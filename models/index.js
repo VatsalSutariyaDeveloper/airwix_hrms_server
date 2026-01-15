@@ -1,7 +1,7 @@
 const sequelize = require("../config/database");
 const masterSequelize = require('../config/master_database');
 const { DataTypes } = require("sequelize");
-const { encrypt,decrypt } = require("../helpers/crypto");
+const { encrypt, decrypt } = require("../helpers/crypto");
 
 // Administration models
 const ModuleMaster = require("./administration/permission/moduleMaster")(sequelize, DataTypes);
@@ -32,7 +32,7 @@ const TaxGroupTransaction = require("./settings/tax/taxGroupTransaction")(sequel
 const Notification = require("./settings/notification")(sequelize, DataTypes);
 
 // Transaction models
-const TaxTransaction = require("./transactions/taxTransaction")(sequelize,DataTypes);
+const TaxTransaction = require("./transactions/taxTransaction")(sequelize, DataTypes);
 
 // Auth models
 const User = require("./settings/user/user")(sequelize, DataTypes);
@@ -46,6 +46,17 @@ const Logs = require("./logs")(sequelize, DataTypes);
 // Subscription models
 const CompanySubscription = require("./subscription/companySubscriptions")(sequelize, DataTypes);
 const SubscriptionPlan = require("./subscription/subscriptionPlans")(sequelize, DataTypes);
+
+//Attendance models
+const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataTypes);
+const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
+const Shift = require("./attendance/shift")(sequelize, DataTypes);
+const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
+const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes);
+
+// Employee models
+const Employee = require("./employee")(sequelize, DataTypes);
+const EmployeeFamilyMember = require("./employeeFamilyMember")(sequelize, DataTypes);
 
 // Collect all models in one db object
 const db = {
@@ -92,6 +103,17 @@ const db = {
   // Subscription
   CompanySubscription,
   SubscriptionPlan,
+
+  //Attandance
+  AttendancePunch,
+  AttendanceDay,
+  Shift,
+  WeeklyOff,
+  EmployeeShift,
+
+  // Employee
+  Employee,
+  EmployeeFamilyMember,
 };
 
 Object.keys(db).forEach(modelName => {
