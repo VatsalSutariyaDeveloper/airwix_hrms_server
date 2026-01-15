@@ -10,7 +10,7 @@ const normalizePath = (path) => {
     return path.split('?')[0].replace(/\/+$/, "");
 };
 
-const PUBLIC_ROUTE_SUFFIXES = [
+const PUBLIC_ROUTE_KEYWORDS = [
   "/auth",
   "/subscription",
   "/public",
@@ -19,12 +19,31 @@ const PUBLIC_ROUTE_SUFFIXES = [
 
 module.exports = async function checkPermission(req, res, next) {
   try {
-    const ctx = getContext();
-    console.log("ctx",ctx)
+    // -----------------------------------------------------------
+    // ✅ 1. CHECK PUBLIC ROUTES FIRST (Before getting Context)
+    // -----------------------------------------------------------
+    
     if (process.env.BYPASS_PERMISSION === "true") return next();
     if (req.method === "OPTIONS") return next();
-    if (PUBLIC_ROUTE_SUFFIXES.some(s => req.path.endsWith(s))) return next();
 
+    // Fix: Check if URL contains "/auth" or matches other public keywords
+    // 'req.originalUrl' is safer to use than 'req.path' in middlewares
+    const currentUrl = req.originalUrl.toLowerCase();
+    
+    const isPublic = PUBLIC_ROUTE_KEYWORDS.some(keyword => currentUrl.includes(keyword));
+    
+    if (isPublic) {
+      // If it's a login/public route, we STOP here. 
+      // We do NOT try to get context, because it doesn't exist yet.
+      return next();
+    }
+
+    // -----------------------------------------------------------
+    // ✅ 2. GET CONTEXT (Only for Protected Routes)
+    // -----------------------------------------------------------
+    const ctx = getContext(); 
+    // This will now only run if the user IS logged in (has a token).
+    
     const currentPath = normalizePath(req.originalUrl);
     const currentMethod = req.method.toUpperCase();
 

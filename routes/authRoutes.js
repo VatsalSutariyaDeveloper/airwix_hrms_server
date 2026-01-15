@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { bufferFile } = require("../helpers/fileUpload");
 
 // --- Import Controllers ---
 const loginController = require("../controllers/auth/loginController");
@@ -12,13 +13,12 @@ const loginHistoryController = require("../controllers/auth/loginHistoryControll
 router.post("/login", loginController.login);
 router.post("/login/send-otp", loginController.sendLoginOtp);
 router.post("/logout/:id", loginController.logout);
-router.post("/session_data", loginController.sessionData);
 
 // OTP Rate Limit
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 router.get("/otp-limit/blocked-numbers", loginController.getAllBlockedNumbers);
 router.delete("/otp-limit/reset/:mobile_no", loginController.resetOtpLimit);
-
+router.post("/face-login", bufferFile("image"), loginController.faceLogin);
 
 // ==========================
 // 2. LOGIN HISTORY ROUTES

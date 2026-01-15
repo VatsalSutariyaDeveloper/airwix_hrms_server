@@ -9,11 +9,78 @@ const moment = require('moment');
 const { clearUserCache } = require("../../helpers/permissionCache");
 const { createOrUpdateNotification } = require("../../helpers/functions/commonFunctions");
 const { getContext } = require("../../utils/requestContext.js");
+const FormData = require('form-data');
+const axios = require("axios");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
   if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
   return [];
+};
+
+/**
+ * Face Login
+ * Receives image, verifies with Python AI, and logs in User ID 1 (Admin)
+ */
+exports.faceLogin = async (req, res) => {
+  try {
+    // 1. Check if file exists
+    if (!req.file) {
+      return res.error(constants.VALIDATION_ERROR, { message: "No image provided" });
+    }
+
+    // 2. Prepare data for Python Service (Port 5002)
+    const formData = new FormData();
+    formData.append('image', req.file.buffer, { filename: 'capture.jpg' });
+
+    // Call Python Service
+    // Note: Ensure your Python service is running on port 5002
+    const pythonServiceUrl = 'http://127.0.0.1:5002/verify';
+    
+    let aiResponse;
+    try {
+        aiResponse = await axios.post(pythonServiceUrl, formData, {
+            headers: { ...formData.getHeaders() }
+        });
+    } catch (serviceErr) {
+        console.error("AI Service Error:", serviceErr.message);
+        return res.error(constants.SERVER_ERROR, { message: "Face Recognition Service Unavailable" });
+    }
+
+    const { verified, message } = aiResponse.data;
+
+    // 3. Handle AI Result
+    if (!verified) {
+        return res.error(constants.UNAUTHORIZED, { message: message || "Face mismatch" });
+    }
+
+    // 4. Login Success logic
+    // Since Python matches 'owner.jpg', we map this to Admin (User ID 1)
+    const user = await commonQuery.findOneRecord(User, 1);
+
+    if (!user || user.status === 2) {
+        return res.error(constants.USER_NOT_FOUND, { message: "Linked user account not found" });
+    }
+
+    // 5. Generate Token and Return Success
+    const token = generateToken(user); 
+
+    const responseData = {
+        token,
+        user: {
+            id: user.id,
+            name: user.user_name,
+            email: user.email,
+            role_id: user.role_id,
+            image: user.profile_image 
+        }
+    };
+
+    return res.success(constants.LOGIN_SUCCESS || "Face Login Successful", responseData);
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
 };
 
 /**
@@ -156,16 +223,16 @@ exports.login = async (req, res) => {
       return res.error(401, "No branch assigned to your profile.");
     }
 
-    const branch = await commonQuery.findOneRecord(
-      BranchMaster,
-      { id: user.branch_id },
-      {},
-      transaction, false, false
-    );
-    if (!branch) {
-      await transaction.rollback();
-      return res.error(401, "Your assigned branch is inactive.");
-    }
+    // const branch = await commonQuery.findOneRecord(
+    //   BranchMaster,
+    //   { id: user.branch_id },
+    //   {},
+    //   transaction, false, false
+    // );
+    // if (!branch) {
+    //   await transaction.rollback();
+    //   return res.error(401, "Your assigned branch is inactive.");
+    // }
 
     // --- C. GENERATE TOKEN & HISTORY ---
 

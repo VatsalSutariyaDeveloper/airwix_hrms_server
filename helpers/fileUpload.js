@@ -5,6 +5,7 @@ const multer = require("multer");
 const checkPermission = require("../middlewares/checkPermission");
 const { normalizeValues } = require("../middlewares/normalizeNullValues");
 const { constants } = require("./constants");
+const { requestContext } = require("../utils/requestContext"); // ✅ IMPORT CONTEXT
 
 // --- UTILITY FUNCTIONS ---
 const ensureDir = (dirPath) => {
@@ -43,8 +44,8 @@ const attachRollbackHook = (transaction, fullPath) => {
 };
 
 /**
- * Deletes a specified file.
- */
+ * Deletes a specified file.
+ */
 const deleteFile = async (req, res, folder, filename) => {
   if (!folder || !filename) return;
   const filePath = path.join(process.cwd(), "uploads", folder, filename);
@@ -60,13 +61,7 @@ const deleteFile = async (req, res, folder, filename) => {
 };
 
 /**
- * Saves one or more buffered files and optionally deletes an old file.
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- * @param {string} subfolder - The subfolder where files should be saved
- * @param {Object} transaction - Sequelize transaction object
- * @param {string} oldFileName - Old file name to be deleted
- * @returns {Object} Object containing the saved filenames keyed by their field names
+ * Saves one or more buffered files.
  */
 const uploadFile = async (
   req,
@@ -114,8 +109,6 @@ const uploadFile = async (
 
     try {
       fs.writeFileSync(fullPath, file.buffer);
-      // --- FIX: Use `file.fieldname` (e.g., 'document_file_0') as the key.
-      // This now matches the `file_key` sent from the frontend.
       savedFilenames[file.fieldname] = filename;
       attachRollbackHook(transaction, fullPath);
     } catch (err) {
@@ -175,37 +168,48 @@ const bufferFile = (fieldNames, maxCount = 10) => {
   }
 
   return (req, res, next) => {
+    // ✅ CAPTURE CONTEXT BEFORE MULTER RUNS
+    const store = requestContext.getStore();
+
     uploader(req, res, (err) => {
-      if (err) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-          const { code, status, message } = responseCodes.FILE_TOO_LARGE;
-          return res.status(code).json({ status, message });
-        }
-        if (err.customCode === "FILE_TYPE_NOT_ALLOWED") {
-          const { code, status, message } = responseCodes.FILE_TYPE_NOT_ALLOWED;
-          return res.status(code).json({ status, message });
-        }
-        if (err instanceof multer.MulterError) {
-          console.error("Multer Error:", err);
-          const { code, status } = responseCodes.FILE_UPLOAD_FAILED;
+      // ✅ DEFINE LOGIC TO RUN INSIDE CONTEXT
+      const runLogic = () => {
+        if (err) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            const { code, status, message } = responseCodes.FILE_TOO_LARGE;
+            return res.status(code).json({ status, message });
+          }
+          if (err.customCode === "FILE_TYPE_NOT_ALLOWED") {
+            const { code, status, message } = responseCodes.FILE_TYPE_NOT_ALLOWED;
+            return res.status(code).json({ status, message });
+          }
+          if (err instanceof multer.MulterError) {
+            console.error("Multer Error:", err);
+            const { code, status } = responseCodes.FILE_UPLOAD_FAILED;
+            return res
+              .status(code)
+              .json({ status, message: `File upload error ${err.message}` });
+          }
+          const { code, status, message } = responseCodes.SERVER_ERROR;
           return res
             .status(code)
-            .json({ status, message: `File upload error ${err.message}` });
+            .json({ status, message: "Server error during file processing." });
         }
-        const { code, status, message } = responseCodes.SERVER_ERROR;
-        return res
-          .status(code)
-          .json({ status, message: "Server error during file processing." });
-      }
 
-      if (req.body && typeof req.body === 'object') {
-         normalizeValues(req.body);
+        if (req.body && typeof req.body === "object") {
+          normalizeValues(req.body);
+        }
+
+        // ✅ RUN PERMISSION CHECK (Since app.js skips it for multipart)
+        checkPermission(req, res, next);
+      };
+
+      // ✅ RESTORE CONTEXT AND RUN LOGIC
+      if (store) {
+        requestContext.run(store, runLogic);
+      } else {
+        runLogic();
       }
-      
-      // checkPermission(req, res, (err) => {
-        if (err) return;
-        next();
-      // });
     });
   };
 };
@@ -232,6 +236,7 @@ const bufferImage = (fieldNames) => {
     limits: { fileSize: maxSize },
     fileFilter,
   });
+
   return async (req, res, next) => {
     const uploader = fieldNames
       ? multerHandler.fields(
@@ -241,30 +246,46 @@ const bufferImage = (fieldNames) => {
         )
       : multerHandler.any();
 
+    // ✅ CAPTURE CONTEXT
+    const store = requestContext.getStore();
+
     uploader(req, res, async (err) => {
-      if (err) {
-        if (err.code === "LIMIT_FILE_SIZE"){
-          const { code, status, message } = responseCodes.IMAGE_TOO_LARGE;
-          return res.status(code).json({ status, message });
+      // ✅ WRAP LOGIC
+      const runLogic = () => {
+        if (err) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            const { code, status, message } = responseCodes.IMAGE_TOO_LARGE;
+            return res.status(code).json({ status, message });
+          }
+          if (err.customCode === "IMAGE_TYPE_NOT_ALLOWED") {
+            const { code, status, message } =
+              responseCodes.IMAGE_TYPE_NOT_ALLOWED;
+            return res.status(code).json({ status, message });
+          }
+          if (err instanceof multer.MulterError) {
+            const { code, status } = responseCodes.IMAGE_UPLOAD_FAILED;
+            return res
+              .status(code)
+              .json({
+                status,
+                message: `Image upload error: ${err.message}`,
+              });
+          }
         }
-        if (err.customCode === "IMAGE_TYPE_NOT_ALLOWED") {
-          const { code, status, message } = responseCodes.IMAGE_TYPE_NOT_ALLOWED;
-          return res.status(code).json({ status, message });
+        if (req.body && typeof req.body === "object") {
+          normalizeValues(req.body);
         }
-        if (err instanceof multer.MulterError) {
-          const { code, status } = responseCodes.IMAGE_UPLOAD_FAILED;
-          return res
-            .status(code)
-            .json({ status, message: `Image upload error: ${err.message}` });
-        }
+        
+        // ✅ RUN PERMISSION CHECK
+        checkPermission(req, res, next);
+      };
+
+      // ✅ RESTORE CONTEXT
+      if (store) {
+        requestContext.run(store, runLogic);
+      } else {
+        runLogic();
       }
-      if (req.body && typeof req.body === 'object') {
-         normalizeValues(req.body);
-      }
-      //   checkPermission(req, res, (err) => {
-      if (err) return;
-      next();
-      //   });
     });
   };
 };
@@ -281,7 +302,7 @@ const bufferExcel = (fieldName) => {
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "text/csv",
       "application/csv",
-      "application/vnd.ms-excel", 
+      "application/vnd.ms-excel",
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowedExt.test(ext) && allowedMime.includes(file.mimetype)) {
@@ -302,32 +323,53 @@ const bufferExcel = (fieldName) => {
   const uploader = multerInstance.single(fieldName);
 
   return (req, res, next) => {
+    // ✅ CAPTURE CONTEXT
+    const store = requestContext.getStore();
+
     uploader(req, res, (err) => {
-      if (err) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-          const { code, status, message } = responseCodes.FILE_TOO_LARGE;
-          return res.status(code).json({ status, message });
-        }
-        if (err.customCode === "EXCEL_FILE_ONLY") {
-          const { code, status } = responseCodes.FILE_TYPE_NOT_ALLOWED;
-          return res.status(code).json({ status, message: "Invalid file type. Only Excel files (.xls, .xlsx) are allowed." });
-        }
-        if (err instanceof multer.MulterError) {
-          console.error("Multer Error:", err);
-          const { code, status } = responseCodes.FILE_UPLOAD_FAILED;
+      // ✅ WRAP LOGIC
+      const runLogic = () => {
+        if (err) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            const { code, status, message } = responseCodes.FILE_TOO_LARGE;
+            return res.status(code).json({ status, message });
+          }
+          if (err.customCode === "EXCEL_FILE_ONLY") {
+            const { code, status } = responseCodes.FILE_TYPE_NOT_ALLOWED;
+            return res
+              .status(code)
+              .json({
+                status,
+                message:
+                  "Invalid file type. Only Excel files (.xls, .xlsx) are allowed.",
+              });
+          }
+          if (err instanceof multer.MulterError) {
+            console.error("Multer Error:", err);
+            const { code, status } = responseCodes.FILE_UPLOAD_FAILED;
+            return res
+              .status(code)
+              .json({ status, message: `File upload error: ${err.message}` });
+          }
+          const { code, status, message } = responseCodes.SERVER_ERROR;
           return res
             .status(code)
-            .json({ status, message: `File upload error: ${err.message}` });
+            .json({ status, message: "Server error during file processing." });
         }
-        const { code, status, message } = responseCodes.SERVER_ERROR;
-        return res
-          .status(code)
-          .json({ status, message: "Server error during file processing." });
+        if (req.body && typeof req.body === "object") {
+          normalizeValues(req.body);
+        }
+        
+        // ✅ RUN PERMISSION CHECK
+        checkPermission(req, res, next);
+      };
+
+      // ✅ RESTORE CONTEXT
+      if (store) {
+        requestContext.run(store, runLogic);
+      } else {
+        runLogic();
       }
-      if (req.body && typeof req.body === 'object') {
-         normalizeValues(req.body);
-      }
-      next();
     });
   };
 };
@@ -335,7 +377,7 @@ const bufferExcel = (fieldName) => {
 const uploadExcelToDisk = (fieldName) => {
   const maxSize = 50 * 1024 * 1024; // 50MB limit
   const baseDir = "uploads/temp_imports"; // Temporary folder
-  
+
   ensureDir(path.join(process.cwd(), baseDir));
 
   const storage = multer.diskStorage({
@@ -343,9 +385,12 @@ const uploadExcelToDisk = (fieldName) => {
       cb(null, path.join(process.cwd(), baseDir));
     },
     filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-    }
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      cb(
+        null,
+        file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+      );
+    },
   });
 
   const fileFilter = (req, file, cb) => {
@@ -354,10 +399,10 @@ const uploadExcelToDisk = (fieldName) => {
       "application/vnd.ms-excel",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "text/csv",
-      "application/csv"
+      "application/csv",
     ];
     const ext = path.extname(file.originalname).toLowerCase();
-    
+
     if (allowedExt.test(ext) || allowedMime.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -376,22 +421,35 @@ const uploadExcelToDisk = (fieldName) => {
   const uploader = multerInstance.single(fieldName);
 
   return (req, res, next) => {
+     // ✅ CAPTURE CONTEXT
+    const store = requestContext.getStore();
+
     uploader(req, res, (err) => {
-      if (err) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-           return res.status(413).json({ status: false, message: "File too large" });
+      // ✅ WRAP LOGIC
+      const runLogic = () => {
+        if (err) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            return res
+              .status(413)
+              .json({ status: false, message: "File too large" });
+          }
+          return res.status(400).json({ status: false, message: err.message });
         }
-        return res.status(400).json({ status: false, message: err.message });
+
+        if (req.body && typeof req.body === "object") {
+          normalizeValues(req.body);
+        }
+
+        // ✅ RUN PERMISSION CHECK
+        checkPermission(req, res, next);
+      };
+
+      // ✅ RESTORE CONTEXT
+      if (store) {
+        requestContext.run(store, runLogic);
+      } else {
+        runLogic();
       }
-      
-      if (req.body && typeof req.body === 'object') {
-         normalizeValues(req.body);
-      }
-      
-      // checkPermission(req, res, (err) => {
-        if (err) return;
-        next();
-      // });
     });
   };
 };
@@ -411,4 +469,4 @@ module.exports = {
   bufferExcel,
   uploadExcelToDisk,
   fileExists,
-};
+};a
