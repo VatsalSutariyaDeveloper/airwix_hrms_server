@@ -15,7 +15,9 @@ const importController = require("../controllers/settings/import/importControlle
 const taxTypeController = require("../controllers/settings/tax/taxTypeController");
 const taxesController = require("../controllers/settings/tax/taxesController");
 const taxGroupController = require("../controllers/settings/tax/taxGroupController");
+const controller = require("../controllers/settings/user/userAccessController");
 
+router.get("/user-access/session-data", controller.sessionData);
 
 
 
