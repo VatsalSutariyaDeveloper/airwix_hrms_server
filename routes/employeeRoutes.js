@@ -3,7 +3,7 @@ const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
 
 router.post("/", employeeController.create);
-router.get("/", employeeController.getAll);
+router.post("/get-transaction", employeeController.getAll);
 router.get("/dropdown-list", employeeController.dropdownList);
 router.get("/:id", employeeController.getById);
 router.put("/update-status", employeeController.updateStatus);

@@ -98,7 +98,10 @@ exports.create = async (req, res) => {
                 'bank_proof_doc',
                 'pan_doc',
                 'aadhaar_doc',
-                'passport_doc'
+                'pan_doc',
+                'aadhaar_doc',
+                'passport_doc',
+                'profile_image' // Added profile_image
             ];
 
             fileColumns.forEach(col => {
@@ -222,7 +225,9 @@ exports.update = async (req, res) => {
                 'bank_proof_doc',
                 'pan_doc',
                 'aadhaar_doc',
-                'passport_doc'
+                'aadhaar_doc',
+                'passport_doc',
+                'profile_image'
             ];
 
             for (const col of fileColumns) {
@@ -354,7 +359,9 @@ exports.getById = async (req, res) => {
             'bank_proof_doc',
             'pan_doc',
             'aadhaar_doc',
-            'passport_doc'
+            'aadhaar_doc',
+            'passport_doc',
+            'profile_image'
         ];
 
         fileColumns.forEach(field => {
@@ -423,7 +430,9 @@ exports.delete = async (req, res) => {
             'bank_proof_doc',
             'pan_doc',
             'aadhaar_doc',
-            'passport_doc'
+            'aadhaar_doc',
+            'passport_doc',
+            'profile_image'
         ];
 
         for (const emp of employeesToDelete) {
@@ -459,7 +468,7 @@ exports.getAll = async (req, res) => {
             fieldConfig,
             {
                 include: [
-                    { model: User, as: "created_by", attributes: [] },
+                    { model: User, as: "created_by", attributes: [], required: false },
                 ],
                 attributes: [
                     "id",
@@ -468,7 +477,7 @@ exports.getAll = async (req, res) => {
                     "joining_date",
                     "status",
                     // "approval_status", // Uncomment if column exists
-                    "designation",
+                    // "designation",
                     "created_at",
                     "created_by.user_name"
                 ]

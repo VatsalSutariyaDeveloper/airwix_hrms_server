@@ -13,6 +13,7 @@ module.exports = (sequelize, DataTypes) => {
         physically_challenged: { type: DataTypes.BOOLEAN, defaultValue: false },
         disability_type: { type: DataTypes.SMALLINT, comment: "1: Hearing, 2: Locomotive disability, 3: Visual, 4: None" },
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },
+        profile_image: { type: DataTypes.STRING }, // Added profile image
         dob: { type: DataTypes.DATEONLY },
         place_of_birth: { type: DataTypes.STRING },
         height: { type: DataTypes.STRING },
@@ -102,6 +103,10 @@ module.exports = (sequelize, DataTypes) => {
         timestamps: true,
         underscored: true // Ensures snake_case for created_at, updated_at
     });
+
+    Employee.associate = function (models) {
+        Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
+    };
 
     return Employee;
 };
