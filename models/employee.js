@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         role_id: { type: DataTypes.INTEGER, allowNull: true },
         email: { type: DataTypes.STRING, validate: { isEmail: true } },
         blood_group: { type: DataTypes.SMALLINT, comment: "1: A+, 2: A-, 3: B+, 4: B-, 5: O+, 6: O-, 7: AB+, 8: AB-" },
-        marital_status: { type: DataTypes.SMALLINT, comment: "1: Married, 2: Separated, 3: Single, 4: Widowed" },
+        marital_status: { type: DataTypes.SMALLINT, comment: "1: Married, 2: Unmarried" },
         marriage_date: { type: DataTypes.DATEONLY },
         spouse_name: { type: DataTypes.STRING },
         country_of_origin: { type: DataTypes.STRING, defaultValue: 'India' },
@@ -94,6 +94,11 @@ module.exports = (sequelize, DataTypes) => {
         education_details: {
             type: DataTypes.JSONB,
             defaultValue: []
+        },
+        face_descriptor: {
+            type: DataTypes.JSONB, 
+            defaultValue: null,
+            comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
         },
         status: {
             type: DataTypes.SMALLINT,
