@@ -26,9 +26,9 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
      DEFAULT REQUIRED NUMBERS
      ========================= */
   const DEFAULT_REQUIRED_NUMBERS = {
-    user_id: "User ID",
-    branch_id: "Branch ID",
-    company_id: "Company ID",
+    // user_id: "User ID",
+    // branch_id: "Branch ID",
+    // company_id: "Company ID",
   };
 
   for (const field in DEFAULT_REQUIRED_NUMBERS) {

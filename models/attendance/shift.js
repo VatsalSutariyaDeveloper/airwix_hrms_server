@@ -2,7 +2,6 @@ module.exports = (sequelize, DataTypes) => {
     const Shift = sequelize.define(
         "Shift",
         {
-            id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
             shift_code: { type: DataTypes.STRING, unique: true },
             shift_name: { type: DataTypes.STRING, allowNull: false },
             start_time: { type: DataTypes.TIME, allowNull: false },
