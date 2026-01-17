@@ -1,7 +1,7 @@
-import jwt from "jsonwebtoken";
-import { requestContext } from "../utils/requestContext.js";
+const jwt = require("jsonwebtoken");
+const { requestContext } = require("../utils/requestContext.js");
 
-export function authMiddleware(req, res, next) {
+function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -42,3 +42,5 @@ export function authMiddleware(req, res, next) {
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 }
+
+module.exports = { authMiddleware };

@@ -33,7 +33,6 @@ const { ENTITIES } = require('../../helpers/constants');
 const ApprovalEngine = require("../../helpers/approvalEngine");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const bcrypt = require("bcrypt");
-const { getContext } = require("../../utils/requestContext");
 
 const STATUS = {
     ACTIVE: 0,
@@ -68,7 +67,6 @@ exports.create = async (req, res) => {
 
     try {
         parseJsonFields(req.body);
-        const ctx = getContext();
         const POST = req.body;
 
         // Validate Required Fields
@@ -218,7 +216,7 @@ exports.create = async (req, res) => {
             const userData = {
                 ...POST,
                 user_name: POST.first_name,
-                comapny_access: ctx.companyId,
+                comapny_access: req.user.companyId,
                 employee_id: employee.id,
                 status: 0
             };
@@ -256,7 +254,6 @@ exports.update = async (req, res) => {
     try {
         parseJsonFields(req.body);
 
-        const ctx = getContext();
         const { id } = req.params;
         const POST = req.body;
 
@@ -418,7 +415,7 @@ exports.update = async (req, res) => {
             const userData = {
                 ...POST,
                 user_name: POST.first_name,
-                comapny_access: ctx.companyId,
+                comapny_access: req.user.companyId,
                 employee_id: id,
                 status: 0
             };

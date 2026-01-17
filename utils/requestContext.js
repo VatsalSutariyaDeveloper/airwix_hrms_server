@@ -1,11 +1,15 @@
-import { AsyncLocalStorage } from "async_hooks";
+const { AsyncLocalStorage } = require("async_hooks");
+const requestContext = new AsyncLocalStorage();
 
-export const requestContext = new AsyncLocalStorage();
-
-export function getContext() {
+function getContext() {
   const store = requestContext.getStore();
   if (!store) {
     throw new Error("Request context not available");
   }
   return store;
 }
+
+module.exports = {
+  requestContext,
+  getContext,
+};
