@@ -1,4 +1,5 @@
 const { CustomField } = require("../models");
+const { getContext } = require("../utils/requestContext");
 /**
  * Validates required fields, types, and uniqueness.
  * Returns FIELD → ERROR CODE mapping
@@ -8,6 +9,7 @@ const { CustomField } = require("../models");
 
 async function validateRequest(body, fieldsWithLabels = {}, options = {}, transaction = null) {
   const errors = {};
+  const ctx = getContext();
 
   // Trim all string fields
   for (const key in body) {
@@ -25,11 +27,7 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
   /* =========================
      DEFAULT REQUIRED NUMBERS
      ========================= */
-  const DEFAULT_REQUIRED_NUMBERS = {
-    user_id: "User ID",
-    branch_id: "Branch ID",
-    company_id: "Company ID",
-  };
+  const DEFAULT_REQUIRED_NUMBERS = {};
 
   for (const field in DEFAULT_REQUIRED_NUMBERS) {
     if (skipDefaultRequired.includes(field)) continue;
@@ -139,8 +137,8 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
         continue;
       }
 
-      if(!excludeCompany && body.company_id !== undefined){
-        where.company_id = body.company_id;
+      if(!excludeCompany && ctx.companyId !== undefined){
+        where.company_id = ctx.companyId;
       }
 
       if(!excludeStatus){
@@ -167,11 +165,11 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
      CUSTOM FIELD VALIDATION
      ========================= */
   if (options.customFieldConfig) {
-    const { entity_id, company_id, dataKey } = options.customFieldConfig;
-
-    if (entity_id && company_id) {
+    const { entity_id, dataKey } = options.customFieldConfig;
+    
+    if (entity_id && ctx.companyId) {
       const customRules = await CustomField.findAll({
-        where: { entity_id, company_id, status: 0 },
+        where: { entity_id, company_id: ctx.companyId, status: 0 },
         attributes: ['field_name', 'field_label', 'is_mandatory', 'field_type', 'options'],
         transaction 
       });

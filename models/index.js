@@ -58,6 +58,16 @@ const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes
 const Employee = require("./employee")(sequelize, DataTypes);
 const EmployeeFamilyMember = require("./employeeFamilyMember")(sequelize, DataTypes);
 
+// SeriesTypeMaster
+const SeriesTypeMaster = require("./settings/seriesTypeMaster")(sequelize, DataTypes);
+
+// APPROVAL ENGINE (Depends on Users, Modules, etc.)
+const ApprovalWorkflow = require("./administration/approval/approvalWorkflow")(sequelize, DataTypes);
+const ApprovalRule = require("./administration/approval/approvalRule")(sequelize, DataTypes);
+const ApprovalLevel = require("./administration/approval/approvalLevel")(sequelize, DataTypes);
+const ApprovalRequest = require("./administration/approval/approvalRequest")(sequelize, DataTypes);
+const ApprovalLog = require("./administration/approval/approvalLog")(sequelize, DataTypes);
+
 // Collect all models in one db object
 const db = {
   // Administration
@@ -87,6 +97,16 @@ const db = {
   TaxGroup,
   TaxGroupTransaction,
   Notification,
+
+  // SeriesTypeMaster
+  SeriesTypeMaster,
+
+  // APPROVAL ENGINE (Depends on Users, Modules, etc.)
+  ApprovalWorkflow,
+  ApprovalRule,
+  ApprovalLevel,
+  ApprovalRequest,
+  ApprovalLog,
 
   // Transactions
   TaxTransaction,

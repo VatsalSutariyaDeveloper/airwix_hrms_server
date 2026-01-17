@@ -5,7 +5,7 @@ module.exports = (sequelize, DataTypes) => {
       receiver_id: { type: DataTypes.INTEGER, allowNull: false },
       title: { type: DataTypes.STRING, allowNull: false },
       message: { type: DataTypes.TEXT },
-      type: { type: DataTypes.STRING, comment: "info, alert, task, etc."},
+      type: { type: DataTypes.STRING, comment: "info, alert, task, etc." },
       is_read: { type: DataTypes.BOOLEAN, defaultValue: false },
       read_at: { type: DataTypes.DATE, allowNull: true },
       link: { type: DataTypes.STRING },
@@ -14,9 +14,9 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         comment: "0: Active, 1 = Inactive, 2: Deleted"
       },
-      user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      user_id: { type: DataTypes.INTEGER, allowNull: true },
+      branch_id: { type: DataTypes.INTEGER, allowNull: true },
+      company_id: { type: DataTypes.INTEGER, allowNull: true },
     },
     {
       tableName: "notifications",

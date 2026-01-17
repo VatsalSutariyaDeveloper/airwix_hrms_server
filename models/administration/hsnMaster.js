@@ -1,8 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
   const HSNMaster = sequelize.define("HSNMaster", {
     tax_group_id: { type: DataTypes.INTEGER, allowNull: true },
-    inter_tax_group_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
-    intra_tax_group_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
+    inter_tax_group_id: { type: DataTypes.INTEGER, allowNull: true },
+    intra_tax_group_id: { type: DataTypes.INTEGER, allowNull: true },
     hsn_code: { type: DataTypes.STRING(100), allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: true },
     status: {
@@ -24,6 +24,6 @@ module.exports = (sequelize, DataTypes) => {
     HSNMaster.belongsTo(models.TaxGroup, { foreignKey: "intra_tax_group_id", as: 'intraTaxGroup' });
     HSNMaster.belongsTo(models.TaxGroup, { foreignKey: "inter_tax_group_id", as: 'interTaxGroup' });
   };
-  
+
   return HSNMaster;
 };

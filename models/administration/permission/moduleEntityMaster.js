@@ -36,10 +36,10 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   ModuleEntityMaster.associate = (models) => {
-    ModuleEntityMaster.belongsTo(models.ModulePermissionTypeMaster, {
-      foreignKey: "entity_permmision_type_ids",
-      as: "permissionType",
-    });
+    // ModuleEntityMaster.belongsTo(models.ModulePermissionTypeMaster, {
+    //   foreignKey: "entity_permmision_type_ids",
+    //   as: "permissionType",
+    // });
 
     ModuleEntityMaster.belongsTo(models.ModuleMaster, {
       foreignKey: "module_id",

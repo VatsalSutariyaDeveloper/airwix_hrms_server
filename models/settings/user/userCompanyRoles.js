@@ -1,10 +1,11 @@
 module.exports = (sequelize, DataTypes) => {
   const UserCompanyRoles = sequelize.define("userCompanyRoles", {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     user_id: { type: DataTypes.INTEGER, allowNull: false },
     role_id: { type: DataTypes.INTEGER, allowNull: false },
     branch_id: { type: DataTypes.INTEGER, allowNull: false },
     company_id: { type: DataTypes.INTEGER, allowNull: false },
-    permissions: { type: DataTypes.TEXT, allowNull: false },
+    permissions: { type: DataTypes.TEXT, allowNull: true },
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,

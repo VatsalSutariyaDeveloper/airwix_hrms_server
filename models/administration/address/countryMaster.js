@@ -4,9 +4,9 @@ module.exports = (sequelize, DataTypes) => {
     country_code: { type: DataTypes.STRING(10), allowNull: false },
     isd_code: { type: DataTypes.STRING(10), allowNull: false },
     country_image: { type: DataTypes.STRING(100) },
-    currency_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
-    mask: { type: DataTypes.STRING(50), allowNull: true, defaultValue: null,comment: "Phone number mask format" },
-    digit: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null,comment: "Mobile number length without country code" },
+    currency_id: { type: DataTypes.INTEGER, allowNull: true },
+    mask: { type: DataTypes.STRING(50), allowNull: true, defaultValue: null, comment: "Phone number mask format" },
+    digit: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null, comment: "Mobile number length without country code" },
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,

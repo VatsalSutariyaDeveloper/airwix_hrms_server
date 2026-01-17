@@ -1,11 +1,14 @@
 const {
     Employee,
-    FamilyMember,
+    EmployeeFamilyMember,
     User,
     ModuleEntityMaster,
     ApprovalRequest,
     StateMaster,     // Assuming you have these for Address includes
-    CountryMaster
+    CountryMaster,
+    UserCompanyRoles,
+    CompanyConfigration,
+    RolePermission
 } = require("../../models");
 
 const {
@@ -29,6 +32,8 @@ const {
 const { ENTITIES } = require('../../helpers/constants');
 const ApprovalEngine = require("../../helpers/approvalEngine");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
+const bcrypt = require("bcrypt");
+const { getContext } = require("../../utils/requestContext");
 
 const STATUS = {
     ACTIVE: 0,
@@ -63,22 +68,25 @@ exports.create = async (req, res) => {
 
     try {
         parseJsonFields(req.body);
-
+        const ctx = getContext();
         const POST = req.body;
 
         // Validate Required Fields
         const requiredFields = {
             series_id: "Series",
             first_name: "First Name", // Assuming 'first_name' is mapped to 'father_name' or you add a name field
-            personal_email: "Personal Email",
+            email: "Personal Email",
             joining_date: "Joining Date",
             mobile_no: "Mobile Number"
         };
 
         const errors = await validateRequest(POST, requiredFields, {
+            uniqueCheck: {
+                model: Employee,
+                fields: ["email", "mobile_no"],
+            },
             customFieldConfig: {
-                entity_id: ENTITIES.EMPLOYEE.ID,
-                company_id: req.body.company_id,
+                // entity_id: ENTITIES.EMPLOYEE.ID,
             }
         }, transaction);
 
@@ -112,7 +120,7 @@ exports.create = async (req, res) => {
         }
 
         // 2. Generate Employee Code
-        POST.employee_code = await generateSeriesNumber(POST.series_id, POST.company_id, transaction, Employee, "employee_code");
+        POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
 
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
@@ -123,34 +131,25 @@ exports.create = async (req, res) => {
         }
 
         // 4. Update Series
-        await updateSeriesNumber(POST.series_id, POST.company_id, transaction);
+        await updateSeriesNumber(POST.series_id, transaction);
 
         // 5. Create Family Members (Bulk Create)
         if (Array.isArray(POST.family_details) && POST.family_details.length > 0) {
             const familyData = POST.family_details.map(member => ({
                 ...member,
                 employee_id: employee.id,
-                company_id: POST.company_id,
-                branch_id: POST.branch_id,
-                user_id: POST.user_id,
                 status: STATUS.ACTIVE
             }));
 
-            await commonQuery.bulkCreate(FamilyMember, familyData, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
         }
-
-        const commonData = {
-            user_id: POST.user_id,
-            company_id: POST.company_id,
-        };
 
         // ------------------------------------------------------------------
         // 🚀 APPROVAL INTEGRATION
         // ------------------------------------------------------------------
         const workflow = await ApprovalEngine.checkApprovalRequired(
             MODULES.HR.EMPLOYEE.ID,
-            employee.toJSON(),
-            req.body.company_id
+            employee.toJSON()
         );
 
         let approvalMsg = constants.EMPLOYEE_CREATED;
@@ -160,13 +159,83 @@ exports.create = async (req, res) => {
                 MODULES.HR.EMPLOYEE.ID,
                 employee.id,
                 workflow.id,
-                commonData.company_id,
                 transaction
             );
 
             // We assume 'approval_status' exists on Employee or is handled via mixin
             await commonQuery.updateRecordById(Employee, employee.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
             approvalMsg = constants.EMPLOYEE_CREATED_SEND_FOR_APPROVAL;
+        }
+
+        // 6. Create User Account if requested OR if role is allowed in Company Configuration
+        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+            setting_key: 'app_access_roles',
+            status: 0
+        }, {}, transaction);
+
+        let rolesNeedingUser = [];
+        if (companyConfig && companyConfig.setting_value) {
+            try {
+                // Expecting JSON array or comma-separated string
+                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+                    ? JSON.parse(companyConfig.setting_value) 
+                    : companyConfig.setting_value;
+                if (!Array.isArray(rolesNeedingUser)) {
+                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+                }
+            } catch (e) {
+                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+            }
+        }
+        
+        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        if (isAppAccessRole) {
+            // Validation for user fields
+            const userRequiredFields = { role_id: "Role" };
+
+            const loginType = parseInt(POST.login_type) || 1;
+            if (loginType === 1) {
+                userRequiredFields.mobile_no = "Mobile No";
+            } else if (loginType === 2) {
+                userRequiredFields.email = "Email";
+                userRequiredFields.password = "Password";
+            }
+
+            const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
+            if (userErrors) {
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, userErrors);
+            }
+
+            // Get permissions from role
+            const rolePermission = await commonQuery.findOneRecord(
+                RolePermission,
+                POST.role_id,
+                {},
+                transaction
+            );
+
+            const userData = {
+                ...POST,
+                user_name: POST.first_name,
+                comapny_access: ctx.companyId,
+                employee_id: employee.id,
+                status: 0
+            };
+
+            if (POST.password) {
+                const salt = await bcrypt.genSalt(10);
+                userData.password = await bcrypt.hash(POST.password, salt);
+            }
+
+            const newUser = await commonQuery.createRecord(User, userData, transaction);
+
+            await commonQuery.createRecord(UserCompanyRoles, {
+                user_id: newUser.id,
+                role_id: POST.role_id,
+                permissions: rolePermission ? rolePermission.permissions : null,
+                status: 0
+            }, transaction);
         }
 
         await transaction.commit();
@@ -187,18 +256,23 @@ exports.update = async (req, res) => {
     try {
         parseJsonFields(req.body);
 
+        const ctx = getContext();
         const { id } = req.params;
         const POST = req.body;
 
         // Validation
         const requiredFields = {
-            personal_email: "Personal Email"
+            email: "Personal Email"
         };
 
         const errors = await validateRequest(POST, requiredFields, {
+            uniqueCheck: {
+                model: Employee,
+                fields: ["email", "mobile_no"],
+                excludeId: id
+            },
             customFieldConfig: {
-                entity_id: ENTITIES.EMPLOYEE.ID,
-                company_id: req.body.company_id,
+                // entity_id: ENTITIES.EMPLOYEE.ID,
             }
         }, transaction);
 
@@ -254,11 +328,10 @@ exports.update = async (req, res) => {
         // A. Soft Delete removed members
         // Find members currently in DB but NOT in incoming IDs
         await commonQuery.softDeleteById(
-            FamilyMember,
+            EmployeeFamilyMember,
             {
                 employee_id: id,
-                id: { [Op.notIn]: incomingIds },
-                company_id: POST.company_id
+                id: { [Op.notIn]: incomingIds }
             },
             null,
             transaction
@@ -268,16 +341,13 @@ exports.update = async (req, res) => {
         for (const member of incomingFamily) {
             const memberPayload = {
                 ...member,
-                employee_id: id,
-                company_id: POST.company_id,
-                branch_id: POST.branch_id,
-                user_id: POST.user_id
+                employee_id: id
             };
 
             if (member.id) {
-                await commonQuery.updateRecordById(FamilyMember, member.id, memberPayload, transaction);
+                await commonQuery.updateRecordById(EmployeeFamilyMember, member.id, memberPayload, transaction);
             } else {
-                await commonQuery.createRecord(FamilyMember, memberPayload, transaction);
+                await commonQuery.createRecord(EmployeeFamilyMember, memberPayload, transaction);
             }
         }
 
@@ -301,8 +371,7 @@ exports.update = async (req, res) => {
         // Check Approval Again
         const workflow = await ApprovalEngine.checkApprovalRequired(
             MODULES.HR.EMPLOYEE.ID,
-            updatedEmployee.toJSON(),
-            POST.company_id
+            updatedEmployee.toJSON()
         );
 
         if (workflow) {
@@ -310,13 +379,100 @@ exports.update = async (req, res) => {
                 MODULES.HR.EMPLOYEE.ID,
                 id,
                 workflow.id,
-                POST.company_id,
                 transaction
             );
 
             await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.PENDING_APPROVAL }, transaction);
         } else {
             await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.ACTIVE }, transaction);
+        }
+
+        // 4. Create/Update User Account if requested OR if role is allowed in Company Configuration
+        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+            setting_key: 'app_access_roles',
+            status: 0
+        }, {}, transaction);
+
+        let rolesNeedingUser = [];
+        if (companyConfig && companyConfig.setting_value) {
+            try {
+                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+                    ? JSON.parse(companyConfig.setting_value) 
+                    : companyConfig.setting_value;
+                if (!Array.isArray(rolesNeedingUser)) {
+                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+                }
+            } catch (e) {
+                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+            }
+        }
+
+        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+
+        if (isAppAccessRole) {
+            const loginType = parseInt(POST.login_type) || 1;
+
+            // Check if user already exists for this employee
+            let existingUser = await commonQuery.findOneRecord(User, { employee_id: id }, {}, transaction);
+
+            const userData = {
+                ...POST,
+                user_name: POST.first_name,
+                comapny_access: ctx.companyId,
+                employee_id: id,
+                status: 0
+            };
+
+            if (POST.role_id) {
+                const rolePermission = await commonQuery.findOneRecord(
+                    RolePermission,
+                    POST.role_id,
+                    {},
+                    transaction
+                );
+                userData.permission = rolePermission ? rolePermission.permissions : null;
+            }
+
+            if (POST.password) {
+                const salt = await bcrypt.genSalt(10);
+                userData.password = await bcrypt.hash(POST.password, salt);
+            }
+
+            if (existingUser) {
+                await commonQuery.updateRecordById(User, existingUser.id, userData, transaction);
+
+                // Update UserCompanyRoles if role changed
+                if (POST.role_id) {
+                    await UserCompanyRoles.update(
+                        { role_id: POST.role_id, permissions: userData.permission },
+                        { where: { user_id: existingUser.id }, transaction }
+                    );
+                }
+            } else {
+                // Validation for new user
+                const userRequiredFields = { role_id: "Role" };
+                if (loginType === 1) userRequiredFields.mobile_no = "Mobile No";
+                else if (loginType === 2) {
+                    userRequiredFields.email = "Email";
+                    userRequiredFields.password = "Password";
+                }
+
+                const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
+                if (userErrors) {
+                    await transaction.rollback();
+                    return res.error(constants.VALIDATION_ERROR, userErrors);
+                }
+
+                const newUser = await commonQuery.createRecord(User, userData, transaction);
+                await commonQuery.createRecord(UserCompanyRoles, {
+                    user_id: newUser.id,
+                    role_id: POST.role_id,
+                    permissions: userData.permission,
+                    status: 0
+                }, transaction);
+            }
+        } else {
+            await commonQuery.softDeleteById(User, { employee_id: id }, transaction);
         }
 
         await transaction.commit();
@@ -336,9 +492,15 @@ exports.getById = async (req, res) => {
 
         const dynamicIncludes = [
             {
-                model: FamilyMember,
+                model: EmployeeFamilyMember,
                 as: 'family_members', // Ensure this alias matches your models/index.js association
                 where: { status: { [Op.in]: [0, 1] } }, // Active or Inactive, not Deleted
+                required: false
+            },
+            {
+                model: User,
+                as: 'linked_user',
+                attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'],
                 required: false
             },
             // If you have State/Country relations for addresses, include them here:
@@ -421,7 +583,7 @@ exports.delete = async (req, res) => {
         }
 
         // 3. Soft Delete associated Family Members
-        await commonQuery.softDeleteById(FamilyMember, { employee_id: ids }, null, transaction);
+        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
 
         // 4. Delete Physical Files
         const fileColumns = [
@@ -458,7 +620,7 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["father_name", true, true],
-            ["personal_email", true, false],
+            ["email", true, false],
             ["mobile_no", true, false],
         ];
 
@@ -473,7 +635,7 @@ exports.getAll = async (req, res) => {
                 attributes: [
                     "id",
                     "father_name", // or first_name if you have it
-                    "personal_email",
+                    "email",
                     "joining_date",
                     "status",
                     // "approval_status", // Uncomment if column exists

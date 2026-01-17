@@ -1,13 +1,13 @@
 ﻿module.exports = (sequelize, DataTypes) => {
     const Permission = sequelize.define("Permission", {
-        id: { 
-            type: DataTypes.INTEGER, 
-            primaryKey: true, 
-            autoIncrement: true 
+        id: {
+            type: DataTypes.INTEGER,
+            primaryKey: true,
+            autoIncrement: true
         },
         // Replaces 'entity' string
-        module_id: { 
-            type: DataTypes.INTEGER, 
+        module_id: {
+            type: DataTypes.INTEGER,
             allowNull: false,
             references: {
                 model: 'module_master',
@@ -16,28 +16,26 @@
             comment: "Links to ModuleMaster (The high-level Entity, e.g. Sales)"
         },
         // Replaces 'entity' string
-        entity_id: { 
-            type: DataTypes.INTEGER, 
+        entity_id: {
+            type: DataTypes.INTEGER,
             allowNull: false,
             references: {
-                model: 'module_entity_master', 
+                model: 'module_entity_master',
                 key: 'id'
             },
             comment: "Links to ModuleEntityMaster (The Entity, e.g. Invoice)"
         },
-        action: { 
-            type: DataTypes.STRING, 
+        action: {
+            type: DataTypes.STRING,
             allowNull: false,
-            comment: "e.g. create, view, edit, delete, approve" 
+            comment: "e.g. create, view, edit, delete, approve"
         },
-        slug: { 
-            type: DataTypes.STRING, 
-            allowNull: true, // Allow null initially, hook fills it
-            unique: true,
-            comment: "Auto-generated: moduleName.entityName.action"
+        slug: {
+            type: DataTypes.STRING,
+            allowNull: true
         },
-        description: { 
-            type: DataTypes.STRING 
+        description: {
+            type: DataTypes.STRING
         },
         status: {
             type: DataTypes.SMALLINT,
@@ -48,6 +46,12 @@
         tableName: "permissions",
         timestamps: true,
         underscored: true,
+        indexes: [
+            {
+                unique: true,
+                fields: ['slug']
+            }
+        ],
         hooks: {
             // ASYNC HOOK: Fetch names and build slug before saving
             beforeValidate: async (permission, options) => {
