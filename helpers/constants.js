@@ -1,37 +1,8 @@
 const constants = {
-  /* Stage Constants */
-  WON: 5,
-  LOST: 6,
-
   UPLOAD_PATH: "uploads/",
 
-  /* Settings Files Constants */
-  ITEM_IMG_FOLDER: "items/",
-  COMPANY_LOGO_IMG_FOLDER: "companies/logo/",
-  COMPANY_SIGN_IMG_FOLDER: "companies/signatures/",
-  USER_IMG_FOLDER: "users/images/",
-  USER_SIGN_IMG_FOLDER: "users/signatures/",
-  PARTIES_DOC_FOLDER: "parties/documents/",
-  PARTIES_PROFILE_IMAGE_FOLDER: "parties/profile-images/",
-  DRAWING_ATTACHMENT_FOLDER: "drawing/attachments/",
-  PRINT_SETTINGS_IMG_FOLDER: "print_settings/",
-
-  /* SALES Files Constants*/
-  ATTACHMENT_FOLDER: "attachments/",
-  LEADS_ATTACHMENT_FOLDER: "sales/attachments/",
-  QUOTATION_ATTACHMENT_FOLDER: "sales/quotation/attachments/",
-  SALESORDER_ATTACHMENT_FOLDER: "sales/sales_order/attachments/",
-  TASK_ATTACHMENT_FOLDER: "sales/task/attachments/",
-  PROFORMA_INVOICE_ATTACHMENT_FOLDER: "sales/proforma_invoice/attachments/",
-  INVOICE_ATTACHMENT_FOLDER: "sales/invoice/attachments/",
-  PURCHASE_ORDER_ATTACHMENT_FOLDER: "purchase/attachments/",
-
-  /* Signature Files Constants*/
-  SIGNATURE_FOLDER: "signature/",
-
-  /* DeliveryChallan Files Constants*/
-  DISPATCH_ATTACHMENT_FOLDER: "delivery_challan/attachments/",
-  // Add other constants here as needed
+  ATTENDANCE_FOLDER: "employee/attendance/",
+  EMPLOYEE_IMG_FOLDER: "employee/images/",
 
   /* =======================
    * COMMON / GENERIC

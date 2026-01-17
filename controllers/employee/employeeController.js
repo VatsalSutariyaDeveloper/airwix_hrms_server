@@ -33,6 +33,23 @@ const { ENTITIES } = require('../../helpers/constants');
 const ApprovalEngine = require("../../helpers/approvalEngine");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const bcrypt = require("bcrypt");
+const { getContext } = require("../../utils/requestContext");
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
+const FormData = require('form-data');
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
+const FACE_MATCH_THRESHOLD = 0.40;
+
+const DEBUG_MODE = true; 
+
+// Helper for conditional logging
+const debugLog = (tag, message, data = "") => {
+    if (DEBUG_MODE) {
+        console.log(`[DEBUG] 🔍 ${tag}:`, message, data ? JSON.stringify(data).substring(0, 200) + "..." : "");
+    }
+};
 
 const STATUS = {
     ACTIVE: 0,
@@ -71,11 +88,7 @@ exports.create = async (req, res) => {
 
         // Validate Required Fields
         const requiredFields = {
-            series_id: "Series",
-            first_name: "First Name", // Assuming 'first_name' is mapped to 'father_name' or you add a name field
-            email: "Personal Email",
-            joining_date: "Joining Date",
-            mobile_no: "Mobile Number"
+            first_name: "First Name",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -83,9 +96,6 @@ exports.create = async (req, res) => {
                 model: Employee,
                 fields: ["email", "mobile_no"],
             },
-            customFieldConfig: {
-                // entity_id: ENTITIES.EMPLOYEE.ID,
-            }
         }, transaction);
 
         if (errors) {
@@ -118,7 +128,7 @@ exports.create = async (req, res) => {
         }
 
         // 2. Generate Employee Code
-        POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
+        // POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
 
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
@@ -129,7 +139,7 @@ exports.create = async (req, res) => {
         }
 
         // 4. Update Series
-        await updateSeriesNumber(POST.series_id, transaction);
+        // await updateSeriesNumber(POST.series_id, transaction);
 
         // 5. Create Family Members (Bulk Create)
         if (Array.isArray(POST.family_details) && POST.family_details.length > 0) {
@@ -631,12 +641,8 @@ exports.getAll = async (req, res) => {
                 ],
                 attributes: [
                     "id",
-                    "father_name", // or first_name if you have it
-                    "email",
-                    "joining_date",
-                    "status",
-                    // "approval_status", // Uncomment if column exists
-                    // "designation",
+                    "first_name", // or first_name if you have it
+                    "employee_code",
                     "created_at",
                     "created_by.user_name"
                 ]
@@ -705,5 +711,273 @@ exports.updateStatus = async (req, res) => {
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
+    }
+};
+
+const calculateCosineDistance = (descriptor1, descriptor2) => {
+    // 1. Safety Check
+    if (!descriptor1 || !descriptor2) {
+        if(DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
+        return 1.0; 
+    }
+    
+    if (descriptor1.length !== descriptor2.length) {
+        if(DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
+        return 1.0;
+    }
+
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < descriptor1.length; i++) {
+        dotProduct += descriptor1[i] * descriptor2[i];
+        normA += descriptor1[i] * descriptor1[i];
+        normB += descriptor2[i] * descriptor2[i];
+    }
+
+    // 2. Avoid division by zero
+    if (normA === 0 || normB === 0) {
+        if(DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
+        return 1.0;
+    }
+
+    // 3. Calculate Similarity (0 to 1)
+    const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+
+    // 4. Return Distance
+    // ArcFace cosine distance: 0 = Same, 1+ = Different
+    const distance = 1 - similarity;
+    
+    // Log first few calculations to check if numbers are valid
+    // if(DEBUG_MODE && Math.random() < 0.05) console.log(`🧮 [Math] Dist: ${distance.toFixed(4)} | Sim: ${similarity.toFixed(4)}`);
+    
+    return distance; 
+};
+
+/**
+ * Register Face
+ * 1. Saves image to 'users/images/' (Permanent Profile Picture).
+ * 2. Deletes old profile image if it exists.
+ * 3. Sends image to Python to get the Face Vector.
+ * 4. Updates Employee record with new Profile Image AND Face Vector.
+ */
+exports.registerFace = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.body;
+
+        // Check if image file exists
+        if (!req.files || (!req.files.image && !req.files['image'])) { 
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+        }
+
+        const employee = await Employee.findByPk(id);
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.EMPLOYEE_NOT_FOUND);
+        }
+
+        // 1. Save File to Disk (Permanent Profile Image)
+        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/users/images/'
+        // We pass 'employee.profile_image' as the last argument so 'uploadFile' automatically deletes the OLD photo.
+        const savedFiles = await uploadFile(
+            req, 
+            res, 
+            constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
+            transaction,
+            employee.profile_image     // ✅ Delete old image if exists
+        );
+
+        const filename = savedFiles.image; 
+        
+        if (!filename) {
+            await transaction.rollback();
+            return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+        }
+
+        // 2. Send to Python to get Face Embedding
+        // We read the file we just saved to ensure Python sees exactly what is on disk
+        const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+        
+        let faceDescriptor;
+        try {
+            const fileBuffer = fs.readFileSync(fullFilePath);
+
+            const formData = new FormData();
+            formData.append('image', fileBuffer, filename); 
+
+            const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+                headers: { ...formData.getHeaders() }
+            });
+
+            if (aiResponse.data.status) {
+                faceDescriptor = aiResponse.data.embedding;
+            } else {
+                throw new Error(aiResponse.data.message);
+            }
+        } catch (aiError) {
+            await transaction.rollback(); 
+            // Optional: Delete the file we just wrote since the process failed
+            try { fs.unlinkSync(fullFilePath); } catch(e) {}
+
+            console.error("AI Service Error:", aiError.message);
+            return res.error(constants.SERVER_ERROR, { message: "AI Processing Failed: " + aiError.message });
+        }
+
+        // 3. Update Employee Record
+        // - Updates 'profile_image' (Visible in App/Admin)
+        // - Updates 'face_descriptor' (Used for AI Matching)
+        await employee.update({
+            profile_image: filename,
+            face_descriptor: faceDescriptor
+        }, { transaction });
+
+        await transaction.commit();
+
+        return res.success("Face Registered & Profile Picture Updated", {
+            image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
+        });
+
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+/**
+ * Face Punch (Attendance)
+ * - Uses 'uploadFile' utility to save to 'uploads/attendance/'
+ * - Runs in PARALLEL with AI and DB for maximum speed.
+ */
+exports.facePunch = async (req, res) => {
+    try {
+        debugLog("Punch", "Request received");
+
+        const files = req.files.image || req.files['image'];
+        if (!files || files.length === 0) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Face image is required" });
+        }
+
+        const imageBuffer = files[0].buffer;
+        const originalName = files[0].originalname;
+        debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
+
+        // 🚀 PARALLEL TASK 1: Call AI Service
+        const getEmbeddingTask = (async () => {
+            const formData = new FormData();
+            formData.append('image', imageBuffer, originalName); 
+            
+            try {
+                debugLog("AI-Call", "Sending to Python...");
+                const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+                    headers: { ...formData.getHeaders() }
+                });
+                
+                if (aiResponse.data.status) {
+                    const vec = aiResponse.data.embedding;
+                    debugLog("AI-Res", `Got Vector. Length: ${vec.length}, First 3 vals: [${vec[0]}, ${vec[1]}, ${vec[2]}]`);
+                    return vec;
+                } else {
+                    throw new Error(aiResponse.data.message);
+                }
+            } catch (error) {
+                const pyError = error.response?.data?.message || error.message;
+                console.error("❌ AI Service Failed:", pyError);
+                throw new Error(pyError);
+            }
+        })();
+
+        // 🚀 PARALLEL TASK 2: Fetch Employees
+        // NOTE: Make sure attributes match your DB Column names exactly
+        const getEmployeesTask = Employee.findAll({
+            where: {
+                status: 0,
+                face_descriptor: { [Op.ne]: null }
+            },
+            attributes: ['id', 'first_name', 'face_descriptor'], // Changed first_name to father_name based on your prev code
+            raw: true 
+        });
+
+        // 🚀 PARALLEL TASK 3: Save File
+        const saveFileTask = (async () => {
+            const saved = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
+            return saved.image || saved['image']; 
+        })();
+
+        // ⚡ EXECUTE ALL AT ONCE
+        const [liveVector, employees, savedFilename] = await Promise.all([
+            getEmbeddingTask,
+            getEmployeesTask,
+            saveFileTask
+        ]);
+
+        debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
+
+        // --- MATCHING LOGIC ---
+        let bestMatch = null;
+        let minDistance = 1.0; 
+
+        // Loop Counter to limit debug logs
+        let logCounter = 0; 
+
+        for (const emp of employees) {
+            let storedVector = emp.face_descriptor;
+            
+            // 🔍 DEBUGGING DATA TYPES
+            // Often DB returns JSONB as Object, but sometimes Text as String.
+            const typeBefore = typeof storedVector;
+            
+            if (typeof storedVector === 'string') {
+                try { 
+                    storedVector = JSON.parse(storedVector); 
+                } catch(e) {
+                    if(DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
+                    continue; 
+                }
+            }
+            
+            // Double check it's an array
+            if (!Array.isArray(storedVector)) {
+                if(DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
+                continue;
+            }
+
+            const dist = calculateCosineDistance(liveVector, storedVector);
+
+            // Log the first 3 comparisons to see what's happening
+            if (DEBUG_MODE && logCounter < 3) {
+                console.log(`👤 [Compare] ID: ${emp.id} | Name: ${emp.first_name} | Dist: ${dist.toFixed(4)}`);
+                logCounter++;
+            }
+
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestMatch = emp;
+                debugLog("Match-Update", `New Best Match: ${emp.first_name} (Dist: ${dist})`);
+            }
+        }
+
+        const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
+        debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
+
+        // --- VALIDATION ---
+        if (bestMatch && minDistance < FACE_MATCH_THRESHOLD) {
+            return res.success("Punch Successful", {
+                employee: bestMatch.first_name,
+                confidence: matchPercentage + "%",
+                image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`
+            });
+        } else {
+            return res.error(constants.FACE_NOT_RECOGNIZED, { 
+                message: `Face Not Recognized (Match: ${matchPercentage}%)` 
+            });
+        }
+
+    } catch (err) {
+        console.error("💥 Server Error:", err);
+        const errorMsg = err.message || "Server Error";
+        const statusCode = errorMsg.includes("Face") ? constants.VALIDATION_ERROR : constants.SERVER_ERROR;
+        return res.error(statusCode, { message: errorMsg });
     }
 };

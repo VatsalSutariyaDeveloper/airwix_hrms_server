@@ -112,7 +112,7 @@ exports.create = async (req, res) => {
     }
     
     // Find the last company to determine the next sequential code.
-    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, {}, { order: [["company_code", "DESC"]] }, transaction);
+    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, {}, { order: [["company_code", "DESC"]] }, transaction, false, false);
 
     let nextNumber = 1;
     if (lastCompany && lastCompany.company_code) {
@@ -143,7 +143,10 @@ exports.create = async (req, res) => {
       record = await commonQuery.findOneRecord(
           CompanyMaster, 
           { id : company_id, status: 0 },
-          { attributes: ['id', 'company_id'] }
+          { attributes: ['id', 'company_id'] },
+          transaction,
+          false,
+          false
       );
       if (!record) {
           return res.error(404, "Invalid or missing company record.");
@@ -200,7 +203,7 @@ exports.create = async (req, res) => {
         transaction
     );
 
-    const RolePermissions = await commonQuery.findOneRecord(RolePermission, { company_id: -1, status: 0 }, {}, transaction);
+    const RolePermissions = await commonQuery.findOneRecord(RolePermission, { company_id: -1, status: 0 }, {}, transaction, false, false);
 
     const userPayload = {
       role_id: 1,
@@ -263,7 +266,10 @@ exports.getCompanies = async (req, res) => {
      const record = await commonQuery.findOneRecord(
         CompanyMaster,
         req.body.company_id,
-        { attributes: ['id', 'company_id'] }
+        { attributes: ['id', 'company_id'] },
+        null,
+        false,
+        false
     );
     if (!record) {
         return res.error(constants.NOT_FOUND);
@@ -332,7 +338,10 @@ exports.getById = async (req, res) => {
     const record = await commonQuery.findOneRecord(
       CompanyMaster,
       req.params.id,
-      { include: includeOptions }
+      { include: includeOptions },
+      null,
+      false,
+      false
     );
 
     // Ensure the company is active
@@ -385,7 +394,9 @@ exports.update = async (req, res) => {
       CompanyMaster,
       req.params.id,
       {},
-      transaction
+      transaction,
+      false,
+      false
     );
 
     if (!existing || existing.status === 2) {
