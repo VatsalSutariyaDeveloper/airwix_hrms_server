@@ -2,6 +2,7 @@ const constants = {
   UPLOAD_PATH: "uploads/",
 
   ATTENDANCE_FOLDER: "employee/attendance/",
+  ATTENDANCE_LOG_FOLDER: "employee/attendance_log/",
   EMPLOYEE_IMG_FOLDER: "employee/images/",
 
   /* =======================
