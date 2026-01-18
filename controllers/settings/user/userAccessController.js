@@ -16,15 +16,13 @@ const normalizeCompanyAccess = (access) => {
 exports.sessionData = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const ctx = getContext();
-    const { companyId: company_id, userId: user_id, branchId: branch_id } = ctx;
+    const { user_id, company_id, branch_id } = getContext();
 
     // 1. Validate Company
     const record = await commonQuery.findOneRecord(
       CompanyMaster,
       company_id,
-      { attributes: ['id', 'company_id'] },
-      null, false, false
+      { attributes: ['id', 'company_id'] }
     );
 
     if (!record) {
@@ -42,13 +40,12 @@ exports.sessionData = async (req, res) => {
         include: [{ 
             model: UserCompanyRoles, 
             as: "ComapanyRole", 
-            where: { company_id, branch_id }, 
             attributes: ["permissions"],
             required: false 
         }]
-      },
-      null, false, false
+      }
     );
+    
     if (!userData) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);
@@ -85,7 +82,7 @@ exports.sessionData = async (req, res) => {
           { model: StateMaster, as: 'state', attributes: ['state_name'], required: false },
         ],
         raw: false, nest: true
-      }, null, false, false),
+      }, null, false),
 
       // B. Sidebar Modules (Hierarchical)
       commonQuery.findAllRecords(ModuleMaster, { status: 0 }, {
@@ -98,7 +95,7 @@ exports.sessionData = async (req, res) => {
             attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"] 
         }],
         order: [["priority", "ASC"], [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']],
-      }, null, false, false),
+      }, null, false),
 
       // C. Configuration
       commonQuery.findAllRecords(CompanyConfigration, { company_id, status: 0 }, {}, null, false),
@@ -110,7 +107,7 @@ exports.sessionData = async (req, res) => {
           { model: ModuleMaster, as: 'module', attributes: ['module_name'] },
           { model: ModuleEntityMaster, as: 'entity', attributes: ['entity_name', 'cust_entity_name'] }
         ]
-      }, null, false, false)
+      }, null, false)
     ]);
 
     // Validate Data
@@ -154,7 +151,7 @@ exports.sessionData = async (req, res) => {
     // Currency
     let currencyDetails = null;
     if (currentCompany.currency_id) {
-      const currencyData = await commonQuery.findOneRecord(CurrencyMaster, { id: settingsObject.default_currency || 67 }, {}, null, false, false); // Default to INR if missing
+      const currencyData = await commonQuery.findOneRecord(CurrencyMaster, { id: settingsObject.default_currency || 67 }); // Default to INR if missing
       if (currencyData) {
         currencyDetails = { 
             currency_id: currencyData.id, 

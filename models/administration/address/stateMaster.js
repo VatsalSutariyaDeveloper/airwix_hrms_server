@@ -19,7 +19,7 @@ module.exports = (sequelize, DataTypes) => {
 
   StateMaster.associate = (models) => {
     // StateMaster.belongsTo(models.CountryMaster, { foreignKey: "country_id", as: "country" });
-    StateMaster.hasMany(models.CityMaster, { foreignKey: "state_id", as: "cities" });
+    // StateMaster.hasMany(models.CityMaster, { foreignKey: "state_id", as: "cities" });
   };
 
 

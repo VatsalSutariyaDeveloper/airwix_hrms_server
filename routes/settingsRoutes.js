@@ -6,18 +6,15 @@ const { uploadExcelToDisk, bufferFile, bufferImage } = require("../helpers/fileU
 const branchMasterController = require("../controllers/settings/branchMasterController");
 const companyMasterController = require("../controllers/settings/company/companyMasterController");
 const companyCofigrationController = require("../controllers/settings/company/companyConfigrationController");
-const templatesMessageController = require("../controllers/settings/templatesMessageController");
 const userController = require("../controllers/settings/user/userController");
 const rolePermissionController = require("../controllers/settings/user/rolePermissionController");
-const notificationController = require("../controllers/settings/notificationController");
-const utilsController = require("../controllers/settings/utilsController");
 const importController = require("../controllers/settings/import/importController");
-const taxTypeController = require("../controllers/settings/tax/taxTypeController");
-const taxesController = require("../controllers/settings/tax/taxesController");
-const taxGroupController = require("../controllers/settings/tax/taxGroupController");
-const controller = require("../controllers/settings/user/userAccessController");
+const utilsController = require("../controllers/settings/utilsController");
+const userAccessController = require("../controllers/settings/user/userAccessController");
 
-router.get("/user-access/session-data", controller.sessionData);
+
+//Session Data
+router.get("/user-access/session-data", userAccessController.sessionData);
 
 
 
@@ -56,43 +53,6 @@ router.get("/company-configration/", companyCofigrationController.getAll);
 router.get("/company-configration/:id", companyCofigrationController.getById);
 router.get("/company-configration/:id/:group", companyCofigrationController.getByGroup);
 router.put("/company-configration/:id", companyCofigrationController.update);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ==========================
-// 14. TEMPLATE MESSAGES
-// ==========================
-// Base Path: /templates-message
-router.post("/templates-message/", templatesMessageController.create);
-router.post("/templates-message/get-transactions", templatesMessageController.getAll);
-router.post("/templates-message/dropdown-list", templatesMessageController.dropdownList);
-router.get("/templates-message/:id", templatesMessageController.getById);
-router.put("/templates-message/:id", templatesMessageController.update);
-router.delete("/templates-message/", templatesMessageController.delete);
-router.patch("/templates-message/status", templatesMessageController.updateStatus);
-
-
-// ==========================
-// 15. NOTIFICATIONS
-// ==========================
-// Base Path: /notification
-router.post("/notification/dropdown-list", notificationController.getAll);
-router.put("/notification/read", notificationController.updateReadStatus);
 
 
 // ==========================
@@ -135,45 +95,6 @@ router.get("/role-permission/:id", rolePermissionController.getById);
 router.put("/role-permission/:id", rolePermissionController.update);
 router.delete("/role-permission/", rolePermissionController.delete);
 router.patch("/role-permission/status", rolePermissionController.updateStatus);
-
-
-
-
-
-
-// ==========================
-// 22. CHARGES & TAXES
-// ==========================
-
-
-// Tax Type (Base Path: /tax-type)
-router.post("/tax-type/", taxTypeController.create);
-router.post("/tax-type/get-transactions", taxTypeController.getAll);
-router.post("/tax-type/dropdown-list", taxTypeController.dropdownList);
-router.get("/tax-type/:id", taxTypeController.getById);
-router.put("/tax-type/:id", taxTypeController.update);
-router.delete("/tax-type/", taxTypeController.delete);
-router.patch("/tax-type/status", taxTypeController.updateStatus);
-
-// Taxes (Base Path: /taxes)
-router.post("/taxes/", taxesController.create);
-router.post("/taxes/dropdown-list", taxesController.dropdownList);
-router.post("/taxes/get-transactions", taxesController.getAll);
-router.get("/taxes/:id", taxesController.getById);
-router.put("/taxes/:id", taxesController.update);
-router.delete("/taxes/", taxesController.delete);
-router.patch("/taxes/status", taxesController.updateStatus);
-
-// Tax Group (Base Path: /tax-group)
-router.post("/tax-group/", taxGroupController.create);
-router.post("/tax-group/dropdown-list", taxGroupController.dropdownList);
-router.post("/tax-group/get-transactions", taxGroupController.getAll);
-router.get("/tax-group/:id", taxGroupController.getById);
-router.put("/tax-group/:id", taxGroupController.update);
-router.delete("/tax-group/", taxGroupController.delete);
-router.patch("/tax-group/status", taxGroupController.updateStatus);
-router.post("/tax-group/rates/dropdown-list", taxGroupController.getGroupRates);
-
 
 // ==========================
 // 23. IMPORT ROUTES

@@ -12,6 +12,7 @@ const { getCompanySetting,clearCompanyCache, getCompanySubscription, clearCompan
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
 const { logActivity, logQuery, archiveAndCleanupLogs } = require("./functions/logFunctions");
 const  otpService = require("./otpService");
+const { getContext } = require("../utils/requestContext");
 
   module.exports = {
     sequelize,
@@ -26,6 +27,7 @@ const  otpService = require("./otpService");
     fixDecimals,
     fixNum,
     fixQty,
+    getContext,
     constants,
     ENTITIES,
     parseDate,

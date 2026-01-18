@@ -72,23 +72,42 @@ from deepface import DeepFace
 
 app = Flask(__name__)
 
-# 🔴 TOGGLE DEBUG MODE
+# 🔴 DEBUG MODE
 DEBUG_MODE = True
 
 def debug_print(tag, message):
     if DEBUG_MODE:
         print(f"🐍 [PY-DEBUG] {tag}: {message}")
 
-# 1. Use ArcFace (Best for Accuracy)
+# Settings
 MODEL_NAME = "ArcFace" 
 DETECTOR_BACKEND = "ssd" 
+TARGET_WIDTH = 320  # Keeping your requested 320px limit
 
+# Load Model
 try:
     print("⏳ Loading AI Models...")
     DeepFace.build_model(MODEL_NAME)
     print(f"✅ {MODEL_NAME} Model Ready!")
 except Exception as e:
     print(f"❌ Model Error: {e}")
+
+def analyze_lighting(frame):
+    """
+    Returns a status string if lighting is bad, or None if lighting is okay.
+    """
+    # Convert to grayscale to check brightness intensity
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    avg_brightness = np.mean(gray)
+
+    debug_print("Light-Check", f"Average Brightness: {avg_brightness:.2f}")
+
+    if avg_brightness < 50:
+        return "Lighting Issue: Environment is too dark. Please ensure better lighting."
+    if avg_brightness > 200:
+        return "Lighting Issue: Too much glare or brightness. Please avoid direct light."
+    
+    return None # Lighting is acceptable
 
 @app.route('/generate-embedding', methods=['POST'])
 def generate_embedding():
@@ -97,57 +116,58 @@ def generate_embedding():
 
     try:
         file = request.files['image']
-        debug_print("Input", f"File received: {file.filename}")
-
         npimg = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
 
         if frame is None:
             raise ValueError("Could not decode image")
 
+        # 🚀 OPTIMIZATION: Resize to 320px as per your request
         height, width = frame.shape[:2]
-        debug_print("Img-Original", f"W: {width} x H: {height}")
-
-        # 🚀 OPTIMIZATION: Resize
-        target_width = 320 
-        
-        if width > target_width:
-            scale_factor = target_width / width
+        if width > TARGET_WIDTH:
+            scale_factor = TARGET_WIDTH / width
             new_height = int(height * scale_factor)
-            frame = cv2.resize(frame, (target_width, new_height), interpolation=cv2.INTER_AREA)
-            debug_print("Img-Resized", f"W: {target_width} x H: {new_height}")
+            frame = cv2.resize(frame, (TARGET_WIDTH, new_height), interpolation=cv2.INTER_AREA)
+            debug_print("Img-Resized", f"Resized to {TARGET_WIDTH}px width")
 
-        # Generate Embedding
-        debug_print("AI", "Starting DeepFace representation...")
+        # Attempt to Generate Embedding
         embedding_objs = DeepFace.represent(
             img_path=frame,
             model_name=MODEL_NAME,
             detector_backend=DETECTOR_BACKEND,
-            enforce_detection=True,
+            enforce_detection=True, # Must be True for Registration
             align=True
         )
         
         embedding = embedding_objs[0]["embedding"]
-        debug_print("AI", f"Vector Generated. Length: {len(embedding)}")
-        
-        # Sanity check: ensure it's not empty
-        if len(embedding) == 0:
-            raise ValueError("Generated embedding is empty")
-
         return jsonify({
-            "status": True,
-            "embedding": embedding,
-            "message": "Embedding generated"
+            "status": True, 
+            "embedding": embedding, 
+            "message": "Success"
         })
 
+    except ValueError as ve:
+        # ⚠️ DeepFace failed to find a face. Now we investigate WHY.
+        error_str = str(ve)
+        
+        if "Face could not be detected" in error_str:
+            # 1. Check Lighting First
+            lighting_msg = analyze_lighting(frame)
+            if lighting_msg:
+                return jsonify({"status": False, "message": lighting_msg}), 400
+            
+            # 2. If Lighting is OK, it must be Angle, Distance, or Obstruction
+            return jsonify({
+                "status": False, 
+                "message": "Angle/Position Issue: Face not visible. Please look directly at camera and remove masks/glasses."
+            }), 400
+
+        return jsonify({"status": False, "message": f"AI Error: {error_str}"}), 500
+
     except Exception as e:
-        error_msg = str(e)
-        debug_print("ERROR", error_msg)
-        
-        if "Face could not be detected" in error_msg:
-            return jsonify({"status": False, "message": "Face not found. Please look at the camera."}), 400
-        
-        return jsonify({"status": False, "message": f"Error: {error_msg}"}), 500
+        return jsonify({"status": False, "message": f"Server Error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, threaded=False)
+    from waitress import serve
+    print(f"🚀 Serving on port 8000 (Size Limit: {TARGET_WIDTH}px)...")
+    serve(app, host='0.0.0.0', port=8000, threads=1)

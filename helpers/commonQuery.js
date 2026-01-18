@@ -74,16 +74,17 @@ async function buildWhere(whereInput, applyDefaults = true) {
   // --- 3. Apply Tenant Defaults ---
   if (applyDefaults) {
     const ctx = getContext();
+
     // A. Company is MANDATORY if context exists
-    if (ctx.companyId && !where.company_id) {
-      where.company_id = ctx.companyId;
+    if (ctx.company_id) {
+      where.company_id = ctx.company_id;
     }
 
     // B. Fetch Settings for User/Branch logic
     let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
     try {
-      if (ctx.companyId) {
-        settings = await getCompanySetting(ctx.companyId);
+      if (ctx.company_id) {
+        settings = await getCompanySetting(ctx.company_id);
       }
     } catch (err) {
       console.warn("⚠️ Failed to fetch company settings:", err.message);
@@ -94,13 +95,13 @@ async function buildWhere(whereInput, applyDefaults = true) {
     // C. Branch Logic
     // If setting is enabled, restrict to current branch
     if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
-      if (ctx.branchId) where.branch_id = ctx.branchId;
+      if (ctx.branch_id) where.branch_id = ctx.branch_id;
     } 
 
     // D. User Logic
     // If setting is enabled, restrict to current user
     if (enable_user_wise_data === "true" || enable_user_wise_data === true) {
-      if (ctx.userId) where.user_id = ctx.userId;
+      if (ctx.user_id) where.user_id = ctx.user_id;
     }
   }
 
@@ -178,13 +179,13 @@ module.exports = {
     };
     if(requireTenantFields){
       const ctx = getContext();
-      enrichedData.company_id= ctx.companyId;
-      enrichedData.user_id= ctx.userId;
-      enrichedData.branch_id= ctx.branchId;
+      enrichedData.company_id= ctx.company_id;
+      enrichedData.user_id= ctx.user_id;
+      enrichedData.branch_id= ctx.branch_id;
       commonData = {
-        user_id: ctx.userId,
-        company_id: ctx.companyId,
-        branch_id: ctx.branchId,
+        user_id: ctx.user_id,
+        company_id: ctx.company_id,
+        branch_id: ctx.branch_id,
       };
     }
 
@@ -220,9 +221,9 @@ module.exports = {
       const ctx = getContext();
       enriched = dataArray.map((item) => ({
         ...item,
-        company_id: ctx.companyId,
-        user_id: ctx.userId,
-        branch_id: ctx.branchId,
+        company_id: ctx.company_id,
+        user_id: ctx.user_id,
+        branch_id: ctx.branch_id,
       }));
 
       commonData = {
@@ -266,13 +267,13 @@ module.exports = {
     };
     if(requireTenantFields){
       const ctx = getContext();
-      safeData.company_id= ctx.companyId;
-      safeData.user_id= ctx.userId;
-      safeData.branch_id= ctx.branchId;
+      safeData.company_id= ctx.company_id;
+      safeData.user_id= ctx.user_id;
+      safeData.branch_id= ctx.branch_id;
       commonData = {
-        user_id: ctx.userId,
-        company_id: ctx.companyId,
-        branch_id: ctx.branchId,
+        user_id: ctx.user_id,
+        company_id: ctx.company_id,
+        branch_id: ctx.branch_id,
       };
     }
 
@@ -325,7 +326,7 @@ module.exports = {
     if (!recordsToDelete.length) return 0;
 
     const [count] = await model.update(
-      { status: 2, user_id: ctx.userId },
+      { status: 2, user_id: ctx.user_id },
       withDebug({ where: { id: { [Op.in]: recordsToDelete.map(r => r.id) } } }, transaction)
     );
 
@@ -336,9 +337,9 @@ module.exports = {
           entity_name: model.name,
           record_id: record.id,
           old_data: record,
-          user_id: ctx.userId,
-          company_id: ctx.companyId,
-          branch_id: ctx.branchId,
+          user_id: ctx.user_id,
+          company_id: ctx.company_id,
+          branch_id: ctx.branch_id,
           ip_address: ctx.ip,
         }, transaction);
       }
@@ -453,7 +454,7 @@ module.exports = {
   },
 
   // 10. ADVANCED PAGINATION
-  async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", extraFilters = {}) {
+  async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt") {
     try {
       const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
         key,
@@ -461,32 +462,32 @@ module.exports = {
         sortable: sortable === true,
       }));
 
-      const page = Math.max(parseInt(reqBody?.page) || 1, 1);
-      const isFetchAll = reqBody?.limit === "all" || reqBody?.limit === "All";
-      const limit = isFetchAll ? undefined : (parseInt(reqBody?.limit) || 10);
+      const page = Math.max(parseInt(reqBody.page) || 1, 1);
+      const isFetchAll = reqBody.limit === "all" || reqBody.limit === "All";
+      const limit = isFetchAll ? undefined : (parseInt(reqBody.limit) || 10);
       const skip = isFetchAll ? 0 : (page - 1) * limit;
 
-      let filters = { ...extraFilters };
+      let filters = {};
 
       // A. Status
-      if (reqBody?.status !== undefined && reqBody?.status !== "All") {
-        if (Array.isArray(reqBody?.status) && reqBody?.status.length > 0) {
-          filters.status = { [Op.in]: reqBody?.status };
+      if (reqBody.status !== undefined && reqBody.status !== "All") {
+        if (Array.isArray(reqBody.status) && reqBody.status.length > 0) {
+          filters.status = { [Op.in]: reqBody.status };
         } else {
-          const s = reqBody?.status;
+          const s = reqBody.status;
           if (["Active", "0", 0].includes(s)) filters.status = 0;
           else if (["Deactive", "1", 1].includes(s)) filters.status = 1;
           else filters.status = s;
         }
       } 
-      else if (reqBody?.status === "All") {
+      else if (reqBody.status === "All") {
         delete filters.status;
         // filters.status = { [Op.or]: [0, 1, 2] }; 
       }
 
       // B. Filter Object
-      if (reqBody?.filter && typeof reqBody?.filter === "object") {
-        for (const [k, v] of Object.entries(reqBody?.filter)) {
+      if (reqBody.filter && typeof reqBody.filter === "object") {
+        for (const [k, v] of Object.entries(reqBody.filter)) {
           if (Array.isArray(v) && v.length > 0) {
             filters[k] = { [Op.in]: v };
           } else if (v !== undefined && v !== null && v !== "") {
@@ -496,24 +497,24 @@ module.exports = {
       }
 
       // C. Explicit Tenant overrides
-      if (reqBody?.company_id) filters.company_id = reqBody?.company_id;
-      if (reqBody?.branch_id) filters.branch_id = reqBody?.branch_id;
-      if (reqBody?.user_id) filters.user_id = reqBody?.user_id;
+      if (reqBody.company_id) filters.company_id = reqBody.company_id;
+      if (reqBody.branch_id) filters.branch_id = reqBody.branch_id;
+      if (reqBody.user_id) filters.user_id = reqBody.user_id;
 
       // D. Date Range
-      if (reqBody?.startDate || reqBody?.endDate) {
+      if (reqBody.startDate || reqBody.endDate) {
         const dateFilter = {};
-        if (reqBody?.startDate) dateFilter[Op.gte] = new Date(reqBody?.startDate);
-        if (reqBody?.endDate) dateFilter[Op.lte] = new Date(reqBody?.endDate);
+        if (reqBody.startDate) dateFilter[Op.gte] = new Date(reqBody.startDate);
+        if (reqBody.endDate) dateFilter[Op.lte] = new Date(reqBody.endDate);
         if (Object.keys(dateFilter).length > 0) filters[dateField] = dateFilter;
       }
 
       // E. Search
       const allowedSearchable = standardizedConfig.filter(f => f.searchable);
-      let searchFields = reqBody?.searchFields || allowedSearchable.map(f => f.key);
+      let searchFields = reqBody.searchFields || allowedSearchable.map(f => f.key);
       searchFields = searchFields.filter(key => allowedSearchable.some(f => f.key === key));
 
-      if (reqBody?.search && searchFields.length > 0) {
+      if (reqBody.search && searchFields.length > 0) {
         const attributeMap = new Map();
         if (options.attributes && Array.isArray(options.attributes)) {
             options.attributes.forEach(attr => {
@@ -527,7 +528,7 @@ module.exports = {
             if (!config) return null;
             let dbCol = attributeMap.has(config.key) ? attributeMap.get(config.key) : config.key;
             
-            const likeVal = `%${reqBody?.search}%`;
+            const likeVal = `%${reqBody.search}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
                 return { [finalKey]: { [Op.like]: likeVal } };
@@ -542,8 +543,8 @@ module.exports = {
       // Sorting
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
       let order = [['createdAt', 'DESC']];
-      if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
-        order = [[reqBody?.sortBy, reqBody?.sortDirection === "descending" ? "DESC" : "ASC"]];
+      if (reqBody.sortBy && sortableFields.includes(reqBody.sortBy)) {
+        order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
       }
 
       // Execution
@@ -556,9 +557,9 @@ module.exports = {
       );
 
       // Sticky Includes
-      if (reqBody?.include && typeof reqBody?.include === "object") {
+      if (reqBody.include && typeof reqBody.include === "object") {
         const includeConditions = [];
-        for (const [key, value] of Object.entries(reqBody?.include)) {
+        for (const [key, value] of Object.entries(reqBody.include)) {
             if (Array.isArray(value) && value.length > 0) includeConditions.push({ [key]: { [Op.in]: value } });
             else if (value) includeConditions.push({ [key]: value });
         }

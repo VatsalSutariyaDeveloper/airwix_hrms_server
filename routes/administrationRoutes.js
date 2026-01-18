@@ -9,15 +9,11 @@ const modulePermissionTypeMasterController = require("../controllers/administrat
 const permissionController = require("../controllers/administration/permission/permissionController");
 
 // Address / Location
-const cityMasterController = require("../controllers/administration/address/cityMasterController");
 const stateMasterController = require("../controllers/administration/address/stateMasterController");
 const countryMasterController = require("../controllers/administration/address/countryMasterController");
-const zoneMasterController = require("../controllers/administration/address/zoneMasterController");
 
 // General Masters
 const bankMasterController = require("../controllers/administration/bankMasterController");
-const hsnMasterController = require("../controllers/administration/hsnMasterController");
-const itemUnitMasterController = require("../controllers/administration/itemUnitMasterController");
 const currencyMasterController = require("../controllers/administration/currencyMasterController");
 const companySettingsMasterController = require("../controllers/administration/companySettingsMasterController");
 
@@ -83,13 +79,6 @@ router.delete("/permission/delete-route-permission/", permissionController.delet
 // 3. ADDRESS & LOCATION
 // =================================================================
 
-// City (Base: /city)
-router.post("/city/", cityMasterController.create);
-router.get("/city/", cityMasterController.getAll);
-router.get("/city/:id", cityMasterController.getById);
-router.put("/city/:id", cityMasterController.update);
-router.delete("/city/:id", cityMasterController.delete);
-
 // State (Base: /state)
 router.post("/state/", stateMasterController.create);
 router.post("/state/get-transactions", stateMasterController.getAll);
@@ -108,13 +97,6 @@ router.put("/country/:id", countryMasterController.update);
 router.delete("/country/", countryMasterController.delete);
 router.patch("/country/status", countryMasterController.updateStatus);
 
-// Zone (Base: /zone)
-router.post("/zone/", zoneMasterController.create);
-router.get("/zone/", zoneMasterController.getAll);
-router.get("/zone/:id", zoneMasterController.getById);
-router.put("/zone/:id", zoneMasterController.update);
-router.delete("/zone/:id", zoneMasterController.delete);
-
 // =================================================================
 // 4. GENERAL MASTERS
 // =================================================================
@@ -125,24 +107,6 @@ router.get("/bank/", bankMasterController.getAll);
 router.get("/bank/:id", bankMasterController.getById);
 router.put("/bank/:id", bankMasterController.update);
 router.delete("/bank/:id", bankMasterController.delete);
-
-// HSN Master (Base: /hsn)
-router.post("/hsn/", hsnMasterController.create);
-router.post("/hsn/get-transactions", hsnMasterController.getAll);
-router.post("/hsn/dropdown-list", hsnMasterController.dropdownList);
-router.get("/hsn/:id", hsnMasterController.getById);
-router.put("/hsn/:id", hsnMasterController.update);
-router.delete("/hsn/", hsnMasterController.delete);
-router.patch("/hsn/status", hsnMasterController.updateStatus);
-
-// Item Unit Master (Base: /item-unit)
-router.post("/item-unit/", itemUnitMasterController.create);
-router.post("/item-unit/get-transactions", itemUnitMasterController.getAll);
-router.post("/item-unit/dropdown-list", itemUnitMasterController.dropdownList);
-router.get("/item-unit/:id", itemUnitMasterController.getById);
-router.put("/item-unit/:id", itemUnitMasterController.update);
-router.delete("/item-unit/", itemUnitMasterController.delete);
-router.patch("/item-unit/status", itemUnitMasterController.updateStatus);
 
 // Currency Master (Base: /currency)
 router.post("/currency/", currencyMasterController.create);

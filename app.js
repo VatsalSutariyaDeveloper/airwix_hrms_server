@@ -86,10 +86,10 @@ app.get("/force-currency-update", async (req, res) => {
   res.status(200).send("Currency update process triggered successfully.");
 });
 
-Promise.all([
-  db.sequelize.sync(), // Syncs the primary database
-])
-  .then(async () => {
+// Promise.all([
+//   db.sequelize.sync({ alter: false, force: false }),
+// ])
+//   .then(async () => {
     console.log("✅ Both databases synced");
 
     // Load entity constants from database
@@ -99,10 +99,10 @@ Promise.all([
     server.listen(process.env.PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on http://0.0.0.0:${process.env.PORT}`);
     });
-  })
-  .catch((err) => {
-    console.error("❌ Failed to sync databases:", err);
-  });
+  // })
+  // .catch((err) => {
+  //   console.error("❌ Failed to sync databases:", err);
+  // });
 
 cron.schedule('0 0 * * *', async () => {
   console.log('⏰ Running daily log cleanup task...');
