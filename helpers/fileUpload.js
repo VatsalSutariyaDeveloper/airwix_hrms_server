@@ -68,7 +68,8 @@ const uploadFile = async (
   res,
   subfolder = "",
   transaction = null,
-  oldFileName = null
+  oldFileName = null,
+  customFilename = null
 ) => {
   let filesToProcess = [];
 
@@ -103,8 +104,17 @@ const uploadFile = async (
 
   for (const file of filesToProcess) {
     const ext = path.extname(file.originalname).toLowerCase();
-    const name = path.basename(file.originalname, ext).replace(/\s+/g, "_");
-    const filename = `${Date.now()}_${name}${ext}`;
+    let filename;
+    
+    if (customFilename) {
+      // Use custom filename, ensure it has the correct extension
+      filename = customFilename.endsWith(ext) ? customFilename : customFilename + ext;
+    } else {
+      // Use default naming
+      const name = path.basename(file.originalname, ext).replace(/\s+/g, "_");
+      filename = `${Date.now()}_${name}${ext}`;
+    }
+    
     const fullPath = path.join(targetFolder, filename);
 
     try {

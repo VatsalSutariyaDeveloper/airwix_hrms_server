@@ -1007,18 +1007,11 @@ exports.facePunch = async (req, res) => {
             const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
             const dateStr = `${day}-${month}-${year}`;
             const ext = path.extname(originalName);
-            const customFilename = `${Date.now()}_punch_${dateStr} || ${timeStr}${ext}`;
+            const customFilename = `${Date.now()}_punch_${dateStr}__${timeStr}${ext}`;
             
-            // Manually save the file with custom name
-            const targetFolder = path.join(process.cwd(), "uploads", constants.ATTENDANCE_LOG_FOLDER);
-            if (!fs.existsSync(targetFolder)) {
-                fs.mkdirSync(targetFolder, { recursive: true });
-            }
-            
-            const fullPath = path.join(targetFolder, customFilename);
-            fs.writeFileSync(fullPath, imageBuffer);
-            
-            savedFilename = customFilename;
+            // Use uploadFile with custom filename
+            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
+            savedFilename = savedFiles.image || savedFiles['image'];
             
             return res.error(constants.FACE_NOT_RECOGNIZED, { 
                 message: `Face Not Recognized (Match: ${matchPercentage}%)` 
