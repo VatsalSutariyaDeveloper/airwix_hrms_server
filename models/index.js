@@ -55,6 +55,11 @@ const ApprovalLevel = require("./administration/approval/approvalLevel")(sequeli
 const ApprovalRequest = require("./administration/approval/approvalRequest")(sequelize, DataTypes);
 const ApprovalLog = require("./administration/approval/approvalLog")(sequelize, DataTypes);
 
+// Holiday models
+const Holiday = require("./holiday")(sequelize, DataTypes);
+const HolidayTemplate = require("./holidayTemplate")(sequelize, DataTypes);
+const HolidayTransaction = require("./holidayTransaction")(sequelize, DataTypes);
+
 // Collect all models in one db object
 const db = {
   // Administration
@@ -109,6 +114,11 @@ const db = {
   // Employee
   Employee,
   EmployeeFamilyMember,
+
+  // Holiday
+  Holiday,
+  HolidayTemplate,
+  HolidayTransaction,
 };
 
 Object.keys(db).forEach(modelName => {
