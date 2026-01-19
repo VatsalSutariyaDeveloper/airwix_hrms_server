@@ -8,7 +8,9 @@ const {
     CountryMaster,
     UserCompanyRoles,
     CompanyConfigration,
-    RolePermission
+    RolePermission,
+    AttendancePunch,
+    AttendanceDay
 } = require("../../models");
 
 const {
@@ -899,17 +901,10 @@ exports.facePunch = async (req, res) => {
             raw: true 
         });
 
-        // 🚀 PARALLEL TASK 3: Save File
-        const saveFileTask = (async () => {
-            const saved = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
-            return saved.image || saved['image']; 
-        })();
-
-        // ⚡ EXECUTE ALL AT ONCE
-        const [liveVector, employees, savedFilename] = await Promise.all([
+        // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
+        const [liveVector, employees] = await Promise.all([
             getEmbeddingTask,
-            getEmployeesTask,
-            saveFileTask
+            getEmployeesTask
         ]);
 
         debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
@@ -961,14 +956,70 @@ exports.facePunch = async (req, res) => {
         const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
         debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
 
-        // --- VALIDATION ---
+        // --- VALIDATION & CONDITIONAL FILE SAVING ---
+        let savedFilename;
         if (bestMatch && minDistance < FACE_MATCH_THRESHOLD) {
-            return res.success("Punch Successful", {
-                employee: bestMatch.first_name,
-                confidence: matchPercentage + "%",
-                image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`
-            });
+            const transaction = await sequelize.transaction();
+            
+            try {
+                const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
+                savedFilename = savedFiles.image || savedFiles['image'];
+                
+                const now = new Date();
+                const attendancePunch = await commonQuery.createRecord(AttendancePunch, {
+                    employee_id: bestMatch.id,
+                    punch_time: now,
+                    punch_type: "IN", 
+                    image_name: savedFilename
+                }, transaction);
+                
+                const today = now.toISOString().split('T')[0];
+               
+                await commonQuery.createRecord(AttendanceDay, {
+                    employee_id: bestMatch.id,
+                    attendance_date: today,
+                }, transaction);
+            
+                await transaction.commit();
+                
+                return res.success("Punch Successful", {
+                    employee: bestMatch.first_name,
+                    confidence: matchPercentage + "%",
+                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
+                    attendance_punch_id: attendancePunch.id
+                });
+            } catch (error) {
+                await transaction.rollback();
+                console.error("Error creating attendance records:", error);
+                return res.error(constants.SERVER_ERROR, { message: "Failed to create attendance records" });
+            }
         } else {
+            // Save to ATTENDANCE_LOG_FOLDER for failed face recognition with custom timestamp
+            const now = new Date();
+            const day = String(now.getDate()).padStart(2, '0');
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const year = now.getFullYear();
+            let hours = now.getHours();
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12; 
+            const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+            const dateStr = `${day}-${month}-${year}`;
+            const ext = path.extname(originalName);
+            const customFilename = `${Date.now()}_punch_${dateStr} || ${timeStr}${ext}`;
+            
+            // Manually save the file with custom name
+            const targetFolder = path.join(process.cwd(), "uploads", constants.ATTENDANCE_LOG_FOLDER);
+            if (!fs.existsSync(targetFolder)) {
+                fs.mkdirSync(targetFolder, { recursive: true });
+            }
+            
+            const fullPath = path.join(targetFolder, customFilename);
+            fs.writeFileSync(fullPath, imageBuffer);
+            
+            savedFilename = customFilename;
+            
             return res.error(constants.FACE_NOT_RECOGNIZED, { 
                 message: `Face Not Recognized (Match: ${matchPercentage}%)` 
             });
