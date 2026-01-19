@@ -367,11 +367,6 @@ exports.update = async (req, res) => {
     if (isUserPermissionUpdate) {
       // Validate only permission-related fields
       requiredFields = {
-        module_id: "Module",
-        entity_id: "Entity",
-        user_id: "User",
-        branch_id: "Branch",
-        company_id: "Company",
         user_permission: "User Permission",
       };
       validateOptions = {};
@@ -623,8 +618,6 @@ exports.getAll = async (req, res) => {
           "user_name",
           "email",
           "mobile_no",
-          "address",
-          "pincode",
           "status",
           "profile_image",
           "authorized_signature",

@@ -52,9 +52,6 @@ exports.getAll = async (req, res) => {
           as: "users",
           attributes: [],
           required: false,
-          where: {
-            company_id: req.body.company_id 
-          }
         }
       ],
       attributes: [
@@ -62,18 +59,16 @@ exports.getAll = async (req, res) => {
         "role_name",
         "permissions",
         sequelize.fn(
-      "STRING_AGG",
-      sequelize.col("users.user_name"),
-      ", "
-    ),
+          "STRING_AGG",
+          sequelize.col("users.user_name"),
+          ", "
+        ),
         "status",
-        "company_id",
         "created_at",
         "updated_at",
       ],
       group: ['rolePermission.id'],
-    },
-    false
+    }
   );
   return res.ok(data);
 };
@@ -86,7 +81,6 @@ exports.dropdownList = async (req, res) => {
     const record = await commonQuery.findAllRecords(
       RolePermission,
       { 
-        company_id: req.body.company_id,
         status: 0
       },
       { 
@@ -94,6 +88,7 @@ exports.dropdownList = async (req, res) => {
         order: [["role_name", "ASC"]] 
       },
       null,
+      false,
       false
     );
     return res.ok(record);
@@ -280,9 +275,6 @@ exports.getPermissions = async (req, res) => {
       ModulePermissionTypeMaster,
       { 
         status: 0,
-        company_id: req.body.company_id,
-        user_id: req.body.user_id,
-        branch_id: req.body.branch_id
       },
       { attributes: ["id", "permission_type_name", "priority"] },
       null,
@@ -300,9 +292,6 @@ exports.getPermissions = async (req, res) => {
         ModuleMaster,
         { 
           status: 0,
-          company_id: req.body.company_id,
-          user_id: req.body.user_id,
-          branch_id: req.body.branch_id
         },
         {
           attributes: ["id", "module_name", "cust_module_name", "priority"],

@@ -33,8 +33,6 @@ const companySettingsMasterController = require("../controllers/administration/c
 // Module Master (Base: /module)
 router.post("/module/", moduleMasterController.create);
 router.post("/module/get-transactions", moduleMasterController.getAll);
-router.post("/module/get_module", moduleMasterController.getModuleId);
-router.post("/module/sidebar-module", moduleMasterController.getSidebarModule);
 router.post("/module/dropdown-list", moduleMasterController.dropdownList);
 router.get("/module/:id", moduleMasterController.getById);
 router.put("/module/:id", moduleMasterController.update);
@@ -44,9 +42,6 @@ router.patch("/module/status", moduleMasterController.updateStatus);
 // Module Entity Master (Base: /module-entity)
 router.post("/module-entity/", moduleEntityMasterController.create);
 router.post("/module-entity/get-transactions", moduleEntityMasterController.getAll);
-router.post("/module-entity/get-ids", moduleEntityMasterController.getModuleAndEntityIdsByUrl);
-router.post("/module-entity/dropdown-list", moduleEntityMasterController.moduleList);
-router.post("/module-entity/get-by-module", moduleEntityMasterController.getByModuleId);
 router.get("/module-entity/:id", moduleEntityMasterController.getById);
 router.put("/module-entity/:id", moduleEntityMasterController.update);
 router.delete("/module-entity/", moduleEntityMasterController.delete);
