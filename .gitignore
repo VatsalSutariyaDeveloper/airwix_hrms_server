@@ -42,6 +42,7 @@ pids/
 
 # Dependency lock files (if using only one package manager, comment the other)
 package-lock.json
+package.json
 # yarn.lock
 # pnpm-lock.yaml
 

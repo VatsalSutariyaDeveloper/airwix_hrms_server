@@ -9,7 +9,7 @@ const {
     UserCompanyRoles,
     CompanyConfigration,
     RolePermission,
-    AttendancePunch,
+    AttendancePunch,    
     AttendanceDay
 } = require("../../models");
 
@@ -658,6 +658,69 @@ exports.getAll = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+
+exports.getPunch = async (req, res) => {
+    try {
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["punch_time", true, true],
+            ["punch_type", true, false],
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            req.body,
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: AttendancePunch,
+                        as: 'attendance_punches',
+                        attributes: [
+                            'id', 
+                            'punch_time', 
+                            'punch_type', 
+                            'image_name', 
+                            'device_id', 
+                        ],
+                        required: false,
+                        order: [['punch_time', 'DESC']]
+                    }
+                ],
+                attributes: [
+                    "id",
+                    "first_name", 
+                    "employee_code",
+                    "created_at",
+                ]
+            },
+            true,
+            "joining_date"
+        );
+
+        // Generate image URLs for attendance punches
+        if (data.items && data.items.length > 0) {
+            data.items = data.items.map(employee => {                
+                const plainEmployee = employee.toJSON ? employee.toJSON() : employee;                
+                if (plainEmployee.attendance_punches && plainEmployee.attendance_punches.length > 0) {
+                    plainEmployee.attendance_punches = plainEmployee.attendance_punches.map(punch => {
+                        const plainPunch = punch.toJSON ? punch.toJSON() : punch;
+                        if (plainPunch.image_name) {
+                            plainPunch.image_name_url = `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${plainPunch.image_name}`;
+                        }
+                        return plainPunch;
+                    });
+                }
+                return plainEmployee;
+            });
+        }
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
 
 /**
  * Dropdown list for Select inputs.

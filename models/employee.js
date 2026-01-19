@@ -119,6 +119,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
         Employee.belongsTo(models.SeriesTypeMaster, { foreignKey: "series_id", as: "series_type" });
         Employee.hasMany(models.EmployeeFamilyMember, { foreignKey: "employee_id", as: "family_members" });
+        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
     };
 
     return Employee;

@@ -8,6 +8,7 @@ router.post("/", bufferImage("profile_image", "bank_proof_doc", "pan_doc", "aadh
 // Existing Routes
 router.post("/", bufferImage("profile_image"), employeeController.create); // Assuming create uses image too
 router.post("/get-transaction", employeeController.getAll);
+router.post("/get-punch", employeeController.getPunch);
 router.get("/dropdown-list", employeeController.dropdownList);
 router.get("/:id", employeeController.getById);
 router.put("/update-status", employeeController.updateStatus);

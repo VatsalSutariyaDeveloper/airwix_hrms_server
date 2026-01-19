@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node app.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon app.js",
+    "dev": "nodemon --legacy-watch app.js",
     "generate:constants": "node scripts/generateModuleConstants.js"
   },
   "keywords": [],
@@ -39,5 +39,9 @@
     "socket.io": "^4.8.1",
     "ua-parser-js": "^2.0.4",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "node-watch": "^0.7.4",
+    "nodemon": "^3.1.11"
   }
 }
