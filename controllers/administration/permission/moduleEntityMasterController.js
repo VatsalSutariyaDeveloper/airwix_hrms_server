@@ -15,103 +15,6 @@ const {
 const { Op } = require("sequelize");
 const { clearEntityCache } = require("../../../helpers/permissionCache");
 
-// Get All Module Entity Name
-exports.moduleList = async (req, res) => {
-  try {
-    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.body.company_id);
-
-    const removalEntity = [];
-    if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
-    if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
-
-    const record = await commonQuery.findAllRecords(
-      ModuleEntityMaster,
-      { 
-        id: { [Op.notIn]: removalEntity },
-        user_id: req.body.user_id,       
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id,
-        status: 0
-      },
-      { attributes: ["id", "entity_name"] },
-      null,
-      false
-    );
-    return res.ok(record);
-  } catch (err) {
-    console.log(err);
-    return handleError(err, res, req);
-  }
-};
-exports.getByModuleId = async (req, res) => {
-  try {
-    // Sanitize the URL by removing the leading slash if it exists
-    let urlToFind = req.body.url;
-    // Remove leading slash if it exists
-    if (urlToFind.startsWith("/")) {
-      urlToFind = urlToFind.substring(1);
-    }
-    
-    // Remove trailing slash if it exists
-    if (urlToFind.endsWith("/")) {
-      urlToFind = urlToFind.slice(0, -1);
-    }
-
-    
-    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.body.company_id);
-
-    const removalEntity = [];
-    if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
-    if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
-
-    const record = await commonQuery.findAllRecords(
-      ModuleMaster,
-      { 
-        module_url: urlToFind,
-        status: 0,
-        user_id: req.body.user_id,
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id 
-      },
-      {
-        attributes: [
-          "id",
-          "module_name",
-          "cust_module_name",
-          "module_icon_name",
-          "module_url",
-          "priority",
-        ],
-        include: [
-          {
-            model: ModuleEntityMaster,
-            as: "entities",
-            where: { 
-              id: { [Op.notIn]: removalEntity },
-              status: 0,
-              entity_visiblity: 1,
-            },
-            attributes: [
-              "id",
-              "entity_name",
-              "cust_entity_name",
-              "entity_icon_name",
-              "entity_url",
-              "priority",
-            ],
-          },
-        ],
-      },
-      null,
-      false
-    );
-
-    return res.ok(record);
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-
 // Create Module Entity Master Access
 exports.create = async (req, res) => {
   const POST = req.body;
@@ -121,14 +24,10 @@ exports.create = async (req, res) => {
       module_id: "Master Module",
       entity_name: "Entity Name",
       cust_entity_name: "Entity Name For Parties",
-      // entity_permmision_type_ids: "Permission Type IDs",
       entity_url: "Entity URL",
       entity_description: "Entity Description",
       entity_icon_name: "Entity Icon Name",
       priority: "Entity Order",
-      user_id: "User",
-      branch_id: "Branch",
-      company_id: "Company",
       actions: "Actions",
     };
 
@@ -157,7 +56,10 @@ exports.create = async (req, res) => {
       const existingPermission = await commonQuery.findOneRecord(
         Permission, 
         { module_id: POST.module_id, entity_id: result.id, action: action.action }, 
-        transaction
+        {},
+        transaction,
+        false,
+        false
       );
 
       if (existingPermission) {
@@ -169,7 +71,7 @@ exports.create = async (req, res) => {
         module_id: POST.module_id,
         entity_id: result.id,
         action: action.action,
-      }, transaction);
+      }, transaction, false);
 
       createdPermissions.push(newPerm);
     }
@@ -185,21 +87,20 @@ exports.create = async (req, res) => {
 // Get All Module Entity Master
 exports.getAll = async (req, res) => {
   try {
-  // key, isSearchable, isSortable
     const fieldConfig = [
       ["moduleMaster.module_name", true, true],
       ["entity_name", true, true],
       ["cust_entity_name", true, true],
     ];
-    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.body.company_id);
+    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.user.company_id);
 
-    const removalEntity = [];
-    if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
-    if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
-    if (!req.body.filter) {
-      req.body.filter = {};
-    }
-    req.body.filter.id = { [Op.notIn]: removalEntity };
+    // const removalEntity = [];
+    // if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
+    // if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
+    // if (!req.body.filter) {
+    //   req.body.filter = {};
+    // }
+    // req.body.filter.id = { [Op.notIn]: removalEntity };
 
     const data = await commonQuery.fetchPaginatedData(
       ModuleEntityMaster,
@@ -216,36 +117,44 @@ exports.getAll = async (req, res) => {
             model: ModulePermissionTypeMaster,
             as: "permissionType",
             required: false,
-            on: sequelize.literal(
-              `FIND_IN_SET(permissionType.id, entity_permmision_type_ids)`
-            ),
+            on: sequelize.literal(`
+              "permissionType"."id" = ANY(
+                string_to_array("ModuleEntityMaster"."entity_permmision_type_ids", ',')::int[]
+              )
+            `),
             attributes: [],
           },
         ],
         attributes: [
           "id",
-          "moduleMaster.module_name",
+          [sequelize.col("moduleMaster.module_name"), "module_name"],
           "entity_name",
           "cust_entity_name",
           "entity_icon_name",
           "priority",
           "status",
-          "company_id",
-          "branch_id",
-          "user_id",
           [
             sequelize.fn(
-              "GROUP_CONCAT",
-              sequelize.col("permissionType.permission_type_name")
+              "STRING_AGG",
+              sequelize.col("permissionType.permission_type_name"),
+              ", "
             ),
             "entity_permission_names",
           ],
         ],
-        group: ["id"],
+        group: [
+          "ModuleEntityMaster.id",
+          "moduleMaster.module_name",
+          "ModuleEntityMaster.entity_name",
+          "ModuleEntityMaster.cust_entity_name",
+          "ModuleEntityMaster.entity_icon_name",
+          "ModuleEntityMaster.priority",
+          "ModuleEntityMaster.status",
+        ],
       },
-      null,
       false
     );
+
     return res.ok(data);
   } catch (err) {
     return handleError(err, res, req);
@@ -268,10 +177,11 @@ exports.getById = async (req, res) => {
           model: ModulePermissionTypeMaster,
           as: "permissionType",
           required: false,
-          // Using sequelize.literal for FIND_IN_SET
-          on: sequelize.literal(
-            `FIND_IN_SET(permissionType.id, ModuleEntityMaster.entity_permmision_type_ids)`
-          ),
+          on: sequelize.literal(`
+            "permissionType"."id" = ANY(
+              string_to_array("ModuleEntityMaster"."entity_permmision_type_ids", ',')::int[]
+            )
+          `),
           attributes: [],
         },
         {
@@ -307,7 +217,6 @@ exports.getById = async (req, res) => {
   }
 };
 
-
 // Update Module Entity Master Access
 exports.update = async (req, res) => {
   const POST = req.body;
@@ -317,11 +226,7 @@ exports.update = async (req, res) => {
       module_id: "Master Module",
       entity_name: "Entity Name",
       cust_entity_name: "Entity Name For Parties",
-      // entity_permmision_type_ids: "Permission Type IDs",
       priority: "Entity Order",
-      user_id: "User",
-      branch_id: "Branch",
-      company_id: "Company",
     };
 
     const errors = await validateRequest(req.body, requiredFields,
@@ -455,7 +360,8 @@ exports.delete = async (req, res) => {
     const deleted = await commonQuery.softDeleteById(
       ModuleEntityMaster,
       ids,
-      transaction
+      transaction,
+      false
     );
     if (!deleted) {
       await transaction.rollback();
@@ -515,83 +421,6 @@ exports.updateStatus = async (req, res) => {
     return res.success(constants.ENTITY_UPDATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
-    return handleError(err, res, req);
-  }
-};
-
-// Get Module ID and Entity ID by URL
-exports.getModuleAndEntityIdsByUrl = async (req, res) => {
-  try {
-    const { url } = req.body;
-
-    if (!url) {
-      return res.error( constants.REQUIRED_FIELD_MISSING, "URL");
-    }
-
-    let normalizedUrl = url.trim();
-
-    // Step 1: Remove leading slash (if it exists)
-    if (normalizedUrl.startsWith('/')) {
-      normalizedUrl = normalizedUrl.slice(1); // Remove leading slash
-    }
-
-    // Remove trailing slash if present (but not the root "/")
-    if (normalizedUrl.length > 1 && normalizedUrl.endsWith('/')) {
-      normalizedUrl = normalizedUrl.slice(0, -1);
-    }
-
-    let previousUrl;
-    do {
-      previousUrl = normalizedUrl;
-      normalizedUrl = normalizedUrl.replace(/\/(add|edit|view|\d+|[0-9a-fA-F-]{36})$/, "");
-    } while (previousUrl !== normalizedUrl);
-
-    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.body.company_id);
-
-    const removalEntity = [];
-    if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
-    if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
-    // Step 2: Try Entity
-    const entityRecord = await commonQuery.findOneRecord(
-      ModuleEntityMaster,
-      { 
-        id: { [Op.notIn]: removalEntity },
-        entity_url: normalizedUrl,
-        user_id: req.body.user_id,
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id 
-      }
-    );
-
-    if (entityRecord) {
-      return res.ok({
-        module_id: entityRecord.module_id,
-        entity_id: entityRecord.id,
-      });
-    }
-
-    // Step 3: Try Module
-    const moduleRecord = await commonQuery.findOneRecord(
-      ModuleMaster,
-      { 
-        module_url: normalizedUrl,
-        user_id: req.body.user_id,
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id 
-      }
-    );
-
-    if (moduleRecord) {
-      return res.ok({
-        module_id: moduleRecord.id,
-        entity_id: null,
-      });
-    }
-
-    // Step 4: Not found
-    return res.error(constants.NOT_FOUND);
-
-  } catch (err) {
     return handleError(err, res, req);
   }
 };

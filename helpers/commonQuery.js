@@ -313,9 +313,9 @@ module.exports = {
   },
 
   // 4. Soft Delete
-  softDeleteById: async (model, whereInput, transaction = null) => {
+  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true) => {
     const ctx = getContext();
-    const condition = await buildWhere(whereInput, true);
+    const condition = await buildWhere(whereInput, requireTenantFields);
 
     const recordsToDelete = await model.findAll({
       where: condition,
