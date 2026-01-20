@@ -112,16 +112,18 @@ router.get("/shift/:id", shiftController.getById);
 router.put("/shift/:id", shiftController.update);
 router.delete("/shift/", shiftController.delete);
 router.patch("/shift/status", shiftController.updateStatus);
+router.post("/shift/dropdown-list", shiftController.dropdownList);
+
 
 // ==========================
 // 25. DEVICE MASTER ROUTES
 // ==========================
-
-router.post("/device-master", deviceMasterController.create);
-router.post("/device-master/get-transactions", deviceMasterController.getAll);
 router.get("/device-master/:id", deviceMasterController.getById);
+router.post("/device-master/get-transactions", deviceMasterController.getAll);
+router.post("/device-master", deviceMasterController.create);
 router.put("/device-master/:id", deviceMasterController.update);
 router.delete("/device-master", deviceMasterController.delete);
 router.patch("/device-master/status", deviceMasterController.updateStatus);
+router.post("/device-master/dropdown-list", deviceMasterController.dropdownList);
 
 module.exports = router;

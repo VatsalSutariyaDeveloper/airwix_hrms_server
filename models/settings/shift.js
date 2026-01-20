@@ -12,6 +12,7 @@ const Shift = sequelize.define("Shift",
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,
+            comment: "0: Active, 1: Inactive, 2: Deleted"
         },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

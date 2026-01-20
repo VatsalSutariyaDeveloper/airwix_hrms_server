@@ -201,3 +201,12 @@ exports.updateStatus = async (req, res) => {
 
 //     res.json({ message: "Shift assigned successfully" });
 // };
+
+exports.dropdownList = async (req, res) => {
+  try {
+    const result = await commonQuery.findAllRecords(Shift, { status: 0 });
+    return res.ok(result);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+}

@@ -39,7 +39,10 @@ const SubscriptionPlan = require("./subscription/subscriptionPlans")(sequelize, 
 const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataTypes);
 const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
 const Shift = require("./settings/shift")(sequelize, DataTypes);
-const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
+// const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
+const WeeklyOffTemplate = require("./attendance/weeklyOffTemplate")(sequelize, DataTypes);
+const WeeklyOffTemplateDay = require("./attendance/weeklyOffTemplateDay")(sequelize, DataTypes);
+
 const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes);
 
 // Employee models
@@ -115,7 +118,9 @@ const db = {
   AttendancePunch,
   AttendanceDay,
   Shift,
-  WeeklyOff,
+  // WeeklyOff,
+  WeeklyOffTemplate,
+  WeeklyOffTemplateDay,
   EmployeeShift,
 
   // Employee
