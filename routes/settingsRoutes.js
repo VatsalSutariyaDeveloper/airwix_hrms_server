@@ -13,6 +13,7 @@ const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftController = require("../controllers/settings/shiftController.js");
 const deviceMasterController = require("../controllers/settings/deviceMasterController");
+const holidayTemplateController = require("../controllers/settings/holidayTemplateController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -125,5 +126,17 @@ router.put("/device-master/:id", deviceMasterController.update);
 router.delete("/device-master", deviceMasterController.delete);
 router.patch("/device-master/status", deviceMasterController.updateStatus);
 router.post("/device-master/dropdown-list", deviceMasterController.dropdownList);
+
+// ==========================
+// 26. HOLIDAY TEMPLATE ROUTES
+// ==========================
+router.post("/holiday-template/", holidayTemplateController.create);
+router.put("/holiday-template/:id", holidayTemplateController.update);
+router.post("/holiday-template/get-transactions", holidayTemplateController.getAll);
+router.post("/holiday-template/dropdown-list", holidayTemplateController.dropdownList);
+router.get("/holiday-template/:id", holidayTemplateController.getById);
+router.delete("/holiday-template/", holidayTemplateController.delete);
+router.patch("/holiday-template/status", holidayTemplateController.updateStatus);
+
 
 module.exports = router;

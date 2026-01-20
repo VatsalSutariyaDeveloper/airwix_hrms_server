@@ -209,3 +209,13 @@ exports.updateStatus = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+// Get dropdown list of active device masters
+exports.dropdownList = async (req, res) => {
+    try {
+        const result = await commonQuery.findAllRecords(DeviceMaster, { status: 0 });
+        return res.ok(result);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
