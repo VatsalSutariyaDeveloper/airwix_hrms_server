@@ -106,6 +106,7 @@ exports.logActivity = async (logData, transaction = null) => {
     }, { transaction });
   } catch (err) {
     console.error(`[CRITICAL] Failed to log activity: ${err.message}`);
+    throw err;
   }
 };
 
@@ -140,6 +141,7 @@ exports.logQuery = async (logData, transaction = null) => {
 
   } catch (err) {
     console.error(`[CRITICAL] Failed to log query: ${err.message}`);
+    throw err;
   }
 };
 
@@ -166,6 +168,7 @@ exports.logError = async (logData, transaction = null) => {
 
   } catch (err) {
     console.error(`[CRITICAL] Failed to log error: ${err.message}`);
+    throw err;
   }
 };
 

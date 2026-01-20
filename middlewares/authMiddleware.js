@@ -21,7 +21,8 @@ function authMiddleware(req, res, next) {
       company_id: decoded.company_id,
       branch_id: decoded.branch_id,
       role_id: decoded.role_id,
-      permissions: decoded.permissions || []
+      permissions: decoded.permissions || [],
+      access_by: decoded.access_by || "web login"
     };
 
     // ✅ 2. Bind AsyncLocalStorage context ONCE

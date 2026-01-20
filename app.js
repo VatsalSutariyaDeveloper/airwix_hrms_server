@@ -3,6 +3,8 @@ const path = require("path");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const http = require("http");
+const os = require("os");
+
 dotenv.config({ path: ".env.local", override: true });
 dotenv.config({ path: ".env" });
 // const { initSocket } = require('./socket');
@@ -98,8 +100,12 @@ app.get("/force-currency-update", async (req, res) => {
 
     server.setTimeout(50 * 1000);
 
-    server.listen(process.env.PORT, "0.0.0.0", () => {
-      console.log(`🚀 Server running on http://0.0.0.0:${process.env.PORT}`);
+    const PORT = process.env.PORT || 5000;
+    const HOST = "0.0.0.0";
+
+    server.listen(PORT, HOST, () => {
+      const ip = getServerIP();
+      console.log(`🚀 Server running on http://${ip}:${PORT}`);
     });
   // })
   // .catch((err) => {
@@ -116,4 +122,15 @@ cron.schedule('0 0 * * *', async () => {
   }
 });
 
-// connectMongoDB();
+function getServerIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name]) {
+      // IPv4, non-internal (not 127.0.0.1)
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "localhost";
+}

@@ -59,11 +59,23 @@ const ERROR_HTTP_MAP = {
 
 module.exports = (req, res, next) => {
 
+  const isApp = () => {
+    const accessBy = req.user?.access_by || req.body?.access_by || req.query?.access_by;
+    return true;
+  };
+
   /**
    * OK RESPONSE (FETCH / READ)
    * Usage: res.ok(data)
   */
   res.ok = (data) => {
+    if (isApp()) {
+      return res.json({
+        status: true,
+        message: "Action successful",
+        data: data
+      });
+    }
     return res.json({
       success: true,
       data
@@ -77,6 +89,14 @@ module.exports = (req, res, next) => {
    *  res.success(code, data)
   */
   res.success = (code, data) => {
+    if (isApp()) {
+      return res.json({
+        status: true,
+        message: code,
+        data: data || null
+      });
+    }
+
     const response = {
       success: true,
       code
@@ -97,15 +117,29 @@ module.exports = (req, res, next) => {
   */
   res.error = (code, errors = null) => {
     const status = ERROR_HTTP_MAP[code] || 500;
-    return res.status(status).json({ success:false, code, errors });
+    if (isApp()) {
+      return res.status(status).json({
+        status: false,
+        message: typeof errors === 'string' ? errors : (errors?.message || code),
+        data: errors
+      });
+    }
+    return res.status(status).json({ success: false, code, errors });
   };
 
   res.dataError = (code, data = null) => {
-    const status = ERROR_HTTP_MAP[code] || 400; 
-    return res.status(status).json({ 
-      success: false, 
+    const status = ERROR_HTTP_MAP[code] || 400;
+    if (isApp()) {
+      return res.status(status).json({
+        status: false,
+        message: code,
+        data: data
+      });
+    }
+    return res.status(status).json({
+      success: false,
       code,
-      errors: null, 
+      errors: null,
       data
     });
   };

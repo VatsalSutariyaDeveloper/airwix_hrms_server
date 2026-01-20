@@ -13,6 +13,7 @@ const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftController = require("../controllers/settings/shiftController.js");
 const deviceMasterController = require("../controllers/settings/deviceMasterController");
+const leaveTemplateController = require("../controllers/settings/leave/leaveTemplateController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -123,5 +124,15 @@ router.get("/device-master/:id", deviceMasterController.getById);
 router.put("/device-master/:id", deviceMasterController.update);
 router.delete("/device-master", deviceMasterController.delete);
 router.patch("/device-master/status", deviceMasterController.updateStatus);
+
+// ==========================
+// 26. LEAVE TEMPLATE ROUTES
+// ==========================
+router.post("/leave-template", leaveTemplateController.create);
+router.post("/leave-template/get-transactions", leaveTemplateController.getAll);
+router.get("/leave-template/:id", leaveTemplateController.getById);
+router.put("/leave-template/:id", leaveTemplateController.update);
+router.delete("/leave-template", leaveTemplateController.delete);
+router.patch("/leave-template/status", leaveTemplateController.updateStatus);
 
 module.exports = router;

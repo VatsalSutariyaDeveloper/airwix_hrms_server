@@ -61,6 +61,10 @@ const Holiday = require("./holiday")(sequelize, DataTypes);
 const HolidayTemplate = require("./holidayTemplate")(sequelize, DataTypes);
 const HolidayTransaction = require("./holidayTransaction")(sequelize, DataTypes);
 
+// Leave models
+const LeaveTemplate = require("./settings/leave/leaveTemplate")(sequelize, DataTypes);
+const LeaveTemplateCategory = require("./settings/leave/leaveTemplateCategory")(sequelize, DataTypes);
+
 
 // Collect all models in one db object
 const db = {
@@ -122,6 +126,10 @@ const db = {
   Holiday,
   HolidayTemplate,
   HolidayTransaction,
+
+  // Leave
+  LeaveTemplate,
+  LeaveTemplateCategory,
 };
 
 Object.keys(db).forEach(modelName => {

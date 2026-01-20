@@ -10,9 +10,9 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0: Active, 1: Inactive, 2: Deleted"
             },
-            user_id: { type: DataTypes.INTEGER, defaultValue: 0, comment: "Owner of the device" },
-            branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-            company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+            user_id: { type: DataTypes.INTEGER, allowNull: true },
+            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            company_id: { type: DataTypes.INTEGER, allowNull: true },
         },
         {
             tableName: "device_master",
