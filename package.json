@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node app.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon --legacy-watch app.js",
+    "dev": "nodemon app.js",
     "generate:constants": "node scripts/generateModuleConstants.js",
     "sync:routes": "node scripts/syncRoutePermissions.js"
   },
@@ -40,9 +40,5 @@
     "socket.io": "^4.8.1",
     "ua-parser-js": "^2.0.4",
     "xlsx": "^0.18.5"
-  },
-  "devDependencies": {
-    "node-watch": "^0.7.4",
-    "nodemon": "^3.1.11"
   }
 }

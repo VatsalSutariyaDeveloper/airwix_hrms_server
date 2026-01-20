@@ -57,9 +57,9 @@ const ApprovalRequest = require("./administration/approval/approvalRequest")(seq
 const ApprovalLog = require("./administration/approval/approvalLog")(sequelize, DataTypes);
 
 // Holiday models
-const Holiday = require("./holiday")(sequelize, DataTypes);
-const HolidayTemplate = require("./holidayTemplate")(sequelize, DataTypes);
-const HolidayTransaction = require("./holidayTransaction")(sequelize, DataTypes);
+const Holiday = require("./administration/holiday")(sequelize, DataTypes);
+const HolidayTemplate = require("./settings/holidayTemplate")(sequelize, DataTypes);
+const HolidayTransaction = require("./settings/holidayTransaction")(sequelize, DataTypes);
 
 
 // Collect all models in one db object

@@ -2,16 +2,16 @@ module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
         employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
-        role_id: { type: DataTypes.INTEGER, allowNull: true },
+        role_id: { type: DataTypes.INTEGER},
 
         // PROFILE INFORMATION
         profile_image: { type: DataTypes.STRING },
         employee_code: { type: DataTypes.STRING },
         first_name: { type: DataTypes.STRING },
         mobile_no: { type: DataTypes.STRING },
-        designation:{ type: DataTypes.STRING, allowNull:true },
-        attendance_supervisor:{ type: DataTypes.STRING, allowNull:true },
-        reporting_manager:{ type: DataTypes.STRING, allowNull:true },
+        designation:{ type: DataTypes.STRING },
+        attendance_supervisor:{ type: DataTypes.STRING },
+        reporting_manager:{ type: DataTypes.STRING },
 
         // GENERAL INFORMATION
         salary_cycle: { type: DataTypes.INTEGER },
@@ -33,7 +33,7 @@ module.exports = (sequelize, DataTypes) => {
         physically_challenged: { type: DataTypes.BOOLEAN, defaultValue: false },
         emergency_contact_mobile: { type: DataTypes.STRING },
         father_name: { type: DataTypes.STRING },
-        mother_name: { type: DataTypes.STRING, allowNull:true },
+        mother_name: { type: DataTypes.STRING },
         spouse_name: { type: DataTypes.STRING },
 
         // ADDRESS INFORMATION
@@ -42,16 +42,16 @@ module.exports = (sequelize, DataTypes) => {
         permanent_address2: { type: DataTypes.STRING },
         permanent_city: { type: DataTypes.STRING },
         permanent_pincode: { type: DataTypes.STRING },
-        permanent_state_id: { type: DataTypes.STRING },
-        permanent_country_id: { type: DataTypes.STRING },
+        permanent_state_id: { type: DataTypes.INTEGER },
+        permanent_country_id: { type: DataTypes.INTEGER },
         permanent_address_proof_doc: { type: DataTypes.STRING },
 
         present_address1: { type: DataTypes.STRING },
         present_address2: { type: DataTypes.STRING },
         present_city: { type: DataTypes.STRING },
         present_pincode: { type: DataTypes.STRING },
-        present_state_id: { type: DataTypes.STRING },
-        present_country_id: { type: DataTypes.STRING },
+        present_state_id: { type: DataTypes.INTEGER },
+        present_country_id: { type: DataTypes.INTEGER },
         present_address_proof_doc: { type: DataTypes.STRING },
 
         // EMPLOYEEMENT INFORMATION
@@ -60,12 +60,12 @@ module.exports = (sequelize, DataTypes) => {
         name_as_per_pan: { type: DataTypes.STRING },
         pan_number: { type: DataTypes.STRING },
         name_as_per_aadhaar: { type: DataTypes.STRING },
-        aadhaar_number: { type: DataTypes.STRING },
+        aadhaar_number: { type: DataTypes.INTEGER },
         pf_number: { type: DataTypes.STRING },
         pf_joing_date: { type: DataTypes.DATEONLY },
         pf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         esi_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
-        esi_number: { type: DataTypes.INTEGER },
+        esi_number: { type: DataTypes.STRING },
         pt_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         lwf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         eps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -75,11 +75,11 @@ module.exports = (sequelize, DataTypes) => {
 
         // BANK INFORMATION
         name_as_per_bank: { type: DataTypes.STRING },
-        bank_name: { type: DataTypes.STRING, allowNull:true },
-        bank_account_number: { type: DataTypes.STRING },
+        bank_name: { type: DataTypes.STRING },
+        bank_account_number: { type: DataTypes.INTEGER },
         bank_ifsc_code: { type: DataTypes.STRING },
-        bank_account_holder_name: { type: DataTypes.STRING, allowNull:true },
-        upi_id:{ type: DataTypes.STRING, allowNull:true },
+        bank_account_holder_name: { type: DataTypes.STRING },
+        upi_id:{ type: DataTypes.STRING },
  
         // DOCUMENT UPLOAD
         aadhaar_doc: { type: DataTypes.STRING },
@@ -93,8 +93,8 @@ module.exports = (sequelize, DataTypes) => {
         is_international_emp: { type: DataTypes.BOOLEAN, defaultValue: false },
         disability_type: { type: DataTypes.SMALLINT, comment: "1: Hearing, 2: Locomotive disability, 3: Visual, 4: None" },
         place_of_birth: { type: DataTypes.STRING },
-        height: { type: DataTypes.STRING },
-        weight: { type: DataTypes.STRING },
+        height: { type: DataTypes.INTEGER },
+        weight: { type: DataTypes.INTEGER },
         identification_mark: { type: DataTypes.STRING },
         religion: { type: DataTypes.STRING },
         caste: { type: DataTypes.STRING },
@@ -108,7 +108,7 @@ module.exports = (sequelize, DataTypes) => {
         notice_period_days: { type: DataTypes.INTEGER },
         referred_by: { type: DataTypes.STRING },
 
-        passport_number: { type: DataTypes.STRING },
+        passport_number: { type: DataTypes.INTEGER },
         name_as_per_passport: { type: DataTypes.STRING },
         passport_expiry_date: { type: DataTypes.DATEONLY },
         passport_doc: { type: DataTypes.STRING },
