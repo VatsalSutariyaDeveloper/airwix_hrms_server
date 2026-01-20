@@ -17,9 +17,5 @@ module.exports = (sequelize, DataTypes) => {
         }
     );
 
-    HolidayTransaction.associate = (models) => {
-        HolidayTransaction.belongsTo(models.HolidayTemplate, { foreignKey: "template_id", as: "template" });
-    };
-
     return HolidayTransaction;
 }

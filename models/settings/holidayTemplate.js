@@ -16,6 +16,13 @@ module.exports = (sequelize, DataTypes) => {
             underscored: true,
         }
     );
-    
+
+    HolidayTemplate.associate = function(models) {
+        HolidayTemplate.hasMany(models.HolidayTransaction, {
+            foreignKey: 'template_id',
+            as: 'holidayTransactions'
+        });
+    };
+      
     return HolidayTemplate;
 }

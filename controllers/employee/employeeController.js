@@ -83,10 +83,10 @@ const parseJsonFields = (body) => {
  */
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
-
     try {
         parseJsonFields(req.body);
         const POST = req.body;
+        console.log("post--------------- --------------- -----------------------------\n",POST);
 
         // Validate Required Fields
         const requiredFields = {

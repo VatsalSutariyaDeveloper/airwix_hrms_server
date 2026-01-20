@@ -17,6 +17,9 @@ const bankMasterController = require("../controllers/administration/bankMasterCo
 const currencyMasterController = require("../controllers/administration/currencyMasterController");
 const companySettingsMasterController = require("../controllers/administration/companySettingsMasterController");
 
+const holidayController = require("../controllers/settings/holidayController.js");
+
+
 // --- Helper to safely get handler ---
 // const getHandler = (controller, method, name) => {
 //     if (controller && typeof controller[method] === 'function') {
@@ -119,5 +122,14 @@ router.post("/company-settings/get-transactions", companySettingsMasterControlle
 router.get("/company-settings/:id", companySettingsMasterController.getById);
 router.put("/company-settings/:id", companySettingsMasterController.update);
 router.delete("/company-settings/", companySettingsMasterController.delete);
+
+// HOLIDAY ROUTES
+router.post("/holiday/", holidayController.create);
+router.put("/holiday/:id", holidayController.update);
+router.post("/holiday/get-transactions", holidayController.getAll);
+router.post("/holiday/dropdown-list", holidayController.dropdownList);
+router.get("/holiday/:id", holidayController.getById);
+router.delete("/holiday/", holidayController.delete);
+router.patch("/holiday/status", holidayController.updateStatus);
 
 module.exports = router;
