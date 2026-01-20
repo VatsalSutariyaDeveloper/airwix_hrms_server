@@ -1,6 +1,13 @@
 const constants = {
   UPLOAD_PATH: "uploads/",
 
+  /* Files Path Constants */
+  COMPANY_LOGO_IMG_FOLDER: "companies/logo/",
+  COMPANY_SIGN_IMG_FOLDER: "companies/signatures/",
+  USER_IMG_FOLDER: "users/images/",
+  USER_SIGN_IMG_FOLDER: "users/signatures/",
+  ATTACHMENT_FOLDER: "attachments/",
+  SIGNATURE_FOLDER: "signature/",
   ATTENDANCE_FOLDER: "employee/attendance/",
   ATTENDANCE_LOG_FOLDER: "employee/attendance_log/",
   EMPLOYEE_IMG_FOLDER: "employee/images/",

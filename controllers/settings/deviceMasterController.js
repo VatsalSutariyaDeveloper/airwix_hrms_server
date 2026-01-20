@@ -1,8 +1,8 @@
-const { deviceMaster } = require("../../models");
+const { DeviceMaster } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
-console.log("DeviceMaster model:", deviceMaster);
+console.log("DeviceMaster model:", DeviceMaster);
 
 // Create a new bank master record
 exports.create = async (req, res) => {
@@ -16,7 +16,7 @@ exports.create = async (req, res) => {
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
-                model: deviceMaster,
+                model: DeviceMaster,
                 fields: ["device_name", "model_name"],
                 excludeId: req.params.id,
             }
@@ -27,7 +27,7 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const device_master = await commonQuery.createRecord(deviceMaster, req.body, transaction);
+        const device_master = await commonQuery.createRecord(DeviceMaster, req.body, transaction);
         await transaction.commit();
         return res.success(constants.DEVICE_MASTER_CREATED, device_master);
 
@@ -40,16 +40,26 @@ exports.create = async (req, res) => {
 // Get all active shift records
 exports.getAll = async (req, res) => {
     try {
-        const result = await commonQuery.findAllRecords(deviceMaster, { status: 0 });
-        return res.ok(result);
+        const fieldConfig = [
+            ["device_name", true, true],
+            ["model_name", true, true],
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            DeviceMaster,
+            req.body,
+            fieldConfig,
+        );
+
+        return res.ok(data);
     } catch (err) {
-        return handleError(err, res, req);
+    return handleError(err, res, req);
     }
 };
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(deviceMaster, req.params.id);
+        const record = await commonQuery.findOneRecord(DeviceMaster, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -81,7 +91,7 @@ exports.update = async (req, res) => {
             requiredFields,
             {
                 uniqueCheck: {
-                    model: deviceMaster,
+                    model: DeviceMaster,
                     fields: ["device_name", "model_name"],
                     excludeId: req.params.id,
                 }
@@ -93,7 +103,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(deviceMaster, { id: req.params.id }, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(DeviceMaster, { id: req.params.id }, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -137,7 +147,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(deviceMaster, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(DeviceMaster, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
@@ -183,7 +193,7 @@ exports.updateStatus = async (req, res) => {
 
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
-            deviceMaster,
+            DeviceMaster,
             ids,
             { status },
             transaction

@@ -12,7 +12,7 @@ const importController = require("../controllers/settings/import/importControlle
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftController = require("../controllers/settings/shiftController.js");
-// const deviceMasterController = require("../controllers/settings/deviceMasterController");
+const deviceMasterController = require("../controllers/settings/deviceMasterController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -117,11 +117,11 @@ router.patch("/shift/status", shiftController.updateStatus);
 // 25. DEVICE MASTER ROUTES
 // ==========================
 
-// router.post("/device-master", deviceMasterController.create);
-// router.get("/device-master/get-transactions", deviceMasterController.getAll);
-// router.get("/device-master/:id", deviceMasterController.getById);
-// router.put("/device-master/:id", deviceMasterController.update);
-// router.delete("/device-master", deviceMasterController.delete);
-// router.patch("/device-master/status", deviceMasterController.updateStatus);
+router.post("/device-master", deviceMasterController.create);
+router.post("/device-master/get-transactions", deviceMasterController.getAll);
+router.get("/device-master/:id", deviceMasterController.getById);
+router.put("/device-master/:id", deviceMasterController.update);
+router.delete("/device-master", deviceMasterController.delete);
+router.patch("/device-master/status", deviceMasterController.updateStatus);
 
 module.exports = router;

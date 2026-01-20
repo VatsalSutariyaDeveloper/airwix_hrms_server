@@ -87,9 +87,6 @@ exports.dropdownList = async (req, res) => {
         attributes: ["id", "role_name"], 
         order: [["role_name", "ASC"]] 
       },
-      null,
-      false,
-      false
     );
     return res.ok(record);
   } catch (err) {
