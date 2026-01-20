@@ -2,8 +2,6 @@ const { DeviceMaster } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
-console.log("DeviceMaster model:", DeviceMaster);
-
 // Create a new bank master record
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
