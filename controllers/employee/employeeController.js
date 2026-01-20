@@ -1,11 +1,16 @@
 const {
     Employee,
-    FamilyMember,
+    EmployeeFamilyMember,
     User,
     ModuleEntityMaster,
     ApprovalRequest,
     StateMaster,     // Assuming you have these for Address includes
-    CountryMaster
+    CountryMaster,
+    UserCompanyRoles,
+    CompanyConfigration,
+    RolePermission,
+    AttendancePunch,    
+    AttendanceDay
 } = require("../../models");
 
 const {
@@ -29,6 +34,24 @@ const {
 const { ENTITIES } = require('../../helpers/constants');
 const ApprovalEngine = require("../../helpers/approvalEngine");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
+const bcrypt = require("bcrypt");
+const { getContext } = require("../../utils/requestContext");
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
+const FormData = require('form-data');
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
+const FACE_MATCH_THRESHOLD = 0.40;
+
+const DEBUG_MODE = true; 
+
+// Helper for conditional logging
+const debugLog = (tag, message, data = "") => {
+    if (DEBUG_MODE) {
+        console.log(`[DEBUG] 🔍 ${tag}:`, message, data ? JSON.stringify(data).substring(0, 200) + "..." : "");
+    }
+};
 
 const STATUS = {
     ACTIVE: 0,
@@ -63,23 +86,18 @@ exports.create = async (req, res) => {
 
     try {
         parseJsonFields(req.body);
-
         const POST = req.body;
 
         // Validate Required Fields
         const requiredFields = {
-            series_id: "Series",
-            first_name: "First Name", // Assuming 'first_name' is mapped to 'father_name' or you add a name field
-            personal_email: "Personal Email",
-            joining_date: "Joining Date",
-            mobile_no: "Mobile Number"
+            first_name: "First Name",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
-            customFieldConfig: {
-                entity_id: ENTITIES.EMPLOYEE.ID,
-                company_id: req.body.company_id,
-            }
+            uniqueCheck: {
+                model: Employee,
+                fields: ["email", "mobile_no"],
+            },
         }, transaction);
 
         if (errors) {
@@ -112,7 +130,7 @@ exports.create = async (req, res) => {
         }
 
         // 2. Generate Employee Code
-        POST.employee_code = await generateSeriesNumber(POST.series_id, POST.company_id, transaction, Employee, "employee_code");
+        // POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
 
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
@@ -123,34 +141,25 @@ exports.create = async (req, res) => {
         }
 
         // 4. Update Series
-        await updateSeriesNumber(POST.series_id, POST.company_id, transaction);
+        // await updateSeriesNumber(POST.series_id, transaction);
 
         // 5. Create Family Members (Bulk Create)
         if (Array.isArray(POST.family_details) && POST.family_details.length > 0) {
             const familyData = POST.family_details.map(member => ({
                 ...member,
                 employee_id: employee.id,
-                company_id: POST.company_id,
-                branch_id: POST.branch_id,
-                user_id: POST.user_id,
                 status: STATUS.ACTIVE
             }));
 
-            await commonQuery.bulkCreate(FamilyMember, familyData, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
         }
-
-        const commonData = {
-            user_id: POST.user_id,
-            company_id: POST.company_id,
-        };
 
         // ------------------------------------------------------------------
         // 🚀 APPROVAL INTEGRATION
         // ------------------------------------------------------------------
         const workflow = await ApprovalEngine.checkApprovalRequired(
             MODULES.HR.EMPLOYEE.ID,
-            employee.toJSON(),
-            req.body.company_id
+            employee.toJSON()
         );
 
         let approvalMsg = constants.EMPLOYEE_CREATED;
@@ -160,13 +169,83 @@ exports.create = async (req, res) => {
                 MODULES.HR.EMPLOYEE.ID,
                 employee.id,
                 workflow.id,
-                commonData.company_id,
                 transaction
             );
 
             // We assume 'approval_status' exists on Employee or is handled via mixin
             await commonQuery.updateRecordById(Employee, employee.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
             approvalMsg = constants.EMPLOYEE_CREATED_SEND_FOR_APPROVAL;
+        }
+
+        // 6. Create User Account if requested OR if role is allowed in Company Configuration
+        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+            setting_key: 'app_access_roles',
+            status: 0
+        }, {}, transaction);
+
+        let rolesNeedingUser = [];
+        if (companyConfig && companyConfig.setting_value) {
+            try {
+                // Expecting JSON array or comma-separated string
+                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+                    ? JSON.parse(companyConfig.setting_value) 
+                    : companyConfig.setting_value;
+                if (!Array.isArray(rolesNeedingUser)) {
+                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+                }
+            } catch (e) {
+                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+            }
+        }
+        
+        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        if (isAppAccessRole) {
+            // Validation for user fields
+            const userRequiredFields = { role_id: "Role" };
+
+            const loginType = parseInt(POST.login_type) || 1;
+            if (loginType === 1) {
+                userRequiredFields.mobile_no = "Mobile No";
+            } else if (loginType === 2) {
+                userRequiredFields.email = "Email";
+                userRequiredFields.password = "Password";
+            }
+
+            const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
+            if (userErrors) {
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, userErrors);
+            }
+
+            // Get permissions from role
+            const rolePermission = await commonQuery.findOneRecord(
+                RolePermission,
+                POST.role_id,
+                {},
+                transaction
+            );
+
+            const userData = {
+                ...POST,
+                user_name: POST.first_name,
+                comapny_access: req.user.companyId,
+                employee_id: employee.id,
+                status: 0
+            };
+
+            if (POST.password) {
+                const salt = await bcrypt.genSalt(10);
+                userData.password = await bcrypt.hash(POST.password, salt);
+            }
+
+            const newUser = await commonQuery.createRecord(User, userData, transaction);
+
+            await commonQuery.createRecord(UserCompanyRoles, {
+                user_id: newUser.id,
+                role_id: POST.role_id,
+                permissions: rolePermission ? rolePermission.permissions : null,
+                status: 0
+            }, transaction);
         }
 
         await transaction.commit();
@@ -192,13 +271,17 @@ exports.update = async (req, res) => {
 
         // Validation
         const requiredFields = {
-            personal_email: "Personal Email"
+            email: "Personal Email"
         };
 
         const errors = await validateRequest(POST, requiredFields, {
+            uniqueCheck: {
+                model: Employee,
+                fields: ["email", "mobile_no"],
+                excludeId: id
+            },
             customFieldConfig: {
-                entity_id: ENTITIES.EMPLOYEE.ID,
-                company_id: req.body.company_id,
+                // entity_id: ENTITIES.EMPLOYEE.ID,
             }
         }, transaction);
 
@@ -254,11 +337,10 @@ exports.update = async (req, res) => {
         // A. Soft Delete removed members
         // Find members currently in DB but NOT in incoming IDs
         await commonQuery.softDeleteById(
-            FamilyMember,
+            EmployeeFamilyMember,
             {
                 employee_id: id,
-                id: { [Op.notIn]: incomingIds },
-                company_id: POST.company_id
+                id: { [Op.notIn]: incomingIds }
             },
             null,
             transaction
@@ -268,16 +350,13 @@ exports.update = async (req, res) => {
         for (const member of incomingFamily) {
             const memberPayload = {
                 ...member,
-                employee_id: id,
-                company_id: POST.company_id,
-                branch_id: POST.branch_id,
-                user_id: POST.user_id
+                employee_id: id
             };
 
             if (member.id) {
-                await commonQuery.updateRecordById(FamilyMember, member.id, memberPayload, transaction);
+                await commonQuery.updateRecordById(EmployeeFamilyMember, member.id, memberPayload, transaction);
             } else {
-                await commonQuery.createRecord(FamilyMember, memberPayload, transaction);
+                await commonQuery.createRecord(EmployeeFamilyMember, memberPayload, transaction);
             }
         }
 
@@ -301,8 +380,7 @@ exports.update = async (req, res) => {
         // Check Approval Again
         const workflow = await ApprovalEngine.checkApprovalRequired(
             MODULES.HR.EMPLOYEE.ID,
-            updatedEmployee.toJSON(),
-            POST.company_id
+            updatedEmployee.toJSON()
         );
 
         if (workflow) {
@@ -310,13 +388,100 @@ exports.update = async (req, res) => {
                 MODULES.HR.EMPLOYEE.ID,
                 id,
                 workflow.id,
-                POST.company_id,
                 transaction
             );
 
             await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.PENDING_APPROVAL }, transaction);
         } else {
             await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.ACTIVE }, transaction);
+        }
+
+        // 4. Create/Update User Account if requested OR if role is allowed in Company Configuration
+        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+            setting_key: 'app_access_roles',
+            status: 0
+        }, {}, transaction);
+
+        let rolesNeedingUser = [];
+        if (companyConfig && companyConfig.setting_value) {
+            try {
+                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+                    ? JSON.parse(companyConfig.setting_value) 
+                    : companyConfig.setting_value;
+                if (!Array.isArray(rolesNeedingUser)) {
+                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+                }
+            } catch (e) {
+                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+            }
+        }
+
+        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+
+        if (isAppAccessRole) {
+            const loginType = parseInt(POST.login_type) || 1;
+
+            // Check if user already exists for this employee
+            let existingUser = await commonQuery.findOneRecord(User, { employee_id: id }, {}, transaction);
+
+            const userData = {
+                ...POST,
+                user_name: POST.first_name,
+                comapny_access: req.user.companyId,
+                employee_id: id,
+                status: 0
+            };
+
+            if (POST.role_id) {
+                const rolePermission = await commonQuery.findOneRecord(
+                    RolePermission,
+                    POST.role_id,
+                    {},
+                    transaction
+                );
+                userData.permission = rolePermission ? rolePermission.permissions : null;
+            }
+
+            if (POST.password) {
+                const salt = await bcrypt.genSalt(10);
+                userData.password = await bcrypt.hash(POST.password, salt);
+            }
+
+            if (existingUser) {
+                await commonQuery.updateRecordById(User, existingUser.id, userData, transaction);
+
+                // Update UserCompanyRoles if role changed
+                if (POST.role_id) {
+                    await UserCompanyRoles.update(
+                        { role_id: POST.role_id, permissions: userData.permission },
+                        { where: { user_id: existingUser.id }, transaction }
+                    );
+                }
+            } else {
+                // Validation for new user
+                const userRequiredFields = { role_id: "Role" };
+                if (loginType === 1) userRequiredFields.mobile_no = "Mobile No";
+                else if (loginType === 2) {
+                    userRequiredFields.email = "Email";
+                    userRequiredFields.password = "Password";
+                }
+
+                const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
+                if (userErrors) {
+                    await transaction.rollback();
+                    return res.error(constants.VALIDATION_ERROR, userErrors);
+                }
+
+                const newUser = await commonQuery.createRecord(User, userData, transaction);
+                await commonQuery.createRecord(UserCompanyRoles, {
+                    user_id: newUser.id,
+                    role_id: POST.role_id,
+                    permissions: userData.permission,
+                    status: 0
+                }, transaction);
+            }
+        } else {
+            await commonQuery.softDeleteById(User, { employee_id: id }, transaction);
         }
 
         await transaction.commit();
@@ -336,9 +501,15 @@ exports.getById = async (req, res) => {
 
         const dynamicIncludes = [
             {
-                model: FamilyMember,
+                model: EmployeeFamilyMember,
                 as: 'family_members', // Ensure this alias matches your models/index.js association
                 where: { status: { [Op.in]: [0, 1] } }, // Active or Inactive, not Deleted
+                required: false
+            },
+            {
+                model: User,
+                as: 'linked_user',
+                attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'],
                 required: false
             },
             // If you have State/Country relations for addresses, include them here:
@@ -421,7 +592,7 @@ exports.delete = async (req, res) => {
         }
 
         // 3. Soft Delete associated Family Members
-        await commonQuery.softDeleteById(FamilyMember, { employee_id: ids }, null, transaction);
+        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
 
         // 4. Delete Physical Files
         const fileColumns = [
@@ -458,7 +629,7 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["father_name", true, true],
-            ["personal_email", true, false],
+            ["email", true, false],
             ["mobile_no", true, false],
         ];
 
@@ -472,12 +643,8 @@ exports.getAll = async (req, res) => {
                 ],
                 attributes: [
                     "id",
-                    "father_name", // or first_name if you have it
-                    "personal_email",
-                    "joining_date",
-                    "status",
-                    // "approval_status", // Uncomment if column exists
-                    // "designation",
+                    "first_name", // or first_name if you have it
+                    "employee_code",
                     "created_at",
                     "created_by.user_name"
                 ]
@@ -491,6 +658,69 @@ exports.getAll = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+
+exports.getPunch = async (req, res) => {
+    try {
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["punch_time", true, true],
+            ["punch_type", true, false],
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            req.body,
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: AttendancePunch,
+                        as: 'attendance_punches',
+                        attributes: [
+                            'id', 
+                            'punch_time', 
+                            'punch_type', 
+                            'image_name', 
+                            'device_id', 
+                        ],
+                        required: false,
+                        order: [['punch_time', 'DESC']]
+                    }
+                ],
+                attributes: [
+                    "id",
+                    "first_name", 
+                    "employee_code",
+                    "created_at",
+                ]
+            },
+            true,
+            "joining_date"
+        );
+
+        // Generate image URLs for attendance punches
+        if (data.items && data.items.length > 0) {
+            data.items = data.items.map(employee => {                
+                const plainEmployee = employee.toJSON ? employee.toJSON() : employee;                
+                if (plainEmployee.attendance_punches && plainEmployee.attendance_punches.length > 0) {
+                    plainEmployee.attendance_punches = plainEmployee.attendance_punches.map(punch => {
+                        const plainPunch = punch.toJSON ? punch.toJSON() : punch;
+                        if (plainPunch.image_name) {
+                            plainPunch.image_name_url = `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${plainPunch.image_name}`;
+                        }
+                        return plainPunch;
+                    });
+                }
+                return plainEmployee;
+            });
+        }
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
 
 /**
  * Dropdown list for Select inputs.
@@ -546,5 +776,315 @@ exports.updateStatus = async (req, res) => {
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
+    }
+};
+
+const calculateCosineDistance = (descriptor1, descriptor2) => {
+    // 1. Safety Check
+    if (!descriptor1 || !descriptor2) {
+        if(DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
+        return 1.0; 
+    }
+    
+    if (descriptor1.length !== descriptor2.length) {
+        if(DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
+        return 1.0;
+    }
+
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < descriptor1.length; i++) {
+        dotProduct += descriptor1[i] * descriptor2[i];
+        normA += descriptor1[i] * descriptor1[i];
+        normB += descriptor2[i] * descriptor2[i];
+    }
+
+    // 2. Avoid division by zero
+    if (normA === 0 || normB === 0) {
+        if(DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
+        return 1.0;
+    }
+
+    // 3. Calculate Similarity (0 to 1)
+    const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+
+    // 4. Return Distance
+    // ArcFace cosine distance: 0 = Same, 1+ = Different
+    const distance = 1 - similarity;
+    
+    // Log first few calculations to check if numbers are valid
+    // if(DEBUG_MODE && Math.random() < 0.05) console.log(`🧮 [Math] Dist: ${distance.toFixed(4)} | Sim: ${similarity.toFixed(4)}`);
+    
+    return distance; 
+};
+
+/**
+ * Register Face
+ * 1. Saves image to 'users/images/' (Permanent Profile Picture).
+ * 2. Deletes old profile image if it exists.
+ * 3. Sends image to Python to get the Face Vector.
+ * 4. Updates Employee record with new Profile Image AND Face Vector.
+ */
+exports.registerFace = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.body;
+
+        // Check if image file exists
+        if (!req.files || (!req.files.image && !req.files['image'])) { 
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+        }
+
+        const employee = await Employee.findByPk(id);
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.EMPLOYEE_NOT_FOUND);
+        }
+
+        // 1. Save File to Disk (Permanent Profile Image)
+        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/users/images/'
+        // We pass 'employee.profile_image' as the last argument so 'uploadFile' automatically deletes the OLD photo.
+        const savedFiles = await uploadFile(
+            req, 
+            res, 
+            constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
+            transaction,
+            employee.profile_image     // ✅ Delete old image if exists
+        );
+
+        const filename = savedFiles.image; 
+        
+        if (!filename) {
+            await transaction.rollback();
+            return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+        }
+
+        // 2. Send to Python to get Face Embedding
+        // We read the file we just saved to ensure Python sees exactly what is on disk
+        const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+        
+        let faceDescriptor;
+        try {
+            const fileBuffer = fs.readFileSync(fullFilePath);
+
+            const formData = new FormData();
+            formData.append('image', fileBuffer, filename); 
+
+            const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+                headers: { ...formData.getHeaders() }
+            });
+
+            if (aiResponse.data.status) {
+                faceDescriptor = aiResponse.data.embedding;
+            } else {
+                throw new Error(aiResponse.data.message);
+            }
+        } catch (aiError) {
+            await transaction.rollback(); 
+            // Optional: Delete the file we just wrote since the process failed
+            try { fs.unlinkSync(fullFilePath); } catch(e) {}
+
+            console.error("AI Service Error:", aiError.message);
+            return res.error(constants.SERVER_ERROR, { message: "AI Processing Failed: " + aiError.message });
+        }
+
+        // 3. Update Employee Record
+        // - Updates 'profile_image' (Visible in App/Admin)
+        // - Updates 'face_descriptor' (Used for AI Matching)
+        await employee.update({
+            profile_image: filename,
+            face_descriptor: faceDescriptor
+        }, { transaction });
+
+        await transaction.commit();
+
+        return res.success("Face Registered & Profile Picture Updated", {
+            image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
+        });
+
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+/**
+ * Face Punch (Attendance)
+ * - Uses 'uploadFile' utility to save to 'uploads/attendance/'
+ * - Runs in PARALLEL with AI and DB for maximum speed.
+ */
+exports.facePunch = async (req, res) => {
+    try {
+        debugLog("Punch", "Request received");
+
+        const files = req.files.image || req.files['image'];
+        if (!files || files.length === 0) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Face image is required" });
+        }
+
+        const imageBuffer = files[0].buffer;
+        const originalName = files[0].originalname;
+        debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
+
+        // 🚀 PARALLEL TASK 1: Call AI Service
+        const getEmbeddingTask = (async () => {
+            const formData = new FormData();
+            formData.append('image', imageBuffer, originalName); 
+            
+            try {
+                debugLog("AI-Call", "Sending to Python...");
+                const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+                    headers: { ...formData.getHeaders() }
+                });
+                
+                if (aiResponse.data.status) {
+                    const vec = aiResponse.data.embedding;
+                    debugLog("AI-Res", `Got Vector. Length: ${vec.length}, First 3 vals: [${vec[0]}, ${vec[1]}, ${vec[2]}]`);
+                    return vec;
+                } else {
+                    throw new Error(aiResponse.data.message);
+                }
+            } catch (error) {
+                const pyError = error.response?.data?.message || error.message;
+                console.error("❌ AI Service Failed:", pyError);
+                throw new Error(pyError);
+            }
+        })();
+
+        // 🚀 PARALLEL TASK 2: Fetch Employees
+        // NOTE: Make sure attributes match your DB Column names exactly
+        const getEmployeesTask = Employee.findAll({
+            where: {
+                status: 0,
+                face_descriptor: { [Op.ne]: null }
+            },
+            attributes: ['id', 'first_name', 'face_descriptor'], // Changed first_name to father_name based on your prev code
+            raw: true 
+        });
+
+        // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
+        const [liveVector, employees] = await Promise.all([
+            getEmbeddingTask,
+            getEmployeesTask
+        ]);
+
+        debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
+
+        // --- MATCHING LOGIC ---
+        let bestMatch = null;
+        let minDistance = 1.0; 
+
+        // Loop Counter to limit debug logs
+        let logCounter = 0; 
+
+        for (const emp of employees) {
+            let storedVector = emp.face_descriptor;
+            
+            // 🔍 DEBUGGING DATA TYPES
+            // Often DB returns JSONB as Object, but sometimes Text as String.
+            const typeBefore = typeof storedVector;
+            
+            if (typeof storedVector === 'string') {
+                try { 
+                    storedVector = JSON.parse(storedVector); 
+                } catch(e) {
+                    if(DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
+                    continue; 
+                }
+            }
+            
+            // Double check it's an array
+            if (!Array.isArray(storedVector)) {
+                if(DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
+                continue;
+            }
+
+            const dist = calculateCosineDistance(liveVector, storedVector);
+
+            // Log the first 3 comparisons to see what's happening
+            if (DEBUG_MODE && logCounter < 3) {
+                console.log(`👤 [Compare] ID: ${emp.id} | Name: ${emp.first_name} | Dist: ${dist.toFixed(4)}`);
+                logCounter++;
+            }
+
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestMatch = emp;
+                debugLog("Match-Update", `New Best Match: ${emp.first_name} (Dist: ${dist})`);
+            }
+        }
+
+        const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
+        debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
+
+        // --- VALIDATION & CONDITIONAL FILE SAVING ---
+        let savedFilename;
+        if (bestMatch && minDistance < FACE_MATCH_THRESHOLD) {
+            const transaction = await sequelize.transaction();
+            
+            try {
+                const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
+                savedFilename = savedFiles.image || savedFiles['image'];
+                
+                const now = new Date();
+                const attendancePunch = await commonQuery.createRecord(AttendancePunch, {
+                    employee_id: bestMatch.id,
+                    punch_time: now,
+                    punch_type: "IN", 
+                    image_name: savedFilename
+                }, transaction);
+                
+                const today = now.toISOString().split('T')[0];
+               
+                await commonQuery.createRecord(AttendanceDay, {
+                    employee_id: bestMatch.id,
+                    attendance_date: today,
+                }, transaction);
+            
+                await transaction.commit();
+                
+                return res.success("Punch Successful", {
+                    employee: bestMatch.first_name,
+                    confidence: matchPercentage + "%",
+                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
+                    attendance_punch_id: attendancePunch.id
+                });
+            } catch (error) {
+                await transaction.rollback();
+                console.error("Error creating attendance records:", error);
+                return res.error(constants.SERVER_ERROR, { message: "Failed to create attendance records" });
+            }
+        } else {
+            // Save to ATTENDANCE_LOG_FOLDER for failed face recognition with custom timestamp
+            const now = new Date();
+            const day = String(now.getDate()).padStart(2, '0');
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const year = now.getFullYear();
+            let hours = now.getHours();
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12; 
+            const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+            const dateStr = `${day}-${month}-${year}`;
+            const ext = path.extname(originalName);
+            const customFilename = `${Date.now()}_punch_${dateStr}__${timeStr}${ext}`;
+            
+            // Use uploadFile with custom filename
+            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
+            savedFilename = savedFiles.image || savedFiles['image'];
+            
+            return res.error(constants.FACE_NOT_RECOGNIZED, { 
+                message: `Face Not Recognized (Match: ${matchPercentage}%)` 
+            });
+        }
+
+    } catch (err) {
+        console.error("💥 Server Error:", err);
+        const errorMsg = err.message || "Server Error";
+        const statusCode = errorMsg.includes("Face") ? constants.VALIDATION_ERROR : constants.SERVER_ERROR;
+        return res.error(statusCode, { message: errorMsg });
     }
 };

@@ -1,10 +1,14 @@
 module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
         // 1. PERSONAL INFORMATION
+        series_id: { type: DataTypes.INTEGER },
+        employee_code: { type: DataTypes.STRING },
+        first_name: { type: DataTypes.STRING },
         father_name: { type: DataTypes.STRING },
-        personal_email: { type: DataTypes.STRING, validate: { isEmail: true } },
+        role_id: { type: DataTypes.INTEGER, allowNull: true },
+        email: { type: DataTypes.STRING, validate: { isEmail: true } },
         blood_group: { type: DataTypes.SMALLINT, comment: "1: A+, 2: A-, 3: B+, 4: B-, 5: O+, 6: O-, 7: AB+, 8: AB-" },
-        marital_status: { type: DataTypes.SMALLINT, comment: "1: Married, 2: Separated, 3: Single, 4: Widowed" },
+        marital_status: { type: DataTypes.SMALLINT, comment: "1: Married, 2: Unmarried" },
         marriage_date: { type: DataTypes.DATEONLY },
         spouse_name: { type: DataTypes.STRING },
         country_of_origin: { type: DataTypes.STRING, defaultValue: 'India' },
@@ -13,7 +17,8 @@ module.exports = (sequelize, DataTypes) => {
         physically_challenged: { type: DataTypes.BOOLEAN, defaultValue: false },
         disability_type: { type: DataTypes.SMALLINT, comment: "1: Hearing, 2: Locomotive disability, 3: Visual, 4: None" },
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },
-        profile_image: { type: DataTypes.STRING }, // Added profile image
+        profile_image: { type: DataTypes.STRING },
+        mobile_no: { type: DataTypes.STRING },
         dob: { type: DataTypes.DATEONLY },
         place_of_birth: { type: DataTypes.STRING },
         height: { type: DataTypes.STRING },
@@ -90,14 +95,19 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.JSONB,
             defaultValue: []
         },
+        face_descriptor: {
+            type: DataTypes.JSONB, 
+            defaultValue: null,
+            comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
+        },
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,
             comment: "0: Active, 1: Inactive, 2: Deleted"
-        },
-        user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-        branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-        company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+        },  
+        user_id: { type: DataTypes.INTEGER, allowNull: true },
+        branch_id: { type: DataTypes.INTEGER, allowNull: true },
+        company_id: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'employees',
         timestamps: true,
@@ -106,6 +116,10 @@ module.exports = (sequelize, DataTypes) => {
 
     Employee.associate = function (models) {
         Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
+        Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
+        Employee.belongsTo(models.SeriesTypeMaster, { foreignKey: "series_id", as: "series_type" });
+        Employee.hasMany(models.EmployeeFamilyMember, { foreignKey: "employee_id", as: "family_members" });
+        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
     };
 
     return Employee;

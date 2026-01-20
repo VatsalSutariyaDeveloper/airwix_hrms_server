@@ -1,11 +1,12 @@
 const { User, RolePermission, CompanyMaster, UserCompanyRoles } = require("../../../models");
-const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription,} = require("../../../helpers");
+const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription, } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 const path = require("path");
 const { clearUserCache } = require("../../../helpers/permissionCache");
+const { getContext } = require("../../../utils/requestContext");
 
 const ENTITY = ENTITIES.USER.NAME;
 
@@ -58,9 +59,8 @@ async function sendPasswordEmail(user, rawToken, req, type = "setup") {
           </tr>
           <tr>
             <td style="padding:30px; font-size:15px; color:#333;">
-              <p style="margin:0 0 15px;">Hello <strong>${
-                user.name || "User"
-              }</strong>,</p>
+              <p style="margin:0 0 15px;">Hello <strong>${user.name || "User"
+      }</strong>,</p>
               <p style="margin:0 0 20px;">${introText}</p>
               <div style="text-align:center; margin:30px 0;">
                 <a href="${url}" 
@@ -126,7 +126,7 @@ exports.create = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const companyPlan = await getCompanySubscription(req.body.company_id);
-    if(companyPlan.users_limit <= companyPlan.used_users){
+    if (companyPlan.users_limit <= companyPlan.used_users) {
       await transaction.rollback();
       return res.error(constants.LIMIT_EXCEEDED, constants.USER_LIMIT_REACHED);
     }
@@ -367,11 +367,6 @@ exports.update = async (req, res) => {
     if (isUserPermissionUpdate) {
       // Validate only permission-related fields
       requiredFields = {
-        module_id: "Module",
-        entity_id: "Entity",
-        user_id: "User",
-        branch_id: "Branch",
-        company_id: "Company",
         user_permission: "User Permission",
       };
       validateOptions = {};
@@ -523,7 +518,7 @@ exports.update = async (req, res) => {
     const updated = await commonQuery.updateRecordById(
       User,
       req.params.id,
-      req.body,
+      { ...req.body, employee_id: req.body.employee_id || existing.employee_id },
       transaction
     );
 
@@ -591,6 +586,19 @@ exports.getAll = async (req, res) => {
       ["role_name", true, false],
     ];
 
+    const ctx = getContext();
+    const { companyId: company_id } = ctx;
+
+    const extraFilters = {
+      [Op.or]: [
+        { company_id: company_id },
+        sequelize.where(
+          sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+          true
+        )
+      ]
+    };
+
     const data = await commonQuery.fetchPaginatedData(
       User,
       req.body,
@@ -610,14 +618,15 @@ exports.getAll = async (req, res) => {
           "user_name",
           "email",
           "mobile_no",
-          "address",
-          "pincode",
           "status",
           "profile_image",
           "authorized_signature",
           ["RolePermission.role_name", "role_name"],
         ],
-      }
+      },
+      true,
+      "createdAt",
+      extraFilters
     );
     return res.ok(data);
   } catch (err) {
@@ -654,7 +663,15 @@ exports.dropdownList = async (req, res) => {
  */
 exports.getById = async (req, res) => {
   try {
-    const record = await commonQuery.findOneRecord(User, req.params.id);
+    const record = await commonQuery.findOneRecord(User, req.params.id, {
+      include: [
+        {
+          model: require("../../../models").Employee,
+          as: "Employee",
+          required: false
+        }
+      ]
+    });
 
     if (!record || record.status === 2) return res.error("NOT_FOUND");
 

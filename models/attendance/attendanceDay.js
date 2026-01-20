@@ -11,8 +11,6 @@ module.exports = (sequelize, DataTypes) => {
         worked_minutes: DataTypes.INTEGER,
         late_minutes: DataTypes.INTEGER,
         early_out_minutes: DataTypes.INTEGER,
-        status: DataTypes.STRING,
-        source: { type: DataTypes.STRING, defaultValue: "AUTO" },
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,
@@ -23,7 +21,7 @@ module.exports = (sequelize, DataTypes) => {
         company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     },
     {
-      tableName: "attendance_punch",
+      tableName: "attendance_day",
       timestamps: true,
       underscored: true,
     }

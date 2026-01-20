@@ -74,16 +74,17 @@ async function buildWhere(whereInput, applyDefaults = true) {
   // --- 3. Apply Tenant Defaults ---
   if (applyDefaults) {
     const ctx = getContext();
+
     // A. Company is MANDATORY if context exists
-    if (ctx.companyId) {
-      where.company_id = ctx.companyId;
+    if (ctx.company_id) {
+      where.company_id = ctx.company_id;
     }
 
     // B. Fetch Settings for User/Branch logic
     let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
     try {
-      if (ctx.companyId) {
-        settings = await getCompanySetting(ctx.companyId);
+      if (ctx.company_id) {
+        settings = await getCompanySetting(ctx.company_id);
       }
     } catch (err) {
       console.warn("⚠️ Failed to fetch company settings:", err.message);
@@ -94,13 +95,13 @@ async function buildWhere(whereInput, applyDefaults = true) {
     // C. Branch Logic
     // If setting is enabled, restrict to current branch
     if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
-      if (ctx.branchId) where.branch_id = ctx.branchId;
+      if (ctx.branch_id) where.branch_id = ctx.branch_id;
     } 
 
     // D. User Logic
     // If setting is enabled, restrict to current user
     if (enable_user_wise_data === "true" || enable_user_wise_data === true) {
-      if (ctx.userId) where.user_id = ctx.userId;
+      if (ctx.user_id) where.user_id = ctx.user_id;
     }
   }
 
@@ -178,13 +179,13 @@ module.exports = {
     };
     if(requireTenantFields){
       const ctx = getContext();
-      enrichedData.company_id= ctx.companyId;
-      enrichedData.user_id= ctx.userId;
-      enrichedData.branch_id= ctx.branchId;
+      enrichedData.company_id= ctx.company_id;
+      enrichedData.user_id= ctx.user_id;
+      enrichedData.branch_id= ctx.branch_id;
       commonData = {
-        user_id: ctx.userId,
-        company_id: ctx.companyId,
-        branch_id: ctx.branchId,
+        user_id: ctx.user_id,
+        company_id: ctx.company_id,
+        branch_id: ctx.branch_id,
       };
     }
 
@@ -220,9 +221,9 @@ module.exports = {
       const ctx = getContext();
       enriched = dataArray.map((item) => ({
         ...item,
-        company_id: ctx.companyId,
-        user_id: ctx.userId,
-        branch_id: ctx.branchId,
+        company_id: ctx.company_id,
+        user_id: ctx.user_id,
+        branch_id: ctx.branch_id,
       }));
 
       commonData = {
@@ -266,13 +267,13 @@ module.exports = {
     };
     if(requireTenantFields){
       const ctx = getContext();
-      safeData.company_id= ctx.companyId;
-      safeData.user_id= ctx.userId;
-      safeData.branch_id= ctx.branchId;
+      safeData.company_id= ctx.company_id;
+      safeData.user_id= ctx.user_id;
+      safeData.branch_id= ctx.branch_id;
       commonData = {
-        user_id: ctx.userId,
-        company_id: ctx.companyId,
-        branch_id: ctx.branchId,
+        user_id: ctx.user_id,
+        company_id: ctx.company_id,
+        branch_id: ctx.branch_id,
       };
     }
 
@@ -312,9 +313,9 @@ module.exports = {
   },
 
   // 4. Soft Delete
-  softDeleteById: async (model, whereInput, transaction = null) => {
+  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true) => {
     const ctx = getContext();
-    const condition = await buildWhere(whereInput, true);
+    const condition = await buildWhere(whereInput, requireTenantFields);
 
     const recordsToDelete = await model.findAll({
       where: condition,
@@ -325,7 +326,7 @@ module.exports = {
     if (!recordsToDelete.length) return 0;
 
     const [count] = await model.update(
-      { status: 2, user_id: ctx.userId },
+      { status: 2, user_id: ctx.user_id },
       withDebug({ where: { id: { [Op.in]: recordsToDelete.map(r => r.id) } } }, transaction)
     );
 
@@ -336,9 +337,9 @@ module.exports = {
           entity_name: model.name,
           record_id: record.id,
           old_data: record,
-          user_id: ctx.userId,
-          company_id: ctx.companyId,
-          branch_id: ctx.branchId,
+          user_id: ctx.user_id,
+          company_id: ctx.company_id,
+          branch_id: ctx.branch_id,
           ip_address: ctx.ip,
         }, transaction);
       }

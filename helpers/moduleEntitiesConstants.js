@@ -135,8 +135,16 @@ export const MODULES = {
       "NAME": "Reports"
     }
   },
-  "SETTINGS": {
+  "HR": {
     "ID": 9,
+    "NAME": "HR",
+    "EMPLOYEE": {
+      "ID": 30,
+      "NAME": "Employee"
+    }
+  },
+  "SETTINGS": {
+    "ID": 10,
     "NAME": "Settings",
     "TAXES_AND_GROUPS": {
       "ID": 25,

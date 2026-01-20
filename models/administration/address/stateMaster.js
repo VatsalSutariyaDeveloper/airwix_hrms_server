@@ -1,8 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
   const StateMaster = sequelize.define("StateMaster", {
-    country_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    country_id: { type: DataTypes.INTEGER, allowNull: true },
     state_name: { type: DataTypes.STRING, allowNull: false },
-    code: { type: DataTypes.STRING, allowNull: true,defaultValue: 0 },
+    code: { type: DataTypes.STRING, allowNull: true, defaultValue: 0 },
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,
@@ -18,10 +18,10 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   StateMaster.associate = (models) => {
-    StateMaster.belongsTo(models.CountryMaster, { foreignKey: "country_id", as: "country" });
-    StateMaster.hasMany(models.CityMaster, { foreignKey: "state_id", as: "cities" });
+    // StateMaster.belongsTo(models.CountryMaster, { foreignKey: "country_id", as: "country" });
+    // StateMaster.hasMany(models.CityMaster, { foreignKey: "state_id", as: "cities" });
   };
 
-  
+
   return StateMaster;
 };

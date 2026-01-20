@@ -16,8 +16,7 @@ const normalizeCompanyAccess = (access) => {
 exports.sessionData = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const ctx = getContext();
-    const { companyId: company_id, userId: user_id, branchId: branch_id } = ctx;
+    const { user_id, company_id, branch_id } = getContext();
 
     // 1. Validate Company
     const record = await commonQuery.findOneRecord(
@@ -41,12 +40,12 @@ exports.sessionData = async (req, res) => {
         include: [{ 
             model: UserCompanyRoles, 
             as: "ComapanyRole", 
-            where: { company_id, branch_id }, 
             attributes: ["permissions"],
             required: false 
         }]
       }
     );
+    
     if (!userData) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);

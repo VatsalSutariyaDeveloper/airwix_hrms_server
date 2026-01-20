@@ -21,6 +21,7 @@ const { normalizeNullValues } = require("./middlewares/normalizeNullValues");
 const { archiveAndCleanupLogs } = require('./helpers');
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
+const holidayRoutes = require("./routes/holidayRoutes");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
 
@@ -71,6 +72,7 @@ app.use("/administration", administrationRoutes);
 app.use("/subscription", subscriptionRoutes);
 app.use("/attendance", attendanceRoutes);
 app.use("/employee", employeeRoutes);
+app.use("/holiday", holidayRoutes);
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS
@@ -86,10 +88,10 @@ app.get("/force-currency-update", async (req, res) => {
   res.status(200).send("Currency update process triggered successfully.");
 });
 
-Promise.all([
-  db.sequelize.sync(), // Syncs the primary database
-])
-  .then(async () => {
+// Promise.all([
+//   db.sequelize.sync({ alter: false, force: false }),
+// ])
+//   .then(async () => {
     console.log("✅ Both databases synced");
 
     // Load entity constants from database
@@ -99,10 +101,10 @@ Promise.all([
     server.listen(process.env.PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on http://0.0.0.0:${process.env.PORT}`);
     });
-  })
-  .catch((err) => {
-    console.error("❌ Failed to sync databases:", err);
-  });
+  // })
+  // .catch((err) => {
+  //   console.error("❌ Failed to sync databases:", err);
+  // });
 
 cron.schedule('0 0 * * *', async () => {
   console.log('⏰ Running daily log cleanup task...');

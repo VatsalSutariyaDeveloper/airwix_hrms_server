@@ -17,8 +17,7 @@ module.exports = (sequelize, DataTypes) => {
       },
       status: {
         type: DataTypes.ENUM("pending", "approved", "rejected"),
-        defaultValue: "pending",
-        comment: "Current status of the activation request",
+        defaultValue: "pending"
       },
       request_message: {
         type: DataTypes.TEXT,

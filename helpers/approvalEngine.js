@@ -33,11 +33,11 @@ const ApprovalEngine = {
   /**
    * Main Logic: Find the FIRST workflow that matches the data
    */
-  checkApprovalRequired: async (moduleEntityId, recordData, companyId) => {
+  checkApprovalRequired: async (moduleEntityId, recordData) => {
     // 1. Fetch Workflows sorted by PRIORITY (1 -> 999)
     const workflows = await commonQuery.findAllRecords(
       ApprovalWorkflow,
-      { module_entity_id: moduleEntityId, status: 1, company_id: companyId },
+      { module_entity_id: moduleEntityId, status: 1 },
       {
         include: [{ 
           model: ApprovalRule, 
@@ -106,7 +106,7 @@ const ApprovalEngine = {
   /**
    * Initiate the approval process in DB
    */
-  initiateApproval: async (moduleEntityId, entityId, workflowId, companyId, transaction) => {
+  initiateApproval: async (moduleEntityId, entityId, workflowId, transaction) => {
     return await commonQuery.createRecord(
       ApprovalRequest,
       {
@@ -114,8 +114,7 @@ const ApprovalEngine = {
         entity_id: entityId,
         workflow_id: workflowId,
         current_level_sequence: 1,
-        status: STATUS.PENDING,
-        company_id: companyId
+        status: STATUS.PENDING
       }, 
       transaction
     );
@@ -161,8 +160,7 @@ const ApprovalEngine = {
         user_id: userId,
         action: action,
         comment: comment,
-        level_sequence: request.current_level_sequence,
-        company_id: request.company_id
+        level_sequence: request.current_level_sequence
       }, 
       transaction
     );

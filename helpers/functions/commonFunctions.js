@@ -247,7 +247,6 @@ function getMonthNameFull(index) {
 
 exports.generateSeriesNumber = async (
   typeId,
-  companyId,
   transaction,
   modelToCheck = null, // e.g. ItemMaster
   uniqueField = null, // e.g. 'series_code'
@@ -262,9 +261,9 @@ exports.generateSeriesNumber = async (
 
     let where = {};
     if (typeId === 0) {
-      where = { series_entity_id: entity_id, is_default: 1, company_id: companyId, status: 0 };
+      where = { series_entity_id: entity_id, is_default: 1, status: 0 };
     } else {
-      where = { id: typeId, company_id: companyId, status: 0 };
+      where = { id: typeId, status: 0 };
     }
 
     // Fetch current series config
@@ -299,11 +298,11 @@ exports.generateSeriesNumber = async (
         break;
     }
 
-    // ✅ Check uniqueness if model provided
+    // Check uniqueness if model provided
     if (modelToCheck) {
       const exists = await commonQuery.findOneRecord(
         modelToCheck,
-        { [uniqueField]: seriesNumber, company_id: companyId },
+        { [uniqueField]: seriesNumber },
         {},
         transaction,
         true
@@ -311,13 +310,13 @@ exports.generateSeriesNumber = async (
       
       if (!exists) {
         // Update series for next use
-        return seriesNumber; // ✅ unique, return
+        return seriesNumber; // unique, return
       }
 
       // If exists, increment series and retry
       await commonQuery.updateRecordById(
         SeriesTypeMaster,
-        { id: typeId, company_id: companyId },
+        { id: typeId },
         { start_series: id },
         transaction
       );
@@ -332,13 +331,13 @@ exports.generateSeriesNumber = async (
   );
 };
 
-exports.updateSeriesNumber = async (typeId, companyId, transaction = null, entity_id) => {
+exports.updateSeriesNumber = async (typeId, transaction = null, entity_id) => {
   try {
     let where = {};
     if (typeId === 0) {
-      where = { series_entity_id: entity_id, is_default: 1, company_id: companyId, status: 0 };
+      where = { series_entity_id: entity_id, is_default: 1, status: 0 };
     } else {
-      where = { id: typeId, company_id: companyId, status: 0 };
+      where = { id: typeId, status: 0 };
     }
     const rows = await commonQuery.findOneRecord(
       SeriesTypeMaster,
@@ -358,7 +357,6 @@ exports.updateSeriesNumber = async (typeId, companyId, transaction = null, entit
       SeriesTypeMaster,
       {
         id: typeId,
-        company_id: companyId,
       },
       { start_series: parseInt(seriesType.start_series || 0, 10) + 1 },
       transaction

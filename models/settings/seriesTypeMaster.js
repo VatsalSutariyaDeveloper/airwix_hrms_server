@@ -1,8 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
   const SeriesTypeMaster = sequelize.define("SeriesTypeMaster", {
     series_type_name: { type: DataTypes.STRING(100), allowNull: false },
-    series_entity_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    financial_year_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    series_entity_id: { type: DataTypes.INTEGER, allowNull: true },
+    financial_year_id: { type: DataTypes.INTEGER, allowNull: true },
     start_series: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "0" },
     series_format: { type: DataTypes.INTEGER },
     format_value: { type: DataTypes.STRING(50) },

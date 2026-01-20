@@ -1,17 +1,13 @@
 const sequelize = require("../config/database");
 const masterSequelize = require('../config/master_database');
 const { DataTypes } = require("sequelize");
-const { encrypt, decrypt } = require("../helpers/crypto");
 
 // Administration models
 const ModuleMaster = require("./administration/permission/moduleMaster")(sequelize, DataTypes);
 const ModuleEntityMaster = require("./administration/permission/moduleEntityMaster")(sequelize, DataTypes);
 const ModulePermissionTypeMaster = require("./administration/permission/modulePermissionTypeMaster")(sequelize, DataTypes);
-const HSNMaster = require("./administration/hsnMaster")(sequelize, DataTypes);
-const CityMaster = require("./administration/address/cityMaster")(masterSequelize, DataTypes);
 const StateMaster = require("./administration/address/stateMaster")(sequelize, DataTypes);
 const CountryMaster = require("./administration/address/countryMaster")(sequelize, DataTypes);
-const ZoneMaster = require("./administration/address/zoneMaster")(sequelize, DataTypes);
 const CompanySettingsMaster = require("./administration/companySettingsMaster")(sequelize, DataTypes);
 const CurrencyMaster = require("./administration/currencyMaster")(sequelize, DataTypes);
 const BankMaster = require("./administration/bankMaster")(sequelize, DataTypes);
@@ -21,18 +17,10 @@ const RolePermission = require("./settings/user/rolePermission")(sequelize, Data
 const Permission = require("./settings/user/permission")(sequelize, DataTypes);
 const RoutePermission = require("./settings/user/routePermission")(sequelize, DataTypes);
 const UserCompanyRoles = require("./settings/user/userCompanyRoles")(sequelize, DataTypes);
-const TemplatesMessage = require("./settings/templatesMessage")(sequelize, DataTypes);
 const CompanyMaster = require("./settings/company/companyMaster")(sequelize, DataTypes);
 const CompanyConfigration = require("./settings/company/companyConfigration")(sequelize, DataTypes);
 const CompanyAddress = require("./settings/company/companyAddress")(sequelize, DataTypes);
-const TaxTypeMaster = require("./settings/tax/taxTypeMaster")(sequelize, DataTypes);
-const Taxes = require("./settings/tax/taxes")(sequelize, DataTypes);
-const TaxGroup = require("./settings/tax/taxGroup")(sequelize, DataTypes);
-const TaxGroupTransaction = require("./settings/tax/taxGroupTransaction")(sequelize, DataTypes);
-const Notification = require("./settings/notification")(sequelize, DataTypes);
-
-// Transaction models
-const TaxTransaction = require("./transactions/taxTransaction")(sequelize, DataTypes);
+const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
 
 // Auth models
 const User = require("./settings/user/user")(sequelize, DataTypes);
@@ -50,7 +38,7 @@ const SubscriptionPlan = require("./subscription/subscriptionPlans")(sequelize, 
 //Attendance models
 const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataTypes);
 const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
-const Shift = require("./attendance/shift")(sequelize, DataTypes);
+const Shift = require("./settings/shift")(sequelize, DataTypes);
 const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
 const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes);
 
@@ -58,17 +46,30 @@ const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes
 const Employee = require("./employee")(sequelize, DataTypes);
 const EmployeeFamilyMember = require("./employeeFamilyMember")(sequelize, DataTypes);
 
+// SeriesTypeMaster
+const SeriesTypeMaster = require("./settings/seriesTypeMaster")(sequelize, DataTypes);
+
+// APPROVAL ENGINE (Depends on Users, Modules, etc.)
+const ApprovalWorkflow = require("./administration/approval/approvalWorkflow")(sequelize, DataTypes);
+const ApprovalRule = require("./administration/approval/approvalRule")(sequelize, DataTypes);
+const ApprovalLevel = require("./administration/approval/approvalLevel")(sequelize, DataTypes);
+const ApprovalRequest = require("./administration/approval/approvalRequest")(sequelize, DataTypes);
+const ApprovalLog = require("./administration/approval/approvalLog")(sequelize, DataTypes);
+
+// Holiday models
+const Holiday = require("./holiday")(sequelize, DataTypes);
+const HolidayTemplate = require("./holidayTemplate")(sequelize, DataTypes);
+const HolidayTransaction = require("./holidayTransaction")(sequelize, DataTypes);
+
+
 // Collect all models in one db object
 const db = {
   // Administration
   ModuleMaster,
   ModuleEntityMaster,
   ModulePermissionTypeMaster,
-  HSNMaster,
-  CityMaster,
   StateMaster,
   CountryMaster,
-  ZoneMaster,
   CompanySettingsMaster,
   CurrencyMaster,
   BankMaster,
@@ -78,18 +79,20 @@ const db = {
   Permission,
   RoutePermission,
   UserCompanyRoles,
-  TemplatesMessage,
   CompanyMaster,
   CompanyConfigration,
   CompanyAddress,
-  TaxTypeMaster,
-  Taxes,
-  TaxGroup,
-  TaxGroupTransaction,
-  Notification,
+  DeviceMaster,
 
-  // Transactions
-  TaxTransaction,
+  // SeriesTypeMaster
+  SeriesTypeMaster,
+
+  // APPROVAL ENGINE (Depends on Users, Modules, etc.)
+  ApprovalWorkflow,
+  ApprovalRule,
+  ApprovalLevel,
+  ApprovalRequest,
+  ApprovalLog,
 
   // Auth
   User,
@@ -114,6 +117,11 @@ const db = {
   // Employee
   Employee,
   EmployeeFamilyMember,
+
+  // Holiday
+  Holiday,
+  HolidayTemplate,
+  HolidayTransaction,
 };
 
 Object.keys(db).forEach(modelName => {

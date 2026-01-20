@@ -13,7 +13,7 @@ yarn-error.log*
 Thumbs.db
 
 # Environment files
-# .env
+.env
 .env.local
 .env.*.local
 
@@ -42,5 +42,9 @@ pids/
 
 # Dependency lock files (if using only one package manager, comment the other)
 package-lock.json
+package.json
 # yarn.lock
 # pnpm-lock.yaml
+
+# Python AI Service
+python/venv/

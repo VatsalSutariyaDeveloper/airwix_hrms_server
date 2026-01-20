@@ -6,6 +6,7 @@ module.exports = (sequelize, DataTypes) => {
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
         punch_time: { type: DataTypes.DATE, allowNull: false },
         punch_type: { type: DataTypes.ENUM("IN", "OUT"), allowNull: false },
+        image_name: DataTypes.STRING,
         device_id: DataTypes.STRING,
         latitude: DataTypes.DECIMAL(10, 7),
         longitude: DataTypes.DECIMAL(10, 7),
