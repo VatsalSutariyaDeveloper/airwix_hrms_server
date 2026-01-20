@@ -11,7 +11,8 @@ const rolePermissionController = require("../controllers/settings/user/rolePermi
 const importController = require("../controllers/settings/import/importController");
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
-
+const shiftController = require("../controllers/settings/shiftController.js");
+// const deviceMasterController = require("../controllers/settings/deviceMasterController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -101,5 +102,26 @@ router.patch("/role-permission/status", rolePermissionController.updateStatus);
 // ==========================
 router.get("/download-errors", importController.downloadErrorFile);
 router.post("/import-data", uploadExcelToDisk("file"), importController.importData);
+
+// ==========================
+// 24. SHIFT ROUTES
+// ==========================
+router.post("/shift", shiftController.create);
+router.post("/shift/get-transactions", shiftController.getAll);
+router.get("/shift/:id", shiftController.getById);
+router.put("/shift/:id", shiftController.update);
+router.delete("/shift/", shiftController.delete);
+router.patch("/shift/status", shiftController.updateStatus);
+router.post("/shift/assign", shiftController.assignShift);
+
+// ==========================
+// 25. DEVICE MASTER ROUTES
+// ==========================
+// router.post("/device-master", deviceMasterController.create);
+// router.get("/device-master/get-transactions", deviceMasterController.getAll);
+// router.get("/device-master/:id", deviceMasterController.getById);
+// router.put("/device-master/:id", deviceMasterController.update);
+// router.delete("/device-master", deviceMasterController.delete);
+// router.patch("/device-master/status", deviceMasterController.updateStatus);
 
 module.exports = router;

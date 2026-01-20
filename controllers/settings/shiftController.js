@@ -76,19 +76,11 @@ exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         // Only validate fields sent in request
-        const fieldLabels = {
+        const requiredFields = {
             shift_name: "Shift Name",
             start_time: "Start Time",
             end_time: "End Time",
         };
-
-        const requiredFields = {};
-
-        Object.keys(fieldLabels).forEach(key => {
-            if (req.body[key] !== undefined) {
-                requiredFields[key] = fieldLabels[key];
-            }
-        });
 
         const errors = await validateRequest(
             req.body,

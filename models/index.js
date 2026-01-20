@@ -20,6 +20,7 @@ const UserCompanyRoles = require("./settings/user/userCompanyRoles")(sequelize, 
 const CompanyMaster = require("./settings/company/companyMaster")(sequelize, DataTypes);
 const CompanyConfigration = require("./settings/company/companyConfigration")(sequelize, DataTypes);
 const CompanyAddress = require("./settings/company/companyAddress")(sequelize, DataTypes);
+const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
 
 // Auth models
 const User = require("./settings/user/user")(sequelize, DataTypes);
@@ -37,7 +38,7 @@ const SubscriptionPlan = require("./subscription/subscriptionPlans")(sequelize, 
 //Attendance models
 const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataTypes);
 const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
-const Shift = require("./attendance/shift")(sequelize, DataTypes);
+const Shift = require("./settings/shift")(sequelize, DataTypes);
 const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
 const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes);
 
@@ -60,6 +61,7 @@ const Holiday = require("./holiday")(sequelize, DataTypes);
 const HolidayTemplate = require("./holidayTemplate")(sequelize, DataTypes);
 const HolidayTransaction = require("./holidayTransaction")(sequelize, DataTypes);
 
+
 // Collect all models in one db object
 const db = {
   // Administration
@@ -80,6 +82,7 @@ const db = {
   CompanyMaster,
   CompanyConfigration,
   CompanyAddress,
+  DeviceMaster,
 
   // SeriesTypeMaster
   SeriesTypeMaster,

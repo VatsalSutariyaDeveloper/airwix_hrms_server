@@ -104,11 +104,14 @@ const uploadFile = async (
 
   for (const file of filesToProcess) {
     const ext = path.extname(file.originalname).toLowerCase();
+    console.log("Processing file:----------------\n", file.originalname);
+    console.log("ext-------------------------------\n:", ext);
     let filename;
     
     if (customFilename) {
       // Use custom filename, ensure it has the correct extension
       filename = customFilename.endsWith(ext) ? customFilename : customFilename + ext;
+      console.log("Custom filename used:", filename);
     } else {
       // Use default naming
       const name = path.basename(file.originalname, ext).replace(/\s+/g, "_");
