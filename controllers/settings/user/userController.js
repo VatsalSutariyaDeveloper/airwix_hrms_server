@@ -586,8 +586,7 @@ exports.getAll = async (req, res) => {
       ["role_name", true, false],
     ];
 
-    const ctx = getContext();
-    const { companyId: company_id } = ctx;
+    const company_id = req.user.company_id;
 
     const extraFilters = {
       [Op.or]: [
@@ -639,14 +638,19 @@ exports.getAll = async (req, res) => {
  */
 exports.dropdownList = async (req, res) => {
   try {
+    const company_id = req.user.company_id;
+    const extraFilters = {
+      [Op.or]: [
+        { company_id: company_id },
+        sequelize.where(
+          sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+          true
+        )
+      ]
+    };
     const record = await commonQuery.findAllRecords(
       User,
-      {
-        user_id: req.body.user_id,
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id,
-        status: 0,
-      },
+      extraFilters,
       {
         attributes: ["id", "user_name", "email"],
         order: [["user_name", "ASC"]],
