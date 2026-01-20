@@ -214,7 +214,6 @@ const constants = {
     DEVICE_MASTER_DELETED: "DEVICE_MASTER_DELETED",
 };
 
-
 const ENTITIES = {
     ITEM_MASTER: { ID: 17, NAME: "Item" },
     PARTIES_MASTER: { ID: 27, NAME: "Party" },
