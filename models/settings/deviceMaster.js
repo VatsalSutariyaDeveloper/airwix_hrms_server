@@ -2,15 +2,9 @@ module.exports = (sequelize, DataTypes) => {
     const DeviceMaster = sequelize.define(
         "DeviceMaster",
         {
-            device_name: { 
-                type: DataTypes.STRING, allowNull: false 
-            },
-            model_name: {
-                 type: DataTypes.STRING, unique: true, allowNull: false 
-            },
-            access_by: { 
-                type: DataTypes.INTEGER, allowNull: true, comment: "User who last accessed/modified the device" 
-            },
+            device_name: { type: DataTypes.STRING, allowNull: false },
+            model_name: { type: DataTypes.STRING, unique: true, allowNull: false },
+            access_by: { type: DataTypes.INTEGER, allowNull: true, comment: "User who last accessed/modified the device" },
             status: {
                 type: DataTypes.SMALLINT,
                 defaultValue: 0,
@@ -36,6 +30,5 @@ module.exports = (sequelize, DataTypes) => {
             as: "accessBy"
         });
     };
-
     return DeviceMaster;
 }
