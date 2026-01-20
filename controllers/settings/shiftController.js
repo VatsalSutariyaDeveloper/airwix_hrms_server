@@ -1,12 +1,6 @@
 const { Shift } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
-const shiftService = require("../../helpers/shiftHelper");
-const { constants } = require("../../helpers/constants");
+const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 
-// exports.createShift = async (req, res) => {
-//     const shift = await shiftService.createShift(req.body, req.user.companyId);
-//     res.json({ message: "Shift created", data: shift });
-// };
 // Create a new bank master record
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -39,27 +33,25 @@ exports.create = async (req, res) => {
     }
 };
 
-// exports.assignShift = async (req, res) => {
-//     const { employee_id, shift_id, effective_from } = req.body;
-
-//     await shiftService.assignShiftToEmployee(
-//         employee_id,
-//         shift_id,
-//         effective_from
-//     );
-
-//     res.json({ message: "Shift assigned successfully" });
-// };
-
 // Get all active shift records
 exports.getAll = async (req, res) => {
-    try {
-        const result = await commonQuery.findAllRecords(Shift, { status: 0 });
-        return res.ok(result);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
+  try {
+     const fieldConfig = [
+      ["shift_name", true, true],
+    ];
+
+    const data = await commonQuery.fetchPaginatedData(
+      Shift,
+      req.body,
+      fieldConfig,
+    );
+
+    return res.ok(data);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
 };
+
 // Get By Id
 exports.getById = async (req, res) => {
     try {
@@ -75,7 +67,6 @@ exports.getById = async (req, res) => {
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        // Only validate fields sent in request
         const requiredFields = {
             shift_name: "Shift Name",
             start_time: "Start Time",
@@ -115,19 +106,6 @@ exports.update = async (req, res) => {
 // Soft delete a shift record by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
-    // try {
-    //     const deleted = await commonQuery.softDeleteById(Shift, req.params.id, transaction);
-    //     if (!deleted) {
-    //         await transaction.rollback();
-    //         return res.error(constants.NOT_FOUND);
-    //     }
-    //     await transaction.commit();
-    //     return res.success(constants.SHIFT_DELETED);
-    // } catch (err) {
-    //     await transaction.rollback();
-    //     return handleError(err, res, req);
-    // }
-    //  const transaction = await sequelize.transaction();
     try {
         const requiredFields = {
             ids: "Select Data"
@@ -138,15 +116,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        let { ids } = req.body; // Accept array of ids
-
-        //normalize ids
-        if (Array.isArray(ids) && typeof ids[0] === "string") {
-            ids = ids[0]
-                .split(",")
-                .map(id => parseInt(id.trim()))
-                .filter(Boolean);
-        }
+        let { ids } = req.body; 
 
         // Validate that ids is an array and not empty
         if (!Array.isArray(ids) || ids.length === 0) {
@@ -155,10 +125,12 @@ exports.delete = async (req, res) => {
         }
 
         const deleted = await commonQuery.softDeleteById(Shift, ids, transaction);
+
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
+
         await transaction.commit();
         return res.success(constants.SHIFT_DELETED);
     } catch (err) {
@@ -172,7 +144,7 @@ exports.updateStatus = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
 
-    const { status, ids } = req.body; // expecting status in request body
+    const { status, ids } = req.body; 
 
     const requiredFields = {
       ids: "Select Any One Data",
@@ -218,14 +190,14 @@ exports.updateStatus = async (req, res) => {
   }
 };
 
-exports.assignShift = async (req, res) => {
-    const { employee_id, shift_id, effective_from } = req.body;
+// exports.assignShift = async (req, res) => {
+//     const { employee_id, shift_id, effective_from } = req.body;
 
-    await shiftService.assignShiftToEmployee(
-        employee_id,
-        shift_id,
-        effective_from
-    );
+//     await shiftService.assignShiftToEmployee(
+//         employee_id,
+//         shift_id,
+//         effective_from
+//     );
 
-    res.json({ message: "Shift assigned successfully" });
-};
+//     res.json({ message: "Shift assigned successfully" });
+// };
