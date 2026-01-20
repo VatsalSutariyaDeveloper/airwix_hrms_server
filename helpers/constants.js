@@ -10,6 +10,7 @@ const constants = {
   SIGNATURE_FOLDER: "signature/",
   ATTENDANCE_FOLDER: "employee/attendance/",
   ATTENDANCE_LOG_FOLDER: "employee/attendance_log/",
+  ATTENDANCE_DOC_FOLDER: "employee/docs/",
   EMPLOYEE_IMG_FOLDER: "employee/images/",
 
   /* =======================

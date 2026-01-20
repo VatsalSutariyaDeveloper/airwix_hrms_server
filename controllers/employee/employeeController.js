@@ -64,7 +64,7 @@ const STATUS = {
 const parseJsonFields = (body) => {
     // 'education_details' is a column in Employee (JSONB)
     // 'family_details' is NOT a column, but we send it as JSON to process into FamilyMember table
-    const fieldsToParse = ["education_details", "family_details"];
+    const fieldsToParse = ["education_details"];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
@@ -86,7 +86,6 @@ exports.create = async (req, res) => {
     try {
         parseJsonFields(req.body);
         const POST = req.body;
-        console.log("post--------------- --------------- -----------------------------\n",POST);
 
         // Validate Required Fields
         const requiredFields = {
@@ -107,15 +106,13 @@ exports.create = async (req, res) => {
 
         // 1. Handle File Uploads
         // We map the uploaded file keys to the database column names
-        if (req.files && req.files.length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.ATTACHMENT_FOLDER, transaction);
+        if (req.files && Object.keys(req.files).length > 0) {
+            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_DOC_FOLDER, transaction);
 
             const fileColumns = [
                 'permanent_address_proof_doc',
                 'present_address_proof_doc',
                 'bank_proof_doc',
-                'pan_doc',
-                'aadhaar_doc',
                 'pan_doc',
                 'aadhaar_doc',
                 'passport_doc',
