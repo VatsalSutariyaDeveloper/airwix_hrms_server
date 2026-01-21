@@ -10,8 +10,10 @@ module.exports = (sequelize, DataTypes) => {
         first_name: { type: DataTypes.STRING },
         mobile_no: { type: DataTypes.STRING },
         designation:{ type: DataTypes.STRING },
-        attendance_supervisor:{ type: DataTypes.STRING },
-        reporting_manager:{ type: DataTypes.STRING },
+        attendance_supervisor:{ type: DataTypes.INTEGER },
+        is_attendance_supervisor:{ type: DataTypes.BOOLEAN, defaultValue: false },
+        reporting_manager:{ type: DataTypes.INTEGER },
+        is_reporting_manager:{ type: DataTypes.BOOLEAN, defaultValue: false },
 
         // GENERAL INFORMATION
         salary_cycle: { type: DataTypes.INTEGER },
@@ -62,15 +64,15 @@ module.exports = (sequelize, DataTypes) => {
         name_as_per_aadhaar: { type: DataTypes.STRING },
         aadhaar_number: { type: DataTypes.STRING(12) },
         pf_number: { type: DataTypes.STRING },
-        // pf_joing_date: { type: DataTypes.DATEONLY },
+        pf_joining_date: { type: DataTypes.DATEONLY },
         pf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         esi_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         esi_number: { type: DataTypes.STRING },
         pt_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         lwf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         eps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
-        // eps_joing_date: { type: DataTypes.DATEONLY },
-        // eps_exit_date: { type: DataTypes.DATEONLY },
+        eps_joining_date: { type: DataTypes.DATEONLY },
+        eps_exit_date: { type: DataTypes.DATEONLY },
         hps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
 
         // BANK INFORMATION
@@ -136,7 +138,6 @@ module.exports = (sequelize, DataTypes) => {
     Employee.associate = function (models) {
         Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
-        Employee.hasMany(models.EmployeeFamilyMember, { foreignKey: "employee_id", as: "family_members" });
         Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
         Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });
     };
