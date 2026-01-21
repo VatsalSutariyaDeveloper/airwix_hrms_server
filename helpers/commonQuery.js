@@ -147,7 +147,7 @@ async function normalizeInclude(includeArray) {
       const newWhere = { ...(newInc.where || {}) };
 
       if (newWhere.status === undefined) {
-        newWhere.status = { [Op.ne]: 2 };
+        newWhere.status = { [Op.in]: [0, 1] };
       }
 
       newInc.where = newWhere;
@@ -177,13 +177,11 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
-    let ip_address = data.ip_address;
     if(requireTenantFields){
       const ctx = getContext();
       enrichedData.company_id= ctx.company_id;
       enrichedData.user_id= ctx.user_id;
       enrichedData.branch_id= ctx.branch_id;
-      ip_address= ctx.ip;
       commonData = {
         user_id: ctx.user_id,
         company_id: ctx.company_id,
@@ -193,14 +191,18 @@ module.exports = {
 
     const result = await model.create(enrichedData, withDebug({}, transaction));
 
-    await logQuery({
-      action_type: "CREATE",
-      entity_name: model.name,
-      record_id: result.id,
-      new_data: result.toJSON ? result.toJSON() : result,
-      ...commonData,
-      ip_address,
-    }, transaction);
+    try {
+      await logQuery({
+        action_type: "CREATE",
+        entity_name: model.name,
+        record_id: result.id,
+        new_data: result.toJSON ? result.toJSON() : result,
+        ...commonData,
+        ip_address: ctx.ip,
+      }, transaction);
+    } catch (logErr) {
+      console.error("Audit log failed:", logErr.message);
+    }
 
     return result;
   },
@@ -214,7 +216,7 @@ module.exports = {
       company_id: extraFields.company_id,
       branch_id: extraFields.branch_id,
     };
-    let ip_address = extraFields.ip_address;
+
     if(requireTenantFields){
       const ctx = getContext();
       enriched = dataArray.map((item) => ({
@@ -223,7 +225,7 @@ module.exports = {
         user_id: ctx.user_id,
         branch_id: ctx.branch_id,
       }));
-      ip_address = ctx.ip;
+
       commonData = {
         user_id: ctx.user_id,
         company_id: ctx.company_id,
@@ -234,14 +236,18 @@ module.exports = {
     const createdRecords = await Model.bulkCreate(enriched, withDebug({}, transaction));
 
     if (createdRecords.length) {
-      for (const record of createdRecords) {
-        await logQuery({
-          action_type: "BULK_CREATE",
-          entity_name: Model.name,
-          record_id: record.id,
-          ...commonData,
-          ip_address,
-        }, transaction);
+      try {
+        for (const record of createdRecords) {
+          await logQuery({
+            action_type: "BULK CREATE",
+            entity_name: Model.name,
+            record_id: record.id,
+            ...commonData,
+            ip_address: ctx.ip,
+          }, transaction);
+        }
+      } catch (logErr) {
+        console.error("Audit log failed:", logErr.message);
       }
     }
 
@@ -259,13 +265,11 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
-    let ip_address = data.ip_address;
     if(requireTenantFields){
       const ctx = getContext();
       safeData.company_id= ctx.company_id;
       safeData.user_id= ctx.user_id;
       safeData.branch_id= ctx.branch_id;
-      ip_address = ctx.ip;
       commonData = {
         user_id: ctx.user_id,
         company_id: ctx.company_id,
@@ -290,16 +294,20 @@ module.exports = {
     const newRecord = await model.findOne({ where: condition, transaction });
     if (newRecord && forceReload) await newRecord.reload({ transaction });
 
-    const isStatusChange = Object.keys(safeData).length === 1 && safeData.status !== undefined;
-    await logQuery({
-      action_type: isStatusChange ? "STATUS_CHANGE" : "UPDATE",
-      entity_name: model.name,
-      record_id: newRecord.id,
-      old_data: oldRecord,
-      new_data: newRecord.toJSON ? newRecord.toJSON() : newRecord,
-      ...commonData,
-      ip_address,
-    }, transaction);
+    try {
+      const isStatusChange = Object.keys(safeData).length === 1 && safeData.status !== undefined;
+      await logQuery({
+        action_type: isStatusChange ? "STATUS_CHANGE" : "UPDATE",
+        entity_name: model.name,
+        record_id: newRecord.id,
+        old_data: oldRecord,
+        new_data: newRecord.toJSON(),
+        ...commonData,
+        ip_address: ctx.ip,
+      }, transaction);
+    } catch (logErr) {
+      console.error("Audit log failed:", logErr.message);
+    }
 
     return newRecord;
   },
@@ -448,7 +456,7 @@ module.exports = {
   // 10. ADVANCED PAGINATION
   async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt") {
     try {
-      const standardizedConfig = fieldConfig?.map(([key, searchable, sortable]) => ({
+      const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
         key,
         searchable: searchable === true,
         sortable: sortable === true,
@@ -474,6 +482,7 @@ module.exports = {
       } 
       else if (reqBody?.status === "All") {
         delete filters.status;
+        // filters.status = { [Op.or]: [0, 1, 2] }; 
       }
 
       // B. Filter Object
