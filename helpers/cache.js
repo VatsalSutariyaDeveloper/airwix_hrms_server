@@ -174,32 +174,64 @@ const reloadCompanyCache = async (company_id) => {
 
 
 // ================= ROUTE PERMISSION CACHE =================
+let reloadPromise = null;
+
 const reloadRoutePermissions = async () => {
-    try {
-        const routes = await RoutePermission.findAll({
-            raw: true,
-            attributes: ["method", "path_pattern", "permission_id"]
-        });
-
-        routeCache.flushAll();
-
-        routes.forEach(r => {
-            routeCache.set(
-                `${r.method.toUpperCase()}:${r.path_pattern}`,
-                r.permission_id
-            );
-        });
-    } catch (err) {
-        console.error("[Cache] Route reload failed", err);
+    // 1. If a reload is already running, return that existing promise
+    if (reloadPromise) {
+        console.log('⏳ Cache reload in progress, joining queue...');
+        return reloadPromise;
     }
+
+    // 2. Start the reload
+    reloadPromise = (async () => {
+        try {
+            console.log('🔄 Fetching Route Permissions from DB...');
+            const routes = await RoutePermission.findAll({
+                raw: true,
+                attributes: ["method", "path_pattern", "permission_id"]
+            });
+
+            console.log(`[Cache] Found ${routes.length} routes in DB.`);
+
+            // 3. Prepare data for Mass Set (mset)
+            const formattedRoutes = routes.map(r => ({
+                key: `${r.method.toUpperCase()}:${r.path_pattern}`,
+                val: r.permission_id
+            }));
+
+            // 4. Use mset (Atomic Update). 
+            // ⚠️ DO NOT USE flushAll() here. It causes downtime.
+            // mset overwrites existing keys safely.
+            if (formattedRoutes.length > 0) {
+                routeCache.mset(formattedRoutes);
+                console.log(`✅ Cache Updated Successfully.`);
+            }
+        } catch (err) {
+            console.error("[Cache] Route reload failed", err);
+        } finally {
+            // 5. Release the lock
+            reloadPromise = null;
+        }
+    })();
+
+    return reloadPromise;
 };
 
 const getRoutePermissionId = async (method, path) => {
     const key = `${method.toUpperCase()}:${path}`;
-    const cached = routeCache.get(key);
+    
+    // 1. Try Cache
+    let cached = routeCache.get(key);
     if (cached !== undefined) return cached;
 
+    // 2. Cache Miss? Reload (Safely)
+    console.log(`⚠️ Cache Miss for [${key}]. Reloading...`);
+    
+    // 3. AWAIT the reload!
     await reloadRoutePermissions();
+
+    // 4. Retry Cache
     return routeCache.get(key);
 };
 

@@ -137,8 +137,8 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
         continue;
       }
 
-      if(!excludeCompany && ctx.companyId !== undefined){
-        where.company_id = ctx.companyId;
+      if(!excludeCompany && ctx.company_id !== undefined){
+        where.company_id = ctx.company_id;
       }
 
       if(!excludeStatus){
@@ -167,9 +167,9 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
   if (options.customFieldConfig) {
     const { entity_id, dataKey } = options.customFieldConfig;
     
-    if (entity_id && ctx.companyId) {
+    if (entity_id && ctx.company_id) {
       const customRules = await CustomField.findAll({
-        where: { entity_id, company_id: ctx.companyId, status: 0 },
+        where: { entity_id, company_id: ctx.company_id, status: 0 },
         attributes: ['field_name', 'field_label', 'is_mandatory', 'field_type', 'options'],
         transaction 
       });

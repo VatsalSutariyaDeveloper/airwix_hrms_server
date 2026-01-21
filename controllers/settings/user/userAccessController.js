@@ -212,9 +212,9 @@ exports.sessionData = async (req, res) => {
             if (removalEntity.includes(entity.id)) return false;
             
             // B. Check Company License (Subscription)
-            if (companyAllowedEntityIds && !companyAllowedEntityIds.includes(String(entity.id)) && process.env.BYPASS_PERMISSION !== "true") {
-                return false;
-            }
+            // if (companyAllowedEntityIds && !companyAllowedEntityIds.includes(String(entity.id)) && process.env.BYPASS_PERMISSION !== "true") {
+            //     return false;
+            // }
             return true;
         }).map(entity => {
             // Inject Permission String
