@@ -61,7 +61,7 @@ module.exports = (req, res, next) => {
 
   const isApp = () => {
     const accessBy = req.user?.access_by || req.body?.access_by || req.query?.access_by;
-    return true;
+    return accessBy === "application";
   };
 
   /**
