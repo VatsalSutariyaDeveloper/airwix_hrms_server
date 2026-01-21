@@ -4,16 +4,24 @@ module.exports = (sequelize, DataTypes) => {
         {
             template_name: { type: DataTypes.STRING(100), allowNull: false },
             leave_policy_cycle: { 
-                type: DataTypes.STRING(50), 
+                type: DataTypes.ENUM('CALENDAR_YEAR', 'FINANCIAL_YEAR', 'SERVICE_YEAR'), 
                 allowNull: false, 
-                comment: "Yearly, Monthly, etc." 
+                defaultValue: 'CALENDAR_YEAR',
+                comment: "CALENDAR_YEAR: Jan-Dec, FINANCIAL_YEAR: Apr-Mar, SERVICE_YEAR: Join Date anniversary" 
             },
             leave_period_start: { type: DataTypes.DATEONLY, allowNull: true },
             leave_period_end: { type: DataTypes.DATEONLY, allowNull: true },
             accrual_type: { 
-                type: DataTypes.STRING(50), 
+                type: DataTypes.ENUM('UPFRONT', 'MONTHLY'), 
                 allowNull: false, 
-                comment: "All at once, Monthly, etc." 
+                defaultValue: 'UPFRONT',
+                comment: "UPFRONT: Full credit at start, MONTHLY: Earn credit every month" 
+            },
+            join_month_rule: {
+                type: DataTypes.ENUM('THRESHOLD_BASED', 'FULL_MONTH', 'PRO_RATA_DAYS'),
+                allowNull: false,
+                defaultValue: 'THRESHOLD_BASED',
+                comment: "How to handle join month credit"
             },
             count_sandwich_leaves: { type: DataTypes.BOOLEAN, defaultValue: false },
             status: { 

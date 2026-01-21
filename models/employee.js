@@ -18,7 +18,7 @@ module.exports = (sequelize, DataTypes) => {
         weekly_off_template: { type: DataTypes.INTEGER },
         holiday_template: { type: DataTypes.INTEGER },
         leave_template: { type: DataTypes.INTEGER },
-        swift: { type: DataTypes.INTEGER },
+        shift_template: { type: DataTypes.INTEGER },
         attendance_weekly_off_template: { type: DataTypes.INTEGER },
         geofence_template: { type: DataTypes.INTEGER },
         attendance_setting_template: { type: DataTypes.INTEGER },
@@ -62,15 +62,15 @@ module.exports = (sequelize, DataTypes) => {
         name_as_per_aadhaar: { type: DataTypes.STRING },
         aadhaar_number: { type: DataTypes.STRING(12) },
         pf_number: { type: DataTypes.STRING },
-        pf_joing_date: { type: DataTypes.DATEONLY },
+        // pf_joing_date: { type: DataTypes.DATEONLY },
         pf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         esi_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         esi_number: { type: DataTypes.STRING },
         pt_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         lwf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         eps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
-        eps_joing_date: { type: DataTypes.DATEONLY },
-        eps_exit_date: { type: DataTypes.DATEONLY },
+        // eps_joing_date: { type: DataTypes.DATEONLY },
+        // eps_exit_date: { type: DataTypes.DATEONLY },
         hps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
 
         // BANK INFORMATION
@@ -138,6 +138,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
         Employee.hasMany(models.EmployeeFamilyMember, { foreignKey: "employee_id", as: "family_members" });
         Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
+        Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });
     };
 
     return Employee;

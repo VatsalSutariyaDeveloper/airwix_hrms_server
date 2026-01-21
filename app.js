@@ -23,6 +23,7 @@ const { normalizeNullValues } = require("./middlewares/normalizeNullValues");
 const { archiveAndCleanupLogs } = require('./helpers');
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
+const LeaveBalanceService = require("./services/leaveBalanceService");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
 
@@ -88,27 +89,36 @@ app.get("/force-currency-update", async (req, res) => {
   res.status(200).send("Currency update process triggered successfully.");
 });
 
-// Promise.all([
-//   db.sequelize.sync({ alter: false, force: false }),
-// ])
-//   .then(async () => {
-    console.log("✅ Both databases synced");
+const startServer = () => {
+  server.setTimeout(50 * 1000);
+  const PORT = process.env.PORT || 5000;
+  const HOST = "0.0.0.0";
 
-    // Load entity constants from database
+  server.listen(PORT, HOST, () => {
+    const ip = getServerIP();
+    console.log(`🚀 Server running on http://${ip}:${PORT}`);
+  });
+};
 
-    server.setTimeout(50 * 1000);
+const DB_SYNC_ENABLED = process.env.DB_SYNC === "true";
 
-    const PORT = process.env.PORT || 5000;
-    const HOST = "0.0.0.0";
-
-    server.listen(PORT, HOST, () => {
-      const ip = getServerIP();
-      console.log(`🚀 Server running on http://${ip}:${PORT}`);
+if (DB_SYNC_ENABLED) {
+  console.log("🛠️  DB_SYNC is ENABLED. Checking for missing tables...");
+  // CRITICAL: We explicitly set alter: false and force: false to prevent data loss or schema changes
+  db.sequelize.sync()
+    .then(() => {
+      console.log("✅ Database check complete (new tables created if they were missing)");
+      startServer();
+    })
+    .catch((err) => {
+      console.error("❌ Database sync failed:", err.message);
+      // We still try to start the server even if sync fails (optional, depends on requirement)
+      process.exit(1); 
     });
-  // })
-  // .catch((err) => {
-  //   console.error("❌ Failed to sync databases:", err);
-  // });
+} else {
+  console.log("ℹ️  DB_SYNC is DISABLED. Skipping table checks.");
+  startServer();
+}
 
 cron.schedule('0 0 * * *', async () => {
   console.log('⏰ Running daily log cleanup task...');
@@ -117,6 +127,32 @@ cron.schedule('0 0 * * *', async () => {
     console.log('✅ Log cleanup completed.');
   } catch (error) {
     console.error('❌ Log cleanup failed:', error);
+  }
+});
+
+// ⏰ Monthly Leave Accrual Task
+// Runs on the 1st of every month at 00:05 AM
+cron.schedule('5 0 1 * *', async () => {
+  console.log('⏰ Running monthly leave accrual task...');
+  try {
+    const LeaveBalanceService = require("./services/leaveBalanceService");
+    await LeaveBalanceService.processMonthlyAccruals();
+    console.log('✅ Monthly leave accruals completed.');
+  } catch (error) {
+    console.error('❌ Monthly leave accrual failed:', error);
+  }
+});
+
+// ⏰ Year-End Leave Reset Task
+// Runs every day at 00:10 AM to check if any employee's cycle has ended
+cron.schedule('10 0 * * *', async () => {
+  console.log('⏰ Checking for year-end leave resets...');
+  try {
+    const LeaveBalanceService = require("./services/leaveBalanceService");
+    await LeaveBalanceService.processYearEndReset();
+    console.log('✅ Year-end reset check completed.');
+  } catch (error) {
+    console.error('❌ Year-end reset failed:', error);
   }
 });
 

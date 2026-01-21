@@ -223,3 +223,36 @@ exports.updateStatus = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+// Get Assigned Leaves for an Employee
+exports.getAssignedLeavesByEmployee = async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+
+        const { Employee } = require("../../../models");
+
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [
+                {
+                    model: LeaveTemplate,
+                    as: "leaveTemplate",
+                    include: [
+                        {
+                            model: LeaveTemplateCategory,
+                            as: "categories",
+                            where: { status: 0 } // Only active categories
+                        }
+                    ]
+                }
+            ],
+            attributes: ["id", "first_name", "employee_code", "leave_template"]
+        });
+
+        if (!employee) return res.error(constants.NOT_FOUND);
+        if (!employee.leaveTemplate) return res.error("NO_POLICY_ASSIGNED", { message: "No leave template assigned to this employee" });
+
+        return res.ok(employee.leaveTemplate.categories);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

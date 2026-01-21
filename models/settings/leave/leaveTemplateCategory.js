@@ -13,9 +13,10 @@ module.exports = (sequelize, DataTypes) => {
             leave_category_name: { type: DataTypes.STRING(100), allowNull: false },
             leave_count: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             unused_leave_rule: {
-                type: DataTypes.STRING(50),
+                type: DataTypes.ENUM('LAPSE', 'CARRY_FORWARD', 'ENCASH'),
                 allowNull: false,
-                comment: "Lapse, Carry Forward, Encash",
+                defaultValue: 'LAPSE',
+                comment: "LAPSE: Lost, CARRY_FORWARD: Transfer to next year, ENCASH: Paid out",
             },
             carry_forward_limit: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             automation_rules: { type: DataTypes.TEXT, allowNull: true },

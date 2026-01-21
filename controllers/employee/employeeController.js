@@ -40,6 +40,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const FormData = require('form-data');
+const LeaveBalanceService = require("../../services/leaveBalanceService");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
@@ -135,6 +136,11 @@ exports.create = async (req, res) => {
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.DATABASE_ERROR, { errors: constants.FAILED_TO_CREATE_RECORD });
+        }
+
+        // Initialize Leave Balance if template is assigned
+        if (POST.leave_template) {
+            await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
         }
 
         // 4. Update Series
@@ -326,6 +332,11 @@ exports.update = async (req, res) => {
         // 2. Update Employee Record
         // Note: 'education_details' is in POST and will be updated automatically as it's a JSONB column
         const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
+
+        // Sync or Initialize Leave Balance if template is provided/changed
+        if (POST.leave_template) {
+            await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
+        }
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];

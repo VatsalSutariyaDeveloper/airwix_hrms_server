@@ -16,6 +16,8 @@ const deviceMasterController = require("../controllers/settings/deviceMasterCont
 const holidayTemplateController = require("../controllers/settings/holidayTemplateController");
 const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTemplateController");
 const attendanceTemplateController = require("../controllers/settings/attendanceTemplateController");
+const leaveTemplateController = require("../controllers/settings/leave/leaveTemplateController");
+const leaveRequestController = require("../controllers/settings/leave/leaveRequestController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -162,5 +164,25 @@ router.delete("/attendance-template", attendanceTemplateController.delete);
 router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
 router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
 
+
+// ==========================
+// 27. LEAVE TEMPLATE ROUTES
+// ==========================
+router.post("/leave-template", leaveTemplateController.create);
+router.post("/leave-template/get-transactions", leaveTemplateController.getAll);
+router.get("/leave-template/:id", leaveTemplateController.getById);
+router.put("/leave-template/:id", leaveTemplateController.update);
+router.delete("/leave-template", leaveTemplateController.delete);
+router.patch("/leave-template/status", leaveTemplateController.updateStatus);
+router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
+
+// ==========================
+// 28. LEAVE REQUEST & BALANCE ROUTES
+// ==========================
+router.post("/leave-request", leaveRequestController.create);
+router.post("/leave-request/get-transactions", leaveRequestController.getAll);
+router.get("/leave-request/:id", leaveRequestController.getById);
+router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
+router.get("/leave-balance/:employeeId", leaveRequestController.getEmployeeBalance);
 
 module.exports = router;

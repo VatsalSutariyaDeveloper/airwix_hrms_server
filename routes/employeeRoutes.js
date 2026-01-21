@@ -6,7 +6,7 @@ const { bufferImage } = require("../helpers/fileUpload");
 router.post("/", bufferImage(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc"]), employeeController.create);
 
 // router.post("/", bufferImage("profile_image"), employeeController.create); 
-router.post("/get-transaction", employeeController.getAll);
+router.post("/get-transactions", employeeController.getAll);
 router.post("/get-punch", employeeController.getPunch);
 router.get("/dropdown-list", employeeController.dropdownList);
 router.get("/:id", employeeController.getById);
