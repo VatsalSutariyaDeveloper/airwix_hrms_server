@@ -1,4 +1,4 @@
-const { WeeklyOffTemplate, WeeklyOffTemplateDay } = require("../../models");
+const { WeeklyOffTemplate, WeeklyOffTemplateDay, User } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
@@ -57,7 +57,10 @@ exports.getAll = async (req, res) => {
             WeeklyOffTemplate,
             req.body,
             fieldConfig,
-            { attributes: ["id", "name", "status"] }
+            { 
+                include: { model: User, as: "user", attributes: [] },
+                attributes: ["id", "name", "status", "user.user_name"] 
+            }
         );
         return res.ok(records);
     } catch (err) {

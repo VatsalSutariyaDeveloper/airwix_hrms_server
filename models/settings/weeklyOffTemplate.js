@@ -21,6 +21,10 @@ module.exports = (sequelize, DataTypes) => {
             foreignKey: "template_id",
             as: "days"
         });
+        WeeklyOffTemplate.belongsTo(models.User, {
+            foreignKey: "user_id",
+            as: "user"
+        });
     };
     
     return WeeklyOffTemplate;
