@@ -61,6 +61,18 @@ const STATUS = {
     PENDING_APPROVAL: 4
 };
 
+const ALLOWED_TEMPLATE_FIELDS = [
+    "weekly_off_template",
+    "holiday_template",
+    "leave_template",
+    "attendance_weekly_off_template",
+    "geofence_template",
+    "attendance_setting_template",
+    "salary_access",
+    "salary_cycle",
+    "shift_template"
+];
+
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
     // 'education_details' is a column in Employee (JSONB)
@@ -108,7 +120,7 @@ exports.create = async (req, res) => {
         // 1. Handle File Uploads
         // We map the uploaded file keys to the database column names
         if (req.files && Object.keys(req.files).length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_DOC_FOLDER, transaction);
+            const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
 
             const fileColumns = [
                 'permanent_address_proof_doc',
@@ -252,7 +264,7 @@ exports.create = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(approvalMsg, employee.id);
+        return res.success(constants.EMPLOYEE_CREATED);
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -274,7 +286,7 @@ exports.update = async (req, res) => {
 
         // Validation
         const requiredFields = {
-            email: "Personal Email"
+            first_name: "First Name",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -290,7 +302,7 @@ exports.update = async (req, res) => {
 
         if (errors) {
             await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { errors });
+            return res.error(constants.VALIDATION_ERROR, errors);
         }
 
         // Fetch existing data to handle file deletion
@@ -302,8 +314,8 @@ exports.update = async (req, res) => {
         }
 
         // 1. Handle File Uploads & Cleanup
-        if (req.files && req.files.length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.ATTACHMENT_FOLDER, transaction);
+        if (req.files && (Array.isArray(req.files) ? req.files.length > 0 : Object.keys(req.files).length > 0)) {
+            const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
 
             const fileColumns = [
                 'permanent_address_proof_doc',
@@ -321,7 +333,7 @@ exports.update = async (req, res) => {
                 if (savedFiles[col]) {
                     // Delete old file from disk if it exists
                     if (existingEmployee[col]) {
-                        await deleteFile(req, res, constants.ATTACHMENT_FOLDER, existingEmployee[col]);
+                        await deleteFile(req, res, constants.EMPLOYEE_DOC_FOLDER, existingEmployee[col]);
                     }
                     // Assign new filename to POST data
                     POST[col] = savedFiles[col];
@@ -493,7 +505,7 @@ exports.update = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_UPDATED, updatedEmployee.id);
+        return res.success(constants.EMPLOYEE_UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -508,12 +520,6 @@ exports.getById = async (req, res) => {
         const { id } = req.params;
 
         const dynamicIncludes = [
-            {
-                model: EmployeeFamilyMember,
-                as: 'family_members', // Ensure this alias matches your models/index.js association
-                where: { status: { [Op.ne]: 2 } }, // Active or Inactive, not Deleted
-                required: false
-            },
             {
                 model: User,
                 as: 'linked_user',
@@ -545,9 +551,9 @@ exports.getById = async (req, res) => {
 
         fileColumns.forEach(field => {
             if (plainRecord[field]) {
-                const exists = fileExists(constants.ATTACHMENT_FOLDER, plainRecord[field]);
+                const exists = fileExists(constants.EMPLOYEE_DOC_FOLDER, plainRecord[field]);
                 if (exists) {
-                    plainRecord[field + '_url'] = `${process.env.FILE_SERVER_URL}${constants.ATTACHMENT_FOLDER}${plainRecord[field]}`;
+                    plainRecord[field + '_url'] = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${plainRecord[field]}`;
                 } else {
                     plainRecord[field + '_url'] = null;
                 }
@@ -602,25 +608,24 @@ exports.delete = async (req, res) => {
         // 3. Soft Delete associated Family Members
         await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
 
-        // 4. Delete Physical Files
-        const fileColumns = [
-            'permanent_address_proof_doc',
-            'present_address_proof_doc',
-            'bank_proof_doc',
-            'pan_doc',
-            'aadhaar_doc',
-            'aadhaar_doc',
-            'passport_doc',
-            'profile_image'
-        ];
+        // // 4. Delete Physical Files
+        // const fileColumns = [
+        //     'permanent_address_proof_doc',
+        //     'present_address_proof_doc',
+        //     'bank_proof_doc',
+        //     'pan_doc',
+        //     'aadhaar_doc',
+        //     'passport_doc',
+        //     'profile_image'
+        // ];
 
-        for (const emp of employeesToDelete) {
-            for (const field of fileColumns) {
-                if (emp[field]) {
-                    await deleteFile(req, res, constants.ATTACHMENT_FOLDER, emp[field]);
-                }
-            }
-        }
+        // for (const emp of employeesToDelete) {
+        //     for (const field of fileColumns) {
+        //         if (emp[field]) {
+        //             await deleteFile(req, res, constants.EMPLOYEE_DOC_FOLDER, emp[field]);
+        //         }
+        //     }
+        // }
 
         await transaction.commit();
         return res.success(constants.EMPLOYEE_DELETED);
@@ -635,15 +640,16 @@ exports.delete = async (req, res) => {
  */
 exports.getAll = async (req, res) => {
     try {
+        const POST = req.body;
         const fieldConfig = [
-            ["father_name", true, true],
+            ["first_name", true, true],
             ["email", true, false],
             ["mobile_no", true, false],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
             Employee,
-            req.body,
+            { ...POST, status: STATUS.ACTIVE },
             fieldConfig,
             {
                 include: [
@@ -651,7 +657,7 @@ exports.getAll = async (req, res) => {
                 ],
                 attributes: [
                     "id",
-                    "first_name", // or first_name if you have it
+                    "first_name",
                     "employee_code",
                     "created_at",
                     "created_by.user_name"
@@ -734,30 +740,23 @@ exports.getPunch = async (req, res) => {
  * Dropdown list for Select inputs.
  */
 exports.dropdownList = async (req, res) => {
-    try {
-        const fieldConfig = [
-            ["father_name", true, true]
+  try {
+    const POST = req.body;
+      const fieldConfig = [
+          ["first_name", true, true],
         ];
 
-        const data = await commonQuery.fetchPaginatedData(
-            Employee,
-            { ...req.body, status: STATUS.ACTIVE },
-            fieldConfig,
-            { attributes: ["id", "father_name"] },
-            true
-        );
-
-        if (data.list) {
-            data.list = data.list.map(emp => ({
-                id: emp.id,
-                label: emp.father_name
-            }));
-        }
-
-        return res.ok(data);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
+    const data = await commonQuery.fetchPaginatedData(
+      Employee,
+      { ...POST, status: STATUS.ACTIVE },
+      fieldConfig,
+      {},
+      false,
+    );
+    return res.ok(data);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
 };
 
 /**
@@ -781,6 +780,87 @@ exports.updateStatus = async (req, res) => {
 
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Bulk Update Template for Employees
+ */
+exports.assignTemplate = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { field_name, employees } = req.body;
+
+        // 1. Allowed Fields Whitelist
+        if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_FIELD_NAME);
+        }
+
+        // 2. Validate Input
+        if (!Array.isArray(employees) || employees.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.EMPLOYEE_DATA_IS_REQUIRED_AND_MUST_BE_AN_ARRAY);
+        }
+
+        // 3. Process Updates
+        const updatePromises = [];
+        for (const emp of employees) {
+            if (emp.id && emp.value !== undefined) {
+                // Update each employee record
+                updatePromises.push(
+                    commonQuery.updateRecordById(
+                        Employee,
+                        emp.id,
+                        { [field_name]: emp.value },
+                        transaction
+                    )
+                );
+            }
+        }
+
+        await Promise.all(updatePromises);
+
+        await transaction.commit();
+        return res.success(constants.EMPLOYEE_UPDATED);
+
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get Employees by Template Field
+ */
+exports.getEmployeesByTemplate = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { field_name, value } = req.body;
+
+        if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_FIELD_NAME);
+        }
+
+        if (value === undefined || value === null) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Value is required" });
+        }
+
+        const employees = await commonQuery.findAllRecords(
+            Employee,   
+            { [field_name]: value, status: STATUS.ACTIVE }, 
+            {attributes: ['id', 'first_name', 'employee_code', field_name]},
+            transaction
+        );
+
+        await transaction.commit();
+        return res.ok(employees);
+
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);

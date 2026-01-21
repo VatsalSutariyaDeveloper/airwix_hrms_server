@@ -531,9 +531,9 @@ module.exports = {
             const likeVal = `%${reqBody?.search}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
-                return { [finalKey]: { [Op.like]: likeVal } };
+                return { [finalKey]: { [Op.iLike]: likeVal } };
             } else {
-                return sequelize.where(dbCol, { [Op.like]: likeVal });
+                return sequelize.where(dbCol, { [Op.iLike]: likeVal });
             }
         }).filter(Boolean);
 
