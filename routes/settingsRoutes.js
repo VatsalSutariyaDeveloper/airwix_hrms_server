@@ -166,7 +166,7 @@ router.post("/attendance-template/dropdown-list", attendanceTemplateController.d
 
 
 // ==========================
-// 27. LEAVE TEMPLATE ROUTES
+// 29. LEAVE TEMPLATE ROUTES
 // ==========================
 router.post("/leave-template", leaveTemplateController.create);
 router.post("/leave-template/get-transactions", leaveTemplateController.getAll);
@@ -177,7 +177,7 @@ router.patch("/leave-template/status", leaveTemplateController.updateStatus);
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
 
 // ==========================
-// 28. LEAVE REQUEST & BALANCE ROUTES
+// 30. LEAVE REQUEST & BALANCE ROUTES
 // ==========================
 router.post("/leave-request", leaveRequestController.create);
 router.post("/leave-request/get-transactions", leaveRequestController.getAll);
