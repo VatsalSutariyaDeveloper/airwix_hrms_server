@@ -15,6 +15,7 @@ const shiftController = require("../controllers/settings/shiftController.js");
 const deviceMasterController = require("../controllers/settings/deviceMasterController");
 const holidayTemplateController = require("../controllers/settings/holidayTemplateController");
 const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTemplateController");
+const attendanceTemplateController = require("../controllers/settings/attendanceTemplateController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -149,6 +150,17 @@ router.put("/weekly-off-template/:id", weeklyOffTemplateController.update);
 router.delete("/weekly-off-template", weeklyOffTemplateController.delete);
 router.patch("/weekly-off-template/status", weeklyOffTemplateController.updateStatus);
 router.post("/weekly-off-template/dropdown-list", weeklyOffTemplateController.dropdownList);
+
+// ===============================
+// 28. ATTENDANCE TEMPLATE ROUTES
+// ===============================
+router.get("/attendance-template/:id", attendanceTemplateController.getById);
+router.post("/attendance-template/get-transactions", attendanceTemplateController.getAll);
+router.post("/attendance-template", attendanceTemplateController.create);
+router.put("/attendance-template/:id", attendanceTemplateController.update);
+router.delete("/attendance-template", attendanceTemplateController.delete);
+router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
+router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
 
 
 module.exports = router;

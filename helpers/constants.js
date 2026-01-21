@@ -231,14 +231,27 @@ const constants = {
     SHIFT_UPDATED: "SHIFT_UPDATED",
     SHIFT_DELETED: "SHIFT_DELETED",
 
+  /* =============================
+   * SETTINGS / WEEKLYOFFTEMPLATE
+   * ============================= */
     WEEKLY_OFF_CREATED: "WEEKLY_OFF_CREATED",
     WEEKLY_OFF_UPDATED: "WEEKLY_OFF_UPDATED",
     WEEKLY_OFF_DELETED: "WEEKLY_OFF_DELETED",
     
+  /* =============================
+   * SETTINGS / DEVICEMASTER
+   * ============================= */
     DEVICE_MASTER_CREATED: "DEVICE_MASTER_CREATED",
     DEVICE_MASTER_UPDATED: "DEVICE_MASTER_UPDATED",
     DEVICE_MASTER_DELETED: "DEVICE_MASTER_DELETED",
-    
+
+  /* =============================
+   * SETTINGS / ATTENDANCETEMPLATE
+   * ============================= */
+    ATTENDANCE_TEMPLATE_CREATED: "ATTENDANCE_TEMPLATE_CREATED",
+    ATTENDANCE_TEMPLATE_UPDATED: "ATTENDANCE_TEMPLATE_UPDATED",
+    ATTENDANCE_TEMPLATE_DELETED: "ATTENDANCE_TEMPLATE_DELETED",
+
    /* =======================
    * LEAVE TEMPLATE
    * ======================= */

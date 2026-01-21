@@ -90,7 +90,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(Shift, { id: req.params.id }, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(Shift,req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
