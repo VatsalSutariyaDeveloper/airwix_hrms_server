@@ -117,6 +117,7 @@ exports.update = async (req, res) => {
 };
 
 // Soft Delete Module Master
+// Soft Delete Module Master
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
@@ -127,21 +128,36 @@ exports.delete = async (req, res) => {
     const errors = await validateRequest(req.body, requiredFields, {}, transaction);
     if (errors) {
       await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, errors );
+      return res.error(constants.VALIDATION_ERROR, errors);
     }
     const { ids } = req.body; // Accept array of ids
-    
+
     // Validate that ids is an array and not empty
     if (!Array.isArray(ids) || ids.length === 0) {
       await transaction.rollback();
       return res.error(constants.INVALID_ID);
     }
+
+    // 1. Delete the Module(s)
+    const deleted = await commonQuery.softDeleteById(ModuleMaster, ids, transaction, false);
     
-    const deleted = await commonQuery.softDeleteById(ModuleMaster, ids, transaction);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);
     }
+
+    // ------------------------------------------------------------------
+    // 2. CASCADE DELETE: Delete associated Entities
+    // ------------------------------------------------------------------
+    // This looks for ModuleEntityMaster records where module_id is in the `ids` array
+    // and sets their status to 2.
+    await commonQuery.softDeleteById(
+      ModuleEntityMaster, 
+      { module_id: { [Op.in]: ids } }, 
+      transaction,
+      false
+    );
+
     await transaction.commit();
     return res.success(constants.MODULE_DELETED);
   } catch (err) {

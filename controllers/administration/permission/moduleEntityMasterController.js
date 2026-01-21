@@ -235,16 +235,14 @@ exports.update = async (req, res) => {
       },
       transaction
     );
+
     if (errors) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors );
     }
-    const updated = await commonQuery.updateRecordById(
-      ModuleEntityMaster,
-      req.params.id,
-      POST,
-      transaction
-    );
+
+    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, POST, transaction, false, false);
+
     if (!updated || updated.status === 2) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -284,7 +282,7 @@ exports.update = async (req, res) => {
               entity_id: req.params.id, 
               action: action.action
             }, 
-            transaction
+            transaction, false, false
           );
 
           if (existingPermission) {

@@ -15,6 +15,10 @@ const PUBLIC_ROUTE_KEYWORDS = [
   "/subscription",
   "/public",
   "/webhook",
+  "/settings/user-access",
+  "/dashboard",
+  "/dropdown-list",
+  "/administration",
 ];
 
 module.exports = async function checkPermission(req, res, next) {
@@ -47,26 +51,25 @@ module.exports = async function checkPermission(req, res, next) {
     const currentPath = normalizePath(req.originalUrl);
     const currentMethod = req.method.toUpperCase();
 
-    const routeRule = getRoutePermissionId(currentPath, currentMethod);
+    const routeRule = await getRoutePermissionId(currentMethod, currentPath);
+
     if (!routeRule) {
       console.warn(`[PERMISSION] Missing rule: ${currentMethod} ${currentPath}`);
       return next();
     }
 
-    const userId = ctx.userId;
-    const companyId = ctx.companyId;
-    const branchId = ctx.branchId;
+    const userId = ctx.user_id;
+    const companyId = ctx.company_id;
+    const branchId = ctx.branch_id;
 
     if (!userId || !companyId) {
       return res.error(constants.UNAUTHORIZED, ["Authentication required"]);
     }
 
     const companySubscription = await getCompanySubscription(companyId);
-    const allowedModules = (companySubscription.allowed_module_ids || "")
-      .split(",")
-      .map(Number);
+    const allowedModules = (companySubscription.allowed_module_ids || "").split(",").map(Number);
 
-    if (!allowedModules.includes(routeRule.permission_id)) {
+    if (!allowedModules.includes(routeRule)) {
       return res.error(constants.FORBIDDEN, ["Module not enabled"]);
     }
 

@@ -36,6 +36,7 @@ const CompanySubscription = require("./subscription/companySubscriptions")(seque
 const SubscriptionPlan = require("./subscription/subscriptionPlans")(sequelize, DataTypes);
 
 //Attendance models
+const AttendanceTemplate = require("./attendance/attendanceTemplate")(sequelize, DataTypes);
 const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataTypes);
 const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
 const Shift = require("./settings/shift")(sequelize, DataTypes);
@@ -115,6 +116,7 @@ const db = {
   SubscriptionPlan,
 
   //Attandance
+  AttendanceTemplate,
   AttendancePunch,
   AttendanceDay,
   Shift,
