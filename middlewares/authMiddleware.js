@@ -1,7 +1,16 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 
+const SKIP_ROUTES = [
+  "/administration/permission/constants"
+];
+
 function authMiddleware(req, res, next) {
+  // ✅ Skip auth for specific routes
+  if (SKIP_ROUTES.includes(req.path)) {
+    return next();
+  }
+
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -15,7 +24,6 @@ function authMiddleware(req, res, next) {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ✅ 1. Attach identity to req.user (ONLY place)
     req.user = {
       id: decoded.id,
       company_id: decoded.company_id,
@@ -25,7 +33,6 @@ function authMiddleware(req, res, next) {
       access_by: decoded.access_by || "web login"
     };
 
-    // ✅ 2. Bind AsyncLocalStorage context ONCE
     requestContext.run(
       {
         userId: decoded.id,
@@ -34,9 +41,7 @@ function authMiddleware(req, res, next) {
         roleId: decoded.role_id,
         ip: req.ip
       },
-      () => {
-        next(); // ✅ only ONE next()
-      }
+      () => next()
     );
 
   } catch (err) {

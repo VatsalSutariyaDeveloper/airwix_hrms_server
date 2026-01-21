@@ -134,6 +134,7 @@ exports.getPermissionConstants = async (req, res) => {
 
 exports.getPermissionHierarchy = async (req, res) => {
     try {
+        console.log("Fetching Permission Hierarchy...");
         const [modules, permissions] = await Promise.all([
             commonQuery.findAllRecords(ModuleMaster, { status: 0 }, {
                 attributes: ['id', 'module_name', 'module_icon_name', 'priority', 'cust_module_name'],

@@ -1,4 +1,4 @@
-const { RolePermission, ModulePermissionTypeMaster, ModuleMaster, ModuleEntityMaster, User} = require("../../../models");
+const { RolePermission, ModulePermissionTypeMaster, ModuleMaster, ModuleEntityMaster, User, UserCompanyRoles} = require("../../../models");
 const { sequelize, validateRequest, handleError, commonQuery, constants } = require("../../../helpers");
 
 // Create Role Access Permission
@@ -156,14 +156,12 @@ exports.update = async (req, res) => {
       return res.error(constants.NOT_FOUND);
     }
 
-    if (update_user_role === "yes") {
       await commonQuery.updateRecordById(
-        User,
+        UserCompanyRoles,
         { role_id: req.params.id },
-        { permission: permissions },
+        { permissions: permissions },
         transaction
       );
-    }
     
     await transaction.commit();
     return res.success(constants.ROLE_PERMISSION_UPDATED, updated);
