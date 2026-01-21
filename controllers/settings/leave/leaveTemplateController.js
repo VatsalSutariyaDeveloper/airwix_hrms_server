@@ -197,11 +197,6 @@ exports.updateStatus = async (req, res) => {
             return res.error("INVALID_idS_ARRAY");
         }
 
-        if (![0, 1, 2].includes(status)) {
-            await transaction.rollback();
-            return res.error("VALIDATION_ERROR", { errors: ["Invalid status value"] });
-        }
-
         const updated = await commonQuery.updateRecordById(
             LeaveTemplate,
             ids,

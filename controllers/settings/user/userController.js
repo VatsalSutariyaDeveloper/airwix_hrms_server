@@ -797,14 +797,6 @@ exports.updateStatus = async (req, res) => {
       return res.error("INVALID_idS_ARRAY");
     }
 
-    // Validate that status is provided and valid (0,1,2 as per your definition)
-    if (![0, 1, 2].includes(status)) {
-      await transaction.rollback();
-      return res.error("VALIDATION_ERROR", {
-        errors: ["Invalid status value"],
-      });
-    }
-
     // Update only the status field by id
     const updated = await commonQuery.updateRecordById(
       User,

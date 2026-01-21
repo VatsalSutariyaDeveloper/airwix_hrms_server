@@ -178,10 +178,6 @@ exports.updateStatus = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
-    if (![0, 1].includes(status)) {
-      await transaction.rollback();
-      return res.error(constants.INVALID_STATUS);
-    }
 
     const updated = await commonQuery.updateRecordById(
       HolidayTemplate,

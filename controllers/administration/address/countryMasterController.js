@@ -170,9 +170,6 @@ exports.updateStatus = async (req, res) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
-    if (![0, 1].includes(status)) {
-        return res.error(constants.INVALID_STATUS);
-    }
 
     const updated = await commonQuery.updateRecordById(
       CountryMaster,

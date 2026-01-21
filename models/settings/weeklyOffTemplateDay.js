@@ -15,13 +15,7 @@ module.exports = (sequelize, DataTypes) => {
         {
             tableName: "weekly_off_template_days",
             timestamps: true,
-            underscored: true,
-            indexes: [
-                {
-                    unique: true,
-                    fields: ["template_id", "day_of_week", "week_no"]
-                }
-            ]
+            underscored: true
         }
     );
 

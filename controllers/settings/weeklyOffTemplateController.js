@@ -1,5 +1,5 @@
 const { WeeklyOffTemplate, WeeklyOffTemplateDay } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
 exports.create = async (req, res) => {
@@ -57,7 +57,7 @@ exports.getAll = async (req, res) => {
             WeeklyOffTemplate,
             req.body,
             fieldConfig,
-            { attributes: ["id", "name"] }
+            { attributes: ["id", "name", "status"] }
         );
         return res.ok(records);
     } catch (err) {
@@ -82,6 +82,7 @@ exports.getById = async (req, res) => {
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
+        const { id } = req.params;
         const { days, ...templateData } = req.body;
 
         const requiredFields = {
@@ -96,7 +97,7 @@ exports.update = async (req, res) => {
                 uniqueCheck: {
                     model: WeeklyOffTemplate,
                     fields: ["name"],
-                    excludeId: req.params.id,
+                    excludeId: id,
                 }
             },
             transaction
@@ -107,33 +108,47 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const updated = await commonQuery.updateRecordById(WeeklyOffTemplate, req.params.id, templateData, transaction);
+        const updated = await commonQuery.updateRecordById(WeeklyOffTemplate, id, templateData, transaction);
 
-        // Replace days
-        if (Array.isArray(days)) {
-            await WeeklyOffTemplateDay.destroy({
-                where: { template_id: template.id },
-                transaction
-            });
-
-            const newDays = days.map(d => ({
-                template_id: template.id,
-                day_of_week: d.day_of_week,
-                week_no: d.week_no,
-                is_off: d.is_off ?? true
-            }));
-
-            await WeeklyOffTemplateDay.bulkCreate(newDays, { transaction });
-        }
-        // const updated = await commonQuery.updateRecordById(WeeklyOffTemplate, { id: req.params.id }, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
+
+        // Sync WeeklyOffTemplateDay
+        if (Array.isArray(days)) {
+            const incomingIds = days.map(d => d.id).filter(Boolean);
+
+            // 1. Soft delete removed days
+            await commonQuery.softDeleteById(
+                WeeklyOffTemplateDay,
+                {
+                    template_id: id,
+                    id: { [Op.notIn]: incomingIds }
+                },
+                transaction
+            );
+
+            // 2. Update or Create days
+            for (const day of days) {
+                const dayPayload = {
+                    ...day,
+                    template_id: id,
+                    is_off: day.is_off ?? true
+                };
+
+                if (day.id) {
+                    await commonQuery.updateRecordById(WeeklyOffTemplateDay, day.id, dayPayload, transaction);
+                } else {
+                    await commonQuery.createRecord(WeeklyOffTemplateDay, dayPayload, transaction);
+                }
+            }
+        }
+
         await transaction.commit();
         return res.success(constants.WEEKLY_OFF_UPDATED, updated);
     } catch (err) {
-        await transaction.rollback();
+        if (transaction && !transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
@@ -192,12 +207,6 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        // Validate that status is provided and valid (0,1,2 as per your definition)
-        if (![0, 1, 2].includes(status)) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_STATUS);
-        }
-
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
             WeeklyOffTemplate,
@@ -229,7 +238,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(WeeklyOffTemplate, { status: 0 });
+    const result = await commonQuery.findAllRecords(WeeklyOffTemplate, { status: 0 }, { attributes: ["id", "name"] });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

@@ -500,7 +500,7 @@ exports.getById = async (req, res) => {
             {
                 model: EmployeeFamilyMember,
                 as: 'family_members', // Ensure this alias matches your models/index.js association
-                where: { status: { [Op.in]: [0, 1] } }, // Active or Inactive, not Deleted
+                where: { status: { [Op.ne]: 2 } }, // Active or Inactive, not Deleted
                 required: false
             },
             {

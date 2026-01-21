@@ -147,7 +147,7 @@ async function normalizeInclude(includeArray) {
       const newWhere = { ...(newInc.where || {}) };
 
       if (newWhere.status === undefined) {
-        newWhere.status = { [Op.in]: [0, 1] };
+        newWhere.status = { [Op.ne]: 2 };
       }
 
       newInc.where = newWhere;
@@ -474,7 +474,6 @@ module.exports = {
       } 
       else if (reqBody?.status === "All") {
         delete filters.status;
-        // filters.status = { [Op.or]: [0, 1, 2] }; 
       }
 
       // B. Filter Object
