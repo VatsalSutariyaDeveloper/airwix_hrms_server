@@ -40,8 +40,8 @@ const AttendancePunch = require("./attendance/attendancePunch")(sequelize, DataT
 const AttendanceDay = require("./attendance/attendanceDay")(sequelize, DataTypes);
 const Shift = require("./settings/shift")(sequelize, DataTypes);
 // const WeeklyOff = require("./attendance/weeklyOff")(sequelize, DataTypes);
-const WeeklyOffTemplate = require("./attendance/weeklyOffTemplate")(sequelize, DataTypes);
-const WeeklyOffTemplateDay = require("./attendance/weeklyOffTemplateDay")(sequelize, DataTypes);
+const WeeklyOffTemplate = require("./settings/weeklyOffTemplate")(sequelize, DataTypes);
+const WeeklyOffTemplateDay = require("./settings/weeklyOffTemplateDay")(sequelize, DataTypes);
 
 const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes);
 

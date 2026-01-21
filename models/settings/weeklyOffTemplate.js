@@ -3,17 +3,11 @@ module.exports = (sequelize, DataTypes) => {
     const WeeklyOffTemplate = sequelize.define(
         "WeeklyOffTemplate",
         {
-            id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
             name: { type: DataTypes.STRING(100), allowNull: false },
-            company_id: { type: DataTypes.INTEGER, allowNull: false },
+            status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
+            user_id: {type: DataTypes.INTEGER, allowNull: true },
             branch_id: {type: DataTypes.INTEGER, allowNull: true },
-            status: { type: DataTypes.SMALLINT, defaultValue: 1, 
-                // 1 = Active, 0 = Inactive 
-            },
-            created_by: {
-                type: DataTypes.INTEGER,
-                allowNull: false
-            }
+            company_id: { type: DataTypes.INTEGER, allowNull: false },
         },
         {
             tableName: "weekly_off_templates",

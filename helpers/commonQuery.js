@@ -448,7 +448,7 @@ module.exports = {
   // 10. ADVANCED PAGINATION
   async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt") {
     try {
-      const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
+      const standardizedConfig = fieldConfig?.map(([key, searchable, sortable]) => ({
         key,
         searchable: searchable === true,
         sortable: sortable === true,

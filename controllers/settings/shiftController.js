@@ -36,7 +36,7 @@ exports.create = async (req, res) => {
 // Get all active shift records
 exports.getAll = async (req, res) => {
   try {
-     const fieldConfig = [
+    const fieldConfig = [
       ["shift_name", true, true],
     ];
 

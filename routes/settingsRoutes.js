@@ -14,6 +14,7 @@ const userAccessController = require("../controllers/settings/user/userAccessCon
 const shiftController = require("../controllers/settings/shiftController.js");
 const deviceMasterController = require("../controllers/settings/deviceMasterController");
 const holidayTemplateController = require("../controllers/settings/holidayTemplateController");
+const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTemplateController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -137,6 +138,17 @@ router.post("/holiday-template/dropdown-list", holidayTemplateController.dropdow
 router.get("/holiday-template/:id", holidayTemplateController.getById);
 router.delete("/holiday-template/", holidayTemplateController.delete);
 router.patch("/holiday-template/status", holidayTemplateController.updateStatus);
+
+// ==========================
+// 27. WEEKLY OFF ROUTES
+// ==========================
+router.get("/weekly-off-template/:id", weeklyOffTemplateController.getById);
+router.post("/weekly-off-template/get-transactions", weeklyOffTemplateController.getAll);
+router.post("/weekly-off-template", weeklyOffTemplateController.create);
+router.put("/weekly-off-template/:id", weeklyOffTemplateController.update);
+router.delete("/weekly-off-template", weeklyOffTemplateController.delete);
+router.patch("/weekly-off-template/status", weeklyOffTemplateController.updateStatus);
+router.post("/weekly-off-template/dropdown-list", weeklyOffTemplateController.dropdownList);
 
 
 module.exports = router;

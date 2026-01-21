@@ -1,5 +1,5 @@
-const { punch } = require("../../helpers/attendanceHelper.js");
-const { handleError, constants } = require("../../helpers");
+const { punch } = require("../../helpers/attendanceHelper");
+const { handleError } = require("../../helpers");
 
 const attendancePunch = async (req, res) => {
   try {

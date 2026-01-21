@@ -60,7 +60,7 @@ module.exports = (sequelize, DataTypes) => {
         name_as_per_pan: { type: DataTypes.STRING },
         pan_number: { type: DataTypes.STRING },
         name_as_per_aadhaar: { type: DataTypes.STRING },
-        aadhaar_number: { type: DataTypes.INTEGER },
+        aadhaar_number: { type: DataTypes.STRING(12) },
         pf_number: { type: DataTypes.STRING },
         pf_joing_date: { type: DataTypes.DATEONLY },
         pf_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -76,8 +76,8 @@ module.exports = (sequelize, DataTypes) => {
         // BANK INFORMATION
         name_as_per_bank: { type: DataTypes.STRING },
         bank_name: { type: DataTypes.STRING },
-        bank_account_number: { type: DataTypes.INTEGER },
-        bank_ifsc_code: { type: DataTypes.STRING },
+        bank_account_number: { type: DataTypes.STRING(16) },
+        bank_ifsc_code: { type: DataTypes.STRING(11) },
         bank_account_holder_name: { type: DataTypes.STRING },
         upi_id:{ type: DataTypes.STRING },
  
@@ -108,7 +108,7 @@ module.exports = (sequelize, DataTypes) => {
         notice_period_days: { type: DataTypes.INTEGER },
         referred_by: { type: DataTypes.STRING },
 
-        passport_number: { type: DataTypes.INTEGER },
+        passport_number: { type: DataTypes.STRING(9) },
         name_as_per_passport: { type: DataTypes.STRING },
         passport_expiry_date: { type: DataTypes.DATEONLY },
         passport_doc: { type: DataTypes.STRING },
