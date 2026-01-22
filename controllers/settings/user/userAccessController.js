@@ -37,6 +37,7 @@ exports.sessionData = async (req, res) => {
       User,
       user_id,
       {
+        attributes: ['id', 'user_name', 'email', 'role_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
         include: [{ 
             model: UserCompanyRoles, 
             as: "ComapanyRole", 
@@ -140,9 +141,11 @@ exports.sessionData = async (req, res) => {
     const userJson = userData.toJSON();
     const enrichedUserData = { 
         ...userJson, 
-        permission: userData.ComapanyRole?.[0]?.permissions ?? userData.permission, 
+        permission: userData.ComapanyRole?.[0]?.permissions ?? null, 
         profile_image_url: userData.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${userData.profile_image}` : null 
     };
+
+    delete enrichedUserData.ComapanyRole;
     
     // Find Current Company
     const companyIndex = companyList.findIndex(c => c.id === company_id);

@@ -114,15 +114,10 @@ exports.getAll = async (req, res) => {
             attributes: [],
           },
           {
-            model: ModulePermissionTypeMaster,
-            as: "permissionType",
+            model: Permission,
             required: false,
-            on: sequelize.literal(`
-              "permissionType"."id" = ANY(
-                string_to_array("ModuleEntityMaster"."entity_permmision_type_ids", ',')::int[]
-              )
-            `),
-            attributes: [],
+            as: "permissions",
+            attributes: []
           },
         ],
         attributes: [
@@ -136,7 +131,7 @@ exports.getAll = async (req, res) => {
           [
             sequelize.fn(
               "STRING_AGG",
-              sequelize.col("permissionType.permission_type_name"),
+              sequelize.col("permissions.action"),
               ", "
             ),
             "entity_permission_names",
@@ -172,17 +167,6 @@ exports.getById = async (req, res) => {
           model: ModuleMaster,
           as: "moduleMaster",
           attributes: ["module_name"],
-        },
-        {
-          model: ModulePermissionTypeMaster,
-          as: "permissionType",
-          required: false,
-          on: sequelize.literal(`
-            "permissionType"."id" = ANY(
-              string_to_array("ModuleEntityMaster"."entity_permmision_type_ids", ',')::int[]
-            )
-          `),
-          attributes: [],
         },
         {
           model: Permission,
