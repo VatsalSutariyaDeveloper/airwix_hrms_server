@@ -104,7 +104,6 @@ async function buildWhere(whereInput, applyDefaults = true) {
       if (ctx.user_id) where.user_id = ctx.user_id;
     }
   }
-
   return where;
 }
 
@@ -281,9 +280,7 @@ module.exports = {
     try {
       oldRecord = await model.findOne({ where: condition, transaction, raw: true });
     } catch (e) {}
-
     if (!oldRecord) return null;
-
     const [count] = await model.update(
       safeData,
       withDebug({ where: condition }, transaction)

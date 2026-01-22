@@ -163,7 +163,7 @@ exports.create = async (req, res) => {
             const familyData = POST.family_details.map(member => ({
                 ...member,
                 employee_id: employee.id,
-                status: STATUS.ACTIVE
+                status: 0
             }));
 
             await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
@@ -413,7 +413,7 @@ exports.update = async (req, res) => {
 
             await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.PENDING_APPROVAL }, transaction);
         } else {
-            await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.ACTIVE }, transaction);
+            await commonQuery.updateRecordById(Employee, id, { approval_status: 0 }, transaction);
         }
 
         // 4. Create/Update User Account if requested OR if role is allowed in Company Configuration
@@ -598,7 +598,7 @@ exports.delete = async (req, res) => {
         });
 
         // 2. Soft Delete Employees
-        const count = await commonQuery.softDeleteById(Employee, ids, null, transaction);
+        const count = await commonQuery.softDeleteById(Employee, ids, transaction);
 
         if (count === 0) {
             await transaction.rollback();
@@ -648,7 +648,7 @@ exports.getAll = async (req, res) => {
 
         const data = await commonQuery.fetchPaginatedData(
             Employee,
-            { ...POST, status: STATUS.ACTIVE },
+            { ...POST, status: 0 },
             fieldConfig,
             {
                 include: [
@@ -747,7 +747,7 @@ exports.dropdownList = async (req, res) => {
 
     const data = await commonQuery.fetchPaginatedData(
       Employee,
-      { ...POST, status: STATUS.ACTIVE },
+      { ...POST, status: 0 },
       fieldConfig,
       {},
       false,
@@ -767,7 +767,7 @@ exports.updateStatus = async (req, res) => {
         const { ids, status } = req.body;
         if (!Array.isArray(ids) || ids.length === 0) {
             await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { errors: constants.INVALID_INPUT });
+            return res.error(constants.INVALID_ID);
         }
 
         const count = await commonQuery.updateRecordById(Employee, ids, { status }, transaction);
@@ -784,6 +784,87 @@ exports.updateStatus = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.assignRole = async(req, res) => {
+    const transaction = await sequelize.transaction();
+    const { company_id } = getContext();
+    const POST = req.body;
+
+     try{
+        const { ids, field_name } = req.body;
+
+        const requiredFields = {
+            field_name: "Field Name",
+            ids: "Ids",
+        };
+
+        const errors = await validateRequest(POST, requiredFields, {}, transaction);
+
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        if (field_name && !['is_attendance_supervisor', 'is_reporting_manager'].includes(field_name)) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Invalid field_name. Must be 'is_attendance_supervisor' or 'is_reporting_manager'" });
+        }
+         
+        // 1. Update employees field to true for all provided IDs
+        const employeeUpdateData = { [field_name]: true };
+        const updatedEmployees = await commonQuery.updateRecordById(Employee, ids, employeeUpdateData, transaction);
+        
+        if (!updatedEmployees) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "No employees found" });
+        }
+        
+        // 2. Find associated users for all updated employees
+        const users = await commonQuery.findAllRecords(User, { employee_id: { [Op.in]: ids } }, {}, transaction);
+        
+        if (!users || users.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "No users found for the provided employees" });
+        }
+      
+        // 3. Determine role_id based on field_name
+        let newRoleId;
+        if (field_name === 'is_reporting_manager') {
+            newRoleId = 13;
+        } else if (field_name === 'is_attendance_supervisor') {
+            newRoleId = 12;
+        }
+        
+        // 4. Get permissions from RolePermission table
+        const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
+        
+        // 5. Update all users and their roles
+        const updatePromises = users.map(async (user) => {
+            // Update user role_id
+            await commonQuery.updateRecordById(User, user.id, { role_id: newRoleId }, transaction);
+            
+            // Update UserCompanyRoles with role_id and permissions
+            return commonQuery.updateRecordById(
+                UserCompanyRoles,
+                { user_id: user.id, company_id: company_id },
+                { 
+                    role_id: newRoleId,
+                    permissions: rolePermission.permissions
+                },
+                transaction, false, false
+            );
+        });
+        
+        await Promise.all(updatePromises);
+        
+        await transaction.commit();
+        return res.success(constants.EMPLOYEE_UPDATED);
+        
+     }catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+}   
 
 /**
  * Bulk Update Template for Employees
@@ -852,7 +933,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
 
         const employees = await commonQuery.findAllRecords(
             Employee,   
-            { [field_name]: value, status: STATUS.ACTIVE }, 
+            { [field_name]: value, status: 0 }, 
             {attributes: ['id', 'first_name', 'employee_code', field_name]},
             transaction
         );

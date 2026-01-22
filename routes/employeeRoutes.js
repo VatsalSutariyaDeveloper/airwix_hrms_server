@@ -11,6 +11,7 @@ router.get("/:id", employeeController.getById);
 router.patch("/status", employeeController.updateStatus);
 router.post("/assign-template", employeeController.assignTemplate);
 router.post("/get-employees-by-template", employeeController.getEmployeesByTemplate);
+router.post("/assign-role", employeeController.assignRole);
 router.put("/:id", bufferImage(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc"]), employeeController.update);
 router.delete("/", employeeController.delete);
 

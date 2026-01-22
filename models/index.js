@@ -71,6 +71,11 @@ const LeaveTemplateCategory = require("./settings/leave/leaveTemplateCategory")(
 const LeaveBalance = require("./settings/leave/leaveBalance")(sequelize, DataTypes);
 const LeaveRequest = require("./settings/leave/leaveRequest")(sequelize, DataTypes);
 
+// Salary models
+const SalaryTemplate = require("./settings/salary/salaryTemplate")(sequelize, DataTypes);
+const SalaryTemplateComponent = require("./settings/salary/salaryTemplateComponent")(sequelize, DataTypes);
+const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, DataTypes);
+
 
 // Collect all models in one db object
 const db = {
@@ -141,6 +146,11 @@ const db = {
   LeaveTemplateCategory,
   LeaveBalance,
   LeaveRequest,
+
+  // Salary
+  SalaryTemplate,
+  SalaryTemplateComponent,
+  SalaryComponent,
 };
 
 Object.keys(db).forEach(modelName => {

@@ -123,9 +123,10 @@ async function sendForgotPasswordEmail(user, req) {
  * Create User and Send Password Setup Link
  */
 exports.create = async (req, res) => {
+  const { company_id } = getContext();
   const transaction = await sequelize.transaction();
   try {
-    const companyPlan = await getCompanySubscription(req.body.company_id);
+    const companyPlan = await getCompanySubscription(company_id);
     if (companyPlan.users_limit <= companyPlan.used_users) {
       await transaction.rollback();
       return res.error(constants.LIMIT_EXCEEDED, constants.USER_LIMIT_REACHED);

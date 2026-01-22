@@ -18,6 +18,7 @@ const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTe
 const attendanceTemplateController = require("../controllers/settings/attendanceTemplateController");
 const leaveTemplateController = require("../controllers/settings/leave/leaveTemplateController");
 const leaveRequestController = require("../controllers/settings/leave/leaveRequestController");
+const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -184,5 +185,16 @@ router.post("/leave-request/get-transactions", leaveRequestController.getAll);
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.get("/leave-balance/:employeeId", leaveRequestController.getEmployeeBalance);
+
+// ==========================
+// 31. Salary Template ROUTES
+// ==========================
+router.post("/salary-template/", salaryTemplateController.create);
+router.post("/salary-template/get-transactions", salaryTemplateController.getAll);
+router.post("/salary-template/dropdown-list", salaryTemplateController.dropdownList);
+router.get("/salary-template/:id", salaryTemplateController.getById);
+router.put("/salary-template/:id", salaryTemplateController.update);
+router.delete("/salary-template/", salaryTemplateController.delete);
+router.patch("/salary-template/status", salaryTemplateController.updateStatus);
 
 module.exports = router;

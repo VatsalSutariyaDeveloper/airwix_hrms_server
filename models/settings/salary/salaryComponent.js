@@ -38,11 +38,5 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true
   });
 
-  SalaryComponent.associate = models => {
-    SalaryComponent.hasMany(models.SalaryComponentRule, {
-      foreignKey: "component_id"
-    });
-  };
-
   return SalaryComponent;
 };

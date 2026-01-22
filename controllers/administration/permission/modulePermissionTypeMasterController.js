@@ -8,9 +8,6 @@ exports.dropdownList = async (req, res) => {
     const record = await commonQuery.findAllRecords(
       ModulePermissionTypeMaster,
       { 
-        user_id: req.body.user_id,       
-        branch_id: req.body.branch_id,
-        company_id: req.body.company_id,
         status: 0
       },
       { attributes: ["id", "permission_type_name"] },

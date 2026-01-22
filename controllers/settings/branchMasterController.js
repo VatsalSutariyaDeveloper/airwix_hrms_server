@@ -138,8 +138,6 @@ exports.dropdownList = async (req, res) => {
     const record = await commonQuery.findAllRecords(
       BranchMaster,
       {
-        user_id: req.body.user_id,
-        company_id: req.body.company_id,
         status: 0
       },
       {
