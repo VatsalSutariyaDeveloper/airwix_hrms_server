@@ -78,7 +78,7 @@ module.exports = (sequelize, DataTypes) => {
         // BANK INFORMATION
         name_as_per_bank: { type: DataTypes.STRING },
         bank_name: { type: DataTypes.STRING },
-        bank_account_number: { type: DataTypes.STRING(16) },
+        bank_account_number: { type: DataTypes.STRING(100) },
         bank_ifsc_code: { type: DataTypes.STRING(11) },
         bank_account_holder_name: { type: DataTypes.STRING },
         upi_id:{ type: DataTypes.STRING },

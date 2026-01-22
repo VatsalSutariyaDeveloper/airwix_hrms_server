@@ -151,9 +151,9 @@ exports.create = async (req, res) => {
         }
 
         // Initialize Leave Balance if template is assigned
-        if (POST.leave_template) {
-            await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
-        }
+        // if (POST.leave_template) {
+        //     await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
+        // }
 
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
@@ -346,9 +346,9 @@ exports.update = async (req, res) => {
         const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
 
         // Sync or Initialize Leave Balance if template is provided/changed
-        if (POST.leave_template) {
-            await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
-        }
+        // if (POST.leave_template) {
+        //     await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
+        // }
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];
@@ -643,8 +643,7 @@ exports.getAll = async (req, res) => {
         const POST = req.body;
         const fieldConfig = [
             ["first_name", true, true],
-            ["email", true, false],
-            ["mobile_no", true, false],
+            ["employee_code", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
