@@ -931,12 +931,21 @@ exports.getEmployeesByTemplate = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "Value is required" });
         }
 
-        const employees = await commonQuery.findAllRecords(
-            Employee,   
-            { [field_name]: value, status: 0 }, 
-            {attributes: ['id', 'first_name', 'employee_code', field_name]},
-            transaction
+        const employees = await commonQuery.fetchPaginatedData(
+            Employee,
+            { status: 0 },
+            [],
+            { attributes: ['id', 'first_name', 'employee_code', field_name] },
+            false
         );
+
+        if (employees.items && employees.items.length > 0) {
+            employees.items = employees.items.map(emp => {
+                const plainEmp = emp.toJSON ? emp.toJSON() : emp;
+                plainEmp[`is_${field_name}`] = plainEmp[field_name] == value;
+                return plainEmp;
+            });
+        }
 
         await transaction.commit();
         return res.ok(employees);
