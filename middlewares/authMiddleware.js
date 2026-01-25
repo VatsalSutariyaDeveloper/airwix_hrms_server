@@ -26,19 +26,29 @@ function authMiddleware(req, res, next) {
 
     req.user = {
       id: decoded.id,
+      employee_id: decoded.employee_id,
       company_id: decoded.company_id,
       branch_id: decoded.branch_id,
       role_id: decoded.role_id,
       permissions: decoded.permissions || [],
-      access_by: decoded.access_by || "web login"
+      access_by: decoded.access_by || "web login",
+      is_attendance_supervisor: decoded.is_attendance_supervisor,
+      is_reporting_manager: decoded.is_reporting_manager,
+      is_super_admin: decoded.role_id == 1,
+      is_admin: decoded.role_id == 2
     };
 
     requestContext.run(
       {
         userId: decoded.id,
+        employeeId: decoded.employee_id,
         companyId: decoded.company_id,
         branchId: decoded.branch_id,
         roleId: decoded.role_id,
+        is_attendance_supervisor: decoded.is_attendance_supervisor,
+        is_reporting_manager: decoded.is_reporting_manager,
+        is_super_admin: decoded.role_id == 1,
+        is_admin: decoded.role_id == 2,
         ip: req.ip
       },
       () => next()

@@ -1,4 +1,4 @@
-const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission, Employee } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService } = require("../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -17,10 +17,13 @@ const generateToken = (user, companyId, access_by = "web login") => {
   return jwt.sign(
     {
       id: user.id,
+      employee_id: user.employee_id,
       role_id: user.role_id,
       branch_id: user.branch_id,
       company_id: companyId,
-      access_by: access_by
+      access_by: access_by,
+      is_attendance_supervisor: user.is_attendance_supervisor,
+      is_reporting_manager: user.is_reporting_manager
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "1d" }
@@ -212,6 +215,18 @@ exports.login = async (req, res) => {
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
     const access_by = req.body.access_by === "application" ? "application" : "web login";
+
+    if(user.role_id != 1){
+      const employee = await commonQuery.findOneRecord(
+          Employee, 
+          user.employee_id,
+          { attributes: ['is_attendance_supervisor', 'is_reporting_manager'] },
+          transaction, false, false
+      );
+
+      user.is_attendance_supervisor = employee.is_attendance_supervisor;
+      user.is_reporting_manager = employee.is_reporting_manager;
+    }
 
     const token = generateToken(user, defaultCompanyId, access_by);
 

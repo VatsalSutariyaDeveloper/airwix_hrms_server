@@ -23,6 +23,16 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 'THRESHOLD_BASED',
                 comment: "How to handle join month credit"
             },
+            approval_levels: { 
+                type: DataTypes.INTEGER, 
+                defaultValue: 1, 
+                comment: "1, 2, or 3 levels of approval" 
+            },
+            approval_config: { 
+                type: DataTypes.JSON, 
+                allowNull: true,
+                comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
+            },
             count_sandwich_leaves: { type: DataTypes.BOOLEAN, defaultValue: false },
             status: { 
                 type: DataTypes.SMALLINT, 

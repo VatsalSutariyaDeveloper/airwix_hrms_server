@@ -4,7 +4,6 @@ const requestContext = new AsyncLocalStorage();
 
 function getContext() {
   const store = requestContext.getStore();
-  console.log("Request Context Store:", store);
   if (!store) {
     throw new Error("Request context not available");
   }

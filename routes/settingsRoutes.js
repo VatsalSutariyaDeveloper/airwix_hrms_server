@@ -182,6 +182,7 @@ router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateControlle
 // ==========================
 router.post("/leave-request", leaveRequestController.create);
 router.post("/leave-request/get-transactions", leaveRequestController.getAll);
+router.post("/leave-request/pending-approvals", leaveRequestController.getPendingApprovals);
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.get("/leave-balance/:employeeId", leaveRequestController.getEmployeeBalance);

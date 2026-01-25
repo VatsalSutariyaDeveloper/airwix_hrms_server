@@ -19,7 +19,17 @@ module.exports = (sequelize, DataTypes) => {
             approval_status: { 
                 type: DataTypes.STRING(20), 
                 defaultValue: "PENDING",
-                comment: "PENDING, APPROVED, REJECTED, CANCELLED" 
+                comment: "PENDING, PARTIALLY_APPROVED, APPROVED, REJECTED, CANCELLED" 
+            },
+            current_level: { 
+                type: DataTypes.INTEGER, 
+                defaultValue: 1,
+                comment: "Tracks the current approval stage"
+            },
+            approval_history: { 
+                type: DataTypes.JSON, 
+                allowNull: true,
+                comment: "Record of who approved at each level"
             },
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },

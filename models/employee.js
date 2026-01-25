@@ -140,6 +140,10 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
         Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
         Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });
+        
+        // Reporting Hierarchy
+        Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
+        Employee.belongsTo(models.Employee, { foreignKey: "attendance_supervisor", as: "supervisor" });
     };
 
     return Employee;

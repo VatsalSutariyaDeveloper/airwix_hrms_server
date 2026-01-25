@@ -167,24 +167,73 @@ class LeaveBalanceService {
     }
 
     /**
+     * Synchronizes balances when an employee's template is changed.
+     * Deletes balances for categories not in the new template.
+     */
+    static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null) {
+        const t = transaction || (await sequelize.transaction());
+        try {
+            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            if (!employee) throw new Error("Employee not found");
+
+            if (!newTemplateId) {
+                // If template is removed, de-activate ALL current active balances
+                await commonQuery.updateRecordById(LeaveBalance, {
+                    employee_id: employeeId,
+                    status: 0
+                }, { status: 2 }, t);
+                
+                if (!transaction) await t.commit();
+                return [];
+            }
+
+            const newTemplate = await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
+                include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
+            }, t);
+
+            if (!newTemplate) throw new Error("New leave template not found");
+
+            const newCategoryIds = newTemplate.categories.map(c => c.id);
+            const { start } = this.getCycleDates(employee.joining_date, newTemplate.leave_policy_cycle);
+
+            // 1. Mark balances as status=2 (deleted/inactive) if their category is not in the new template
+            await commonQuery.updateRecordById(LeaveBalance, {
+                employee_id: employeeId,
+                year: start.year(),
+                leave_category_id: { [Op.notIn]: newCategoryIds }
+            }, { status: 2 }, t);
+
+            // 2. Run standard initialization (handles creation or update of remaining/new categories)
+            const results = await this.initializeBalance(employeeId, newTemplateId, t);
+
+            if (!transaction) await t.commit();
+            return results;
+        } catch (error) {
+            if (!transaction && !t.finished) await t.rollback();
+            throw error;
+        }
+    }
+
+    /**
      * Batch job to add monthly credits. Called by Cron.
      */
     static async processMonthlyAccruals() {
         const transaction = await sequelize.transaction();
         try {
             // Find all active templates that use MONTHLY accrual
-            const templates = await LeaveTemplate.findAll({
-                where: { accrual_type: 'MONTHLY', status: 0 },
-                include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }],
-                transaction
-            });
+            const templates = await commonQuery.findAllRecords(LeaveTemplate, {
+                accrual_type: 'MONTHLY',
+                status: 0
+            }, {
+                include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }]
+            }, transaction);
 
             for (const template of templates) {
                 // Find all employees assigned to this template
-                const employees = await Employee.findAll({
-                    where: { leave_template: template.id, status: 0 },
-                    transaction
-                });
+                const employees = await commonQuery.findAllRecords(Employee, {
+                    leave_template: template.id,
+                    status: 0
+                }, {}, transaction);
 
                 for (const employee of employees) {
                     const { start } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
@@ -192,23 +241,21 @@ class LeaveBalanceService {
                     for (const category of template.categories) {
                         const monthlyRate = category.leave_count / 12;
 
-                        const balance = await LeaveBalance.findOne({
-                            where: {
-                                employee_id: employee.id,
-                                leave_category_id: category.id,
-                                year: start.year()
-                            },
-                            transaction
-                        });
+                        const balance = await commonQuery.findOneRecord(LeaveBalance, {
+                            employee_id: employee.id,
+                            leave_category_id: category.id,
+                            year: start.year(),
+                            status: 0
+                        }, {}, transaction);
 
                         if (balance) {
                             const newTotal = parseFloat(balance.total_allocated) + monthlyRate;
                             const newPending = parseFloat(balance.pending_leaves) + monthlyRate;
                             
-                            await balance.update({
+                            await commonQuery.updateRecordById(LeaveBalance, balance.id, {
                                 total_allocated: Math.round(newTotal * 2) / 2, // Keep to 0.5 rounding
                                 pending_leaves: Math.round(newPending * 2) / 2
-                            }, { transaction });
+                            }, transaction);
                         }
                     }
                 }
@@ -232,15 +279,16 @@ class LeaveBalanceService {
             const today = dayjs();
             
             // 1. Get all employees with active leave templates
-            const employees = await Employee.findAll({
-                where: { status: 0, leave_template: { [Op.ne]: null } },
+            const employees = await commonQuery.findAllRecords(Employee, {
+                status: 0,
+                leave_template: { [Op.ne]: null }
+            }, {
                 include: [{
                     model: LeaveTemplate,
                     as: 'leaveTemplate',
                     include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }]
-                }],
-                transaction
-            });
+                }]
+            }, transaction);
 
             for (const employee of employees) {
                 const template = employee.leaveTemplate;
@@ -260,14 +308,12 @@ class LeaveBalanceService {
                 
                 for (const category of template.categories) {
                     // 3. Find current balance for the cycle that just ended
-                    const lastBalance = await LeaveBalance.findOne({
-                        where: {
-                            employee_id: employee.id,
-                            leave_category_id: category.id,
-                            year: lastYear
-                        },
-                        transaction
-                    });
+                    const lastBalance = await commonQuery.findOneRecord(LeaveBalance, {
+                        employee_id: employee.id,
+                        leave_category_id: category.id,
+                        year: lastYear,
+                        status: 0
+                    }, {}, transaction);
 
                     if (!lastBalance) continue;
 
@@ -286,19 +332,18 @@ class LeaveBalanceService {
 
                     // 6. Update new balance with carry forward
                     const newYear = today.year();
-                    const newBalance = await LeaveBalance.findOne({
-                        where: {
-                            employee_id: employee.id,
-                            leave_category_id: category.id,
-                            year: newYear
-                        },
-                        transaction
-                    });
+                    const newBalance = await commonQuery.findOneRecord(LeaveBalance, {
+                        employee_id: employee.id,
+                        leave_category_id: category.id,
+                        year: newYear,
+                        status: 0
+                    }, {}, transaction);
 
                     if (newBalance) {
-                        newBalance.carry_forward_leaves = carryForwardAmount;
-                        newBalance.pending_leaves = parseFloat(newBalance.pending_leaves) + carryForwardAmount;
-                        await newBalance.save({ transaction });
+                        await commonQuery.updateRecordById(LeaveBalance, newBalance.id, {
+                            carry_forward_leaves: carryForwardAmount,
+                            pending_leaves: parseFloat(newBalance.pending_leaves) + carryForwardAmount
+                        }, transaction);
                     }
                 }
             }

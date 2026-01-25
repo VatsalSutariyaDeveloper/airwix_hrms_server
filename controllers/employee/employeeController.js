@@ -151,9 +151,9 @@ exports.create = async (req, res) => {
         }
 
         // Initialize Leave Balance if template is assigned
-        // if (POST.leave_template) {
-        //     await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
-        // }
+        if (POST.leave_template) {
+            await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
+        }
 
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
@@ -193,28 +193,28 @@ exports.create = async (req, res) => {
         }
 
         // 6. Create User Account if requested OR if role is allowed in Company Configuration
-        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
-            setting_key: 'app_access_roles',
-            status: 0
-        }, {}, transaction);
+        // const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+        //     setting_key: 'app_access_roles',
+        //     status: 0
+        // }, {}, transaction);
 
-        let rolesNeedingUser = [];
-        if (companyConfig && companyConfig.setting_value) {
-            try {
-                // Expecting JSON array or comma-separated string
-                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
-                    ? JSON.parse(companyConfig.setting_value) 
-                    : companyConfig.setting_value;
-                if (!Array.isArray(rolesNeedingUser)) {
-                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-                }
-            } catch (e) {
-                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-            }
-        }
+        // let rolesNeedingUser = [];
+        // if (companyConfig && companyConfig.setting_value) {
+        //     try {
+        //         // Expecting JSON array or comma-separated string
+        //         rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+        //             ? JSON.parse(companyConfig.setting_value) 
+        //             : companyConfig.setting_value;
+        //         if (!Array.isArray(rolesNeedingUser)) {
+        //             rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+        //         }
+        //     } catch (e) {
+        //         rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+        //     }
+        // }
         
-        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
-        if (isAppAccessRole) {
+        // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        if (POST.employee_type == 1) {
             // Validation for user fields
             const userRequiredFields = { role_id: "Role" };
 
@@ -346,9 +346,15 @@ exports.update = async (req, res) => {
         const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
 
         // Sync or Initialize Leave Balance if template is provided/changed
-        // if (POST.leave_template) {
-        //     await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
-        // }
+        if (POST.leave_template) {
+            if (parseInt(POST.leave_template) !== parseInt(existingEmployee.leave_template)) {
+                // Template Changed -> Sync (Cleanup old categories + Init new ones)
+                await LeaveBalanceService.syncEmployeeBalances(id, POST.leave_template, transaction);
+            } else {
+                // Just ensure balance exists (e.g. if it was never initialized)
+                await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
+            }
+        }
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];
@@ -385,17 +391,11 @@ exports.update = async (req, res) => {
         // ------------------------------------------------------------------
 
         // Cancel any existing PENDING requests
-        await ApprovalRequest.update(
-            { status: 'CANCELLED' },
-            {
-                where: {
-                    entity_id: id,
-                    module_entity_id: MODULES.HR.EMPLOYEE.ID,
-                    status: 'PENDING'
-                },
-                transaction
-            }
-        );
+        await commonQuery.updateRecordById(ApprovalRequest, {
+            entity_id: id,
+            module_entity_id: MODULES.HR.EMPLOYEE.ID,
+            status: 'PENDING'
+        }, { status: 'CANCELLED' }, transaction);
 
         // Check Approval Again
         const workflow = await ApprovalEngine.checkApprovalRequired(
@@ -417,28 +417,27 @@ exports.update = async (req, res) => {
         }
 
         // 4. Create/Update User Account if requested OR if role is allowed in Company Configuration
-        const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
-            setting_key: 'app_access_roles',
-            status: 0
-        }, {}, transaction);
+        // const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
+        //     setting_key: 'app_access_roles',
+        //     status: 0
+        // }, {}, transaction);
 
-        let rolesNeedingUser = [];
-        if (companyConfig && companyConfig.setting_value) {
-            try {
-                rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
-                    ? JSON.parse(companyConfig.setting_value) 
-                    : companyConfig.setting_value;
-                if (!Array.isArray(rolesNeedingUser)) {
-                    rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-                }
-            } catch (e) {
-                rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-            }
-        }
+        // let rolesNeedingUser = [];
+        // if (companyConfig && companyConfig.setting_value) {
+        //     try {
+        //         rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
+        //             ? JSON.parse(companyConfig.setting_value) 
+        //             : companyConfig.setting_value;
+        //         if (!Array.isArray(rolesNeedingUser)) {
+        //             rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+        //         }
+        //     } catch (e) {
+        //         rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
+        //     }
+        // }
 
-        const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
-
-        if (isAppAccessRole) {
+        // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        if (POST.employee_type == 1) {
             const loginType = parseInt(POST.login_type) || 1;
 
             // Check if user already exists for this employee
@@ -470,12 +469,11 @@ exports.update = async (req, res) => {
             if (existingUser) {
                 await commonQuery.updateRecordById(User, existingUser.id, userData, transaction);
 
-                // Update UserCompanyRoles if role changed
                 if (POST.role_id) {
-                    await UserCompanyRoles.update(
-                        { role_id: POST.role_id, permissions: userData.permission },
-                        { where: { user_id: existingUser.id }, transaction }
-                    );
+                    await commonQuery.updateRecordById(UserCompanyRoles, { user_id: existingUser.id }, {
+                        role_id: POST.role_id,
+                        permissions: userData.permission
+                    }, transaction);
                 }
             } else {
                 // Validation for new user
@@ -592,10 +590,9 @@ exports.delete = async (req, res) => {
         }
 
         // 1. Find records to identify files to delete
-        const employeesToDelete = await Employee.findAll({
-            where: { id: { [Op.in]: ids } },
+        const employeesToDelete = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: ids } }, {
             attributes: ['permanent_address_proof_doc', 'present_address_proof_doc', 'bank_proof_doc', 'pan_doc', 'aadhaar_doc', 'passport_doc']
-        });
+        }, transaction);
 
         // 2. Soft Delete Employees
         const count = await commonQuery.softDeleteById(Employee, ids, transaction);
@@ -887,22 +884,25 @@ exports.assignTemplate = async (req, res) => {
         }
 
         // 3. Process Updates
-        const updatePromises = [];
         for (const emp of employees) {
             if (emp.id && emp.value !== undefined) {
+                // Fetch current record to check if template is actually changing
+                const existing = await commonQuery.findOneRecord(Employee, emp.id, { attributes: ['id', 'leave_template'] }, transaction);
+                
                 // Update each employee record
-                updatePromises.push(
-                    commonQuery.updateRecordById(
-                        Employee,
-                        emp.id,
-                        { [field_name]: emp.value },
-                        transaction
-                    )
-                );
+                await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
+
+                // Special handling for leave_template assignments
+                if (field_name === 'leave_template') {
+                    const oldVal = existing ? existing.leave_template : null;
+                    const newVal = emp.value;
+
+                    if (parseInt(oldVal) !== parseInt(newVal)) {
+                        await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
+                    }
+                }
             }
         }
-
-        await Promise.all(updatePromises);
 
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
@@ -1006,7 +1006,7 @@ exports.registerFace = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
         }
 
-        const employee = await Employee.findByPk(id);
+        const employee = await commonQuery.findOneRecord(Employee, id);
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.EMPLOYEE_NOT_FOUND);
@@ -1123,11 +1123,10 @@ exports.facePunch = async (req, res) => {
 
         // 🚀 PARALLEL TASK 2: Fetch Employees
         // NOTE: Make sure attributes match your DB Column names exactly
-        const getEmployeesTask = Employee.findAll({
-            where: {
-                status: 0,
-                face_descriptor: { [Op.ne]: null }
-            },
+        const getEmployeesTask = commonQuery.findAllRecords(Employee, {
+            status: 0,
+            face_descriptor: { [Op.ne]: null }
+        }, {
             attributes: ['id', 'first_name', 'face_descriptor'], // Changed first_name to father_name based on your prev code
             raw: true 
         });
