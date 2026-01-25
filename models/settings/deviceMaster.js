@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
         {
             device_name: { type: DataTypes.STRING, allowNull: false },
             model_name: { type: DataTypes.STRING, unique: true, allowNull: false },
-            access_by: { type: DataTypes.INTEGER, allowNull: true, comment: "User who last accessed/modified the device" },
+            mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,
                 defaultValue: 0,
@@ -20,15 +20,5 @@ module.exports = (sequelize, DataTypes) => {
             underscored: true,
         }
     );
-    DeviceMaster.associate = models => {
-        DeviceMaster.belongsTo(models.User, {
-            foreignKey: "user_id",
-            as: "owner"
-        });
-        DeviceMaster.belongsTo(models.User, {
-            foreignKey: "access_by",
-            as: "accessBy"
-        });
-    };
     return DeviceMaster;
 }

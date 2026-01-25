@@ -9,7 +9,7 @@ exports.create = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             model_name: "Model Name",
-            access_by: "access_by",
+            mobile_no: "Mobile No",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
@@ -73,7 +73,7 @@ exports.update = async (req, res) => {
         const fieldLabels = {
             device_name: "Device Name",
             model_name: "Model Name",
-            access_by: "Access By"
+            mobile_no: "Mobile No"
         };
 
         const requiredFields = {};
