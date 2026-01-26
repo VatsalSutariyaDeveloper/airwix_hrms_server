@@ -933,7 +933,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
 
         const employees = await commonQuery.fetchPaginatedData(
             Employee,
-            { status: 0 },
+            { status: 0, ...req.body },
             [],
             { attributes: ['id', 'first_name', 'employee_code', field_name] },
             false

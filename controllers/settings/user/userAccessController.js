@@ -92,10 +92,11 @@ exports.sessionData = async (req, res) => {
             model: ModuleEntityMaster, 
             as: "entities", 
             required: false, 
-            where: { status: 0 }, 
+            where: { status: 0, entity_visiblity: 1 }, 
             attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"] 
         }],
-        order: [["priority", "ASC"], [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']],
+        order: [["priority", "ASC"], 
+        [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']],
       }, null, false),
 
       // C. Configuration

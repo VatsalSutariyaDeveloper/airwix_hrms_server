@@ -73,7 +73,7 @@ const LeaveRequest = require("./settings/leave/leaveRequest")(sequelize, DataTyp
 
 // Salary models
 const SalaryTemplate = require("./settings/salary/salaryTemplate")(sequelize, DataTypes);
-const SalaryTemplateComponent = require("./settings/salary/salaryTemplateComponent")(sequelize, DataTypes);
+const SalaryTemplateTransaction = require("./settings/salary/salaryTemplateTransaction")(sequelize, DataTypes);
 const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, DataTypes);
 
 
@@ -149,7 +149,7 @@ const db = {
 
   // Salary
   SalaryTemplate,
-  SalaryTemplateComponent,
+  SalaryTemplateTransaction,
   SalaryComponent,
 };
 

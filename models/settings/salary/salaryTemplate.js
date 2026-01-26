@@ -23,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   SalaryTemplate.associate = models => {
-    SalaryTemplate.hasMany(models.SalaryTemplateComponent, {
+    SalaryTemplate.hasMany(models.SalaryTemplateTransaction, {
       foreignKey: "salary_template_id"
     });
   };

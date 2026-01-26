@@ -1,4 +1,4 @@
-const { sequelize, SalaryTemplate } = require("../../../models");
+const { sequelize, SalaryTemplate, SalaryTemplateTransaction } = require("../../../models");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
@@ -15,13 +15,8 @@ const SALARY_TYPE = {
 }
 
 const salaryTemplateRequiredFields = {
-  template_code: "Template Code",
   template_name: "Template Name",
   staff_type: "Staff Type",
-  salary_type: "Salary Type",
-  ctc_monthly: "CTC Monthly",
-  ctc_yearly: "CTC Yearly",
-  currency: "Currency"
 };
 
 const validateSalaryTemplateEnums = (data) => {
@@ -59,7 +54,19 @@ exports.create = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    await commonQuery.createRecord(SalaryTemplate, POST, transaction);
+    // 2. Create Main Template
+    const template = await commonQuery.createRecord(SalaryTemplate, POST, transaction);
+
+    // 3. Handle Template Transactions (Components)
+    if (POST.components && Array.isArray(POST.components)) {
+      const componentData = POST.components.map(comp => ({
+        ...comp,
+        salary_template_id: template.id
+      }));
+      
+      // Bulk create uses commonQuery to ensure tenant IDs are injected
+      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+    }
 
     await transaction.commit();
     return res.success(constants.SALARY_TEMPLATE_CREATED);
@@ -162,6 +169,26 @@ exports.update = async (req, res) => {
     }
 
     await commonQuery.updateRecordById(SalaryTemplate, id, POST, transaction);
+
+    // 2. Update Transactions (Syncing Logic)
+    if (POST.components && Array.isArray(POST.components)) {
+      // Delete old transactions first (Soft Delete)
+      await commonQuery.updateRecordById(
+        SalaryTemplateTransaction, 
+        { salary_template_id: id }, 
+        { status: 2 }, 
+        transaction
+      );
+
+      // Insert new transactions
+      const componentData = POST.components.map(comp => ({
+        ...comp,
+        salary_template_id: id,
+        status: 0 // Ensure new ones are active
+      }));
+      
+      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+    }
 
     await transaction.commit();
     return res.success(constants.SALARY_TEMPLATE_UPDATED);

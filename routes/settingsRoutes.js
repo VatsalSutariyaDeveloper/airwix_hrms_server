@@ -19,6 +19,7 @@ const attendanceTemplateController = require("../controllers/settings/attendance
 const leaveTemplateController = require("../controllers/settings/leave/leaveTemplateController");
 const leaveRequestController = require("../controllers/settings/leave/leaveRequestController");
 const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
+const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -197,5 +198,16 @@ router.get("/salary-template/:id", salaryTemplateController.getById);
 router.put("/salary-template/:id", salaryTemplateController.update);
 router.delete("/salary-template/", salaryTemplateController.delete);
 router.patch("/salary-template/status", salaryTemplateController.updateStatus);
+
+// ==========================
+// 32. Salary Component ROUTES
+// ==========================
+router.post("/salary-component/", salaryComponentController.create);
+router.post("/salary-component/get-transactions", salaryComponentController.getAll);
+router.post("/salary-component/dropdown-list", salaryComponentController.dropdownList);
+router.get("/salary-component/:id", salaryComponentController.getById);
+router.put("/salary-component/:id", salaryComponentController.update);
+router.delete("/salary-component/", salaryComponentController.delete);
+router.patch("/salary-component/status", salaryComponentController.updateStatus);
 
 module.exports = router;

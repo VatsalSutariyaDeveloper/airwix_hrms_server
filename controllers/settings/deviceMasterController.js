@@ -8,14 +8,13 @@ exports.create = async (req, res) => {
     try {
         const requiredFields = {
             device_name: "Device Name",
-            model_name: "Model Name",
             mobile_no: "Mobile No",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
                 model: DeviceMaster,
-                fields: ["device_name", "model_name"],
+                fields: ["device_name"],
                 excludeId: req.params.id,
             }
         }, transaction);
@@ -72,7 +71,6 @@ exports.update = async (req, res) => {
         // Only validate fields sent in request
         const fieldLabels = {
             device_name: "Device Name",
-            model_name: "Model Name",
             mobile_no: "Mobile No"
         };
 
@@ -90,7 +88,7 @@ exports.update = async (req, res) => {
             {
                 uniqueCheck: {
                     model: DeviceMaster,
-                    fields: ["device_name", "model_name"],
+                    fields: ["device_name"],
                     excludeId: req.params.id,
                 }
             },
