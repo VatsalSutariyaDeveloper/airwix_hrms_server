@@ -917,43 +917,78 @@ exports.assignTemplate = async (req, res) => {
  * Get Employees by Template Field
  */
 exports.getEmployeesByTemplate = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { field_name, value } = req.body;
+  const transaction = await sequelize.transaction();
+  try {
+    const { field_name, value, is_access } = req.body;
 
-        if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_FIELD_NAME);
-        }
 
-        if (value === undefined || value === null) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "Value is required" });
-        }
-
-        const employees = await commonQuery.fetchPaginatedData(
-            Employee,
-            { status: 0, ...req.body },
-            [],
-            { attributes: ['id', 'first_name', 'employee_code', field_name] },
-            false
-        );
-
-        if (employees.items && employees.items.length > 0) {
-            employees.items = employees.items.map(emp => {
-                const plainEmp = emp.toJSON ? emp.toJSON() : emp;
-                plainEmp[`is_${field_name}`] = plainEmp[field_name] == value;
-                return plainEmp;
-            });
-        }
-
-        await transaction.commit();
-        return res.ok(employees);
-
-    } catch (err) {
-        if (!transaction.finished) await transaction.rollback();
-        return handleError(err, res, req);
+    // 1. Validate field name
+    if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
+      await transaction.rollback();
+      return res.error(constants.INVALID_FIELD_NAME);
     }
+
+    // 2. Validate is_access
+    if (is_access === undefined || is_access === null) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, {
+        message: "is_access is required"
+      });
+    }
+
+    // 3. Validate value
+    if (value === undefined || value === null) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, {
+        message: "Value is required"
+      });
+    }
+
+    // 4. Base filter
+    const filter = {
+      status: 0
+    };
+
+    const accessFlag = is_access === true || is_access === "true";
+
+    // 5. Apply condition
+    if (accessFlag) {
+      // TRUE → only matching employees
+      filter[field_name] = value;
+    } else {
+      // FALSE → only non-matching employees
+      filter[field_name] = { [Op.ne]: value };
+    }
+
+    // 6. Fetch employees
+    const employees = await commonQuery.fetchPaginatedData(
+      Employee,
+      { ...req.body, filter },
+      [],
+      {
+        attributes: ["id", "first_name", "employee_code", field_name]
+      },
+      false
+    );
+
+    // 7. Add computed flag
+    if (employees?.items?.length) {
+      employees.items = employees.items.map(emp => {
+        const plainEmp = emp.toJSON();
+        return {
+          ...plainEmp,
+          [`is_${field_name}`]: plainEmp[field_name] == value
+        };
+      });
+    }
+
+    await transaction.commit();
+    return res.ok(employees);
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
 };
 
 const calculateCosineDistance = (descriptor1, descriptor2) => {

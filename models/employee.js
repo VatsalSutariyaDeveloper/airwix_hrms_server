@@ -17,13 +17,13 @@ module.exports = (sequelize, DataTypes) => {
 
         // GENERAL INFORMATION
         salary_cycle: { type: DataTypes.INTEGER },
-        weekly_off_template: { type: DataTypes.INTEGER },
-        holiday_template: { type: DataTypes.INTEGER },
-        leave_template: { type: DataTypes.INTEGER },
-        shift_template: { type: DataTypes.INTEGER },
-        attendance_weekly_off_template: { type: DataTypes.INTEGER },
-        geofence_template: { type: DataTypes.INTEGER },
-        attendance_setting_template: { type: DataTypes.INTEGER },
+        weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        holiday_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        leave_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        shift_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        geofence_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
         salary_access: { type: DataTypes.INTEGER },
 
         // PERSONAL INFORMATION
