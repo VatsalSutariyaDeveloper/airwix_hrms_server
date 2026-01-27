@@ -144,6 +144,8 @@ module.exports = (sequelize, DataTypes) => {
         // Reporting Hierarchy
         Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
         Employee.belongsTo(models.Employee, { foreignKey: "attendance_supervisor", as: "supervisor" });
+        Employee.belongsTo(models.AttendanceTemplate, { foreignKey: "attendance_setting_template", as: "attendanceTemplate" });
+        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendance_days" });
     };
 
     return Employee;

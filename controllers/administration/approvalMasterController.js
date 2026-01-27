@@ -34,28 +34,29 @@ exports.createCompleteWorkflow = async (req, res) => {
         } = req.body;
 
         // 1. Create Workflow
-        const workflow = await ApprovalWorkflow.create({
+        const workflowData = {
             module_entity_id,
             workflow_name,
             description,
-            priority: priority || 999, // Default to low priority
+            priority: priority || 999,
             company_id,
-            created_by: user_id,
+            user_id: user_id, // commonQuery expects user_id for audit logs
             status: 1
-        }, { transaction });
+        };
+        const workflow = await commonQuery.createRecord(ApprovalWorkflow, workflowData, transaction);
 
-        // 2. Create Rules
         if (Array.isArray(rules) && rules.length > 0) {
             const rulesData = rules.map((r, index) => ({
                 workflow_id: workflow.id,
                 field_name: r.field_name,
                 operator: r.operator,
                 value: r.value,
-                logical_operator: r.logical_operator || 'AND', // <--- New
-                sequence: index, // Maintain order
-                company_id
+                logical_operator: r.logical_operator || 'AND',
+                sequence: index,
+                company_id,
+                user_id: user_id
             }));
-            await ApprovalRule.bulkCreate(rulesData, { transaction });
+            await commonQuery.bulkCreate(ApprovalRule, rulesData, {}, transaction);
         }
 
         // 3. Create Levels (Same as before)
@@ -65,9 +66,10 @@ exports.createCompleteWorkflow = async (req, res) => {
                 level_sequence: l.level_sequence,
                 approver_type: l.approver_type,
                 approver_id: l.approver_id,
-                company_id
+                company_id,
+                user_id: user_id
             }));
-            await ApprovalLevel.bulkCreate(levelsData, { transaction });
+            await commonQuery.bulkCreate(ApprovalLevel, levelsData, {}, transaction);
         }
 
         await transaction.commit();
@@ -115,22 +117,19 @@ exports.getAllWorkflows = async (req, res) => {
 exports.getWorkflowById = async (req, res) => {
     try {
         const { id } = req.params;
-        const workflow = await ApprovalWorkflow.findOne({
-            where: { id },
+        const workflow = await commonQuery.findOneRecord(ApprovalWorkflow, { id }, {
             include: [
                 { model: ApprovalRule, as: 'rules' },
                 { 
                     model: ApprovalLevel, 
                     as: 'levels',
-                    // Optional: Include Role/User names for display if needed
-                    // include: [ ... ] 
                 },
                 { model: ModuleEntityMaster, as: 'module_entity' }
             ],
             order: [
                 [{ model: ApprovalLevel, as: 'levels' }, 'level_sequence', 'ASC']
             ]
-        });
+        }, null, false, false);
 
         if (!workflow) return res.error("NOT_FOUND");
 
@@ -150,8 +149,7 @@ exports.updateWorkflow = async (req, res) => {
         const { rules, levels, ...headerData } = req.body;
 
         // 1. Fetch Existing Workflow Logic
-        // We need this to get the correct 'company_id' if it's not passed in the body
-        const existingWorkflow = await ApprovalWorkflow.findByPk(id, { transaction });
+        const existingWorkflow = await commonQuery.findOneRecord(ApprovalWorkflow, id, {}, transaction, false, false);
 
         if (!existingWorkflow) {
             await transaction.rollback();
@@ -162,11 +160,11 @@ exports.updateWorkflow = async (req, res) => {
         const companyId = existingWorkflow.company_id;
 
         // 2. Update Header
-        await existingWorkflow.update(headerData, { transaction });
+        await commonQuery.updateRecordById(ApprovalWorkflow, id, headerData, transaction);
 
         // 3. Sync Rules (Delete old, add new)
         if (rules && Array.isArray(rules)) {
-            await ApprovalRule.destroy({ where: { workflow_id: id }, transaction });
+            await commonQuery.hardDeleteRecords(ApprovalRule, { workflow_id: id }, transaction, false);
             
             if (rules.length > 0) {
                 const rulesData = rules.map((r, index) => ({
@@ -179,13 +177,13 @@ exports.updateWorkflow = async (req, res) => {
                     sequence: index, // Maintain the order from the array
                     company_id: companyId // Safe Company ID
                 }));
-                await ApprovalRule.bulkCreate(rulesData, { transaction });
+                await commonQuery.bulkCreate(ApprovalRule, rulesData, {}, transaction);
             }
         }
 
         // 4. Sync Levels
         if (levels && Array.isArray(levels)) {
-            await ApprovalLevel.destroy({ where: { workflow_id: id }, transaction });
+            await commonQuery.hardDeleteRecords(ApprovalLevel, { workflow_id: id }, transaction, false);
             
             if (levels.length > 0) {
                 const levelsData = levels.map(l => ({
@@ -195,7 +193,7 @@ exports.updateWorkflow = async (req, res) => {
                     approver_id: l.approver_id,
                     company_id: companyId // Safe Company ID
                 }));
-                await ApprovalLevel.bulkCreate(levelsData, { transaction });
+                await commonQuery.bulkCreate(ApprovalLevel, levelsData, {}, transaction);
             }
         }
 
@@ -218,9 +216,9 @@ exports.deleteWorkflow = async (req, res) => {
         
         // Soft delete or Hard delete based on your preference
         // Here assuming Hard delete for config, but you can use update status=2
-        await ApprovalRule.destroy({ where: { workflow_id: id }, transaction });
-        await ApprovalLevel.destroy({ where: { workflow_id: id }, transaction });
-        const deleted = await ApprovalWorkflow.destroy({ where: { id }, transaction });
+        await commonQuery.hardDeleteRecords(ApprovalRule, { workflow_id: id }, transaction, false);
+        await commonQuery.hardDeleteRecords(ApprovalLevel, { workflow_id: id }, transaction, false);
+        const deleted = await commonQuery.hardDeleteRecords(ApprovalWorkflow, { id }, transaction, false);
 
         if (!deleted) {
             await transaction.rollback();
@@ -249,9 +247,11 @@ exports.configureApprovalType = async (req, res) => {
 
         // 1. CLEAR EXISTING CONFIGURATION
         // Delete all active workflows for this module to reset settings
-        await ApprovalWorkflow.update(
-            { status: 2 }, // Soft Delete
-            { where: { module_entity_id, company_id }, transaction }
+        await commonQuery.updateRecordById(
+            ApprovalWorkflow,
+            { module_entity_id, company_id },
+            { status: 2 },
+            transaction
         );
 
         if (type === 1) {
@@ -263,36 +263,35 @@ exports.configureApprovalType = async (req, res) => {
 
         if (type === 2) {
             // Type 2: Admin Approval (Single Step)
-            const wf = await ApprovalWorkflow.create({
+            const wf = await commonQuery.createRecord(ApprovalWorkflow, {
                 module_entity_id,
                 workflow_name: "Admin Approval (System Generated)",
                 priority: 1,
                 company_id,
                 status: 1
-            }, { transaction });
+            }, transaction);
 
             // Level 1 = Admin Role
-            await ApprovalLevel.create({
+            await commonQuery.createRecord(ApprovalLevel, {
                 workflow_id: wf.id,
                 level_sequence: 1,
                 approver_type: 'ROLE',
                 approver_id: admin_role_id,
                 company_id
-            }, { transaction });
+            }, transaction);
         }
 
         if (type === 3) {
             // Type 3: Multi-Level (Fixed Chain)
-            const wf = await ApprovalWorkflow.create({
+            const wf = await commonQuery.createRecord(ApprovalWorkflow, {
                 module_entity_id,
                 workflow_name: "Multi-Level Approval (System Generated)",
                 priority: 1,
                 company_id,
                 status: 1
-            }, { transaction });
+            }, transaction);
 
             // Create Levels from array
-            // approver_ids = [{type: 'USER', id: 10}, {type: 'ROLE', id: 5}]
             if (approver_ids && approver_ids.length > 0) {
                 const levelsData = approver_ids.map((appr, index) => ({
                     workflow_id: wf.id,
@@ -301,7 +300,7 @@ exports.configureApprovalType = async (req, res) => {
                     approver_id: appr.id,
                     company_id
                 }));
-                await ApprovalLevel.bulkCreate(levelsData, { transaction });
+                await commonQuery.bulkCreate(ApprovalLevel, levelsData, {}, transaction);
             }
         }
 

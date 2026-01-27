@@ -46,7 +46,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const existingHoliday = await commonQuery.findOneRecord(Holiday, { id });
+    const existingHoliday = await commonQuery.findOneRecord(Holiday, { id }, {}, transaction);
     if (!existingHoliday) {
       await transaction.rollback();
       return res.error(constants.HOLIDAY_NOT_FOUND);

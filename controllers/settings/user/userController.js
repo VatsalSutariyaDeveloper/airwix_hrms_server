@@ -257,12 +257,10 @@ exports.verifySetupToken = async (req, res) => {
     // Hash the token from URL
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    const user = await User.findOne({
-      where: {
-        reset_password_token: hashedToken,
-        reset_password_expires: { [Op.gt]: new Date() },
-      },
-    });
+    const user = await commonQuery.findOneRecord(User, {
+      reset_password_token: hashedToken,
+      reset_password_expires: { [Op.gt]: new Date() },
+    }, {}, null, false, false);
 
     if (!user) {
       return res.status(400).json({
@@ -291,12 +289,10 @@ exports.setPassword = async (req, res) => {
     const { token, password } = req.body;
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    const user = await User.findOne({
-      where: {
-        reset_password_token: hashedToken,
-        reset_password_expires: { [Op.gt]: new Date() },
-      },
-    });
+    const user = await commonQuery.findOneRecord(User, {
+      reset_password_token: hashedToken,
+      reset_password_expires: { [Op.gt]: new Date() },
+    }, {}, null, false, false);
 
     if (!user) {
       return res.status(400).json({
@@ -330,7 +326,7 @@ exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
 
-    const user = await User.findOne({ where: { email } });
+    const user = await commonQuery.findOneRecord(User, { email }, {}, null, false, false);
     if (!user) {
       return res.status(404).json({
         code: 404,

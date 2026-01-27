@@ -369,7 +369,7 @@ exports.deleteRoutePermission = async (req, res) => {
 
         // Hard delete each record individually
         for (const id of idArray) {
-            const deleted = await commonQuery.hardDeleteById(RoutePermission, id, transaction);
+            const deleted = await commonQuery.hardDeleteRecords(RoutePermission, { id }, transaction);
             if (deleted) {
                 deletedCount++;
             }

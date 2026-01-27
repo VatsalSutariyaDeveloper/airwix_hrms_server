@@ -19,7 +19,7 @@ exports.create = async (req, res) => {
         model: CurrencyMaster,
         fields: ["currency_name"]
       }
-    });
+    }, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -33,6 +33,7 @@ exports.create = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
 
 // Get all active Data For listing with pagination and search
 exports.getAll = async (req, res) => {
@@ -153,6 +154,7 @@ exports.getById = async (req, res) => {
 
 // Update Data by ID
 exports.update = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const requiredFields = {
       currency_name: "Currency Name",
@@ -166,15 +168,21 @@ exports.update = async (req, res) => {
         fields: ["currency_name"],
         excludeId: req.params.id
       }
-    });
+    }, transaction);
 
     if (errors) {
+      await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors);
     }
-    const updated = await commonQuery.updateRecordById(CurrencyMaster, req.params.id, req.body);
-    if (!updated || updated.status === 2) return res.error(constants.NOT_FOUND);
+    const updated = await commonQuery.updateRecordById(CurrencyMaster, req.params.id, req.body, transaction);
+    if (!updated || updated.status === 2) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND);
+    }
+    await transaction.commit();
     return res.success(constants.CURRENCY_MASTER_UPDATED);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };

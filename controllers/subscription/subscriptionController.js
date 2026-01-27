@@ -8,12 +8,15 @@ const CompanySubscriptionModel= "Company Subscription";
 // 1️⃣ Create Subscription Plan
 // ----------------------------------------------
 exports.createSubscriptionPlan = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const data = req.body;
-    const plan = await commonQuery.createRecord(SubscriptionPlan, data);
+    const plan = await commonQuery.createRecord(SubscriptionPlan, data, transaction);
 
+    await transaction.commit();
     return res.success("PLAN_CREATED", plan);
   } catch (err) {
+    await transaction.rollback();
     console.log(err);
     return res.error("ERROR", "Something went wrong", err);
   }
@@ -44,17 +47,21 @@ exports.getSubscriptionPlans = async (req, res) => {
 // 3️⃣ Update Subscription Plan
 // ----------------------------------------------
 exports.updateSubscriptionPlan = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { id } = req.body;
 
     await commonQuery.updateRecordById(
       SubscriptionPlan,
       { id },
-      req.body
+      req.body,
+      transaction
     );
 
+    await transaction.commit();
     return res.success("PLAN_UPDATED", SubscriptionPlanModel);
   } catch (err) {
+    await transaction.rollback();
     return res.error("ERROR", "Something went wrong", err);
   }
 };
@@ -129,7 +136,7 @@ exports.assignSubscription = async (req, res) => {
         return res.error("EXISTING_PLAN", "Company already has an active base plan. Use 'Renew' or 'Upgrade'.");
     }
     
-    await commonQuery.softDeleteById(CompanySubscription, { company_id: company_id }, { status: 1 }, transaction);
+    await commonQuery.updateRecordById(CompanySubscription, { company_id: company_id }, { status: 1 }, transaction);
 
     const start = moment().format("YYYY-MM-DD");
     const end = moment().add(plan.duration_days, "days").format("YYYY-MM-DD");
@@ -288,16 +295,19 @@ exports.checkSubscriptionValidity = async (req, res) => {
 // 8️⃣ Purchase Add-on (Update Limits/Features)
 // ----------------------------------------------
 exports.purchaseAddon = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { addon_plan_id, payment_id, branch_id, user_id, payment_status, amount_paid } = req.body;
 
     const record = await commonQuery.findOneRecord(
         CompanyMaster, 
         req.body.company_id,
-        { attributes: ['id', 'company_id'] }
+        { attributes: ['id', 'company_id'] },
+        transaction
     );
     
     if (!record) {
+        await transaction.rollback();
         return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
     }
 
@@ -308,9 +318,10 @@ exports.purchaseAddon = async (req, res) => {
       company_id, 
       subscription_type: 'plan', 
       status: 0 
-    });
+    }, {}, transaction);
 
     if (!activeBase) {
+      await transaction.rollback();
       return res.error("NO_BASE_PLAN", "Please purchase a base subscription first.");
     }
 
@@ -318,9 +329,12 @@ exports.purchaseAddon = async (req, res) => {
     const addonPlan = await commonQuery.findOneRecord(SubscriptionPlan, {
       id: addon_plan_id,
       status: 0 
-    });
+    }, {}, transaction);
 
-    if (!addonPlan) return res.error("INVALID_PLAN", "Addon plan not found");
+    if (!addonPlan) {
+      await transaction.rollback();
+      return res.error("INVALID_PLAN", "Addon plan not found");
+    }
 
     // 3. Calculate Dates (Synced with Base Plan)
     const start = moment().startOf('day'); // Use startOf('day') for accurate diff
@@ -328,59 +342,54 @@ exports.purchaseAddon = async (req, res) => {
     
     // Check if base plan is already expired
     if (end.isBefore(start)) {
+        await transaction.rollback();
         return res.error("BASE_PLAN_EXPIRED", "Your base plan has expired. Please renew it first.");
     }
 
     // 4. Calculate Remaining Days (Effective Duration)
-    // We add 1 to include the start day in the count (e.g., Today to Today is 1 day usage)
     const effectiveDuration = Math.max(1, end.diff(start, 'days') + 1);
 
     if(effectiveDuration < 30) {
+        await transaction.rollback();
         return res.error("MIN_DURATION_NOT_MET", "Addon purchase requires at least 30 days remaining on the base plan. Current remaining days: " + effectiveDuration);
     }
 
-    // 5. PRO-RATA CALCULATION: (Plan Price / Plan Duration) * Remaining Days
-    // Ensure we don't divide by zero
+    // 5. PRO-RATA CALCULATION
     const planDuration = addonPlan.duration_days || 365; 
     const perDayCost = Number(addonPlan.price) / planDuration;
-    const calculatedPayableAmount = Math.ceil(perDayCost * effectiveDuration); // Round up to nearest integer
+    const calculatedPayableAmount = Math.ceil(perDayCost * effectiveDuration); 
 
-
-    // if(amount_paid != calculatedPayableAmount) {
-    //     return res.error("INSUFFICIENT_AMOUNT", "Paid amount is " + amount_paid + ", Payable amount is " + calculatedPayableAmount);
-    // }
     // 6. Prepare Data
     const subscriptionData = {
       company_id,
       branch_id,
       user_id,
       subscription_plan_id: addonPlan.id,
-      amount_paid: amount_paid, // <--- Use the calculated pro-rata amount
+      amount_paid: amount_paid,
       payment_id,
       payment_status: payment_status || (payment_id ? "Paid" : "Pending"),
       start_date: start.format("YYYY-MM-DD"),
-      end_date: end.format("YYYY-MM-DD"),    // Synced with Base Plan
-      duration_days: effectiveDuration,      // Actual days active
+      end_date: end.format("YYYY-MM-DD"),    
+      duration_days: effectiveDuration,      
       subscription_type: addonPlan.subscription_type,
       auto_renew: activeBase.auto_renew || false,
       ...addonPlan.dataValues, 
       status: 0,
     };
     
-    // Cleanup
     delete subscriptionData.id;
     delete subscriptionData.createdAt;
     delete subscriptionData.updatedAt;
     
-    // Explicit overrides
     subscriptionData.start_date = start.format("YYYY-MM-DD");
     subscriptionData.end_date = end.format("YYYY-MM-DD");
     subscriptionData.duration_days = effectiveDuration;
-    subscriptionData.amount_paid = calculatedPayableAmount; // Ensure this is saved
+    subscriptionData.amount_paid = calculatedPayableAmount; 
 
     // 7. Create Record
-    const newAddonSub = await commonQuery.createRecord(CompanySubscription, subscriptionData);
+    const newAddonSub = await commonQuery.createRecord(CompanySubscription, subscriptionData, transaction);
     
+    await transaction.commit();
     reloadCompanySubscriptionCache(company_id);
 
     const responseData = {
@@ -398,6 +407,7 @@ exports.purchaseAddon = async (req, res) => {
     return res.success("ADDON_PURCHASED", responseData);
 
   } catch (err) {
+    if (transaction) await transaction.rollback();
     console.error(err);
     return res.error("ERROR", "Transaction failed", err);
   }
@@ -449,22 +459,27 @@ exports.getCompanySubscription = async (req, res) => {
 };
 
 exports.deleteSubscriptionPlan = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { id } = req.body;
 
     // Check if plan exists
-    const plan = await commonQuery.findOneRecord(SubscriptionPlan, { id });
+    const plan = await commonQuery.findOneRecord(SubscriptionPlan, { id }, {}, transaction);
     if (!plan) {
+      await transaction.rollback();
       return res.error("NOT_FOUND", "Subscription Plan not found");
     }
 
     await commonQuery.softDeleteById(
       SubscriptionPlan,
-      { id }
+      { id },
+      transaction
     );
 
+    await transaction.commit();
     return res.success("PLAN_DELETED");
   } catch (err) {
+    await transaction.rollback();
     return res.error("ERROR", "Something went wrong", err);
   }
 };
@@ -497,21 +512,21 @@ exports.cancelSubscription = async (req, res) => {
       return res.error("ERROR", "Associated plan details not found");
     }
 
-    await commonQuery.softDeleteById(
+    await commonQuery.updateRecordById(
       CompanySubscription,
       { id: subToCancel.id },
-      {}, 
+      { status: 1 }, 
       transaction
     );
 
     if (planDetails.subscription_type === 'plan') {
-      await commonQuery.softDeleteById(
+      await commonQuery.updateRecordById(
         CompanySubscription,
         { 
           company_id: company_id, 
           status: 0 
         },
-        {},
+        { status: 1 },
         transaction 
       );
       console.log(`Main plan cancelled for Company ${company_id}. Cascading cancel triggered for addons.`);

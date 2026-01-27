@@ -416,11 +416,9 @@ module.exports = {
   },
 
   // 8. Hard Delete
-  hardDeleteById: async (model, id, transaction = null) => {
-    const record = await model.findByPk(id, withDebug({}, transaction));
-    if (!record) return null;
-    await record.destroy(withDebug({}, transaction));
-    return record;
+  hardDeleteRecords: async (model, whereInput = {}, transaction = null, requireTenantFields = true) => {
+    const condition = await buildWhere(whereInput, requireTenantFields);
+    return model.destroy(withDebug({ where: condition }, transaction));
   },
 
   // 9. Aggregates

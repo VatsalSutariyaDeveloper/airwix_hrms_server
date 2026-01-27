@@ -8,33 +8,33 @@ const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 
 // -------------------------------------------------------------------------
 async function syncSettingsToAllCompanies(transaction) {
     // 1. Fetch all Master Settings
-    const masterSettings = await CompanySettingsMaster.findAll({
-        where: { status: 0 },
-        raw: true,
-        transaction
-    });
+    const masterSettings = await commonQuery.findAllRecords(CompanySettingsMaster, {
+        status: 0
+    }, {
+        raw: true
+    }, transaction, false);
 
     if (!masterSettings.length) return { count: 0, companies: 0 };
 
     // 2. Fetch all Active Companies
-    const companies = await CompanyMaster.findAll({
-        where: { status: 0 },
+    const companies = await commonQuery.findAllRecords(CompanyMaster, {
+        status: 0
+    }, {
         attributes: ['id', 'user_id'],
-        raw: true,
-        transaction
-    });
+        raw: true
+    }, transaction, false);
 
     let totalAdded = 0;
 
     // 3. Loop companies and add missing settings
     for (const company of companies) {
         // Get current keys for this company
-        const existingConfig = await CompanyConfigration.findAll({
-            where: { company_id: company.id },
+        const existingConfig = await commonQuery.findAllRecords(CompanyConfigration, {
+            company_id: company.id 
+        }, {
             attributes: ['setting_key'],
-            raw: true,
-            transaction
-        });
+            raw: true
+        }, transaction, false);
 
         const existingKeys = new Set(existingConfig.map(c => c.setting_key));
 
@@ -53,7 +53,7 @@ async function syncSettingsToAllCompanies(transaction) {
                 status: 0
             }));
 
-            await CompanyConfigration.bulkCreate(newEntries, { transaction });
+            await commonQuery.bulkCreate(CompanyConfigration, newEntries, {}, transaction);
             totalAdded += newEntries.length;
         }
     }

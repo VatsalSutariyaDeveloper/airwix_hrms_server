@@ -94,14 +94,18 @@ exports.create = async (req, res) => {
     const companyIds = companies.map(c => c.id);
 
     if (req.body.mobile_no) {
-      const mobileExistsOutside = await CompanyMaster.findOne({
-        where: {
+      const mobileExistsOutside = await commonQuery.findOneRecord(
+        CompanyMaster,
+        {
           mobile_no: req.body.mobile_no,
           id: { [Op.notIn]: companyIds },
           status: { [Op.ne]: 2 }
         },
-        transaction
-      });
+        {},
+        transaction,
+        false,
+        false
+      );
 
       if (mobileExistsOutside) {
         await transaction.rollback();

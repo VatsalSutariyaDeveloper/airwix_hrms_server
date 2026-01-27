@@ -123,7 +123,8 @@ exports.getById = async (req, res) => {
           model: HolidayTransaction,
           as: 'holidayTransactions',
           required: false,
-          attributes: ['id', 'template_id', 'name', 'date', 'status'],
+          attributes: ['id', 'template_id', 'name', 'date', 'holiday_type', 'color', 'status'],
+
         }
       ]
     });
@@ -226,6 +227,8 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
     const dbPayload = {
       name: transactionData.name,
       date: transactionData.date,
+      holiday_type: transactionData.holiday_type || 1,
+      color: transactionData.color || "#E11D48",
       template_id: templateId
     };
     

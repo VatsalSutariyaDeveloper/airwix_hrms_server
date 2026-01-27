@@ -141,18 +141,18 @@ exports.takeAction = async (req, res) => {
         if (result.status === 'APPROVED') {
             // Fully Approved
             if (entity_type === MODULES.SALES.QUOTATION.ID) {
-                await Quotation.update({ status: 0 }, { where: { id: entity_id }, transaction });
+                await commonQuery.updateRecordById(Quotation, entity_id, { status: 0 }, transaction);
             } else if (entity_type === MODULES.SALES.SALES_ORDER.ID) {
-                await SalesOrder.update({ status: 0 }, { where: { id: entity_id }, transaction });
+                await commonQuery.updateRecordById(SalesOrder, entity_id, { status: 0 }, transaction);
             } 
             // Add other entities here (PurchaseOrder, etc.)
         } 
         else if (result.status === 'REJECTED') {
             // Rejected
             if (entity_type === MODULES.SALES.QUOTATION.ID) {
-                await Quotation.update({ status: 1 }, { where: { id: entity_id }, transaction });
+                await commonQuery.updateRecordById(Quotation, entity_id, { status: 1 }, transaction);
             } else if (entity_type === MODULES.SALES.SALES_ORDER.ID) {
-                await SalesOrder.update({ status: 1 }, { where: { id: entity_id }, transaction });
+                await commonQuery.updateRecordById(SalesOrder, entity_id, { status: 1 }, transaction);
             } 
         }
         // If status is 'PENDING', it means it moved to the next level, so we don't change the Entity Status (keep it as 'Pending Approval')
@@ -174,23 +174,23 @@ exports.getApprovalHistory = async (req, res) => {
         const { entity_type, entity_id } = req.body;
         
         // Resolve Request ID first (Optional, or join tables)
-        const requests = await ApprovalRequest.findAll({
-            where: { 
-                module_entity_id: entity_type,
-                entity_id 
-            },
-            attributes: ['id', 'status', 'created_at']
-        });
+        const requests = await commonQuery.findAllRecords(ApprovalRequest, {
+            module_entity_id: entity_type,
+            entity_id 
+        }, {
+            attributes: ['id', 'status', 'createdAt']
+        }, null, false);
 
         const requestIds = requests.map(r => r.id);
 
-        const logs = await ApprovalLog.findAll({
-            where: { request_id: { [Op.in]: requestIds } },
+        const logs = await commonQuery.findAllRecords(ApprovalLog, { 
+            request_id: { [Op.in]: requestIds } 
+        }, {
             include: [
-                { model: User, as: 'user', attributes: ['user_name'] } // Assuming User association exists
+                { model: User, as: 'user', attributes: ['user_name'] }
             ],
-            order: [['created_at', 'DESC']]
-        });
+            order: [['createdAt', 'DESC']]
+        }, null, false);
 
         return res.ok(logs);
     } catch (err) {
@@ -233,7 +233,7 @@ exports.createApprovalRequest = async (req, res) => {
         }
 
         // 2. Fetch the Record Data (Required to check rules like 'total_amount > 5000')
-        recordData = await Model.findOne({ where: { id: entity_id }, transaction });
+        recordData = await commonQuery.findOneRecord(Model, entity_id, {}, transaction, false, false);
 
         if (!recordData) {
             await transaction.rollback(); 
@@ -241,14 +241,11 @@ exports.createApprovalRequest = async (req, res) => {
         }
 
         // Optional: Check if already pending
-        const existingRequest = await ApprovalRequest.findOne({
-            where: {
-                module_entity_id: entity_type,
-                entity_id: entity_id,
-                status: 'PENDING'
-            },
-            transaction
-        });
+        const existingRequest = await commonQuery.findOneRecord(ApprovalRequest, {
+            module_entity_id: entity_type,
+            entity_id: entity_id,
+            status: 'PENDING'
+        }, {}, transaction, false, false);
 
         if (existingRequest) {
             await transaction.rollback();
@@ -284,9 +281,11 @@ exports.createApprovalRequest = async (req, res) => {
         // 5. Update the Main Entity Status (e.g., Sales Order Status)
         // If workflow found -> Status 4 (Pending)
         // If no workflow -> Status 0 (Active)
-        await Model.update(
+        await commonQuery.updateRecordById(
+            Model,
+            entity_id,
             { [statusField]: newStatus },
-            { where: { id: entity_id }, transaction }
+            transaction
         );
 
         await transaction.commit();

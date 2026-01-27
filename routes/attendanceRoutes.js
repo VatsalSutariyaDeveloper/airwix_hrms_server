@@ -1,8 +1,22 @@
 const express = require("express");
 const router = express.Router();
 
-const { attendancePunch }  = require("../controllers/attendance/attendanceController");
+const { 
+  attendancePunch, 
+  getAttendanceSummary, 
+  updateAttendanceDay,
+  bulkUpdateAttendanceDay,
+  deletePunch,
+  deleteAttendanceDay,
+  getAttendanceDayDetails
+}  = require("../controllers/attendance/attendanceController");
 
 router.post("/punch", attendancePunch);
+router.post("/summary", getAttendanceSummary);
+router.post("/update-day", updateAttendanceDay);
+router.post("/bulk-update-day", bulkUpdateAttendanceDay);
+router.post("/delete-punch", deletePunch);
+router.post("/delete-day", deleteAttendanceDay);
+router.post("/details", getAttendanceDayDetails);
 
 module.exports = router;

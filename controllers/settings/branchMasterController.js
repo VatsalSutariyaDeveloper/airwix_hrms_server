@@ -6,6 +6,7 @@ const ENTITY = ENTITIES.BRANCH_MASTER.NAME;
 
 // Create
 exports.create = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const requiredFields = {
       branch_name: "Branch Name",
@@ -23,21 +24,25 @@ exports.create = async (req, res) => {
         fields: ["branch_name"]
       },
       skipDefaultRequired: ["branch_id"],
-    });
+    }, transaction);
 
     if (errors) {
+      await transaction.rollback();
       return res.error("VALIDATION_ERROR", { errors });
     }
 
-    const result = await commonQuery.createRecord(BranchMaster, req.body);
+    const result = await commonQuery.createRecord(BranchMaster, req.body, transaction);
+    await transaction.commit();
     return res.success("CREATE", ENTITY, result);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };
 
 // Update
 exports.update = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const requiredFields = {
       branch_name: "Branch Name",
@@ -56,16 +61,22 @@ exports.update = async (req, res) => {
         excludeId: req.params.id
       }, 
       skipDefaultRequired: ["branch_id"],
-    });
+    }, transaction);
 
     if (errors) {
+      await transaction.rollback();
       return res.error("VALIDATION_ERROR", { errors });
     }
 
-    const updated = await commonQuery.updateRecordById(BranchMaster, req.params.id, req.body);
-    if (!updated || updated.status === 2) return res.error("NOT_FOUND");
+    const updated = await commonQuery.updateRecordById(BranchMaster, req.params.id, req.body, transaction);
+    if (!updated || updated.status === 2) {
+      await transaction.rollback();
+      return res.error("NOT_FOUND");
+    }
+    await transaction.commit();
     return res.success("UPDATE", ENTITY, updated);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };

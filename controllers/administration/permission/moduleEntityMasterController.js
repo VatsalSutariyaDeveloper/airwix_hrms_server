@@ -301,9 +301,9 @@ exports.update = async (req, res) => {
 
       if (idsToDelete.length > 0) {
         for (const id of idsToDelete) {
-          await commonQuery.hardDeleteById(
+          await commonQuery.hardDeleteRecords(
             Permission,
-            id,
+            { id },
             transaction
           );
         }

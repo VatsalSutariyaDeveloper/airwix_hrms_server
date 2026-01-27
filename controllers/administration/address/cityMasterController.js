@@ -9,12 +9,13 @@ exports.create = async (req, res) => {
     city_name: "City Name",
   };
 
-  const errors = await validateRequest(req.body, requiredFields, {skipDefaultRequired: ["company_id","branch_id","user_id"]}, {
+  const errors = await validateRequest(req.body, requiredFields, {
+    skipDefaultRequired: ["company_id", "branch_id", "user_id"],
     uniqueCheck: {
       model: CityMaster,
       fields: ["city_name"]
     }
-  });
+  }, transaction);
 
   if (errors) {
       await transaction.rollback();
@@ -33,19 +34,18 @@ exports.create = async (req, res) => {
 
 exports.getAll = async (req, res) => {
   try {
-    const result = await CityMaster.findAll({
-      where: { status: 0 },
+    const result = await commonQuery.findAllRecords(CityMaster, { status: 0 }, {
       include: [{
         model: StateMaster,
         as: 'state',
         attributes: ['id', 'state_name'],
-        include: [{ // Nested include for the country
+        include: [{ 
           model: CountryMaster,
           as: 'country',
           attributes: ['id', 'country_name']
         }]
       }]
-    });
+    }, null, false);
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
@@ -54,19 +54,18 @@ exports.getAll = async (req, res) => {
 
 exports.getById = async (req, res) => {
   try {
-    const record = await CityMaster.findOne({
-      where: { id: req.params.id, status: 0 },
+    const record = await commonQuery.findOneRecord(CityMaster, { id: req.params.id, status: 0 }, {
       include: [{
         model: StateMaster,
         as: 'state',
         attributes: ['id', 'state_name'],
-        include: [{ // Nested include for the country
+        include: [{ 
           model: CountryMaster,
           as: 'country',
           attributes: ['id', 'country_name']
         }]
       }]
-    });
+    }, null, false, false);
     if (!record) return res.error(constants.CITY_MASTER_NOT_FOUND);
     return res.ok(record);
   } catch (err) {
@@ -81,13 +80,14 @@ exports.update = async (req, res) => {
     city_name: "City Name",
   };
 
-  const errors = await validateRequest(req.body, requiredFields, {skipDefaultRequired: ["company_id","branch_id","user_id"]}, {
+  const errors = await validateRequest(req.body, requiredFields, {
+    skipDefaultRequired: ["company_id", "branch_id", "user_id"],
     uniqueCheck: {
       model: CityMaster,
       fields: ["city_name"],
       excludeId: req.params.id,
     }
-  });
+  }, transaction);
 
   if (errors) {
       await transaction.rollback();
@@ -95,8 +95,11 @@ exports.update = async (req, res) => {
     }
 
   try {
-    const updated = await commonQuery.updateRecordById(CityMaster, req.params.id, req.body);
-    if (!updated) return res.error(constants.CITY_MASTER_NOT_FOUND);
+    const updated = await commonQuery.updateRecordById(CityMaster, req.params.id, req.body, transaction);
+    if (!updated) {
+      await transaction.rollback();
+      return res.error(constants.CITY_MASTER_NOT_FOUND);
+    }
     await transaction.commit();
     return res.success(constants.CITY_MASTER_UPDATED);
   } catch (err) {
@@ -108,8 +111,11 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const deleted = await commonQuery.softDeleteById(CityMaster, req.params.id);
-    if (!deleted) return res.error(constants.CITY_MASTER_NOT_FOUND);
+    const deleted = await commonQuery.softDeleteById(CityMaster, req.params.id, transaction);
+    if (!deleted) {
+      await transaction.rollback();
+      return res.error(constants.CITY_MASTER_NOT_FOUND);
+    }
     await transaction.commit();
     return res.success(constants.CITY_MASTER_DELETED);
   } catch (err) {

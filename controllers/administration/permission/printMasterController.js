@@ -25,7 +25,7 @@ exports.create = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors);
     }
-    await commonQuery.createRecord(PrintMaster, req.body);
+    await commonQuery.createRecord(PrintMaster, req.body, transaction);
     await transaction.commit();
     return res.success(constants.PRINT_MASTER_CREATED);
   } catch (err) {
@@ -78,7 +78,7 @@ exports.update = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors);
     }
-    const updated = await commonQuery.updateRecordById(PrintMaster, req.params.id, req.body);
+    const updated = await commonQuery.updateRecordById(PrintMaster, req.params.id, req.body, transaction);
     if (!updated || updated.status === 2) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -95,8 +95,11 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const deleted = await commonQuery.softDeleteById(PrintMaster, req.params.id);
-    if (!deleted) return res.error(constants.ALREADY_DELETED);
+    const deleted = await commonQuery.softDeleteById(PrintMaster, req.params.id, transaction);
+    if (!deleted) {
+      await transaction.rollback();
+      return res.error(constants.ALREADY_DELETED);
+    }
     await transaction.commit();
     return res.success(constants.PRINT_MASTER_DELETED);
   } catch (err) {

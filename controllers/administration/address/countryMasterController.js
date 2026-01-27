@@ -146,6 +146,7 @@ exports.delete = async (req, res) => {
     
     // Validate that ids is an array and not empty
     if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
       return res.error(constants.INVALID_IDS_ARRAY);
     }
     
@@ -168,6 +169,7 @@ exports.updateStatus = async (req, res) => {
   try {
     const { status, ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
       return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
 

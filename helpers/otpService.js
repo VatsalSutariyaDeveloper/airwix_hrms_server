@@ -62,7 +62,7 @@ module.exports = {
   cleanupOtp: async (mobile_no, transaction) => {
      const record = await commonQuery.findOneRecord(OtpVerification, { mobile_no });
      if (record) {
-       await commonQuery.hardDeleteById(OtpVerification, record.id, transaction);
+       await commonQuery.hardDeleteRecords(OtpVerification, { mobile_no }, transaction);
      }
   }
 };

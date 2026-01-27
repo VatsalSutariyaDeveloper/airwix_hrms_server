@@ -3,6 +3,14 @@ const { logError } = require("./logFunctions");
 const { Err } = require("../Err");
 
 exports.handleError = async (err, res, req = {}) => {
+  // If explicitly handled, returned immediately without logging to DB or Console
+  if (err instanceof Err || err.handled) {
+    if (err.data) {
+      return res.dataError(err.message, err.data);
+    }
+    return res.error(constants.VALIDATION_ERROR, err.message);
+  }
+
   const { user_id = null, company_id = null, branch_id = null } = req.body || {};
 
   /* =========================================================
