@@ -74,17 +74,12 @@ exports.getAll = async (req, res) => {
     const POST = req.body;
     const fieldConfig = [
       ["component_name", true, true],
-      ["component_type", true, false],
-      ["component_category", true, false],
-      ["status", true, false],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryComponent,
       { ...POST },
       fieldConfig,
-      null,
-      false
     );
 
     return res.ok(data);
@@ -106,7 +101,6 @@ exports.dropdownList = async (req, res) => {
       { ...POST, status: 0 },
       fieldConfig,
       { attributes: ["id", "component_name", "component_type", "component_category"] },
-      false,
     );
     return res.ok(data);
   } catch (err) {

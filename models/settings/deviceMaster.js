@@ -3,7 +3,7 @@ module.exports = (sequelize, DataTypes) => {
         "DeviceMaster",
         {
             device_name: { type: DataTypes.STRING, allowNull: false },
-            model_name: { type: DataTypes.STRING, unique: true, allowNull: false },
+            model_name: { type: DataTypes.STRING },
             mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,
