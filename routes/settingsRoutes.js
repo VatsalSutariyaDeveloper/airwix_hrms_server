@@ -20,6 +20,7 @@ const leaveTemplateController = require("../controllers/settings/leave/leaveTemp
 const leaveRequestController = require("../controllers/settings/leave/leaveRequestController");
 const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
 const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
+const departmentController = require("../controllers/settings/departmentController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -209,5 +210,16 @@ router.get("/salary-component/:id", salaryComponentController.getById);
 router.put("/salary-component/:id", salaryComponentController.update);
 router.delete("/salary-component/", salaryComponentController.delete);
 router.patch("/salary-component/status", salaryComponentController.updateStatus);
+
+// ==========================
+// 33. DEPARTMENT ROUTES
+// ==========================
+router.post("/department/", departmentController.create);
+router.post("/department/get-transactions", departmentController.getAll);
+router.post("/department/dropdown-list", departmentController.dropdownList);
+router.get("/department/:id", departmentController.getById);
+router.put("/department/:id", departmentController.update);
+router.delete("/department/", departmentController.delete);
+router.patch("/department/status", departmentController.updateStatus);
 
 module.exports = router;

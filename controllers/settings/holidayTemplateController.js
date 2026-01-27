@@ -91,14 +91,23 @@ exports.getAll = async (req, res) => {
       HolidayTemplate,
       req.body,
       fieldConfig,
-      {
-        include: [{
-          model: HolidayTransaction,
-          as: 'holidayTransactions',
-          attributes: ['id', 'template_id', 'name', 'date', 'status']
-        }]
-      },
+      {},
     );
+
+    if (data.items && data.items.length > 0) {
+      data.items = await Promise.all(
+        data.items.map(async (item) => {
+          const holiday_count = await commonQuery.countRecords(HolidayTransaction, {
+            template_id: item.id
+          });
+
+          return {
+            ...(item.toJSON ? item.toJSON() : item),
+            holiday_count
+          };
+        })
+      );
+    }
 
     return res.ok(data);
   } catch (err) {

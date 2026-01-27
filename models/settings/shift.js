@@ -1,10 +1,13 @@
 module.exports = (sequelize, DataTypes) => {
 const Shift = sequelize.define("Shift",
     {
-        shift_code: { type: DataTypes.STRING, unique: true },
         shift_name: { type: DataTypes.STRING, allowNull: false },
         start_time: { type: DataTypes.TIME, allowNull: false },
         end_time: { type: DataTypes.TIME, allowNull: false },
+        punch_in: { type: DataTypes.SMALLINT, defaultValue: 2},
+        punch_out: { type: DataTypes.SMALLINT, defaultValue: 2},
+        punch_in_time: { type: DataTypes.TIME},
+        punch_out_time: { type: DataTypes.TIME},
         grace_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         min_half_day_minutes: { type: DataTypes.INTEGER, defaultValue: 240 },
         min_full_day_minutes: { type: DataTypes.INTEGER, defaultValue: 480 },

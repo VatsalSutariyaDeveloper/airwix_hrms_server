@@ -9,7 +9,17 @@ exports.create = async (req, res) => {
             shift_name: "Shift Name",
             start_time: "Start Time",
             end_time: "End Time",
+            punch_in: "Punch In",
+            punch_out: "Punch Out",
         };
+
+        if (Number(req.body.punch_in) === 1) {
+            requiredFields.punch_in_time = "Punch In Time";
+        }
+
+        if (Number(req.body.punch_out) === 1) {
+            requiredFields.punch_out_time = "Punch Out Time";
+        }
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
@@ -71,7 +81,17 @@ exports.update = async (req, res) => {
             shift_name: "Shift Name",
             start_time: "Start Time",
             end_time: "End Time",
+            punch_in: "Punch In",
+            punch_out: "Punch Out",
         };
+
+        if (Number(req.body.punch_in) === 1) {
+            requiredFields.punch_in_time = "Punch In Time";
+        }
+
+        if (Number(req.body.punch_out) === 1) {
+            requiredFields.punch_out_time = "Punch Out Time";
+        }
 
         const errors = await validateRequest(
             req.body,

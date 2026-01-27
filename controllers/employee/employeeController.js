@@ -887,6 +887,7 @@ exports.assignTemplate = async (req, res) => {
         for (const emp of employees) {
             if (emp.id && emp.value !== undefined) {
                 // Fetch current record to check if template is actually changing
+
                 const existing = await commonQuery.findOneRecord(Employee, emp.id, { attributes: ['id', 'leave_template'] }, transaction);
                 
                 // Update each employee record
@@ -898,7 +899,7 @@ exports.assignTemplate = async (req, res) => {
                     const newVal = emp.value;
 
                     if (parseInt(oldVal) !== parseInt(newVal)) {
-                        await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
+                        // await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
                     }
                 }
             }
@@ -960,7 +961,16 @@ exports.getEmployeesByTemplate = async (req, res) => {
       filter[field_name] = { [Op.ne]: value };
     }
 
-    // 6. Fetch employees
+    // 6. Fetch counts in parallel
+    const assignFilter = { status: 0, [field_name]: value };
+    const notAssignFilter = { status: 0, [field_name]: { [Op.ne]: value } };
+
+    const [assignedCount, notAssignedCount] = await Promise.all([
+      commonQuery.countRecords(Employee, assignFilter, {}, false),
+      commonQuery.countRecords(Employee, notAssignFilter, {}, false)
+    ]);
+
+    // 7. Fetch employees
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
       { ...req.body, filter },
@@ -971,7 +981,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
       false
     );
 
-    // 7. Add computed flag
+    // 8. Add computed flag
     if (employees?.items?.length) {
       employees.items = employees.items.map(emp => {
         const plainEmp = emp.toJSON();
@@ -981,6 +991,10 @@ exports.getEmployeesByTemplate = async (req, res) => {
         };
       });
     }
+
+    // 9. Attach counts
+    employees.assign_staff_count = assignedCount;
+    employees.not_assign_staff_count = notAssignedCount;
 
     await transaction.commit();
     return res.ok(employees);

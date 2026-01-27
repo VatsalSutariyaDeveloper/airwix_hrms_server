@@ -39,7 +39,6 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["device_name", true, true],
-            ["model_name", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(

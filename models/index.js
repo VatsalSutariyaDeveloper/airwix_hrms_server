@@ -11,6 +11,8 @@ const CountryMaster = require("./administration/address/countryMaster")(sequeliz
 const CompanySettingsMaster = require("./administration/companySettingsMaster")(sequelize, DataTypes);
 const CurrencyMaster = require("./administration/currencyMaster")(sequelize, DataTypes);
 const BankMaster = require("./administration/bankMaster")(sequelize, DataTypes);
+const StatutoryLWFRule = require("./administration/statutoryLWFRuleMaster")(sequelize, DataTypes);
+const StatutoryPTRule = require("./administration/statutoryPTRRuleMaster")(sequelize, DataTypes);
 
 // Settings models
 const RolePermission = require("./settings/user/rolePermission")(sequelize, DataTypes);
@@ -75,6 +77,9 @@ const LeaveRequest = require("./settings/leave/leaveRequest")(sequelize, DataTyp
 const SalaryTemplate = require("./settings/salary/salaryTemplate")(sequelize, DataTypes);
 const SalaryTemplateTransaction = require("./settings/salary/salaryTemplateTransaction")(sequelize, DataTypes);
 const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, DataTypes);
+
+//Department models
+const Department = require("./settings/department")(sequelize, DataTypes);
 
 
 // Collect all models in one db object
@@ -151,6 +156,13 @@ const db = {
   SalaryTemplate,
   SalaryTemplateTransaction,
   SalaryComponent,
+
+  // Statutory Rules
+  StatutoryLWFRule,
+  StatutoryPTRule,
+
+  //Department
+  Department,
 };
 
 Object.keys(db).forEach(modelName => {
