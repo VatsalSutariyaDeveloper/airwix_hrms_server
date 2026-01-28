@@ -1,4 +1,4 @@
-const { LeaveTemplate, LeaveTemplateCategory, sequelize } = require("../../../models");
+const { LeaveTemplate, LeaveTemplateCategory, sequelize, Employee } = require("../../../models");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { ENTITIES, constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -153,13 +153,21 @@ exports.getAll = async (req, res) => {
             ["total_leaves", true, true],
         ];
 
-        const data = await commonQuery.fetchPaginatedData(
+        const records = await commonQuery.fetchPaginatedData(
             LeaveTemplate,
             req.body,
-            fieldConfig
+            fieldConfig,
         );
 
-        return res.ok(data);
+        // Get sum of leave_template values from employees
+        const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
+            leave_template: {
+                [Op.gt]: 0
+            },
+            status: 0 
+        });
+
+        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
     } catch (err) {
         return handleError(err, res, req);
     }

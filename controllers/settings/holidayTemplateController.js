@@ -1,6 +1,6 @@
 const { sequelize, handleError, validateRequest, commonQuery } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { HolidayTemplate, HolidayTransaction } = require("../../models");
+const { HolidayTemplate, HolidayTransaction, Employee } = require("../../models");
 
 
 exports.create = async (req, res) => {
@@ -109,7 +109,14 @@ exports.getAll = async (req, res) => {
       );
     }
 
-    return res.ok(data);
+     const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
+            holiday_template: {
+                [Op.gt]: 0
+            },
+            status: 0 
+        });
+
+        return res.ok({ ...data, total_employee_count: totalEmployeesWithTemplates });
   } catch (err) {
     return handleError(err, res, req);
   }

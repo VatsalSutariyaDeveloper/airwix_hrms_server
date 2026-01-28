@@ -1,4 +1,4 @@
-const { WeeklyOffTemplate, WeeklyOffTemplateDay, User } = require("../../models");
+const { WeeklyOffTemplate, WeeklyOffTemplateDay, User, Employee } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
@@ -62,7 +62,15 @@ exports.getAll = async (req, res) => {
                 attributes: ["id", "name", "status", "user.user_name"] 
             }
         );
-        return res.ok(records);
+         // Get sum of leave_template values from employees
+        const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
+            weekly_off_template: {
+                [Op.gt]: 0
+            },
+            status: 0 
+        });
+
+        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
     } catch (err) {
         return handleError(err, res, req);
     }

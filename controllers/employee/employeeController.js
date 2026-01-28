@@ -957,16 +957,14 @@ exports.getEmployeesByTemplate = async (req, res) => {
 
     // 5. Apply condition
     if (accessFlag) {
-      // TRUE → only matching employees
       filter[field_name] = value;
     } else {
-      // FALSE → only non-matching employees
-      filter[field_name] = { [Op.ne]: value };
+      filter[field_name] = 0 || null;
     }
 
     // 6. Fetch counts in parallel
     const assignFilter = { status: 0, [field_name]: value };
-    const notAssignFilter = { status: 0, [field_name]: { [Op.ne]: value } };
+    const notAssignFilter = { status: 0, [field_name]: 0 || null };
 
     const [assignedCount, notAssignedCount] = await Promise.all([
       commonQuery.countRecords(Employee, assignFilter, {}, false),
@@ -1188,7 +1186,7 @@ exports.facePunch = async (req, res) => {
             status: 0,
             face_descriptor: { [Op.ne]: null }
         }, {
-            attributes: ['id', 'first_name', 'face_descriptor'], // Changed first_name to father_name based on your prev code
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor'], // Changed first_name to father_name based on your prev code
             raw: true 
         });
 
@@ -1271,10 +1269,11 @@ exports.facePunch = async (req, res) => {
                     attendance_date: today,
                 }, transaction);
             
-                await transaction.commit();
+                await transaction.commit();                
                 
                 return res.success("Punch Successful", {
                     employee: bestMatch.first_name,
+                    employee_code: bestMatch.employee_code,
                     confidence: matchPercentage + "%",
                     image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
                     attendance_punch_id: attendancePunch.id

@@ -1,4 +1,4 @@
-const { Shift } = require("../../models");
+const { Shift, Employee } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 
 // Create a new bank master record
@@ -50,13 +50,20 @@ exports.getAll = async (req, res) => {
       ["shift_name", true, true],
     ];
 
-    const data = await commonQuery.fetchPaginatedData(
+    const records = await commonQuery.fetchPaginatedData(
       Shift,
       req.body,
       fieldConfig,
     );
 
-    return res.ok(data);
+    const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
+            shift_template: {
+                [Op.gt]: 0
+            },
+            status: 0 
+        });
+
+        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
   } catch (err) {
     return handleError(err, res, req);
   }
