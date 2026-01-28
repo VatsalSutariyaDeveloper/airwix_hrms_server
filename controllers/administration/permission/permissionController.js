@@ -239,12 +239,12 @@ exports.createRoutePermission = async (req, res) => {
 exports.getAllRoutePermissions = async (req, res) => {
     try {
         const fieldConfig = [
-            ["method", true, true],
+            ["method", false, true],
             ["path_pattern", true, true],
         ];
 
         // Remove tenant-specific fields from request body if they exist
-        const { user_id, company_id, branch_id, ...cleanedBody } = req.body;
+        const { ...cleanedBody } = req.body;
 
         const routes = await commonQuery.fetchPaginatedData(
             RoutePermission,

@@ -111,9 +111,14 @@ exports.logActivity = async (logData, transaction = null) => {
 };
 
 // 2. Log Data Changes (CRUD) -> Goes to 'Logs' Table
-exports.logQuery = async (logData, transaction = null) => {
+exports.logQuery = async (logData, mainTransaction = null) => {
+  // ----------------------------------------------------------------
+  // STEP 1: PREPARE & SANITIZE DATA
+  // ----------------------------------------------------------------
+  let message, finalOld, finalNew;
+  
   try {
-    const message = logData.log_message || generateLogMessage(
+     message = logData.log_message || generateLogMessage(
         logData.entity_name, 
         logData.action_type, 
         logData.new_data || logData.old_data
@@ -122,26 +127,67 @@ exports.logQuery = async (logData, transaction = null) => {
     const oldData = toPlain(logData.old_data);
     const newData = toPlain(logData.new_data);
 
-    const { finalOld, finalNew } = processLogData(logData.action_type, oldData, newData);
+    // [CRITICAL] SANITIZE HEAVY FIELDS
+    // Removing these prevents "Data too long" errors that crash the DB transaction
+    if (oldData) {
+        if (oldData.face_descriptor) oldData.face_descriptor = "[VECTOR_DATA_REMOVED]";
+        if (oldData.profile_image) oldData.profile_image = "[IMAGE_FILENAME]";
+        if (oldData.education_details) oldData.education_details = "[JSON_DATA_TRUNCATED]"; 
+    }
+    
+    if (newData) {
+        if (newData.face_descriptor) newData.face_descriptor = "[VECTOR_DATA_REMOVED]";
+        if (newData.profile_image) newData.profile_image = "[IMAGE_FILENAME]";
+        if (newData.education_details) newData.education_details = "[JSON_DATA_TRUNCATED]";
+    }
+    
+    const processed = processLogData(logData.action_type, oldData, newData);
+    finalOld = processed.finalOld;
+    finalNew = processed.finalNew;
 
-    // Write to the centralized Logs table
-    await Logs.create({
-      entity_name: logData.entity_name,
-      action_type: logData.action_type, // CREATE, UPDATE, DELETE
-      user_id: logData.user_id,
-      company_id: logData.company_id,
-      branch_id: logData.branch_id,
-      record_id: logData.record_id,
-      log_message: truncateText(message, TEXT_LIMIT),
-      old_data: safeJson(finalOld),
-      new_data: safeJson(finalNew),
-      stack_trace: null, // No stack trace for normal queries
-      ip_address: logData.ip_address,
-    }, { transaction });
+  } catch (prepError) {
+      console.error("[LOG_PREP_ERROR] Failed to prepare log data:", prepError.message);
+      return; // Stop here. Failing to prep log shouldn't crash app.
+  }
+
+  // ----------------------------------------------------------------
+  // STEP 2: PERFORM INSERT WITH SAFEGUARD (SAVEPOINT)
+  // ----------------------------------------------------------------
+  try {
+    const logPayload = {
+        entity_name: logData.entity_name,
+        action_type: logData.action_type,
+        user_id: logData.user_id,
+        company_id: logData.company_id,
+        branch_id: logData.branch_id,
+        record_id: logData.record_id,
+        log_message: truncateText(message, TEXT_LIMIT),
+        old_data: safeJson(finalOld),
+        new_data: safeJson(finalNew),
+        stack_trace: null,
+        ip_address: logData.ip_address,
+    };
+
+    if (mainTransaction) {
+        // [MAGIC FIX] Create a Nested Transaction (Savepoint)
+        // If this block fails, Sequelize rolls back ONLY this nested part.
+        // The 'mainTransaction' remains active and valid.
+        await sequelize.transaction({ transaction: mainTransaction }, async (nestedT) => {
+            await Logs.create(logPayload, { transaction: nestedT });
+        });
+    } else {
+        // No main transaction, just insert normally
+        await Logs.create(logPayload);
+    }
 
   } catch (err) {
-    console.error(`[CRITICAL] Failed to log query: ${err.message}`);
-    throw err;
+    // ----------------------------------------------------------------
+    // STEP 3: SILENT FAILURE
+    // ----------------------------------------------------------------
+    // We catch the error so it doesn't bubble up to commonQuery.
+    // Because we used a Savepoint above, the main transaction is still safe.
+    console.error(`[WARNING] Audit Log Failed (Swallowed safely): ${err.message}`);
+    // DO NOT throw err;
   }
 };
 

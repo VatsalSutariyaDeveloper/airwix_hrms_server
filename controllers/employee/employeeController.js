@@ -889,7 +889,10 @@ exports.assignTemplate = async (req, res) => {
                 // Fetch current record to check if template is actually changing
 
                 const existing = await commonQuery.findOneRecord(Employee, emp.id, { attributes: ['id', 'leave_template'] }, transaction);
-                
+
+                if (!existing) {
+                    continue;
+                }
                 // Update each employee record
                 await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
 
@@ -899,7 +902,7 @@ exports.assignTemplate = async (req, res) => {
                     const newVal = emp.value;
 
                     if (parseInt(oldVal) !== parseInt(newVal)) {
-                        // await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
+                        await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
                     }
                 }
             }
