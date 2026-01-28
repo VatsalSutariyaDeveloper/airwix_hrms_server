@@ -13,6 +13,19 @@ const COMPONENT_CATEGORY = {
   STATUTORY: "STATUTORY"
 };
 
+const CALCULATION_TYPE = {
+  FIXED: "FIXED",
+  PERCENTAGE: "PERCENTAGE",
+  FORMULA: "FORMULA",
+  SYSTEM: "SYSTEM"
+};
+
+const PERCENTAGE_OF = {
+  BASIC: "BASIC",
+  GROSS: "GROSS",
+  CTC: "CTC"
+};
+
 const salaryComponentRequiredFields = {
   component_name: "Component Name",
   component_type: "Component Type",
@@ -30,6 +43,14 @@ const validateSalaryComponentEnums = (data) => {
 
   if (data.component_category && !Object.values(COMPONENT_CATEGORY).includes(data.component_category)) {
     errors.component_category = `Must be one of: ${Object.values(COMPONENT_CATEGORY).join(', ')}`;
+  }
+
+  if (data.calculation_type && !Object.values(CALCULATION_TYPE).includes(data.calculation_type)) {
+    errors.calculation_type = `Must be one of: ${Object.values(CALCULATION_TYPE).join(', ')}`;
+  }
+
+  if (data.percentage_of && !Object.values(PERCENTAGE_OF).includes(data.percentage_of)) {
+    errors.percentage_of = `Must be one of: ${Object.values(PERCENTAGE_OF).join(', ')}`;
   }
 
   return Object.keys(errors).length > 0 ? errors : null;
@@ -74,6 +95,14 @@ exports.getAll = async (req, res) => {
     const POST = req.body;
     const fieldConfig = [
       ["component_name", true, true],
+      ["component_type", true, true],
+      ["component_category", true, true],
+      ["calculation_type", true, true],
+      ["percentage_of", true, true],
+      ["percentage_value", true, true],
+      ["is_taxable", true, true],
+      ["is_statutory", true, true],
+      ["is_lwp_impacted", true, true],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
@@ -94,13 +123,21 @@ exports.dropdownList = async (req, res) => {
     const POST = req.body;
     const fieldConfig = [
       ["component_name", true, true],
+      ["component_type", true, true],
+      ["component_category", true, true],
+      ["calculation_type", true, true],
+      ["percentage_of", true, true],
+      ["percentage_value", true, true],
+      ["is_taxable", true, true],
+      ["is_statutory", true, true],
+      ["is_lwp_impacted", true, true],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryComponent,
       { ...POST, status: 0 },
       fieldConfig,
-      { attributes: ["id", "component_name", "component_type", "component_category"] },
+      { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted"] },
     );
     return res.ok(data);
   } catch (err) {

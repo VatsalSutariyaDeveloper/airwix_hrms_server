@@ -14,6 +14,12 @@ const SALARY_TYPE = {
   HOURLY: "Hourly"
 }
 
+const LWP_CALCULATION_BASIS = {
+  DAYS_IN_MONTH: "DAYS_IN_MONTH",
+  FIXED_30_DAYS: "FIXED_30_DAYS",
+  WORKING_DAYS: "WORKING_DAYS"
+}
+
 const salaryTemplateRequiredFields = {
   template_name: "Template Name",
   staff_type: "Staff Type",
@@ -28,6 +34,10 @@ const validateSalaryTemplateEnums = (data) => {
 
   if (data.salary_type && !Object.values(SALARY_TYPE).includes(data.salary_type)) {
     errors.salary_type = `Must be one of: ${Object.values(SALARY_TYPE).join(', ')}`;
+  }
+
+  if (data.lwp_calculation_basis && !Object.values(LWP_CALCULATION_BASIS).includes(data.lwp_calculation_basis)) {
+    errors.lwp_calculation_basis = `Must be one of: ${Object.values(LWP_CALCULATION_BASIS).join(', ')}`;
   }
 
   return Object.keys(errors).length > 0 ? errors : null;
@@ -84,6 +94,8 @@ exports.getAll = async (req, res) => {
       ["template_code", true, true],
       ["staff_type", true, false],
       ["salary_type", true, false],
+      ["ctc_monthly", true, false],
+      ["lwp_calculation_basis", true, false],
       ["status", true, false],
     ];
 
@@ -112,7 +124,7 @@ exports.dropdownList = async (req, res) => {
       SalaryTemplate,
       { ...POST, status: 0 },
       fieldConfig,
-      {attributes: ["id", "template_name", "template_code", "staff_type", "salary_type", "ctc_monthly", "ctc_yearly", "currency"]},
+      {attributes: ["id", "template_name", "template_code", "staff_type", "salary_type", "ctc_monthly", "ctc_yearly", "currency", "lwp_calculation_basis"]},
       false,
     );
     return res.ok(data);
@@ -123,7 +135,19 @@ exports.dropdownList = async (req, res) => {
 
 exports.getById = async (req, res) => {
   try {
-    const record = await commonQuery.findOneRecord(SalaryTemplate, req.params.id);
+    const record = await commonQuery.findOneRecord(SalaryTemplate, req.params.id, {
+      include: [
+        {
+          model: SalaryTemplateTransaction,
+          include: [
+            {
+              model: require("../../../models").SalaryComponent,
+              attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
+            }
+          ]
+        }
+      ]
+    });
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
     return res.ok(record);
   } catch (err) {
