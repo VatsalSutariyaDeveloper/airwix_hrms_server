@@ -62,15 +62,26 @@ exports.getAll = async (req, res) => {
                 attributes: ["id", "name", "status", "user.user_name"] 
             }
         );
-         // Get sum of leave_template values from employees
-        const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
-            weekly_off_template: {
-                [Op.gt]: 0
-            },
-            status: 0 
-        });
 
-        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
+        if (records.items && Array.isArray(records.items)) {
+            records.items = await Promise.all(
+                records.items.map(async (record) => {
+                    const employeeCount = await commonQuery.countRecords(
+                        Employee,
+                        { weekly_off_template: record.id, status: 0 },
+                        {},
+                        false
+                    );
+                    
+                    return {
+                        ...(record.toJSON ? record.toJSON() : record),
+                        employee_count: employeeCount
+                    };
+                })
+            );
+        }
+        
+    return res.ok(records);
     } catch (err) {
         return handleError(err, res, req);
     }

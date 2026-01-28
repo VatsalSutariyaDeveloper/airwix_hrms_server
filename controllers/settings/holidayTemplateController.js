@@ -109,14 +109,19 @@ exports.getAll = async (req, res) => {
       );
     }
 
-     const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
-            holiday_template: {
-                [Op.gt]: 0
-            },
-            status: 0 
-        });
+    if (data.items && Array.isArray(data.items)) {
+      for (const record of data.items) {
+        const employeeCount = await commonQuery.countRecords(
+          Employee,
+          { holiday_template: record.id, status: 0 },
+          {},
+          false
+        );
+        record.employee_count = employeeCount;
+      }
+    }
 
-        return res.ok({ ...data, total_employee_count: totalEmployeesWithTemplates });
+    return res.ok(data);
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -162,29 +167,29 @@ exports.dropdownList = async (req, res) => {
 };
 
 exports.delete = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-      const { ids } = req.body;
+  const transaction = await sequelize.transaction();
+  try {
+    const { ids } = req.body;
 
-      if (!Array.isArray(ids) || ids.length === 0) {
-        await transaction.rollback();
-        return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
-      }
-      
-      const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, null, transaction);
-      if (holidayTemplateCount === 0) {
-          await transaction.rollback();
-          return res.error(constants.NO_RECORDS_FOUND);
-      }
-      
-      await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, null, transaction);
-     
-      await transaction.commit();
-      return res.success(constants.HOLIDAY_TEMPLATE_DELETED);
-    } catch (err) {
-      if (!transaction.finished) await transaction.rollback();
-      return handleError(err, res, req);
+    if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
+
+    const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, null, transaction);
+    if (holidayTemplateCount === 0) {
+      await transaction.rollback();
+      return res.error(constants.NO_RECORDS_FOUND);
+    }
+
+    await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, null, transaction);
+
+    await transaction.commit();
+    return res.success(constants.HOLIDAY_TEMPLATE_DELETED);
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
 };
 
 exports.updateStatus = async (req, res) => {
@@ -222,13 +227,13 @@ exports.updateStatus = async (req, res) => {
 async function syncHolidayTransactions(templateId, incomingTransactions, existingTransactions, transaction) {
   const incomingData = incomingTransactions || [];
   const incomingIds = incomingData.map(d => d.id).filter(Boolean);
-  
+
   // Use existing transactions passed from controller instead of fetching again
   const transactionsToDelete = existingTransactions.filter(att => !incomingIds.includes(att.id));
   for (const transactionToDelete of transactionsToDelete) {
     await commonQuery.softDeleteById(HolidayTransaction, { id: transactionToDelete.id }, transaction);
   }
-  
+
   // Process each transaction from request
   for (const transactionData of incomingData) {
     const dbPayload = {
@@ -238,7 +243,7 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
       color: transactionData.color || "#E11D48",
       template_id: templateId
     };
-    
+
     if (transactionData.id) {
       // Update existing transaction
       await commonQuery.updateRecordById(HolidayTransaction, transactionData.id, dbPayload, transaction);

@@ -157,17 +157,23 @@ exports.getAll = async (req, res) => {
             LeaveTemplate,
             req.body,
             fieldConfig,
+            {}
         );
 
-        // Get sum of leave_template values from employees
-        const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
-            leave_template: {
-                [Op.gt]: 0
-            },
-            status: 0 
-        });
+        // Add employee count to each record
+        if (records.items && Array.isArray(records.items)) {
+            for (const record of records.items) {
+                const employeeCount = await commonQuery.countRecords(
+                    Employee,
+                    { leave_template: record.id, status: 0 },
+                    {},
+                    false
+                );
+                record.dataValues.employee_count = employeeCount;
+            }
+        }
 
-        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
+        return res.ok(records);
     } catch (err) {
         return handleError(err, res, req);
     }

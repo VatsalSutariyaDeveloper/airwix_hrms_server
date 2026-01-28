@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, Shift, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -56,9 +56,9 @@ async function punch(employeeId, meta, transaction = null) {
 
   let shift = null;
   if (empShift) {
-    shift = await commonQuery.findOneRecord(Shift, empShift.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
   } else if (employee.shift_template) {
-    shift = await commonQuery.findOneRecord(Shift, employee.shift_template, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
   }
 
   // Determine punch type (IN / OUT)
@@ -252,9 +252,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   let shift = null;
   if (empShift) {
-    shift = await commonQuery.findOneRecord(Shift, empShift.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
   } else if (employee.shift_template) {
-    shift = await commonQuery.findOneRecord(Shift, employee.shift_template, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
   }
 
   // Find all IN punches on the target date

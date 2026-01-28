@@ -11,7 +11,7 @@ const rolePermissionController = require("../controllers/settings/user/rolePermi
 const importController = require("../controllers/settings/import/importController");
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
-const shiftController = require("../controllers/settings/shiftController.js");
+const shiftTemplateController = require("../controllers/settings/shiftTemplateController");
 const deviceMasterController = require("../controllers/settings/deviceMasterController");
 const holidayTemplateController = require("../controllers/settings/holidayTemplateController");
 const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTemplateController");
@@ -114,13 +114,13 @@ router.post("/import-data", uploadExcelToDisk("file"), importController.importDa
 // ==========================
 // 24. SHIFT ROUTES
 // ==========================
-router.post("/shift", shiftController.create);
-router.post("/shift/get-transactions", shiftController.getAll);
-router.get("/shift/:id", shiftController.getById);
-router.put("/shift/:id", shiftController.update);
-router.delete("/shift/", shiftController.delete);
-router.patch("/shift/status", shiftController.updateStatus);
-router.post("/shift/dropdown-list", shiftController.dropdownList);
+router.post("/shift", shiftTemplateController.create);
+router.post("/shift/get-transactions", shiftTemplateController.getAll);
+router.get("/shift/:id", shiftTemplateController.getById);
+router.put("/shift/:id", shiftTemplateController.update);
+router.delete("/shift/", shiftTemplateController.delete);
+router.patch("/shift/status", shiftTemplateController.updateStatus);
+router.post("/shift/dropdown-list", shiftTemplateController.dropdownList);
 
 
 // ==========================

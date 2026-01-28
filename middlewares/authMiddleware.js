@@ -1,9 +1,20 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 
+// In-memory token blacklist
+const tokenBlacklist = new Set();
+
 const SKIP_ROUTES = [
   "/administration/permission/constants"
 ];
+
+const addToBlacklist = (token) => {
+  tokenBlacklist.add(token);
+};
+
+const isTokenBlacklisted = (token) => {
+  return tokenBlacklist.has(token);
+};
 
 function authMiddleware(req, res, next) {
   // ✅ Skip auth for specific routes
@@ -20,6 +31,11 @@ function authMiddleware(req, res, next) {
     const token = authHeader.split(" ")[1];
     if (!token) {
       return res.status(401).json({ message: "Token missing" });
+    }
+
+    // Check if token is blacklisted
+    if (isTokenBlacklisted(token)) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -59,4 +75,8 @@ function authMiddleware(req, res, next) {
   }
 }
 
-module.exports = { authMiddleware };
+module.exports = { 
+  authMiddleware,
+  addToBlacklist,
+  isTokenBlacklisted
+};

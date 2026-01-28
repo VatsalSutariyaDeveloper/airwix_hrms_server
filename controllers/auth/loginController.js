@@ -6,6 +6,7 @@ const UAParser = require("ua-parser-js");
 const geoip = require("geoip-lite");
 const otpRateLimit = require("../../helpers/otpRateLimit");
 const { clearUserCache } = require("../../helpers/permissionCache");
+const { addToBlacklist } = require("../../middlewares/authMiddleware");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -48,7 +49,7 @@ exports.sendLoginOtp = async (req, res) => {
     }
 
     // 2. Check User Exists (Must exist for login)
-    const user = await commonQuery.findOneRecord(User, { mobile_no, status: 0 }, {}, transaction);
+    const user = await commonQuery.findOneRecord(User, { mobile_no, status: 0 }, {}, transaction, false, false);
     
     if (!user) {
       await transaction.rollback();
@@ -302,6 +303,15 @@ exports.login = async (req, res) => {
 exports.logout = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
+    // Add token to blacklist
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      const token = authHeader.split(" ")[1];
+      if (token) {
+        await addToBlacklist(token, req.user.id, transaction);
+      }
+    }
+
     // Get user data for activity logging
     const user = await commonQuery.findOneRecord(
       User,

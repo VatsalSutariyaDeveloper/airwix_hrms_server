@@ -113,7 +113,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.deleteRecord(EmployeeHoliday, { employee_id: employeeId }, transaction, true);
+        await commonQuery.softDeleteById(EmployeeHoliday, { employee_id: employeeId }, transaction, true);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeHoliday, items, {}, transaction);
         }
@@ -132,7 +132,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.deleteRecord(EmployeeWeeklyOff, { employee_id: employeeId }, transaction, true);
+        await commonQuery.softDeleteById(EmployeeWeeklyOff, { employee_id: employeeId }, transaction, true);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeWeeklyOff, items, {}, transaction);
         }
@@ -151,7 +151,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.deleteRecord(EmployeeLeaveCategory, { employee_id: employeeId }, transaction, true);
+        await commonQuery.softDeleteById(EmployeeLeaveCategory, { employee_id: employeeId }, transaction, true);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeLeaveCategory, items, {}, transaction);
         }
@@ -170,7 +170,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.deleteRecord(EmployeeSalaryComponent, { employee_id: employeeId }, transaction, true);
+        await commonQuery.softDeleteById(EmployeeSalaryComponent, { employee_id: employeeId }, transaction, true);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeSalaryComponent, items, {}, transaction);
         }
@@ -213,7 +213,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.deleteRecord(EmployeePrintTemplate, { employee_id: employeeId }, transaction, true);
+        await commonQuery.softDeleteById(EmployeePrintTemplate, { employee_id: employeeId }, transaction, true);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeePrintTemplate, items, {}, transaction);
         }

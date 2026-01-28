@@ -56,6 +56,10 @@ module.exports = (sequelize, DataTypes) => {
             foreignKey: "leave_template_id",
             as: "categories",
         });
+        LeaveTemplate.hasMany(models.Employee, {
+            foreignKey: "leave_template",
+            as: "employees",
+        });
     };
 
     return LeaveTemplate;

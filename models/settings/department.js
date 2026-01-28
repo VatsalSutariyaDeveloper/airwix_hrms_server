@@ -15,12 +15,12 @@ module.exports = (sequelize, DataTypes) => {
         }
     );
 
-    Department.associate = function(models) {
-        Department.hasMany(models.Employee, {
-            foreignKey: 'department_id',
-            as: 'employees'
-        });
-    };
+    // Department.associate = function(models) {
+    //     Department.hasMany(models.Employee, {
+    //         foreignKey: 'department_id',
+    //         as: 'employees'
+    //     });
+    // };
       
     return Department;
 }

@@ -1,5 +1,5 @@
 const { ShiftTemplate, Employee } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError, constants, Op } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 
 // Create a new bank master record
 exports.create = async (req, res) => {
@@ -56,14 +56,25 @@ exports.getAll = async (req, res) => {
       fieldConfig,
     );
 
-    const totalEmployeesWithTemplates = await commonQuery.countRecords(Employee, {
-            shift_template: {
-                [Op.gt]: 0
-            },
-            status: 0 
-        });
+    if (records.items && Array.isArray(records.items)) {
+            records.items = await Promise.all(
+                records.items.map(async (record) => {
+                    const employeeCount = await commonQuery.countRecords(
+                        Employee,
+                        { shift_template: record.id, status: 0 },
+                        {},
+                        false
+                    );
+                    
+                    return {
+                        ...(record.toJSON ? record.toJSON() : record),
+                        employee_count: employeeCount
+                    };
+                })
+            );
+        }
 
-        return res.ok({ ...records, total_employee_count: totalEmployeesWithTemplates });
+    return res.ok(records);
   } catch (err) {
     return handleError(err, res, req);
   }
