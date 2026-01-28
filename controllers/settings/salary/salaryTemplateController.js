@@ -1,4 +1,4 @@
-const { sequelize, SalaryTemplate, SalaryTemplateTransaction } = require("../../../models");
+const { sequelize, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent } = require("../../../models");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
@@ -141,7 +141,7 @@ exports.getById = async (req, res) => {
           model: SalaryTemplateTransaction,
           include: [
             {
-              model: require("../../../models").SalaryComponent,
+              model: SalaryComponent,
               attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
             }
           ]
