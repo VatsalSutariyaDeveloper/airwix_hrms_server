@@ -34,6 +34,7 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
             },
             count_sandwich_leaves: { type: DataTypes.BOOLEAN, defaultValue: false },
+            total_leaves: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             status: { 
                 type: DataTypes.SMALLINT, 
                 defaultValue: 0, 

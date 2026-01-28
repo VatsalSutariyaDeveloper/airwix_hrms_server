@@ -29,8 +29,14 @@ exports.create = async (req, res) => {
             return res.error("VALIDATION_ERROR", { errors });
         }
 
+        // Calculate total leaves
+        let total_leaves = 0;
+        if (categories && Array.isArray(categories)) {
+            total_leaves = categories.reduce((sum, cat) => sum + (Number(cat.leave_count) || 0), 0);
+        }
+
         // 1. Create Template
-        const template = await commonQuery.createRecord(LeaveTemplate, templateData, transaction);
+        const template = await commonQuery.createRecord(LeaveTemplate, { ...templateData, total_leaves }, transaction);
 
         // 2. Create Categories if provided
         if (categories && Array.isArray(categories) && categories.length > 0) {
@@ -76,8 +82,14 @@ exports.update = async (req, res) => {
             return res.error("VALIDATION_ERROR", { errors });
         }
 
+        // Calculate total leaves
+        let total_leaves = 0;
+        if (categories && Array.isArray(categories)) {
+            total_leaves = categories.reduce((sum, cat) => sum + (Number(cat.leave_count) || 0), 0);
+        }
+
         // 1. Update Template
-        const updatedTemplate = await commonQuery.updateRecordById(LeaveTemplate, id, templateData, transaction);
+        const updatedTemplate = await commonQuery.updateRecordById(LeaveTemplate, id, { ...templateData, total_leaves }, transaction);
         if (!updatedTemplate) {
             await transaction.rollback();
             return res.error("NOT_FOUND");
@@ -138,6 +150,7 @@ exports.getAll = async (req, res) => {
             ["template_name", true, true],
             ["leave_policy_cycle", true, true],
             ["accrual_type", true, true],
+            ["total_leaves", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
