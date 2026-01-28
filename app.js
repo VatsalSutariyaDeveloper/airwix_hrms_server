@@ -23,6 +23,7 @@ const { normalizeNullValues } = require("./middlewares/normalizeNullValues");
 const { archiveAndCleanupLogs } = require('./helpers');
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
+const payrollRoutes = require("./routes/payrollRoutes");
 const LeaveBalanceService = require("./services/leaveBalanceService");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
@@ -74,6 +75,7 @@ app.use("/administration", administrationRoutes);
 app.use("/subscription", subscriptionRoutes);
 app.use("/attendance", attendanceRoutes);
 app.use("/employee", employeeRoutes);
+app.use("/payroll", payrollRoutes);
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS

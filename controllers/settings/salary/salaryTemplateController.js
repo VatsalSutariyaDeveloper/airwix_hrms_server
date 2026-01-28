@@ -115,17 +115,10 @@ exports.getAll = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const POST = req.body;
-    const fieldConfig = [
-      ["template_name", true, true],
-    ];
-
-    const data = await commonQuery.fetchPaginatedData(
+    const data = await commonQuery.findAllRecords(
       SalaryTemplate,
-      { ...POST, status: 0 },
-      fieldConfig,
-      {attributes: ["id", "template_name", "template_code", "staff_type", "salary_type", "ctc_monthly", "ctc_yearly", "currency", "lwp_calculation_basis"]},
-      false,
+      { status: 0 },
+      { attributes: ["id", "template_name"] },
     );
     return res.ok(data);
   } catch (err) {

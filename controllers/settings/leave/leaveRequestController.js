@@ -2,6 +2,7 @@ const { LeaveRequest, LeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employ
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
+const { rebuildAttendanceDay } = require("../../../helpers/attendanceHelper");
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -25,8 +26,34 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const { employee_id, leave_category_id, total_days, company_id } = req.body;
-        const currentYear = new Date(req.body.start_date).getFullYear();
+        const { employee_id, leave_category_id, total_days, start_date, end_date } = req.body;
+        const currentYear = new Date(start_date).getFullYear();
+
+        // Check for Overlapping Leaves
+        const overlap = await commonQuery.findOneRecord(LeaveRequest, {
+            employee_id,
+            approval_status: { [Op.ne]: "REJECTED" },
+            status: 0,
+            [Op.or]: [
+                {
+                    start_date: { [Op.between]: [start_date, end_date] }
+                },
+                {
+                    end_date: { [Op.between]: [start_date, end_date] }
+                },
+                {
+                    [Op.and]: [
+                        { start_date: { [Op.lte]: start_date } },
+                        { end_date: { [Op.gte]: end_date } }
+                    ]
+                }
+            ]
+        }, {}, transaction);
+
+        if (overlap) {
+            await transaction.rollback();
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+        }
 
         // Fetch category to check if it represents a paid leave
         const category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leave_category_id }, {}, transaction);
@@ -221,8 +248,6 @@ exports.getById = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
-// 4. Update Approval Status (Finalize or Restore Balance)
 exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -254,12 +279,8 @@ exports.updateStatus = async (req, res) => {
         const template = employee.leaveTemplate;
         const currentLevel = leaveRequest.current_level;
         const totalLevels = template.approval_levels || 1;
-        const config = template.approval_config || [];
 
         // --- AUTHORIZATION CHECK ---
-        // Basic Authorization: Check if user has the right role/permission for this level
-        // In a real system, we would check req.user.role vs config[currentLevel-1].type
-        // For Level 1 "Anyone", we usually allow Supervisor, Manager, or Admin.
         
         // --- PROCESS APPROVAL ---
         if (approval_status === "APPROVED") {
@@ -295,6 +316,18 @@ exports.updateStatus = async (req, res) => {
                 }
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
+
+            // If final approval, trigger rebuild for attendance days
+            if (updateData.approval_status === "APPROVED") {
+                const start = dayjs(leaveRequest.start_date);
+                const end = dayjs(leaveRequest.end_date);
+                const diff = end.diff(start, 'day');
+
+                for (let i = 0; i <= diff; i++) {
+                    const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                    await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                }
+            }
         } 
         else if (approval_status === "REJECTED" || approval_status === "CANCELLED") {
             // Restore Balance logic

@@ -2,7 +2,7 @@ module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
         employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
-        role_id: { type: DataTypes.INTEGER},
+        role_id: { type: DataTypes.INTEGER, allowNull: true },
 
         // PROFILE INFORMATION
         profile_image: { type: DataTypes.STRING },
@@ -24,6 +24,7 @@ module.exports = (sequelize, DataTypes) => {
         attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
         geofence_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
         attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
+        salary_template_id: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: false },
         salary_access: { type: DataTypes.INTEGER },
 
         // PERSONAL INFORMATION
@@ -139,13 +140,28 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
         Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
-        Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });
-        
+        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendance_days" });
+
         // Reporting Hierarchy
         Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
         Employee.belongsTo(models.Employee, { foreignKey: "attendance_supervisor", as: "supervisor" });
+
+        // Templates - Assignments (Phase 3 Mapping)
+        Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });
         Employee.belongsTo(models.AttendanceTemplate, { foreignKey: "attendance_setting_template", as: "attendanceTemplate" });
-        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendance_days" });
+        Employee.belongsTo(models.HolidayTemplate, { foreignKey: "holiday_template", as: "holidayTemplate" });
+        Employee.belongsTo(models.WeeklyOffTemplate, { foreignKey: "weekly_off_template", as: "weeklyOffTemplate" });
+        Employee.belongsTo(models.SalaryTemplate, { foreignKey: "salary_template_id", as: "salaryTemplate" });
+        Employee.belongsTo(models.Shift, { foreignKey: "shift_template", as: "shift" });
+
+        // User-Wise Template Data
+        Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "userAttendanceTemplate" });
+        Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "userHolidays" });
+        Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "userWeeklyOffs" });
+        Employee.hasMany(models.EmployeeLeaveCategory, { foreignKey: "employee_id", as: "userLeaveCategories" });
+        Employee.hasMany(models.EmployeeSalaryComponent, { foreignKey: "employee_id", as: "userSalaryComponents" });
+        Employee.hasOne(models.EmployeeShiftSetting, { foreignKey: "employee_id", as: "userShiftSetting" });
+        Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "userPrintTemplates" });
     };
 
     return Employee;

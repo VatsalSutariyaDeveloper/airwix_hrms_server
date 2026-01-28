@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, Shift, EmployeeShift, WeeklyOffTemplateDay } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, Shift, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -167,6 +167,51 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   if (!employee) return;
   const template = employee.attendanceTemplate;
 
+  // 0️⃣.A Check if record is locked
+  const existingDay = await commonQuery.findOneRecord(AttendanceDay, { 
+    employee_id: employeeId, 
+    attendance_date: date,
+    status: { [Op.ne]: 99 }
+  }, {}, transaction);
+
+  if (existingDay && existingDay.is_locked) {
+    console.log(`[Attendance] Day ${date} for emp ${employeeId} is locked. Skipping rebuild.`);
+    return;
+  }
+
+  // 0️⃣ Check if there's an approved Leave for this date
+  const approvedLeave = await commonQuery.findOneRecord(LeaveRequest, {
+      employee_id: employeeId,
+      approval_status: "APPROVED",
+      start_date: { [Op.lte]: date },
+      end_date: { [Op.gte]: date },
+      status: 0
+  }, {}, transaction);
+
+  if (approvedLeave) {
+    const leavePayload = {
+        employee_id: employeeId,
+        attendance_date: date,
+        status: 6, // LEAVE
+        user_id: meta.user_id || 0,
+        branch_id: meta.branch_id || 0,
+        company_id: meta.company_id || 0,
+    };
+
+    const existingDay1 = await commonQuery.findOneRecord(AttendanceDay, { 
+        employee_id: employeeId, 
+        attendance_date: date,
+        status: { [Op.ne]: 99 }
+    }, {}, transaction);
+
+    if (existingDay1) {
+        await commonQuery.updateRecordById(AttendanceDay, existingDay1.id, leavePayload, transaction);
+    } else {
+        await commonQuery.createRecord(AttendanceDay, leavePayload, transaction);
+    }
+    return;
+  }
+
   // 1️⃣ Check if it's a Holiday
   let isHoliday = false;
   let holidayDetails = null;
@@ -302,12 +347,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
 
     if (!template.include_overtime_in_total && shift) {
-      const shiftStart = new Date(`${date} ${shift.start_time}`);
-      let shiftEnd = new Date(`${date} ${shift.end_time}`);
+      const shiftStart = dayjs(`${date} ${shift.start_time}`);
+      let shiftEnd = dayjs(`${date} ${shift.end_time}`);
       if (shift.is_night_shift || shift.end_time < shift.start_time) {
-        shiftEnd.setDate(shiftEnd.getDate() + 1);
+        shiftEnd = shiftEnd.add(1, "day");
       }
-      const shiftDuration = (shiftEnd - shiftStart) / 60000;
+      const shiftDuration = shiftEnd.diff(shiftStart, "minute");
 
       if (finalWorkedMinutes > shiftDuration) {
         finalWorkedMinutes = shiftDuration;
@@ -318,14 +363,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let lateMinutes = 0;
   let earlyOutMinutes = 0;
   let overtimeMinutes = 0;
+  let fineAmount = 0;
 
   if (shift) {
-    const shiftStart = new Date(`${date} ${shift.start_time}`);
-    let shiftEnd = new Date(`${date} ${shift.end_time}`);
+    const shiftStart = dayjs(`${date} ${shift.start_time}`);
+    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) {
-      shiftEnd.setDate(shiftEnd.getDate() + 1);
+      shiftEnd = shiftEnd.add(1, "day");
     }
-    const shiftDuration = (shiftEnd - shiftStart) / 60000;
+    const shiftDuration = shiftEnd.diff(shiftStart, "minute");
 
     if (firstIn) {
       const actualIn = dayjs(firstIn.punch_time);
@@ -337,14 +383,67 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (lastOut) {
       const actualOut = dayjs(lastOut.punch_time);
-      const diff = dayjs(shiftEnd).diff(actualOut, "minute", true);
+      const diff = shiftEnd.diff(actualOut, "minute", true);
       if (diff > (shift.early_exit_grace || 0)) {
         earlyOutMinutes = Math.floor(diff);
       }
     }
 
-    if (finalWorkedMinutes > shiftDuration) {
-      overtimeMinutes = Math.floor(finalWorkedMinutes - shiftDuration);
+    // 🏆 OVERTIME CALCULATION
+    if (template && template.overtime_allowed) {
+      const extraMinutes = actualWorkedMinutes - shiftDuration;
+      if (extraMinutes >= (template.min_overtime_mins || 0)) {
+        overtimeMinutes = Math.floor(extraMinutes);
+        if (template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
+          overtimeMinutes = template.max_overtime_mins;
+        }
+      }
+    }
+
+    // 💸 FINE CALCULATION (Late Entry & Early Exit)
+    if (template) {
+        const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
+        const monthEnd = dayjs(date).endOf('month').format('YYYY-MM-DD');
+
+        // Check Late Entry Fine
+        if (lateMinutes > 0 && template.late_entry_fine_type !== 'NONE') {
+            const lateCount = await AttendanceDay.count({
+                where: {
+                    employee_id: employeeId,
+                    attendance_date: { [Op.between]: [monthStart, date] },
+                    late_minutes: { [Op.gt]: 0 },
+                    status: { [Op.ne]: 99 }
+                },
+                transaction
+            });
+
+            if ((lateCount + 1) > (template.late_entry_limit || 0)) {
+                if (template.late_entry_fine_type === 'FIXED') {
+                    fineAmount += parseFloat(template.late_entry_fine_value || 0);
+                }
+                // Percentage logic would require basic salary, usually handled at monthly level
+                // but if template specifies a fixed value, we apply it here.
+            }
+        }
+
+        // Check Early Exit Fine
+        if (earlyOutMinutes > 0 && template.early_exit_fine_type !== 'NONE') {
+            const earlyExitCount = await AttendanceDay.count({
+                where: {
+                    employee_id: employeeId,
+                    attendance_date: { [Op.between]: [monthStart, date] },
+                    early_out_minutes: { [Op.gt]: 0 },
+                    status: { [Op.ne]: 99 }
+                },
+                transaction
+            });
+
+            if ((earlyExitCount + 1) > (template.early_exit_fine_limit || 0)) {
+                if (template.early_exit_fine_type === 'FIXED') {
+                    fineAmount += parseFloat(template.early_exit_fine_value || 0);
+                }
+            }
+        }
     }
   }
 
@@ -368,22 +467,21 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     late_minutes: lateMinutes,
     early_out_minutes: earlyOutMinutes,
     overtime_minutes: overtimeMinutes,
+    fine_amount: fineAmount,
     status: status,
     user_id: meta.user_id || 0,
     branch_id: meta.branch_id || 0,
     company_id: meta.company_id || 0,
   };
 
-  const existingDay = await commonQuery.findOneRecord(AttendanceDay, { 
+  const existingDay2 = await commonQuery.findOneRecord(AttendanceDay, { 
     employee_id: employeeId, 
     attendance_date: date,
-    status: { [Op.ne]: 99 } // Bypass commonQuery default status != 2 filter
+    status: { [Op.ne]: 99 }
   }, {}, transaction);
-  if (existingDay) {
-    await commonQuery.updateRecordById(AttendanceDay, { 
-      id: existingDay.id, 
-      status: { [Op.ne]: 99 } 
-    }, attendancePayload, transaction);
+  
+  if (existingDay2) {
+    await commonQuery.updateRecordById(AttendanceDay, existingDay2.id, attendancePayload, transaction);
   } else {
     await commonQuery.createRecord(AttendanceDay, attendancePayload, transaction);
   }

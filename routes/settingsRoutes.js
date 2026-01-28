@@ -177,6 +177,7 @@ router.get("/leave-template/:id", leaveTemplateController.getById);
 router.put("/leave-template/:id", leaveTemplateController.update);
 router.delete("/leave-template", leaveTemplateController.delete);
 router.patch("/leave-template/status", leaveTemplateController.updateStatus);
+router.post("/leave-template/dropdown-list", leaveTemplateController.dropdownList);
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
 
 // ==========================

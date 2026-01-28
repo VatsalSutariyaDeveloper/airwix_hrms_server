@@ -41,6 +41,7 @@ const path = require('path');
 const fs = require('fs');
 const FormData = require('form-data');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
@@ -68,6 +69,7 @@ const ALLOWED_TEMPLATE_FIELDS = [
     "attendance_weekly_off_template",
     "geofence_template",
     "attendance_setting_template",
+    "salary_template_id",
     "salary_access",
     "salary_cycle",
     "shift_template"
@@ -155,6 +157,9 @@ exports.create = async (req, res) => {
             await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
         }
 
+        // Sync all templates to user-wise tables
+        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
+
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
 
@@ -212,7 +217,7 @@ exports.create = async (req, res) => {
         //         rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
         //     }
         // }
-        
+        POST.role_id = 2;
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
         if (POST.employee_type == 1) {
             // Validation for user fields
@@ -344,6 +349,26 @@ exports.update = async (req, res) => {
         // 2. Update Employee Record
         // Note: 'education_details' is in POST and will be updated automatically as it's a JSONB column
         const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
+
+        // Sync specific templates if they were updated in POST
+        const templateFields = [
+            "weekly_off_template",
+            "holiday_template",
+            "leave_template",
+            "attendance_setting_template",
+            "salary_template_id",
+            "shift_template"
+        ];
+
+        for (const field of templateFields) {
+            if (POST[field] !== undefined) {
+                // If the user passed manual data for this template (e.g., in a field like 'manual_leave_data')
+                const manualDataKey = `manual_${field}_data`;
+                const manualData = POST[manualDataKey] || null;
+                
+                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field], manualData, transaction);
+            }
+        }
 
         // Sync or Initialize Leave Balance if template is provided/changed
         if (POST.leave_template) {
@@ -895,6 +920,9 @@ exports.assignTemplate = async (req, res) => {
                 }
                 // Update each employee record
                 await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
+
+                // Sync the specific template that was assigned
+                await EmployeeTemplateService.syncSpecificTemplate(emp.id, field_name, emp.value, null, transaction);
 
                 // Special handling for leave_template assignments
                 if (field_name === 'leave_template') {

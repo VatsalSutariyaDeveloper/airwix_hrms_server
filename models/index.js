@@ -80,6 +80,16 @@ const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, 
 
 //Department models
 const Department = require("./settings/department")(sequelize, DataTypes);
+const PrintTemplate = require("./settings/printTemplate")(sequelize, DataTypes);
+
+// Employee Specific Template Data (User Wise)
+const EmployeeAttendanceTemplate = require("./employeeData/EmployeeAttendanceTemplate")(sequelize, DataTypes);
+const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, DataTypes);
+const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
+const EmployeeLeaveCategory = require("./employeeData/EmployeeLeaveCategory")(sequelize, DataTypes);
+const EmployeeSalaryComponent = require("./employeeData/EmployeeSalaryComponent")(sequelize, DataTypes);
+const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
+const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 
 
 // Collect all models in one db object
@@ -163,6 +173,16 @@ const db = {
 
   //Department
   Department,
+  PrintTemplate,
+
+  // Employee Specific Data
+  EmployeeAttendanceTemplate,
+  EmployeeHoliday,
+  EmployeeWeeklyOff,
+  EmployeeLeaveCategory,
+  EmployeeSalaryComponent,
+  EmployeeShiftSetting,
+  EmployeePrintTemplate,
 };
 
 Object.keys(db).forEach(modelName => {

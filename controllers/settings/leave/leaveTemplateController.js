@@ -172,6 +172,23 @@ exports.getAll = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+/**
+ * Dropdown list for Select inputs.
+ */
+exports.dropdownList = async (req, res) => {
+    try {
+        const data = await commonQuery.findAllRecords(
+            LeaveTemplate,
+            { status: 0 },
+            {
+                attributes: ["id", "template_name"]
+            }
+        );
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
 
 // Soft Delete
 exports.delete = async (req, res) => {
@@ -249,8 +266,6 @@ exports.updateStatus = async (req, res) => {
 exports.getAssignedLeavesByEmployee = async (req, res) => {
     try {
         const { employeeId } = req.params;
-
-        const { Employee } = require("../../../models");
 
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [

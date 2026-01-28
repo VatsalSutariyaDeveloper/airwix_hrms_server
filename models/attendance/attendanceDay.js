@@ -18,6 +18,7 @@ module.exports = (sequelize, DataTypes) => {
         },
         overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         fine_amount: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+        is_locked: { type: DataTypes.BOOLEAN, defaultValue: false },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
