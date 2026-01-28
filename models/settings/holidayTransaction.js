@@ -1,3 +1,19 @@
+/*
+CREATE TABLE holiday_transactions (
+    id SERIAL PRIMARY KEY,
+    template_id INTEGER,
+    name VARCHAR(100),
+    date DATE,
+    holiday_type SMALLINT DEFAULT 1,
+    color VARCHAR(20) DEFAULT '#E11D48',
+    status SMALLINT DEFAULT 0,
+    user_id INTEGER,
+    branch_id INTEGER,
+    company_id INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+*/
 module.exports = (sequelize, DataTypes) => {
     const HolidayTransaction = sequelize.define(
         "HolidayTransaction",

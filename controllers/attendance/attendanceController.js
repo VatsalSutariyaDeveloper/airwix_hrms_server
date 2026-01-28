@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, Sequelize, sequelize, Shift } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, Sequelize, sequelize, ShiftTemplate } = require("../../models");
 const { Op } = Sequelize;
 
 /**
@@ -398,8 +398,8 @@ exports.getAttendanceDayDetails = async (req, res) => {
     }, {
       include: [
         {
-          model: Shift,
-          as: "Shift",
+          model: ShiftTemplate,
+          as: "ShiftTemplate",
           attributes: ["id", "shift_name", "start_time", "end_time"]
         },
         {

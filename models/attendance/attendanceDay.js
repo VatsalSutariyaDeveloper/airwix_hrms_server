@@ -31,7 +31,7 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   AttendanceDay.associate = (models) => {
-    AttendanceDay.belongsTo(models.Shift, { foreignKey: "shift_id", as: "Shift" });
+    AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "ShiftTemplate" });
     AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "Employee" });
   };
 

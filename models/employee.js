@@ -2,7 +2,7 @@ module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
         employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
-        role_id: { type: DataTypes.INTEGER, allowNull: true },
+        department_id: { type: DataTypes.INTEGER },
 
         // PROFILE INFORMATION
         profile_image: { type: DataTypes.STRING },
@@ -16,16 +16,15 @@ module.exports = (sequelize, DataTypes) => {
         is_reporting_manager:{ type: DataTypes.BOOLEAN, defaultValue: false },
 
         // GENERAL INFORMATION
-        salary_cycle: { type: DataTypes.INTEGER },
-        weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        holiday_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        leave_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        shift_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        geofence_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0, allowNull: false },
-        salary_template_id: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: false },
-        salary_access: { type: DataTypes.INTEGER },
+        salary_cycle: { type: DataTypes.INTEGER, defaultValue: 0 },
+        weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        holiday_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        leave_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        shift_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        geofence_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        salary_access: { type: DataTypes.INTEGER, defaultValue: 0 },
 
         // PERSONAL INFORMATION
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },
@@ -75,6 +74,8 @@ module.exports = (sequelize, DataTypes) => {
         eps_joining_date: { type: DataTypes.DATEONLY },
         eps_exit_date: { type: DataTypes.DATEONLY },
         hps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
+        driving_license_number: { type: DataTypes.STRING },
+        voter_id_number: { type: DataTypes.STRING },
 
         // BANK INFORMATION
         name_as_per_bank: { type: DataTypes.STRING },
@@ -88,6 +89,9 @@ module.exports = (sequelize, DataTypes) => {
         aadhaar_doc: { type: DataTypes.STRING },
         pan_doc: { type: DataTypes.STRING },
         bank_proof_doc: { type: DataTypes.STRING },
+        driving_license_doc: { type: DataTypes.STRING },
+        voter_id_doc: { type: DataTypes.STRING },
+        uan_doc: { type: DataTypes.STRING },
 
         // OTHER INFORMATION
         marriage_date: { type: DataTypes.DATEONLY },
@@ -152,7 +156,8 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.HolidayTemplate, { foreignKey: "holiday_template", as: "holidayTemplate" });
         Employee.belongsTo(models.WeeklyOffTemplate, { foreignKey: "weekly_off_template", as: "weeklyOffTemplate" });
         Employee.belongsTo(models.SalaryTemplate, { foreignKey: "salary_template_id", as: "salaryTemplate" });
-        Employee.belongsTo(models.Shift, { foreignKey: "shift_template", as: "shift" });
+        Employee.belongsTo(models.ShiftTemplate, { foreignKey: "shift_template", as: "shiftTemplate" });
+        Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
 
         // User-Wise Template Data
         Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "userAttendanceTemplate" });

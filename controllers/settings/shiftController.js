@@ -1,5 +1,5 @@
-const { Shift, Employee } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
+const { ShiftTemplate, Employee } = require("../../models");
+const { sequelize, validateRequest, commonQuery, handleError, constants, Op } = require("../../helpers");
 
 // Create a new bank master record
 exports.create = async (req, res) => {
@@ -23,7 +23,7 @@ exports.create = async (req, res) => {
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
-                model: Shift,
+                model: ShiftTemplate,
                 fields: ["shift_name"],
                 excludeId: req.params.id,
             }
@@ -34,7 +34,7 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const shifts = await commonQuery.createRecord(Shift, req.body, transaction);
+        const shifts = await commonQuery.createRecord(ShiftTemplate, req.body, transaction);
         await transaction.commit();
         return res.success(constants.SHIFT_CREATED, shifts);
     } catch (err) {
@@ -51,7 +51,7 @@ exports.getAll = async (req, res) => {
     ];
 
     const records = await commonQuery.fetchPaginatedData(
-      Shift,
+      ShiftTemplate,
       req.body,
       fieldConfig,
     );
@@ -72,7 +72,7 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(Shift, req.params.id);
+        const record = await commonQuery.findOneRecord(ShiftTemplate, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -105,7 +105,7 @@ exports.update = async (req, res) => {
             requiredFields,
             {
                 uniqueCheck: {
-                    model: Shift,
+                    model: ShiftTemplate,
                     fields: ["shift_name"],
                     excludeId: req.params.id,
                 }
@@ -117,7 +117,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(Shift,req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(ShiftTemplate,req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -151,7 +151,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(Shift, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(ShiftTemplate, ids, transaction);
 
         if (!deleted) {
             await transaction.rollback();
@@ -192,7 +192,7 @@ exports.updateStatus = async (req, res) => {
 
     // Update only the status field by id
     const updated = await commonQuery.updateRecordById(
-      Shift,
+      ShiftTemplate,
       ids,
       { status: status },
       transaction
@@ -225,7 +225,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(Shift, { status: 0 });
+    const result = await commonQuery.findAllRecords(ShiftTemplate, { status: 0 });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

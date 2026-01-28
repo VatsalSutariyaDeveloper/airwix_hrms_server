@@ -75,6 +75,20 @@ const ALLOWED_TEMPLATE_FIELDS = [
     "shift_template"
 ];
 
+const FILE_COLUMNS = [
+    'permanent_address_proof_doc',
+    'present_address_proof_doc',
+    'bank_proof_doc',
+    'pan_doc',
+    'aadhaar_doc',
+    'aadhaar_doc',
+    'passport_doc',
+    'profile_image',
+    'driving_license_doc',
+    'voter_id_doc',
+    'uan_doc'
+];
+
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
     // 'education_details' is a column in Employee (JSONB)
@@ -93,6 +107,15 @@ const parseJsonFields = (body) => {
     });
 };
 
+// Helper: Set template fields to 0 if they are null
+const sanitizeTemplateFields = (body) => {
+    ALLOWED_TEMPLATE_FIELDS.forEach((field) => {
+        if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined" || body[field] === "") {
+            body[field] = 0;
+        }
+    });
+};
+
 /**
  * Creates a new Employee and their Family Members.
  */
@@ -100,11 +123,13 @@ exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         parseJsonFields(req.body);
+        sanitizeTemplateFields(req.body);
         const POST = req.body;
 
         // Validate Required Fields
         const requiredFields = {
             first_name: "First Name",
+            joining_date: "Joining Date",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -124,17 +149,7 @@ exports.create = async (req, res) => {
         if (req.files && Object.keys(req.files).length > 0) {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
 
-            const fileColumns = [
-                'permanent_address_proof_doc',
-                'present_address_proof_doc',
-                'bank_proof_doc',
-                'pan_doc',
-                'aadhaar_doc',
-                'passport_doc',
-                'profile_image' // Added profile_image
-            ];
-
-            fileColumns.forEach(col => {
+            FILE_COLUMNS.forEach(col => {
                 if (savedFiles[col]) {
                     POST[col] = savedFiles[col];
                 }
@@ -220,16 +235,10 @@ exports.create = async (req, res) => {
         POST.role_id = 2;
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
         if (POST.employee_type == 1) {
+            POST.role_id = 2;
             // Validation for user fields
             const userRequiredFields = { role_id: "Role" };
-
-            const loginType = parseInt(POST.login_type) || 1;
-            if (loginType === 1) {
-                userRequiredFields.mobile_no = "Mobile No";
-            } else if (loginType === 2) {
-                userRequiredFields.email = "Email";
-                userRequiredFields.password = "Password";
-            }
+            userRequiredFields.mobile_no = "Mobile No";
 
             const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
             if (userErrors) {
@@ -285,6 +294,7 @@ exports.update = async (req, res) => {
 
     try {
         parseJsonFields(req.body);
+        sanitizeTemplateFields(req.body);
 
         const { id } = req.params;
         const POST = req.body;
@@ -322,18 +332,7 @@ exports.update = async (req, res) => {
         if (req.files && (Array.isArray(req.files) ? req.files.length > 0 : Object.keys(req.files).length > 0)) {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
 
-            const fileColumns = [
-                'permanent_address_proof_doc',
-                'present_address_proof_doc',
-                'bank_proof_doc',
-                'pan_doc',
-                'aadhaar_doc',
-                'aadhaar_doc',
-                'passport_doc',
-                'profile_image'
-            ];
-
-            for (const col of fileColumns) {
+            for (const col of FILE_COLUMNS) {
                 // If new file uploaded for this column
                 if (savedFiles[col]) {
                     // Delete old file from disk if it exists
@@ -560,19 +559,7 @@ exports.getById = async (req, res) => {
 
         const plainRecord = record.get({ plain: true });
 
-        // 1. Generate Full URLs for Documents
-        const fileColumns = [
-            'permanent_address_proof_doc',
-            'present_address_proof_doc',
-            'bank_proof_doc',
-            'pan_doc',
-            'aadhaar_doc',
-            'aadhaar_doc',
-            'passport_doc',
-            'profile_image'
-        ];
-
-        fileColumns.forEach(field => {
+        FILE_COLUMNS.forEach(field => {
             if (plainRecord[field]) {
                 const exists = fileExists(constants.EMPLOYEE_DOC_FOLDER, plainRecord[field]);
                 if (exists) {
@@ -987,12 +974,12 @@ exports.getEmployeesByTemplate = async (req, res) => {
     if (accessFlag) {
       filter[field_name] = value;
     } else {
-      filter[field_name] = 0 || null;
+      filter[field_name] = 0;
     }
 
     // 6. Fetch counts in parallel
     const assignFilter = { status: 0, [field_name]: value };
-    const notAssignFilter = { status: 0, [field_name]: 0 || null };
+    const notAssignFilter = { status: 0, [field_name]: 0 };
 
     const [assignedCount, notAssignedCount] = await Promise.all([
       commonQuery.countRecords(Employee, assignFilter, {}, false),

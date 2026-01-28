@@ -1,5 +1,5 @@
 module.exports = (sequelize, DataTypes) => {
-const Shift = sequelize.define("Shift",
+const ShiftTemplate = sequelize.define("ShiftTemplate",
     {
         shift_name: { type: DataTypes.STRING, allowNull: false },
         start_time: { type: DataTypes.TIME, allowNull: false },
@@ -24,12 +24,12 @@ const Shift = sequelize.define("Shift",
         company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     },
     {
-        tableName: "shift",
+        tableName: "shift_template",
         timestamps: true,
         underscored: true,
     }
 );
 
-    return Shift;
+    return ShiftTemplate;
 };
 

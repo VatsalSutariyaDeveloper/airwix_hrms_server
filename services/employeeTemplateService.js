@@ -5,7 +5,7 @@ const {
     WeeklyOffTemplateDay,
     LeaveTemplateCategory,
     SalaryTemplateTransaction,
-    Shift,
+    ShiftTemplate,
     PrintTemplate,
     EmployeeAttendanceTemplate,
     EmployeeHoliday,
@@ -179,7 +179,7 @@ class EmployeeTemplateService {
     static async syncShiftTemplate(employeeId, templateId, manualData, transaction) {
         let data = manualData;
         if (!data && templateId) {
-            const master = await commonQuery.findOneRecord(Shift, templateId, {}, transaction);
+            const master = await commonQuery.findOneRecord(ShiftTemplate, templateId, {}, transaction);
             if (master) {
                 data = master.toJSON();
                 delete data.id; delete data.created_at; delete data.updated_at;

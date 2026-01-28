@@ -1,9 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
-const { bufferImage } = require("../helpers/fileUpload");
+const { bufferImage, bufferFile } = require("../helpers/fileUpload");
 
-router.post("/", bufferImage(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc"]), employeeController.create);
+router.post("/", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.create);
 router.post("/get-transactions", employeeController.getAll);
 router.post("/get-punch", employeeController.getPunch);
 router.post("/dropdown-list", employeeController.dropdownList);
@@ -12,7 +12,7 @@ router.patch("/status", employeeController.updateStatus);
 router.post("/assign-template", employeeController.assignTemplate);
 router.post("/get-employees-by-template", employeeController.getEmployeesByTemplate);
 router.post("/assign-role", employeeController.assignRole);
-router.put("/:id", bufferImage(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc"]), employeeController.update);
+router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.update);
 router.delete("/", employeeController.delete);
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
