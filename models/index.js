@@ -11,8 +11,8 @@ const CountryMaster = require("./administration/address/countryMaster")(sequeliz
 const CompanySettingsMaster = require("./administration/companySettingsMaster")(sequelize, DataTypes);
 const CurrencyMaster = require("./administration/currencyMaster")(sequelize, DataTypes);
 const BankMaster = require("./administration/bankMaster")(sequelize, DataTypes);
-const StatutoryLWFRule = require("./administration/statutoryLWFRuleMaster")(sequelize, DataTypes);
-const StatutoryPTRule = require("./administration/statutoryPTRRuleMaster")(sequelize, DataTypes);
+const StatutoryLWFRule = require("./administration/statutoryLWFRule")(sequelize, DataTypes);
+const StatutoryPTRule = require("./administration/statutoryPTRule")(sequelize, DataTypes);
 
 // Settings models
 const RolePermission = require("./settings/user/rolePermission")(sequelize, DataTypes);

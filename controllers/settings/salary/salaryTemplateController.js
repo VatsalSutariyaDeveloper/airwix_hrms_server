@@ -64,14 +64,36 @@ exports.create = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
+    // 2. Recalculate CTC from components if provided
+    let calcMonthlyCTC = 0;
+    if (POST.components && Array.isArray(POST.components)) {
+      calcMonthlyCTC = POST.components.reduce((sum, comp) => {
+        // In major platforms, CTC = Gross + Employer Contributions (like PF, ESI)
+        // If included_in_ctc is true, we add it to the template level CTC field
+        if (comp.included_in_ctc !== false) {
+           return sum + parseFloat(comp.monthly_amount || 0);
+        }
+        return sum;
+      }, 0);
+    } else {
+        calcMonthlyCTC = parseFloat(POST.ctc_monthly || 0);
+    }
+
+    const templateData = {
+      ...POST,
+      ctc_monthly: calcMonthlyCTC,
+      ctc_yearly: calcMonthlyCTC * 12
+    };
+
     // 2. Create Main Template
-    const template = await commonQuery.createRecord(SalaryTemplate, POST, transaction);
+    const template = await commonQuery.createRecord(SalaryTemplate, templateData, transaction);
 
     // 3. Handle Template Transactions (Components)
     if (POST.components && Array.isArray(POST.components)) {
       const componentData = POST.components.map(comp => ({
         ...comp,
-        salary_template_id: template.id
+        salary_template_id: template.id,
+        yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12
       }));
       
       // Bulk create uses commonQuery to ensure tenant IDs are injected
@@ -185,22 +207,41 @@ exports.update = async (req, res) => {
       return res.error(constants.NOT_FOUND);
     }
 
-    await commonQuery.updateRecordById(SalaryTemplate, id, POST, transaction);
+    // 2. Recalculate CTC from components if provided
+    let calcMonthlyCTC = 0;
+    if (POST.components && Array.isArray(POST.components)) {
+      calcMonthlyCTC = POST.components.reduce((sum, comp) => {
+        if (comp.included_in_ctc !== false) {
+           return sum + parseFloat(comp.monthly_amount || 0);
+        }
+        return sum;
+      }, 0);
+    } else {
+        calcMonthlyCTC = parseFloat(POST.ctc_monthly || salaryTemplate.ctc_monthly || 0);
+    }
+
+    const templateData = {
+      ...POST,
+      ctc_monthly: calcMonthlyCTC,
+      ctc_yearly: calcMonthlyCTC * 12
+    };
+
+    await commonQuery.updateRecordById(SalaryTemplate, id, templateData, transaction);
 
     // 2. Update Transactions (Syncing Logic)
     if (POST.components && Array.isArray(POST.components)) {
-      // Delete old transactions first (Soft Delete)
-      await commonQuery.updateRecordById(
-        SalaryTemplateTransaction, 
-        { salary_template_id: id }, 
-        { status: 2 }, 
+      // Delete old transactions first (Soft Delete or Hard delete since we are replacing)
+      // Here we use status: 2 for soft delete
+      await SalaryTemplateTransaction.destroy({
+        where: { salary_template_id: id },
         transaction
-      );
+      });
 
       // Insert new transactions
       const componentData = POST.components.map(comp => ({
         ...comp,
         salary_template_id: id,
+        yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
         status: 0 // Ensure new ones are active
       }));
       

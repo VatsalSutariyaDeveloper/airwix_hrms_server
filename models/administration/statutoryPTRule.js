@@ -20,11 +20,23 @@ module.exports = (sequelize, DataTypes) => {
         comment: "1: Male, 2: Female, 3: All (Some states have different tax for women)" 
     },
  
-    active: { type: DataTypes.BOOLEAN, defaultValue: true }
+    status: {
+      type: DataTypes.SMALLINT,
+      defaultValue: 0,
+      comment: "0: Active, 1: Inactive, 2: Deleted",
+    },
+
+    user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, },
+    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, },
+    company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, },    
   }, { 
     tableName: "statutory_pt_rules",
-    timestamps: true // These are static rules, rarely change
+    timestamps: true 
   });
  
+  StatutoryPTRule.associate = (models) => {
+    StatutoryPTRule.belongsTo(models.StateMaster, { foreignKey: "state_id" });
+  };
+
   return StatutoryPTRule;
 };

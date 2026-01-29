@@ -16,12 +16,9 @@ const countryMasterController = require("../controllers/administration/address/c
 const bankMasterController = require("../controllers/administration/bankMasterController");
 const currencyMasterController = require("../controllers/administration/currencyMasterController");
 const companySettingsMasterController = require("../controllers/administration/companySettingsMasterController");
-
-const holidayController = require("../controllers/settings/holidayController.js");
-
-const statutoryLWFRuleMaster = require("../controllers/administration/statutoryLWFRuleMasterController");
-const statutoryPTRRuleMaster = require("../controllers/administration/statutoryPTRRuleMasterController");
-
+const statutoryPTRRuleMasterController = require("../controllers/administration/statutoryPTRuleController");
+const statutoryLWFRuleMasterController = require("../controllers/administration/statutoryLWFRuleController");
+const holidayController = require("../controllers/settings/holidayController");
 
 
 // --- Helper to safely get handler ---
@@ -137,21 +134,23 @@ router.delete("/holiday/", holidayController.delete);
 router.patch("/holiday/status", holidayController.updateStatus);
 
 //statutoryLWFRuleMaster routes
-router.get("/statutory-lwt-rule-master/:id",statutoryLWFRuleMaster.getById);
-router.post("/statutory-lwt-rule-master/get-transactions", statutoryLWFRuleMaster.getAll);
-router.post("/statutory-lwt-rule-master",statutoryLWFRuleMaster.create);
-router.put("/statutory-lwt-rule-master/:id",statutoryLWFRuleMaster.update);
-router.delete("/statutory-lwt-rule-master", statutoryLWFRuleMaster.delete);
-router.post("/statutory-lwt-rule-master/dropdown-list", statutoryLWFRuleMaster.dropdownList);
-router.patch("/statutory-lwt-rule-master/status", statutoryLWFRuleMaster.updateStatus);
+router.get("/statutory-lwt-rule-master/:id",statutoryLWFRuleMasterController.getById);
+router.post("/statutory-lwt-rule-master/get-transactions", statutoryLWFRuleMasterController.getAll);
+router.post("/statutory-lwt-rule-master",statutoryLWFRuleMasterController.create);
+router.put("/statutory-lwt-rule-master/:id",statutoryLWFRuleMasterController.update);
+router.delete("/statutory-lwt-rule-master", statutoryLWFRuleMasterController.delete);
+router.post("/statutory-lwt-rule-master/dropdown-list", statutoryLWFRuleMasterController.dropdownList);
+router.patch("/statutory-lwt-rule-master/status", statutoryLWFRuleMasterController.updateStatus);
+router.post("/statutory-lwf-rule/states", statutoryLWFRuleMasterController.getStatesWithRules);
 
 // statutoryPTRRuleMaster routes
-router.get("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.getById);
-router.post("/statutory-ptr-rule-master/get-transactions", statutoryPTRRuleMaster.getAll);
-router.post("/statutory-ptr-rule-master",statutoryPTRRuleMaster.create);
-router.put("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.update);
-router.delete("/statutory-ptr-rule-master", statutoryPTRRuleMaster.delete);
-router.post("/statutory-ptr-rule-master/dropdown-list", statutoryPTRRuleMaster.dropdownList);
-router.patch("/statutory-ptr-rule-master/status", statutoryPTRRuleMaster.updateStatus);
+// router.get("/statutory-ptr-rule-master/:id",statutoryPTRRuleMasterController.getById);
+router.post("/statutory-pt-rule-master/get-transactions", statutoryPTRRuleMasterController.getAll);
+router.post("/statutory-pt-rule-master",statutoryPTRRuleMasterController.create);
+// router.put("/statutory-pt-rule-master/:id",statutoryPTRRuleMasterController.update);
+// router.delete("/statutory-pt-rule-master", statutoryPTRRuleMasterController.delete);
+// router.post("/statutory-pt-rule-master/dropdown-list", statutoryPTRRuleMasterController.dropdownList);
+// router.patch("/statutory-pt-rule-master/status", statutoryPTRRuleMasterController.updateStatus);
+router.post("/statutory-pt-rule/states", statutoryPTRRuleMasterController.getStatesWithRules);
 
 module.exports = router;
