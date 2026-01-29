@@ -2,7 +2,13 @@ module.exports = (sequelize, DataTypes) => {
     const EmployeeSalaryTemplateTransaction = sequelize.define("EmployeeSalaryTemplateTransaction", {
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
         employee_salary_template_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'employee_salary_templates', key: 'id' } },
-        component_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'salary_components', key: 'id' } },
+        component_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'salary_components', key: 'id' } },
+        component_name: { type: DataTypes.STRING(150), allowNull: true },
+        component_type: {
+            type: DataTypes.ENUM("EARNING", "DEDUCTION", "STATUTORY_CONTRIBUTION"),
+            allowNull: false,
+            defaultValue: "EARNING"
+        },
         component_category: {
             type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY"),
             allowNull: true
@@ -10,6 +16,7 @@ module.exports = (sequelize, DataTypes) => {
         monthly_amount: { type: DataTypes.DECIMAL(12, 2) },
         yearly_amount: { type: DataTypes.DECIMAL(12, 2) },
         included_in_ctc: { type: DataTypes.BOOLEAN, defaultValue: true },
+        is_employer_contribution: { type: DataTypes.BOOLEAN, defaultValue: false },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

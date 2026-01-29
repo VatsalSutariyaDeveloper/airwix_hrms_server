@@ -1,9 +1,10 @@
 module.exports = (sequelize, DataTypes) => {
   const SalaryTemplateTransaction = sequelize.define("SalaryTemplateTransaction", {
     salary_template_id: { type: DataTypes.INTEGER, allowNull: false },
-    component_id: { type: DataTypes.INTEGER, allowNull: false },
+    component_id: { type: DataTypes.INTEGER, allowNull: true },
+    component_name: { type: DataTypes.STRING(150), allowNull: true },
     component_type: {
-      type: DataTypes.ENUM("EARNING", "DEDUCTION"),
+      type: DataTypes.ENUM("EARNING", "DEDUCTION", "STATUTORY_CONTRIBUTION"),
       allowNull: false
     },
     component_category: {

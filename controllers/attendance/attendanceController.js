@@ -448,7 +448,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
         {
           model: LeaveTemplateCategory,
           as: "LeaveCategory", 
-          attributes: ["id", "category_name"],
+          attributes: ["id", "leave_category_name"],
           required: false
         }
       ]
