@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
 const { bufferImage, bufferFile } = require("../helpers/fileUpload");
+const importController = require("../controllers/settings/import/importController");
+// const { bufferImage } = require("../helpers/fileUpload");
 
 router.post("/", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.create);
 router.post("/get-transactions", employeeController.getAll);
@@ -17,5 +19,6 @@ router.delete("/", employeeController.delete);
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
+
 
 module.exports = router;

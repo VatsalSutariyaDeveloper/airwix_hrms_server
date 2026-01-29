@@ -9,6 +9,7 @@ const companyCofigrationController = require("../controllers/settings/company/co
 const userController = require("../controllers/settings/user/userController");
 const rolePermissionController = require("../controllers/settings/user/rolePermissionController");
 const importController = require("../controllers/settings/import/importController");
+const importEmployeeController = require('../controllers/settings/import/importEmplyeeController.js');
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftTemplateController = require("../controllers/settings/shiftTemplateController");
@@ -81,8 +82,8 @@ router.post("/utils/fetch-ifsc-details", utilsController.fetchIFSCDetails);
 // Base Path: /user
 router.post("/user/get-transactions", userController.getAll);
 router.post("/user/dropdown-list", userController.dropdownList);
-router.post("/user/", bufferFile(["profile_image","authorized_signature"]), userController.create);
-router.put("/user/:id", bufferFile(["profile_image","authorized_signature"]), userController.update);
+router.post("/user/", bufferFile(["profile_image", "authorized_signature"]), userController.create);
+router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), userController.update);
 router.get("/user/:id", userController.getById);
 router.delete("/user/", userController.delete);
 router.patch("/user/status", userController.updateStatus);
@@ -166,6 +167,12 @@ router.put("/attendance-template/:id", attendanceTemplateController.update);
 router.delete("/attendance-template", attendanceTemplateController.delete);
 router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
 router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
+
+// ==========================
+// 29. IMPORT EMPLOYEE ROUTES
+// ==========================
+// router.get("/download-errors", importEmployeeController.downloadErrorFile);
+router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 
 // ==========================

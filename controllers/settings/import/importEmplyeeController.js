@@ -31,10 +31,8 @@ exports.importData = async (req, res) => {
     }
 
     let workerScriptPath = null;
-    if (req.body.entity_name === "Item Import") {
-      workerScriptPath = "./itemImport.js";
-    } else if (req.body.entity_name === "Party Import") {
-      workerScriptPath = "./partiesImport.js";
+    if (req.body.entity_name === "Employee Import") {
+      workerScriptPath = "./employeeImport.js";
     } else {
       if (req.file && req.file.path) fs.unlinkSync(req.file.path);
       return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid Entity Name"] });
@@ -147,70 +145,5 @@ exports.importData = async (req, res) => {
     console.error("Import Controller Error:", err);
     if (req.file && req.file.path) fs.unlinkSync(req.file.path);
     return handleError(err, res, req);
-  }
-};
-
-/**
- * Controller: Download Error File
- * Reconstructs the file path using the key and streams it as XLSX.
- */
-exports.downloadErrorFile = async (req, res) => {
-  let tempFilePath = null;
-  let fileStream = null;
-
-  try {
-    const { key } = req.query;
-    if (!key) {
-      return res.error(constants.VALIDATION_ERROR, { message: "Missing error key." });
-    }
-
-    const tempDir = path.join(process.cwd(), 'uploads', 'temp_imports'); 
-    tempFilePath = path.join(tempDir, `${key}_errors.jsonl`);
-
-    if (!fs.existsSync(tempFilePath)) {
-      return res.error(constants.NOT_FOUND, { message: "Error file expired or not found." });
-    }
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="rows_with_errors.xlsx"');
-
-    fileStream = fs.createReadStream(tempFilePath);
-    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-      stream: res, useStyles: true, useSharedStrings: true
-    });
-    const worksheet = workbook.addWorksheet("Import Errors");
-
-    let isFirstLine = true;
-    for await (const line of rl) {
-      if (!line) continue;
-      try {
-        const rowData = JSON.parse(line);
-        if (isFirstLine) {
-          const allHeaders = Object.keys(rowData);
-          const errorHeader = allHeaders.find(h => h.toLowerCase() === 'error') || 'Error';
-          const dataHeaders = allHeaders.filter(h => h.toLowerCase() !== 'error');
-          const finalHeaders = [...dataHeaders, errorHeader];
-
-          worksheet.columns = finalHeaders.map(header => ({
-            header, key: header, width: header === errorHeader ? 60 : 15,
-          }));
-          worksheet.getRow(1).font = { bold: true };
-          worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
-          isFirstLine = false;
-        }
-        worksheet.addRow(rowData).commit();
-      } catch (e) {}
-    }
-    await workbook.commit();
-
-  } catch (err) {
-    console.error("Download Error:", err);
-    if (!res.headersSent) res.error(constants.SERVER_ERROR, { message: "Failed to generate file." });
-  } finally {
-      if (fileStream) {
-          fileStream.close();
-      }
   }
 };

@@ -16,9 +16,12 @@ const countryMasterController = require("../controllers/administration/address/c
 const bankMasterController = require("../controllers/administration/bankMasterController");
 const currencyMasterController = require("../controllers/administration/currencyMasterController");
 const companySettingsMasterController = require("../controllers/administration/companySettingsMasterController");
-const statutoryPTRRuleMasterController = require("../controllers/administration/statutoryPTRuleController");
-const statutoryLWFRuleMasterController = require("../controllers/administration/statutoryLWFRuleController");
-const holidayController = require("../controllers/settings/holidayController");
+
+const holidayController = require("../controllers/settings/holidayController.js");
+
+const statutoryLWFRuleMaster = require("../controllers/administration/statutoryLWFRuleMasterController");
+const statutoryPTRRuleMaster = require("../controllers/administration/statutoryPTRRuleMasterController");
+
 
 
 // --- Helper to safely get handler ---
@@ -144,13 +147,12 @@ router.patch("/statutory-lwf-rule-master/status", statutoryLWFRuleMasterControll
 router.post("/statutory-lwf-rule/states", statutoryLWFRuleMasterController.getStatesWithRules);
 
 // statutoryPTRRuleMaster routes
-// router.get("/statutory-ptr-rule-master/:id",statutoryPTRRuleMasterController.getById);
-router.post("/statutory-pt-rule-master/get-transactions", statutoryPTRRuleMasterController.getAll);
-router.post("/statutory-pt-rule-master",statutoryPTRRuleMasterController.create);
-// router.put("/statutory-pt-rule-master/:id",statutoryPTRRuleMasterController.update);
-// router.delete("/statutory-pt-rule-master", statutoryPTRRuleMasterController.delete);
-// router.post("/statutory-pt-rule-master/dropdown-list", statutoryPTRRuleMasterController.dropdownList);
-// router.patch("/statutory-pt-rule-master/status", statutoryPTRRuleMasterController.updateStatus);
-router.post("/statutory-pt-rule/states", statutoryPTRRuleMasterController.getStatesWithRules);
+router.get("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.getById);
+router.post("/statutory-ptr-rule-master/get-transactions", statutoryPTRRuleMaster.getAll);
+router.post("/statutory-ptr-rule-master",statutoryPTRRuleMaster.create);
+router.put("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.update);
+router.delete("/statutory-ptr-rule-master", statutoryPTRRuleMaster.delete);
+router.post("/statutory-ptr-rule-master/dropdown-list", statutoryPTRRuleMaster.dropdownList);
+router.patch("/statutory-ptr-rule-master/status", statutoryPTRRuleMaster.updateStatus);
 
 module.exports = router;

@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
         employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
         department_id: { type: DataTypes.INTEGER },
 
-        // PROFILE INFORMATION
+        // PROFILE INFORMATION ===
         profile_image: { type: DataTypes.STRING },
         employee_code: { type: DataTypes.STRING },
         first_name: { type: DataTypes.STRING },
@@ -26,7 +26,7 @@ module.exports = (sequelize, DataTypes) => {
         attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0 },
         salary_access: { type: DataTypes.INTEGER, defaultValue: 0 },
 
-        // PERSONAL INFORMATION
+        // PERSONAL INFORMATION ===
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },
         dob: { type: DataTypes.DATEONLY },
         email: { type: DataTypes.STRING, validate: { isEmail: true } },
