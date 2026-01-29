@@ -73,6 +73,11 @@ exports.handleError = async (err, res, req = {}) => {
   /* ===============================
      3. RESPONSE HANDLING
      =============================== */
+  if (!res || typeof res.error !== 'function') {
+    console.error("[CRITICAL] Response object is invalid or missing extended methods (res.error)");
+    return res?.status?.(500).json({ success: false, code: constants.SERVER_ERROR }) || console.error("Response object is completely unusable.");
+  }
+
   try {
 
     if (err instanceof Err || err.handled) {
@@ -126,6 +131,10 @@ exports.handleError = async (err, res, req = {}) => {
 
   } catch (fatalError) {
     console.error("[CRITICAL] Error in error handler:", fatalError);
-    return res.error(constants.SERVER_ERROR);
+    if (res && typeof res.error === 'function') {
+      return res.error(constants.SERVER_ERROR);
+    }
+    // Fallback if res.error is missing
+    return res.status(500).json({ success: false, code: constants.SERVER_ERROR });
   }
 };

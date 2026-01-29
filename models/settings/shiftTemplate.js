@@ -2,17 +2,28 @@ module.exports = (sequelize, DataTypes) => {
 const ShiftTemplate = sequelize.define("ShiftTemplate",
     {
         shift_name: { type: DataTypes.STRING, allowNull: false },
+        shift_type: { type: DataTypes.STRING, defaultValue: "Fixed Shift" },
+        // shift_code: { type: DataTypes.STRING(10) },
         start_time: { type: DataTypes.TIME, allowNull: false },
         end_time: { type: DataTypes.TIME, allowNull: false },
         punch_in: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Anytime, 1: Restricted" },
         punch_out: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Anytime, 1: Restricted" },
         punch_in_time: { type: DataTypes.TIME },
         punch_out_time: { type: DataTypes.TIME },
+        first_possible_punch_in: { type: DataTypes.TIME },
+        last_possible_punch_out: { type: DataTypes.TIME },
+        more_settings: {
+            type: DataTypes.JSONB,
+            defaultValue: {},
+            comment: "Additional configurations like auto-punch etc."
+        },
+        total_payable_hours: { type: DataTypes.DECIMAL(5, 2) },
+        max_break_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         grace_minutes: { type: DataTypes.INTEGER, defaultValue: 0, comment: "Late arrival grace" },
         early_exit_grace: { type: DataTypes.INTEGER, defaultValue: 0, comment: "Early departure grace" },
         min_half_day_minutes: { type: DataTypes.INTEGER, defaultValue: 240 },
         min_full_day_minutes: { type: DataTypes.INTEGER, defaultValue: 480 },
-        color: { type: DataTypes.STRING, defaultValue: "#4F46E5" },
+        // color: { type: DataTypes.STRING, defaultValue: "#4F46E5" },
         is_night_shift: { type: DataTypes.BOOLEAN, defaultValue: false },
         status: {
             type: DataTypes.SMALLINT,
@@ -29,6 +40,12 @@ const ShiftTemplate = sequelize.define("ShiftTemplate",
         underscored: true,
     }
 );
+
+    ShiftTemplate.associate = (models) => {
+        ShiftTemplate.hasMany(models.ShiftBreak, {
+            foreignKey: "shift_template_id"
+        });
+    };
 
     return ShiftTemplate;
 };

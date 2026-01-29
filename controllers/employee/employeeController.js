@@ -306,7 +306,7 @@ exports.update = async (req, res) => {
 
         // Validation
         const requiredFields = {
-            first_name: "First Name",
+            // first_name: "First Name",
         };
 
         const errors = await validateRequest(POST, requiredFields, {

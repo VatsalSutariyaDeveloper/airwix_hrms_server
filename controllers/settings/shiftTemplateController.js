@@ -1,4 +1,4 @@
-const { ShiftTemplate, Employee } = require("../../models");
+const { ShiftTemplate, ShiftBreak, Employee } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 
 // Create a new bank master record
@@ -7,6 +7,8 @@ exports.create = async (req, res) => {
     try {
         const requiredFields = {
             shift_name: "Shift Name",
+            shift_type: "Shift Type",
+            // shift_code: "Shift Code",
             start_time: "Start Time",
             end_time: "End Time",
             punch_in: "Punch In",
@@ -35,6 +37,23 @@ exports.create = async (req, res) => {
         }
 
         const shifts = await commonQuery.createRecord(ShiftTemplate, req.body, transaction);
+
+        if (req.body.breaks && Array.isArray(req.body.breaks)) {
+            const breaks = req.body.breaks.map(b => ({
+                ...b,
+                shift_template_id: shifts.id,
+                user_id: req.user?.id || 0,
+                branch_id: req.body.branch_id || 0,
+                company_id: req.body.company_id || 0
+            }));
+            const commonBreaks = {
+                user_id: req.user?.id || 0,
+                branch_id: req.body.branch_id || 0,
+                company_id: req.body.company_id || 0
+            };
+            await commonQuery.bulkCreate(ShiftBreak, breaks, commonBreaks, transaction);
+        }
+
         await transaction.commit();
         return res.success(constants.SHIFT_CREATED, shifts);
     } catch (err) {
@@ -54,6 +73,9 @@ exports.getAll = async (req, res) => {
       ShiftTemplate,
       req.body,
       fieldConfig,
+      {
+        include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
+      }
     );
 
     if (records.items && Array.isArray(records.items)) {
@@ -83,7 +105,9 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(ShiftTemplate, req.params.id);
+        const record = await commonQuery.findOneRecord(ShiftTemplate, req.params.id, {
+            include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
+        });
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -97,6 +121,8 @@ exports.update = async (req, res) => {
     try {
         const requiredFields = {
             shift_name: "Shift Name",
+            shift_type: "Shift Type",
+            // shift_code: "Shift Code",
             start_time: "Start Time",
             end_time: "End Time",
             punch_in: "Punch In",
@@ -133,6 +159,21 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
+
+        if (req.body.breaks && Array.isArray(req.body.breaks)) {
+            // Delete old breaks (Soft delete or Hard delete based on preference, here we replace)
+            await commonQuery.deleteRecords(ShiftBreak, { shift_template_id: req.params.id }, transaction);
+            
+            const breaks = req.body.breaks.map(b => ({
+                ...b,
+                shift_template_id: req.params.id,
+                user_id: req.user?.id || 0,
+                branch_id: req.body.branch_id || 0,
+                company_id: req.body.company_id || 0
+            }));
+            await commonQuery.createBulk(ShiftBreak, breaks, transaction);
+        }
+
         await transaction.commit();
         return res.success(constants.SHIFT_UPDATED, updated);
     } catch (err) {
