@@ -134,13 +134,13 @@ router.delete("/holiday/", holidayController.delete);
 router.patch("/holiday/status", holidayController.updateStatus);
 
 //statutoryLWFRuleMaster routes
-router.get("/statutory-lwt-rule-master/:id",statutoryLWFRuleMasterController.getById);
-router.post("/statutory-lwt-rule-master/get-transactions", statutoryLWFRuleMasterController.getAll);
-router.post("/statutory-lwt-rule-master",statutoryLWFRuleMasterController.create);
-router.put("/statutory-lwt-rule-master/:id",statutoryLWFRuleMasterController.update);
-router.delete("/statutory-lwt-rule-master", statutoryLWFRuleMasterController.delete);
-router.post("/statutory-lwt-rule-master/dropdown-list", statutoryLWFRuleMasterController.dropdownList);
-router.patch("/statutory-lwt-rule-master/status", statutoryLWFRuleMasterController.updateStatus);
+router.get("/statutory-lwf-rule-master/:id",statutoryLWFRuleMasterController.getById);
+router.post("/statutory-lwf-rule-master/get-transactions", statutoryLWFRuleMasterController.getAll);
+router.post("/statutory-lwf-rule-master",statutoryLWFRuleMasterController.create);
+router.put("/statutory-lwf-rule-master/:id",statutoryLWFRuleMasterController.update);
+router.delete("/statutory-lwf-rule-master", statutoryLWFRuleMasterController.delete);
+router.post("/statutory-lwf-rule-master/dropdown-list", statutoryLWFRuleMasterController.dropdownList);
+router.patch("/statutory-lwf-rule-master/status", statutoryLWFRuleMasterController.updateStatus);
 router.post("/statutory-lwf-rule/states", statutoryLWFRuleMasterController.getStatesWithRules);
 
 // statutoryPTRRuleMaster routes
