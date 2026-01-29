@@ -78,6 +78,10 @@ const SalaryTemplate = require("./settings/salary/salaryTemplate")(sequelize, Da
 const SalaryTemplateTransaction = require("./settings/salary/salaryTemplateTransaction")(sequelize, DataTypes);
 const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, DataTypes);
 
+// Employee Salary Template models
+const EmployeeSalaryTemplate = require("./employeeData/EmployeeSalaryTemplate")(sequelize, DataTypes);
+const EmployeeSalaryTemplateTransaction = require("./employeeData/EmployeeSalaryTemplateTransaction")(sequelize, DataTypes);
+
 //Department models
 const Department = require("./settings/department")(sequelize, DataTypes);
 const PrintTemplate = require("./settings/printTemplate")(sequelize, DataTypes);
@@ -87,7 +91,6 @@ const EmployeeAttendanceTemplate = require("./employeeData/EmployeeAttendanceTem
 const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, DataTypes);
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
 const EmployeeLeaveCategory = require("./employeeData/EmployeeLeaveCategory")(sequelize, DataTypes);
-const EmployeeSalaryComponent = require("./employeeData/EmployeeSalaryComponent")(sequelize, DataTypes);
 const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 
@@ -169,6 +172,10 @@ const db = {
   SalaryTemplateTransaction,
   SalaryComponent,
 
+  // Employee Salary Template
+  EmployeeSalaryTemplate,
+  EmployeeSalaryTemplateTransaction,
+
   // Statutory Rules
   StatutoryLWFRule,
   StatutoryPTRule,
@@ -182,7 +189,6 @@ const db = {
   EmployeeHoliday,
   EmployeeWeeklyOff,
   EmployeeLeaveCategory,
-  EmployeeSalaryComponent,
   EmployeeShiftSetting,
   EmployeePrintTemplate,
 

@@ -14,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,
-            comment: "0: PRESENT, 1: HALF_DAY, 3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE",
+            comment: "0: PRESENT, 1: HALF_DAY, 3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE, 7: OVERTIME, 8: FINE",
         },
         overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         fine_amount: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
