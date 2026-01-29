@@ -1,8 +1,11 @@
 const { punch, manualPunch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, Sequelize, sequelize, ShiftTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate } = require("../../models");
 const { Op } = Sequelize;
+const dayjs = require("dayjs");
+const customParseFormat = require('dayjs/plugin/customParseFormat');
+dayjs.extend(customParseFormat);
 
 /**
  * PUNCH (IN/OUT)
@@ -144,7 +147,8 @@ exports.getAttendanceSummary = async (req, res) => {
 
       // Logic for 'currentlyWorking' (Last punch must be 'IN')
       if (punches.length > 0) {
-        const lastPunch = punches.sort((a,b) => new Date(b.punch_time) - new Date(a.punch_time))[0];
+        const sortedPunches = [...punches].sort((a,b) => new Date(b.punch_time) - new Date(a.punch_time));
+        const lastPunch = sortedPunches[0];
         if (lastPunch.punch_type === 'IN') {
            summary.currentlyWorking++;
         }
@@ -168,7 +172,9 @@ exports.updateAttendanceDay = async (req, res) => {
   try {
     const requiredFields = {
       employee_id: "Employee",
-      attendance_date: "Date"
+      attendance_date: "Date",
+      first_in: "In Time",
+      last_out: "Out Time"
     };
 
     const errors = await validateRequest(req.body, requiredFields);
@@ -187,7 +193,13 @@ exports.updateAttendanceDay = async (req, res) => {
       early_out_minutes, 
       worked_minutes,
       overtime_minutes,
-      fine_amount
+      fine_amount,
+      leave_category_id,
+      leave_session,
+      overtime_data,
+      fine_data,
+      is_locked,
+      note
     } = req.body;
 
     // If times are provided manually, create corresponding AttendancePunch records
@@ -215,6 +227,12 @@ exports.updateAttendanceDay = async (req, res) => {
     if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
     if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
     if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+    if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+    if (leave_session !== undefined) payload.leave_session = leave_session;
+    if (overtime_data !== undefined) payload.overtime_data = overtime_data;
+    if (fine_data !== undefined) payload.fine_data = fine_data;
+    if (is_locked !== undefined) payload.is_locked = is_locked;
+    if (note !== undefined) payload.note = note;
 
     const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
       employee_id, 
@@ -318,7 +336,20 @@ exports.deleteAttendanceDay = async (req, res) => {
 exports.bulkUpdateAttendanceDay = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { employee_ids, attendance_date, status, first_in, last_out } = req.body;
+    const { 
+      employee_ids, 
+      attendance_date, 
+      status, 
+      first_in, 
+      last_out,
+      leave_category_id,
+      leave_session,
+      overtime_data,
+      fine_data,
+      overtime_minutes,
+      fine_amount,
+      note
+    } = req.body;
     
     if (!employee_ids || !Array.isArray(employee_ids) || !attendance_date) {
       await t.rollback();
@@ -347,6 +378,13 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (status !== undefined) payload.status = status;
       if (first_in !== undefined) payload.first_in = first_in;
       if (last_out !== undefined) payload.last_out = last_out;
+      if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+      if (leave_session !== undefined) payload.leave_session = leave_session;
+      if (overtime_data !== undefined) payload.overtime_data = overtime_data;
+      if (fine_data !== undefined) payload.fine_data = fine_data;
+      if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+      if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+      if (note !== undefined) payload.note = note;
 
       const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
@@ -406,6 +444,12 @@ exports.getAttendanceDayDetails = async (req, res) => {
           model: Employee,
           as: "Employee",
           attributes: ["id", "first_name", "employee_code"]
+        },
+        {
+          model: LeaveTemplateCategory,
+          as: "LeaveCategory", 
+          attributes: ["id", "category_name"],
+          required: false
         }
       ]
     });
@@ -425,6 +469,116 @@ exports.getAttendanceDayDetails = async (req, res) => {
       attendanceDay: attendanceDay || null,
       punches: punches
     });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET MONTHLY ATTENDANCE WITH PUNCHES
+ * Fetches attendance records and punches for an employee for a specific month.
+ * Expected month_year format: \"Jan 2026\", \"January 2026\", or \"2026-01\"
+ */
+exports.getMonthlyAttendance = async (req, res) => {
+  try {
+    const requiredFields = {
+      employee_id: "Employee",
+      month_year: "Month & Year"
+    };
+
+    const errors = await validateRequest(req.body, requiredFields);
+    if (errors) {
+      return res.error(constants.VALIDATION_ERROR, errors);
+    }
+
+    const { employee_id, month_year } = req.body;
+    
+    // Normalize input (e.g., "jan 2026" -> "Jan 2026")
+    const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
+
+    // Parse the date using various formats
+    const date = dayjs(normalizedMonthYear, ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
+    
+    if (!date.isValid()) {
+      return res.error(constants.VALIDATION_ERROR, "Invalid month and year format. Use 'Jan 2026' or 'January 2026'");
+    }
+
+    const startDate = date.startOf('month').format('YYYY-MM-DD');
+    const endDate = date.endOf('month').format('YYYY-MM-DD');
+
+    // 1. Fetch employee details
+    const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type']
+    });
+
+    if (!employee) {
+      return res.error(constants.NOT_FOUND, "Employee not found");
+    }
+
+    // 2. Fetch AttendanceDay records for the month
+    const attendanceDays = await commonQuery.findAllRecords(AttendanceDay, {
+      employee_id,
+      attendance_date: {
+        [Op.between]: [startDate, endDate]
+      },
+      status: { [Op.ne]: 99 }
+    }, {
+      include: [
+        {
+          model: ShiftTemplate,
+          as: "ShiftTemplate",
+          attributes: ["id", "shift_name", "start_time", "end_time"]
+        }
+      ],
+      order: [["attendance_date", "ASC"]]
+    });
+
+    // 3. Fetch all raw punches for the month
+    const punches = await commonQuery.findAllRecords(AttendancePunch, {
+      employee_id,
+      punch_time: {
+        [Op.between]: [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
+      },
+      status: 0
+    }, {
+      order: [["punch_time", "ASC"]]
+    });
+
+    // 4. Map punches to their respective days
+    // We create a map of days in the month to ensure all days are represented if needed, 
+    // or just return the existing records.
+    const attendanceWithPunches = attendanceDays.map(day => {
+      const dayDate = day.attendance_date;
+      const dayPunches = punches.filter(p => 
+        dayjs(p.punch_time).format('YYYY-MM-DD') === dayDate
+      );
+      
+      const dayJson = day.get ? day.toJSON() : day;
+
+      // Status mapping for human-readable labels
+      const statusMap = {
+        0: "PRESENT",
+        1: "HALF DAY",
+        3: "WEEKLY OFF",
+        4: "HOLIDAY",
+        5: "ABSENT",
+        6: "LEAVE"
+      };
+
+      return {
+        ...dayJson,
+        status_text: statusMap[day.status] || "UNKNOWN",
+        punches: dayPunches
+      };
+    });
+
+    return res.ok({
+      employeeDetails: employee,
+      month_year: date.format('MMMM YYYY'),
+      startDate,
+      endDate,
+      attendance: attendanceWithPunches
+    }, "employee");
   } catch (err) {
     return handleError(err, res, req);
   }

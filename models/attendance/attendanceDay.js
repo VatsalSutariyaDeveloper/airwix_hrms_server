@@ -18,6 +18,11 @@ module.exports = (sequelize, DataTypes) => {
         },
         overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         fine_amount: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+        leave_category_id: { type: DataTypes.INTEGER, allowNull: true },
+        leave_session: { type: DataTypes.SMALLINT, allowNull: true, comment: "1: Session 1, 2: Session 2" },
+        overtime_data: { type: DataTypes.JSONB, allowNull: true },
+        fine_data: { type: DataTypes.JSONB, allowNull: true },
+        note: { type: DataTypes.TEXT, allowNull: true },
         is_locked: { type: DataTypes.BOOLEAN, defaultValue: false },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -33,6 +38,7 @@ module.exports = (sequelize, DataTypes) => {
   AttendanceDay.associate = (models) => {
     AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "ShiftTemplate" });
     AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "Employee" });
+    AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "LeaveCategory" });
   };
 
   return AttendanceDay;

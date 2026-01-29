@@ -240,7 +240,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }, {}, transaction);
     if (weeklyOff) isWeeklyOff = true;
   }
-  // 3️⃣ Fetch Shift for this employee and date
+  // 3️⃣ Fetch assigned Shift for this employee and date
   const empShift = await commonQuery.findOneRecord(EmployeeShift, {
       employee_id: employeeId,
       effective_from: { [Op.lte]: date },
@@ -253,11 +253,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let shift = null;
   if (empShift) {
     shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
-  } else if (employee.shift_template) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
   }
 
-  // Find all IN punches on the target date
+  // Find all IN punches on the target date to help with dynamic shift selection
   const inPunches = await commonQuery.findAllRecords(AttendancePunch, {
       employee_id: employeeId,
       punch_type: "IN",
@@ -268,6 +266,44 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }, {
     order: [["punch_time", "ASC"]],
   }, transaction);
+
+  const firstInPunch = inPunches[0];
+
+  // If no fixed shift Assigned, try to find the best matching shift based on first_in time
+  if (!shift && firstInPunch) {
+    const allShifts = await commonQuery.findAllRecords(ShiftTemplate, {
+      company_id: employee.company_id,
+      status: 0
+    }, {}, transaction);
+
+    if (allShifts.length > 0) {
+      const punchTimeOnly = dayjs(firstInPunch.punch_time).format("HH:mm:ss");
+      const punchDate = dayjs(`${date} ${punchTimeOnly}`);
+
+      let bestShift = null;
+      let minDiff = Infinity;
+
+      for (const s of allShifts) {
+        const shiftStart = dayjs(`${date} ${s.start_time}`);
+        // Calculate difference in minutes
+        let diff = Math.abs(punchDate.diff(shiftStart, "minute"));
+        
+        // Handle cases where punch might be just before midnight for a 12:30 AM shift, etc.
+        // But for most cases, simple diff is enough.
+        
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestShift = s;
+        }
+      }
+      shift = bestShift;
+    }
+  }
+
+  // Fallback to employee's default shift template if still no shift found
+  if (!shift && employee.shift_template) {
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+  }
 
   let allPunches = [];
   for (const inP of inPunches) {
@@ -375,32 +411,47 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (firstIn) {
       const actualIn = dayjs(firstIn.punch_time);
-      const diff = actualIn.diff(shiftStart, "minute", true);
-      if (diff > (shift.grace_minutes || 0)) {
-        lateMinutes = Math.floor(diff);
+      
+      // LATE ENTRY CALCULATION
+      const diffIn = actualIn.diff(shiftStart, "minute", true);
+      if (diffIn > (shift.grace_minutes || 0)) {
+        lateMinutes = Math.floor(diffIn);
       }
     }
 
     if (lastOut) {
       const actualOut = dayjs(lastOut.punch_time);
-      const diff = shiftEnd.diff(actualOut, "minute", true);
-      if (diff > (shift.early_exit_grace || 0)) {
-        earlyOutMinutes = Math.floor(diff);
+
+      // EARLY EXIT CALCULATION
+      const diffOut = shiftEnd.diff(actualOut, "minute", true);
+      if (diffOut > (shift.early_exit_grace || 0)) {
+        earlyOutMinutes = Math.floor(diffOut);
       }
     }
 
     // 🏆 OVERTIME CALCULATION
-    if (template && template.overtime_allowed) {
-      const extraMinutes = actualWorkedMinutes - shiftDuration;
-      if (extraMinutes >= (template.min_overtime_mins || 0)) {
+    // If worked more than shift duration, calculate OT
+    if (finalWorkedMinutes > shiftDuration) {
+      const extraMinutes = finalWorkedMinutes - shiftDuration;
+      
+      // Respect template min OT settings
+      if (!template || (template.overtime_allowed && extraMinutes >= (template.min_overtime_mins || 0))) {
         overtimeMinutes = Math.floor(extraMinutes);
-        if (template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
+        
+        if (template && template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
           overtimeMinutes = template.max_overtime_mins;
+        }
+
+        // Auto-generate overtime_data breakdown
+        overtimeMinutes = Math.max(0, overtimeMinutes);
+        if (overtimeMinutes > 0) {
+           overtimeMinutes = Math.floor(overtimeMinutes);
         }
       }
     }
 
     // 💸 FINE CALCULATION (Late Entry & Early Exit)
+    // ... keeping existing fine logic but ensuring it uses our new late/early mins
     if (template) {
         const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
         const monthEnd = dayjs(date).endOf('month').format('YYYY-MM-DD');
@@ -421,8 +472,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 if (template.late_entry_fine_type === 'FIXED') {
                     fineAmount += parseFloat(template.late_entry_fine_value || 0);
                 }
-                // Percentage logic would require basic salary, usually handled at monthly level
-                // but if template specifies a fixed value, we apply it here.
             }
         }
 
@@ -448,13 +497,20 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   let status = 5; // Default ABSENT
-  const minHalfDay = shift ? shift.min_half_day_minutes : 240;
-  const minFullDay = shift ? shift.min_full_day_minutes : 480;
-
-  if (finalWorkedMinutes >= minFullDay) {
+  
+  // If the last punch is an IN, the employee is marked as PRESENT
+  const lastPunchType = punches[punches.length - 1]?.punch_type;
+  if (lastPunchType === "IN") {
     status = 0; // PRESENT
-  } else if (finalWorkedMinutes >= minHalfDay) {
-    status = 1; // HALF_DAY
+  } else {
+    const minHalfDay = shift ? shift.min_half_day_minutes : 240;
+    const minFullDay = shift ? shift.min_full_day_minutes : 480;
+
+    if (finalWorkedMinutes >= minFullDay) {
+      status = 0; // PRESENT
+    } else if (finalWorkedMinutes >= minHalfDay) {
+      status = 1; // HALF_DAY
+    }
   }
 
   const attendancePayload = {

@@ -8,7 +8,8 @@ const {
   bulkUpdateAttendanceDay,
   deletePunch,
   deleteAttendanceDay,
-  getAttendanceDayDetails
+  getAttendanceDayDetails,
+  getMonthlyAttendance
 }  = require("../controllers/attendance/attendanceController");
 
 router.post("/punch", attendancePunch);
@@ -18,5 +19,6 @@ router.post("/bulk-update-day", bulkUpdateAttendanceDay);
 router.post("/delete-punch", deletePunch);
 router.post("/delete-day", deleteAttendanceDay);
 router.post("/details", getAttendanceDayDetails);
+router.post("/monthly", getMonthlyAttendance);
 
 module.exports = router;
