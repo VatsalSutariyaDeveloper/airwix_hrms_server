@@ -19,6 +19,10 @@ const companySettingsMasterController = require("../controllers/administration/c
 
 const holidayController = require("../controllers/settings/holidayController.js");
 
+const statutoryLWFRuleMaster = require("../controllers/administration/statutoryLWFRuleMasterController");
+const statutoryPTRRuleMaster = require("../controllers/administration/statutoryPTRRuleMasterController");
+
+
 
 // --- Helper to safely get handler ---
 // const getHandler = (controller, method, name) => {
@@ -131,5 +135,23 @@ router.post("/holiday/dropdown-list", holidayController.dropdownList);
 router.get("/holiday/:id", holidayController.getById);
 router.delete("/holiday/", holidayController.delete);
 router.patch("/holiday/status", holidayController.updateStatus);
+
+//statutoryLWFRuleMaster routes
+router.get("/statutory-lwt-rule-master/:id",statutoryLWFRuleMaster.getById);
+router.post("/statutory-lwt-rule-master/get-transactions", statutoryLWFRuleMaster.getAll);
+router.post("/statutory-lwt-rule-master",statutoryLWFRuleMaster.create);
+router.put("/statutory-lwt-rule-master/:id",statutoryLWFRuleMaster.update);
+router.delete("/statutory-lwt-rule-master", statutoryLWFRuleMaster.delete);
+router.post("/statutory-lwt-rule-master/dropdown-list", statutoryLWFRuleMaster.dropdownList);
+router.patch("/statutory-lwt-rule-master/status", statutoryLWFRuleMaster.updateStatus);
+
+// statutoryPTRRuleMaster routes
+router.get("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.getById);
+router.post("/statutory-ptr-rule-master/get-transactions", statutoryPTRRuleMaster.getAll);
+router.post("/statutory-ptr-rule-master",statutoryPTRRuleMaster.create);
+router.put("/statutory-ptr-rule-master/:id",statutoryPTRRuleMaster.update);
+router.delete("/statutory-ptr-rule-master", statutoryPTRRuleMaster.delete);
+router.post("/statutory-ptr-rule-master/dropdown-list", statutoryPTRRuleMaster.dropdownList);
+router.patch("/statutory-ptr-rule-master/status", statutoryPTRRuleMaster.updateStatus);
 
 module.exports = router;
