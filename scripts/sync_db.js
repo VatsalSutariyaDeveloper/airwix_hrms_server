@@ -8,7 +8,7 @@ async function syncDatabase() {
       'EmployeeHoliday',
       'EmployeeWeeklyOff',
       'EmployeeLeaveCategory',
-      'EmployeeSalaryComponent',
+      'EmployeeSalaryTemplateTransaction',
       'EmployeeShiftSetting',
       'EmployeePrintTemplate'
     ];
