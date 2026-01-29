@@ -12,6 +12,7 @@ const { getCompanySetting,clearCompanyCache, getCompanySubscription, clearCompan
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
 const { logActivity, logQuery, archiveAndCleanupLogs } = require("./functions/logFunctions");
 const  otpService = require("./otpService");
+const { Err, fail } = require("./Err");
 const { getContext } = require("../utils/requestContext");
 
   module.exports = {
@@ -51,5 +52,7 @@ const { getContext } = require("../utils/requestContext");
     reloadCompanyCache,
     reloadRoutePermissions,
     getRoutePermissionId,
-    otpService
+    otpService,
+    Err,
+    fail
 };

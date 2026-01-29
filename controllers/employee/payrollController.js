@@ -1,5 +1,5 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, sequelize } = require("../../models");
-const { commonQuery, handleError } = require("../../helpers");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent,  Payslip, sequelize } = require("../../models");
+const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 
@@ -30,7 +30,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }, transaction);
 
     if (!employee || !employee.salaryTemplate) {
-        throw new Error("Employee or Salary Template not found. Please map the employee first.");
+        return fail("Employee or Salary Template not found. Please map the employee first.");
     }
 
     const template = employee.salaryTemplate;
@@ -155,8 +155,6 @@ exports.calculateMonthlySalary = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
-const { Payslip } = require("../../models");
 
 exports.finalizeMonthlySalary = async (req, res) => {
     const transaction = await sequelize.transaction();

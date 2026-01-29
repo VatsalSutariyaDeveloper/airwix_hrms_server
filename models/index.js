@@ -91,6 +91,8 @@ const EmployeeSalaryComponent = require("./employeeData/EmployeeSalaryComponent"
 const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 
+// Payroll models
+const Payslip = require("./payroll/payslip")(sequelize, DataTypes); 
 
 // Collect all models in one db object
 const db = {
@@ -183,6 +185,9 @@ const db = {
   EmployeeSalaryComponent,
   EmployeeShiftSetting,
   EmployeePrintTemplate,
+
+  // Payroll
+  Payslip,
 };
 
 Object.keys(db).forEach(modelName => {
