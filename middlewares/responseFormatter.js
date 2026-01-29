@@ -1,5 +1,5 @@
 const responseCodes = require("../helpers/responseCodes");
-const { logActivity } = require("../helpers"); // <-- Import logActivity helper
+const { logActivity } = require("../helpers"); 
 
 // Mapping common success actions to the logActivity ENUM format
 const logActionTypeMap = {
@@ -66,14 +66,20 @@ module.exports = (req, res, next) => {
 
   /**
    * OK RESPONSE (FETCH / READ)
-   * Usage: res.ok(data)
-  */
-  res.ok = (data) => {
+   * Usage: res.ok(data) OR res.ok(data, "users")
+   */
+  res.ok = (data, rootKey = null) => {
     if (isApp()) {
+      // Logic: If rootKey is provided, wrap the data; otherwise return data as-is
+      let finalData = data;
+      if (rootKey && data) {
+        finalData = { [rootKey]: data };
+      }
+
       return res.json({
         status: true,
         message: "Action successful",
-        data: data
+        data: finalData
       });
     }
     return res.json({
@@ -85,15 +91,24 @@ module.exports = (req, res, next) => {
   /**
    * SUCCESS RESPONSE (CREATE / UPDATE / DELETE)
    * Usage:
-   *  res.success(code)
-   *  res.success(code, data)
-  */
-  res.success = (code, data) => {
+   * res.success(code)
+   * res.success(code, data)
+   * res.success(code, data, "user")  <-- New Wrapper capability
+   */
+  res.success = (code, data, rootKey = null) => {
     if (isApp()) {
+      
+      let finalData = data || null;
+
+      // Logic: If rootKey is provided and data exists, wrap the data in that key
+      if (rootKey && data) {
+        finalData = { [rootKey]: data };
+      }
+
       return res.json({
         status: true,
         message: code,
-        data: data || null
+        data: finalData
       });
     }
 
@@ -112,9 +127,9 @@ module.exports = (req, res, next) => {
   /**
    * ERROR
    * Usage:
-   *  res.error(code)
-   *  res.error(code, errors)
-  */
+   * res.error(code)
+   * res.error(code, errors)
+   */
   res.error = (code, errors = null) => {
     const status = ERROR_HTTP_MAP[code] || 500;
     if (isApp()) {
@@ -146,4 +161,3 @@ module.exports = (req, res, next) => {
 
   next();
 };
-
