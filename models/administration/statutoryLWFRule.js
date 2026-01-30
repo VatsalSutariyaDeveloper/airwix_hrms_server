@@ -22,7 +22,10 @@ module.exports = (sequelize, DataTypes) => {
   });
  
   StatutoryLWFRule.associate = (models) => {
-    StatutoryLWFRule.belongsTo(models.StateMaster, { foreignKey: "state_id" });
+    StatutoryLWFRule.belongsTo(models.StateMaster, { 
+      foreignKey: "state_id",
+      as: "state"
+    });
   };
 
   return StatutoryLWFRule;

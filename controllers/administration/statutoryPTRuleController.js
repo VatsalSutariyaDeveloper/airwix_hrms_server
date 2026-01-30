@@ -50,6 +50,16 @@ exports.getAll = async (req, res) => {
             StatutoryPTRule,
             req.body,
             fieldConfig,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                ]
+            }
         );
 
         return res.ok(data);
@@ -73,6 +83,16 @@ exports.dropdownList = async (req, res) => {
             StatutoryPTRule,
             req.body,
             fieldConfig,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                ]
+            }
         );
 
         return res.ok(result);
@@ -84,7 +104,20 @@ exports.dropdownList = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(StatutoryPTRule, req.params.id);
+        const record = await commonQuery.findOneRecord(
+            StatutoryPTRule, 
+            req.params.id,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: ['state_name', 'code'] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                ]
+            }
+        );
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -216,8 +249,15 @@ exports.getStatesWithRules = async (req, res) => {
             {},
             {
                 attributes: ['state_id'],
-                group: ['StatutoryPTRule.state_id', 'StateMaster.id', 'StateMaster.state_name'],
-                include: [{ model: StateMaster, attributes: ['id', ['state_name', 'name']] }]
+                group: ['state_id'],
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                ]
             }
         );
         

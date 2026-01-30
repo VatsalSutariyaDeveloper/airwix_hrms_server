@@ -35,7 +35,10 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   StatutoryPTRule.associate = (models) => {
-    StatutoryPTRule.belongsTo(models.StateMaster, { foreignKey: "state_id" });
+    StatutoryPTRule.belongsTo(models.StateMaster, { 
+      foreignKey: "state_id",
+      as: "state"
+    });
   };
 
   return StatutoryPTRule;
