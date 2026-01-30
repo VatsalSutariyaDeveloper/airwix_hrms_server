@@ -22,6 +22,7 @@ const leaveRequestController = require("../controllers/settings/leave/leaveReque
 const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
 const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
 const departmentController = require("../controllers/settings/departmentController");
+const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -195,7 +196,7 @@ router.post("/leave-request/get-transactions", leaveRequestController.getAll);
 router.post("/leave-request/pending-approvals", leaveRequestController.getPendingApprovals);
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
-router.get("/leave-balance/:employeeId", leaveRequestController.getEmployeeBalance);
+router.get("/leave-balance/:employeeId", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================
 // 31. Salary Template ROUTES

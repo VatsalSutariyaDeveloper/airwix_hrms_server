@@ -172,12 +172,7 @@ exports.create = async (req, res) => {
             return res.error(constants.DATABASE_ERROR, { errors: constants.FAILED_TO_CREATE_RECORD });
         }
 
-        // Initialize Leave Balance if template is assigned
-        if (POST.leave_template) {
-            await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
-        }
-
-        // Sync all templates to user-wise tables
+        // Initialize all templates to user-wise tables (including leave balances)
         await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
 
         // 4. Update Series
@@ -374,16 +369,6 @@ exports.update = async (req, res) => {
             }
         }
 
-        // Sync or Initialize Leave Balance if template is provided/changed
-        if (POST.leave_template) {
-            if (parseInt(POST.leave_template) !== parseInt(existingEmployee.leave_template)) {
-                // Template Changed -> Sync (Cleanup old categories + Init new ones)
-                await LeaveBalanceService.syncEmployeeBalances(id, POST.leave_template, transaction);
-            } else {
-                // Just ensure balance exists (e.g. if it was never initialized)
-                await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
-            }
-        }
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];

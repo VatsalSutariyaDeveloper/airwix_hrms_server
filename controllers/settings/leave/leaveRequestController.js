@@ -1,8 +1,9 @@
-const { LeaveRequest, LeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize } = require("../../../models");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay } = require("../../../helpers/attendanceHelper");
+const dayjs = require("dayjs");
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -62,40 +63,8 @@ exports.create = async (req, res) => {
             return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
         }
 
-        // 2. Fetch category to check if it represents a paid leave
-        // First check in master template categories
-        let category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leave_category_id }, {}, transaction);
-        
-        // If not found in master template categories, check in employee-specific leave categories
-        // This handles cases where employees have custom/overridden leave categories
-        let isPaid = category ? category.is_paid : true; // Default to true if not found yet (will check next)
-
-        if (!category) {
-            const { EmployeeLeaveCategory } = require("../../../models");
-            const employeeCategory = await commonQuery.findOneRecord(EmployeeLeaveCategory, { 
-                employee_id: employee_id,
-                leave_template_id: leave_category_id // Assuming leave_category_id refers to leave_template_id in EmployeeLeaveCategory if master not found
-                // OR if the frontend sends the specific ID from employee_leave_categories table
-            }, {}, transaction);
-
-            if (employeeCategory) {
-                isPaid = employeeCategory.is_paid;
-                // Create a mock category object for subsequent logic
-                category = { 
-                    id: leave_category_id, 
-                    is_paid: isPaid,
-                    leave_template_id: employeeCategory.leave_template_id
-                };
-            }
-        }
-
-        if (!category) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
-        }
-
-        // 3. Check if balance exists
-        let balance = await commonQuery.findOneRecord(LeaveBalance, {
+        // 2. Fetch specific employee balance record
+        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id,
             leave_category_id,
             year: currentYear,
@@ -107,6 +76,8 @@ exports.create = async (req, res) => {
             return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/year" });
         }
 
+        const isPaid = balance.is_paid;
+
         if (isPaid) {
             // -- PAID LEAVE LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
@@ -115,30 +86,14 @@ exports.create = async (req, res) => {
             }
 
             // Deduct from pending
-            await commonQuery.updateRecordById(LeaveBalance, balance.id, {
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 pending_leaves: parseFloat(balance.pending_leaves) - parseFloat(total_days),
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
         } else {
             // -- UNPAID LEAVE (LOP) LOGIC --
-            // 1. If no balance record exists for LOP, create one with 0 allocation
-            // if (!balance) {
-            //     balance = await commonQuery.createRecord(LeaveBalance, {
-            //         employee_id,
-            //         leave_template_id: category.leave_template_id,
-            //         leave_category_id,
-            //         year: currentYear,
-            //         allocated_leaves: 0,
-            //         carry_forward_leaves: 0,
-            //         pending_leaves: 0,
-            //         used_leaves: 0,
-            //         status: 0,
-            //         company_id: company_id || req.user.company_id
-            //     }, transaction);
-            // }
-
-            // 2. Simply increment used_leaves (pending stays 0 or unchanged)
-            await commonQuery.updateRecordById(LeaveBalance, balance.id, {
+            // Simply increment used_leaves (pending stays 0 or unchanged)
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
         }
@@ -198,55 +153,33 @@ exports.getAll = async (req, res) => {
     }
 };
 
-// 3. Get By ID
+// 3. Get Single Request Details
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(LeaveRequest, { id: req.params.id }, {
+        const { id } = req.params;
+        const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {
             include: [
-                { 
-                    model: Employee, 
-                    as: "employee",
-                    include: [
-                        { model: Employee, as: "manager", attributes: ["id", "first_name", "employee_code"] },
-                        { model: Employee, as: "supervisor", attributes: ["id", "first_name", "employee_code"] },
-                        { model: LeaveTemplate, as: "leaveTemplate" }
-                    ],
-                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"]
-                },
-                { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] }
+                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "leave_template"] },
+                { model: LeaveTemplateCategory, as: "category" }
             ]
         });
 
-        if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
+        if (!leaveRequest) return res.error(constants.NOT_FOUND);
 
-        const raw = record.get({ plain: true });
-        const template = raw.employee?.leaveTemplate;
-        const config = template?.approval_config || [];
+        const raw = leaveRequest.get({ plain: true });
+        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, {});
+        const totalLevels = template ? template.approval_levels : 1;
+        const levelConfigs = template ? (template.levels || []) : [];
+        const approvers = await commonQuery.findAllRecords(User, { status: 0 });
+
         const history = raw.approval_history || [];
-
-        // Fetch Usernames for History
-        const approverIds = history.map(h => h.approved_by || h.by).filter(id => id);
-        const approvers = await commonQuery.findAllRecords(User, { id: { [Op.in]: approverIds } }, {
-            attributes: ["id", "user_name"]
-        });
-
-        // Construct Timeline
         const timeline = [];
-        const totalLevels = template?.approval_levels || 1;
 
         for (let i = 1; i <= totalLevels; i++) {
-            const levelConfig = config.find(c => c.level === i) || { level: i, type: "ADMIN" };
+            const levelConfig = levelConfigs.find(l => l.level === i) || {};
             const levelHistory = history.find(h => h.level === i);
-
             let stageStatus = "UPCOMING";
-            let actionPersonnel = levelConfig.type; // Default to role name
-            
-            // Resolve specific personnel if possible
-            if (levelConfig.type === 'REPORTING_MANAGER' && raw.employee?.manager) {
-                actionPersonnel = raw.employee.manager.first_name;
-            } else if (levelConfig.type === 'ATTENDANCE_SUPERVISOR' && raw.employee?.supervisor) {
-                actionPersonnel = raw.employee.supervisor.first_name;
-            }
+            let actionPersonnel = "-";
 
             if (i < raw.current_level) {
                 stageStatus = "COMPLETED";
@@ -280,11 +213,13 @@ exports.getById = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+// 4. Update Status (Approve/Reject)
 exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, approved_by } = req.body; // APPROVED, REJECTED, CANCELLED
+        const { approval_status, approved_by } = req.body;
 
         const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {}, transaction);
         if (!leaveRequest || leaveRequest.status === 2) {
@@ -298,7 +233,6 @@ exports.updateStatus = async (req, res) => {
             return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
         }
 
-        // Fetch Employee and Template to check approval configuration
         const employee = await commonQuery.findOneRecord(Employee, { id: leaveRequest.employee_id }, {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         }, transaction);
@@ -312,11 +246,7 @@ exports.updateStatus = async (req, res) => {
         const currentLevel = leaveRequest.current_level;
         const totalLevels = template.approval_levels || 1;
 
-        // --- AUTHORIZATION CHECK ---
-        
-        // --- PROCESS APPROVAL ---
         if (approval_status === "APPROVED") {
-            // Update History
             const history = leaveRequest.approval_history || [];
             history.push({
                 level: currentLevel,
@@ -330,31 +260,24 @@ exports.updateStatus = async (req, res) => {
             };
 
             if (currentLevel < totalLevels && !req.user?.is_super_admin) {
-                // Not final level and not super admin
                 updateData.approval_status = "PARTIALLY_APPROVED";
                 updateData.current_level = currentLevel + 1;
             } else {
-                // Final level reached OR Super Admin Bypass
                 updateData.approval_status = "APPROVED";
                 updateData.approved_by = approved_by || req.user?.id;
                 
-                // Record bypass detail in history if it was a super admin
                 if (req.user?.is_super_admin && currentLevel < totalLevels) {
-                    if (history.length > 0) {
-                        history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
-                    }
+                    if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
                     updateData.approval_history = history;
                     updateData.current_level = totalLevels;
                 }
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
 
-            // If final approval, trigger rebuild for attendance days
             if (updateData.approval_status === "APPROVED") {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
                 const diff = end.diff(start, 'day');
-
                 for (let i = 0; i <= diff; i++) {
                     const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
                     await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
@@ -362,40 +285,22 @@ exports.updateStatus = async (req, res) => {
             }
         } 
         else if (approval_status === "REJECTED" || approval_status === "CANCELLED") {
-            // Restore Balance logic
-            const balance = await commonQuery.findOneRecord(LeaveBalance, {
+            const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: leaveRequest.employee_id,
                 leave_category_id: leaveRequest.leave_category_id,
                 year: new Date(leaveRequest.start_date).getFullYear()
             }, {}, transaction);
 
             if (balance) {
-                // Fetch category to see if it's paid
-                let category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leaveRequest.leave_category_id }, { transaction });
-                
-                let isPaid = category ? category.is_paid : true;
-
-                if (!category) {
-                    const { EmployeeLeaveCategory } = require("../../../models");
-                    const employeeCategory = await commonQuery.findOneRecord(EmployeeLeaveCategory, { 
-                        employee_id: leaveRequest.employee_id,
-                        leave_template_id: leaveRequest.leave_category_id
-                    }, { transaction });
-                    if (employeeCategory) isPaid = employeeCategory.is_paid;
-                }
-
                 const balanceUpdate = {
                     used_leaves: parseFloat(balance.used_leaves) - parseFloat(leaveRequest.total_days)
                 };
-
-                if (isPaid) {
+                if (balance.is_paid) {
                     balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(leaveRequest.total_days);
                 }
-                
-                await commonQuery.updateRecordById(LeaveBalance, balance.id, balanceUpdate, transaction);
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
             }
 
-            // Record rejection/cancellation in history
             const history = leaveRequest.approval_history || [];
             history.push({
                 level: currentLevel,
@@ -419,38 +324,10 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
-// 5. Get Employee Balance
-exports.getEmployeeBalance = async (req, res) => {
-    try {
-        const { employeeId } = req.params;
-        const currentYear = new Date().getFullYear();
-
-        const balances = await commonQuery.findAllRecords(LeaveBalance, {
-            employee_id: employeeId,
-            year: currentYear,
-            status: 0
-        }, {
-            include: [
-                { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] }
-            ]
-        });
-
-        return res.ok(balances);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-/**
- * 6. Get Pending Approvals for the Logged-in User (Level-wise)
- * Returns requests that the current user is authorized to approve at their level.
- */
+// 6. Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
         const userId = req.user.id;
-        const employeeId = req.user.employee_id; // The employee_id linked to the logged-in user
-
-        // 1. Fetch all requests that are not finalized
         const requests = await commonQuery.findAllRecords(LeaveRequest, {
             approval_status: { [Op.in]: ["PENDING", "PARTIALLY_APPROVED"] },
             status: 0

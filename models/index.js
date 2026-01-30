@@ -71,7 +71,7 @@ const HolidayTransaction = require("./settings/holidayTransaction")(sequelize, D
 // Leave models
 const LeaveTemplate = require("./settings/leave/leaveTemplate")(sequelize, DataTypes);
 const LeaveTemplateCategory = require("./settings/leave/leaveTemplateCategory")(sequelize, DataTypes);
-const LeaveBalance = require("./settings/leave/leaveBalance")(sequelize, DataTypes);
+const EmployeeLeaveBalance = require("./employeeData/EmployeeLeaveBalance")(sequelize, DataTypes);
 const LeaveRequest = require("./settings/leave/leaveRequest")(sequelize, DataTypes);
 
 // Salary models
@@ -91,7 +91,6 @@ const PrintTemplate = require("./settings/printTemplate")(sequelize, DataTypes);
 const EmployeeAttendanceTemplate = require("./employeeData/EmployeeAttendanceTemplate")(sequelize, DataTypes);
 const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, DataTypes);
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
-const EmployeeLeaveCategory = require("./employeeData/EmployeeLeaveCategory")(sequelize, DataTypes);
 const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 
@@ -166,7 +165,6 @@ const db = {
   // Leave
   LeaveTemplate,
   LeaveTemplateCategory,
-  LeaveBalance,
   LeaveRequest,
 
   // Salary
@@ -188,9 +186,9 @@ const db = {
 
   // Employee Specific Data
   EmployeeAttendanceTemplate,
+  EmployeeLeaveBalance, // Added EmployeeLeaveBalance
   EmployeeHoliday,
   EmployeeWeeklyOff,
-  EmployeeLeaveCategory,
   EmployeeShiftSetting,
   EmployeePrintTemplate,
 

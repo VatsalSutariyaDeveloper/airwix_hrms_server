@@ -2,7 +2,8 @@ const express = require("express");
 const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
 const employeeSalaryTemplateController = require("../controllers/employee/employeeSalaryTemplateController");
-const employeeLeaveCategoryController = require("../controllers/employee/employeeLeaveCategoryController");
+const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
+const employeeAttendanceController = require("../controllers/employee/employeeAttendanceController");
 const { bufferImage, bufferFile } = require("../helpers/fileUpload");
 
 const importController = require("../controllers/settings/import/importController");
@@ -29,8 +30,16 @@ router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
 router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
 router.put("/salary-template/:employeeId", employeeSalaryTemplateController.updateTemplate);
 
-// Employee Leave Category Routes
-router.get("/leave-category/:employeeId", employeeLeaveCategoryController.getByEmployeeId);
-router.put("/leave-category/:employeeId", employeeLeaveCategoryController.updateByEmployeeId);
+// Employee Leave Balance Routes
+router.get("/leave-balance/:employeeId", employeeLeaveBalanceController.getByEmployeeId);
+router.put("/leave-balance/:employeeId", employeeLeaveBalanceController.updateByEmployeeId);
+
+// Employee Attendance Routes (Shift & Weekly Off)
+router.get("/shift-setting/:employeeId", employeeAttendanceController.getShiftSetting);
+router.put("/shift-setting/:employeeId", employeeAttendanceController.updateShiftSetting);
+router.get("/weekly-off/:employeeId", employeeAttendanceController.getWeeklyOffs);
+router.put("/weekly-off/:employeeId", employeeAttendanceController.updateWeeklyOffs);
+router.get("/attendance-setting/:employeeId", employeeAttendanceController.getAttendanceTemplate);
+router.put("/attendance-setting/:employeeId", employeeAttendanceController.updateAttendanceTemplate);
 
 module.exports = router;

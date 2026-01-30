@@ -1,9 +1,9 @@
-const { LeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, sequelize } = require("../models");
+const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
 const dayjs = require("dayjs");
 
 /**
- * Service to manage leave balances, including pro-rata calculations,
+ * Service to manage employee-specific leave balances, including pro-rata calculations,
  * different yearly cycles, and monthly accruals.
  */
 class LeaveBalanceService {
@@ -46,18 +46,13 @@ class LeaveBalanceService {
 
     /**
      * Calculates the leaves earned in a specific window.
-     * Often used for pro-rata joiners.
      */
     static calculateProRata(joiningDate, annualTotal, cycleEndDate, rule = 'THRESHOLD_BASED') {
         const join = dayjs(joiningDate);
         const end = dayjs(cycleEndDate);
         
         const monthlyRate = annualTotal / 12;
-        
-        // Months between joining and end of cycle (full months)
         let diffMonths = end.diff(join.add(1, 'month').startOf('month'), 'month') + 1;
-        
-        // Join month logic based on selected rule
         const day = join.date();
         let joinMonthCredit = 0;
 
@@ -74,8 +69,6 @@ class LeaveBalanceService {
         }
 
         let total = (diffMonths * monthlyRate) + joinMonthCredit;
-        
-        // Round to nearest 0.5
         return Math.round(total * 2) / 2;
     }
 
@@ -101,17 +94,13 @@ class LeaveBalanceService {
                 let allocated = 0;
 
                 if (template.accrual_type === 'UPFRONT') {
-                    // Check if employee joined during this cycle or before
                     const joinDate = dayjs(employee.joining_date);
                     if (joinDate.isAfter(start)) {
-                        // Pro-rata for joiners with configurable rule
                         allocated = this.calculateProRata(employee.joining_date, category.leave_count, end, template.join_month_rule);
                     } else {
-                        // Full allocation for existing employees
                         allocated = category.leave_count;
                     }
                 } else if (template.accrual_type === 'MONTHLY') {
-                    // For monthly, they only get the current month's credit initially
                     const monthlyRate = category.leave_count / 12;
                     const day = dayjs().date();
                     
@@ -129,23 +118,34 @@ class LeaveBalanceService {
                     }
                 }
 
+                // Metadata to store from template category
+                const metaFields = {
+                    leave_category_name: category.leave_category_name,
+                    unused_leave_rule: category.unused_leave_rule,
+                    carry_forward_limit: category.carry_forward_limit,
+                    is_paid: category.is_paid,
+                    automation_rules: category.automation_rules,
+                };
+
                 // Upsert balance record
-                const existingBalance = await commonQuery.findOneRecord(LeaveBalance, {
+                const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     leave_category_id: category.id,
-                    year: start.year() // We use start year as the identifier for the cycle
+                    year: start.year()
                 }, {}, t);
 
                 let balance;
                 if (existingBalance) {
-                    balance = await commonQuery.updateRecordById(LeaveBalance, existingBalance.id, {
+                    balance = await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, {
+                        ...metaFields,
                         total_allocated: allocated,
-                        pending_leaves: allocated - (existingBalance.used_leaves || 0),
+                        pending_leaves: allocated + (existingBalance.carry_forward_leaves || 0) - (existingBalance.used_leaves || 0),
                         leave_template_id: templateId,
                         year: start.year()
                     }, t);
                 } else {
-                    balance = await commonQuery.createRecord(LeaveBalance, {
+                    balance = await commonQuery.createRecord(EmployeeLeaveBalance, {
+                        ...metaFields,
                         employee_id: employeeId,
                         leave_category_id: category.id,
                         year: start.year(),
@@ -168,7 +168,6 @@ class LeaveBalanceService {
 
     /**
      * Synchronizes balances when an employee's template is changed.
-     * Deletes balances for categories not in the new template.
      */
     static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null) {
         const t = transaction || (await sequelize.transaction());
@@ -177,8 +176,7 @@ class LeaveBalanceService {
             if (!employee) throw new Error("Employee not found");
 
             if (!newTemplateId) {
-                // If template is removed, de-activate ALL current active balances
-                await commonQuery.updateRecordById(LeaveBalance, {
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     status: 0
                 }, { status: 2 }, t);
@@ -197,13 +195,13 @@ class LeaveBalanceService {
             const { start } = this.getCycleDates(employee.joining_date, newTemplate.leave_policy_cycle);
 
             // 1. Mark balances as status=2 (deleted/inactive) if their category is not in the new template
-            await commonQuery.updateRecordById(LeaveBalance, {
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                 employee_id: employeeId,
                 year: start.year(),
                 leave_category_id: { [Op.notIn]: newCategoryIds }
             }, { status: 2 }, t);
 
-            // 2. Run standard initialization (handles creation or update of remaining/new categories)
+            // 2. Run standard initialization
             const results = await this.initializeBalance(employeeId, newTemplateId, t);
 
             if (!transaction) await t.commit();
@@ -215,12 +213,11 @@ class LeaveBalanceService {
     }
 
     /**
-     * Batch job to add monthly credits. Called by Cron.
+     * Batch job to add monthly credits.
      */
     static async processMonthlyAccruals() {
         const transaction = await sequelize.transaction();
         try {
-            // Find all active templates that use MONTHLY accrual
             const templates = await commonQuery.findAllRecords(LeaveTemplate, {
                 accrual_type: 'MONTHLY',
                 status: 0
@@ -229,7 +226,6 @@ class LeaveBalanceService {
             }, transaction);
 
             for (const template of templates) {
-                // Find all employees assigned to this template
                 const employees = await commonQuery.findAllRecords(Employee, {
                     leave_template: template.id,
                     status: 0
@@ -241,7 +237,7 @@ class LeaveBalanceService {
                     for (const category of template.categories) {
                         const monthlyRate = category.leave_count / 12;
 
-                        const balance = await commonQuery.findOneRecord(LeaveBalance, {
+                        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                             employee_id: employee.id,
                             leave_category_id: category.id,
                             year: start.year(),
@@ -252,8 +248,8 @@ class LeaveBalanceService {
                             const newTotal = parseFloat(balance.total_allocated) + monthlyRate;
                             const newPending = parseFloat(balance.pending_leaves) + monthlyRate;
                             
-                            await commonQuery.updateRecordById(LeaveBalance, balance.id, {
-                                total_allocated: Math.round(newTotal * 2) / 2, // Keep to 0.5 rounding
+                            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
+                                total_allocated: Math.round(newTotal * 2) / 2,
                                 pending_leaves: Math.round(newPending * 2) / 2
                             }, transaction);
                         }
@@ -262,7 +258,6 @@ class LeaveBalanceService {
             }
 
             await transaction.commit();
-            console.log("✅ Monthly leave accruals processed successfully.");
         } catch (error) {
             await transaction.rollback();
             console.error("❌ Error processing monthly accruals:", error);
@@ -270,15 +265,12 @@ class LeaveBalanceService {
     }
 
     /**
-     * Year-End Reset Logic: Lapses or Carries Forward leaves.
-     * Should be run daily at midnight.
+     * Year-End Reset Logic.
      */
     static async processYearEndReset() {
         const transaction = await sequelize.transaction();
         try {
             const today = dayjs();
-            
-            // 1. Get all employees with active leave templates
             const employees = await commonQuery.findAllRecords(Employee, {
                 status: 0,
                 leave_template: { [Op.ne]: null }
@@ -294,21 +286,15 @@ class LeaveBalanceService {
                 const template = employee.leaveTemplate;
                 if (!template) continue;
 
-                // 2. Determine the cycle that JUST ENDED
-                // We check if "yesterday" was the end of a cycle.
                 const yesterday = today.subtract(1, 'day');
                 const { end: lastCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
                 
-                // If yesterday was the end of the calculated cycle, today is the first day of the new one.
                 if (!yesterday.isSame(lastCycleEnd, 'day')) continue;
-
-                console.log(`🔄 Processing Year-End Reset for Employee: ${employee.first_name} (${employee.employee_code})`);
 
                 const lastYear = lastCycleEnd.year();
                 
                 for (const category of template.categories) {
-                    // 3. Find current balance for the cycle that just ended
-                    const lastBalance = await commonQuery.findOneRecord(LeaveBalance, {
+                    const lastBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: lastYear,
@@ -318,21 +304,16 @@ class LeaveBalanceService {
                     if (!lastBalance) continue;
 
                     let carryForwardAmount = 0;
-
-                    // 4. Apply Carry Forward Rules
                     if (category.unused_leave_rule === 'CARRY_FORWARD') {
                         const limit = parseFloat(category.carry_forward_limit || 0);
                         const remaining = parseFloat(lastBalance.pending_leaves || 0);
                         carryForwardAmount = Math.min(remaining, limit);
                     }
 
-                    // 5. Initialize New Year Balance
-                    // This will handle the base allocation (Upfront or first month of Monthly)
                     await this.initializeBalance(employee.id, template.id, transaction);
 
-                    // 6. Update new balance with carry forward
                     const newYear = today.year();
-                    const newBalance = await commonQuery.findOneRecord(LeaveBalance, {
+                    const newBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: newYear,
@@ -340,7 +321,7 @@ class LeaveBalanceService {
                     }, {}, transaction);
 
                     if (newBalance) {
-                        await commonQuery.updateRecordById(LeaveBalance, newBalance.id, {
+                        await commonQuery.updateRecordById(EmployeeLeaveBalance, newBalance.id, {
                             carry_forward_leaves: carryForwardAmount,
                             pending_leaves: parseFloat(newBalance.pending_leaves) + carryForwardAmount
                         }, transaction);
@@ -349,7 +330,6 @@ class LeaveBalanceService {
             }
 
             await transaction.commit();
-            console.log("✅ Year-End leave reset processed successfully.");
         } catch (error) {
             await transaction.rollback();
             console.error("❌ Error processing year-end reset:", error);

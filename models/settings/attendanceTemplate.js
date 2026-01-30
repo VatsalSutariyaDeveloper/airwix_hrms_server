@@ -3,10 +3,6 @@ module.exports = (sequelize, DataTypes) => {
         name: { type: DataTypes.STRING, },
         mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_AND_LOCATION'), defaultValue: 'MANUAL', comment: 'Defines how the employee marks attendance' },
 
-        // --- POLICY LINKS ---
-        holiday_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        weekly_off_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-
         // --- HOLIDAY RULES ---
         holiday_policy: { type: DataTypes.ENUM('BLOCK_ATTENDANCE', 'COMP_OFF', 'ALLOW_NORMAL'), defaultValue: 'BLOCK_ATTENDANCE', comment: 'Behavior when a user attempts to punch in on a paid holiday' },
 
@@ -49,14 +45,7 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   AttendanceTemplate.associate = (models) => {
-    AttendanceTemplate.belongsTo(models.HolidayTemplate, {
-      foreignKey: "holiday_template_id",
-      as: "HolidayTemplate",
-    });
-    AttendanceTemplate.belongsTo(models.WeeklyOffTemplate, {
-      foreignKey: "weekly_off_template_id",
-      as: "WeeklyOffTemplate",
-    });
+    // Associations removed
   };
 
   return AttendanceTemplate;
