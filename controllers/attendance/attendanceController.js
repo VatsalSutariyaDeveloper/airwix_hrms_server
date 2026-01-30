@@ -173,9 +173,16 @@ exports.updateAttendanceDay = async (req, res) => {
     const requiredFields = {
       employee_id: "Employee",
       attendance_date: "Date",
-      first_in: "In Time",
-      last_out: "Out Time"
     };
+
+    // Add conditional required fields based on status
+    if (req.body.status === 0) {
+      if(!req.body.note){
+        requiredFields.first_in = "In Time";
+      }
+    } else if (req.body.status === 1) {
+      requiredFields.last_out = "Out Time";
+    }
 
     const errors = await validateRequest(req.body, requiredFields);
     if (errors) {
