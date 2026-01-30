@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
 const employeeSalaryTemplateController = require("../controllers/employee/employeeSalaryTemplateController");
+const employeeLeaveCategoryController = require("../controllers/employee/employeeLeaveCategoryController");
 const { bufferImage, bufferFile } = require("../helpers/fileUpload");
 
 const importController = require("../controllers/settings/import/importController");
@@ -26,5 +27,9 @@ router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
 // Employee Salary Template Routes
 router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
 router.put("/salary-template/:employeeId", employeeSalaryTemplateController.updateTemplate);
+
+// Employee Leave Category Routes
+router.get("/leave-category/:employeeId", employeeLeaveCategoryController.getByEmployeeId);
+router.put("/leave-category/:employeeId", employeeLeaveCategoryController.updateByEmployeeId);
 
 module.exports = router;

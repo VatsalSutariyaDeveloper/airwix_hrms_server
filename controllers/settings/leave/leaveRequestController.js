@@ -29,6 +29,13 @@ exports.create = async (req, res) => {
         const { employee_id, leave_category_id, total_days, start_date, end_date } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
+        // 1. Fetch employee to get cycle information or custom template data
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
         // Check for Overlapping Leaves
         const overlap = await commonQuery.findOneRecord(LeaveRequest, {
             employee_id,
@@ -55,14 +62,39 @@ exports.create = async (req, res) => {
             return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
         }
 
-        // Fetch category to check if it represents a paid leave
-        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leave_category_id }, {}, transaction);
+        // 2. Fetch category to check if it represents a paid leave
+        // First check in master template categories
+        let category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leave_category_id }, {}, transaction);
+        
+        // If not found in master template categories, check in employee-specific leave categories
+        // This handles cases where employees have custom/overridden leave categories
+        let isPaid = category ? category.is_paid : true; // Default to true if not found yet (will check next)
+
+        if (!category) {
+            const { EmployeeLeaveCategory } = require("../../../models");
+            const employeeCategory = await commonQuery.findOneRecord(EmployeeLeaveCategory, { 
+                employee_id: employee_id,
+                leave_template_id: leave_category_id // Assuming leave_category_id refers to leave_template_id in EmployeeLeaveCategory if master not found
+                // OR if the frontend sends the specific ID from employee_leave_categories table
+            }, {}, transaction);
+
+            if (employeeCategory) {
+                isPaid = employeeCategory.is_paid;
+                // Create a mock category object for subsequent logic
+                category = { 
+                    id: leave_category_id, 
+                    is_paid: isPaid,
+                    leave_template_id: employeeCategory.leave_template_id
+                };
+            }
+        }
+
         if (!category) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
         }
 
-        // Check if balance exists
+        // 3. Check if balance exists
         let balance = await commonQuery.findOneRecord(LeaveBalance, {
             employee_id,
             leave_category_id,
@@ -75,7 +107,7 @@ exports.create = async (req, res) => {
             return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/year" });
         }
 
-        if (category.is_paid) {
+        if (isPaid) {
             // -- PAID LEAVE LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
                 await transaction.rollback();
@@ -339,13 +371,24 @@ exports.updateStatus = async (req, res) => {
 
             if (balance) {
                 // Fetch category to see if it's paid
-                const category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leaveRequest.leave_category_id }, { transaction });
+                let category = await commonQuery.findOneRecord(LeaveTemplateCategory, { id: leaveRequest.leave_category_id }, { transaction });
                 
+                let isPaid = category ? category.is_paid : true;
+
+                if (!category) {
+                    const { EmployeeLeaveCategory } = require("../../../models");
+                    const employeeCategory = await commonQuery.findOneRecord(EmployeeLeaveCategory, { 
+                        employee_id: leaveRequest.employee_id,
+                        leave_template_id: leaveRequest.leave_category_id
+                    }, { transaction });
+                    if (employeeCategory) isPaid = employeeCategory.is_paid;
+                }
+
                 const balanceUpdate = {
                     used_leaves: parseFloat(balance.used_leaves) - parseFloat(leaveRequest.total_days)
                 };
 
-                if (category && category.is_paid) {
+                if (isPaid) {
                     balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(leaveRequest.total_days);
                 }
                 
