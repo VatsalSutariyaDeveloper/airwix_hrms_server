@@ -181,7 +181,11 @@ exports.updateAttendanceDay = async (req, res) => {
         requiredFields.first_in = "In Time";
       }
     } else if (req.body.status === 1) {
-      requiredFields.last_out = "Out Time";
+      if(!req.body.note){
+        requiredFields.first_in = "In Time";
+        requiredFields.last_out = "Out Time";
+      }
+      requiredFields.leave_category_id = "Leave Category";
     }
 
     const errors = await validateRequest(req.body, requiredFields);

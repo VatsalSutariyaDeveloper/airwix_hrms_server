@@ -7,6 +7,7 @@ const {
 const { commonQuery, handleError } = require("../../helpers");
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const dayjs = require("dayjs");
+const { NOT_FOUND } = require("../../helpers/responseCodes");
 
 /**
  * Controller to handle employee-specific leave balance and configuration.
@@ -25,7 +26,7 @@ const employeeLeaveBalanceController = {
             });
 
             if (!leaveBalances || leaveBalances.length === 0) {
-                return res.success([], "No leave balances found for this employee");
+                return res.error(NOT_FOUND,"No leave balances found for this employee");
             }
 
             // Map total_allocated to leave_count for frontend compatibility
@@ -54,12 +55,12 @@ const employeeLeaveBalanceController = {
             const { leaveBalances } = req.body; // Array of balance updates
 
             if (!Array.isArray(leaveBalances)) {
-                return res.error("Invalid leave data", 400);
+                return res.error(BAD_REQUEST,"Invalid leave data");
             }
 
             const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
             if (!employee) {
-                return res.error("Employee not found", 404);
+                return res.error(NOT_FOUND,"Employee not found");
             }
 
             for (const bal of leaveBalances) {
