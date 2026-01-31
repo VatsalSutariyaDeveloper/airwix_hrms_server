@@ -235,7 +235,6 @@ exports.create = async (req, res) => {
         POST.role_id = 2;
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
         if (POST.employee_type == 1) {
-            POST.role_id = 2;
             // Validation for user fields
             const userRequiredFields = { role_id: "Role" };
             userRequiredFields.mobile_no = "Mobile No";
@@ -451,6 +450,7 @@ exports.update = async (req, res) => {
         // }
 
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        POST.role_id = 2;
         if (POST.employee_type == 1) {
             const loginType = parseInt(POST.login_type) || 1;
 

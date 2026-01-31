@@ -13,17 +13,23 @@ module.exports = (sequelize, DataTypes) => {
 
         // --- LATE ENTRY & EARLY EXIT RULES ---
         late_entry_limit: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Allowed late entries per month before fine' },
-        late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION'), defaultValue: 'NONE' },
+        late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
         late_entry_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+        late_entry_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for late entry' },
 
         early_exit_limit: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Allowed early exits per month before fine' },
-        early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION'), defaultValue: 'NONE' },
+        early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
         early_exit_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+        early_exit_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for early exit' },
 
         // --- OVERTIME RULES ---
         overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
         min_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Minimum minutes needed to count as overtime' },
         max_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Maximum OT allowed per day (0 = Unlimited)' },
+        overtime_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for overtime' },
+
+        early_overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: false },
+        early_overtime_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for early overtime' },
 
         // --- ABSENTEEISM AUTOMATION ---
         auto_mark_absent: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'Enable cron job to mark "Absent" for previous days with no data' },
@@ -31,6 +37,7 @@ module.exports = (sequelize, DataTypes) => {
         deduct_breaks_from_total: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'Rule 4: All breaks deducted. Rule 1: Paid breaks deducted.' },
         include_overtime_in_total: { type: DataTypes.BOOLEAN, defaultValue: true, comment: 'Rule 3: Overtime deducted (False) vs Included (True)' },
         paid_break_duration_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Minutes of break time that are NOT deducted' },
+        break_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for breaks' },
 
         status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },

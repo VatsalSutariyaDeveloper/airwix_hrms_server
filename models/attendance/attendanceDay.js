@@ -11,6 +11,8 @@ module.exports = (sequelize, DataTypes) => {
         worked_minutes: DataTypes.INTEGER,
         late_minutes: DataTypes.INTEGER,
         early_out_minutes: DataTypes.INTEGER,
+        early_overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
+        total_break_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,

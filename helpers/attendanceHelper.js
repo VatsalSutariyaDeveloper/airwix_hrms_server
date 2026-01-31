@@ -377,10 +377,31 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let finalWorkedMinutes = actualWorkedMinutes;
 
   if (template) {
-    if (template.deduct_breaks_from_total && template.paid_break_duration_mins > 0) {
-      const breakToAddBack = Math.min(totalBreakMinutes, template.paid_break_duration_mins);
-      finalWorkedMinutes += breakToAddBack;
+    if (template.deduct_breaks_from_total) {
+      if (template.break_rules && Array.isArray(template.break_rules) && template.break_rules.length > 0) {
+        // Multi-tier break rules
+        const rule = template.break_rules.find(r => totalBreakMinutes >= r.from_mins && totalBreakMinutes <= r.to_mins);
+        if (rule) {
+           // If it says "FIXED" value for a break rule, it might mean "Fixed Deduction" or "Fixed Paid"
+           // Let's assume the value in Rule determines deduction behavior.
+           // For simplicity: if rule found, we use it to determine how much is PAID vs DEDUCTED.
+           // However, to keep it consistent with user request, we just apply the found rule.
+           // For now, let's stick to the core logic: deduct what is NOT in paid allowance.
+           // If user specifically added tiers, we can implement more complex deduction here.
+           finalWorkedMinutes -= totalBreakMinutes; // Start by deducting all
+           const paidAllowance = rule.value || 0; // Value is 'Paid Allowance' for that tier
+           finalWorkedMinutes += Math.min(totalBreakMinutes, paidAllowance);
+        } else {
+           finalWorkedMinutes -= totalBreakMinutes;
+        }
+      } else if (template.paid_break_duration_mins > 0) {
+        const breakToDeduct = Math.max(0, totalBreakMinutes - template.paid_break_duration_mins);
+        finalWorkedMinutes -= breakToDeduct;
+      } else {
+        finalWorkedMinutes -= totalBreakMinutes;
+      }
     }
+
 
     if (!template.include_overtime_in_total && shift) {
       const shiftStart = dayjs(`${date} ${shift.start_time}`);
@@ -429,6 +450,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
     }
 
+    let earlyOvertimeMinutes = 0;
+    if (shift && template && template.early_overtime_allowed && firstIn) {
+      const actualIn = dayjs(firstIn.punch_time);
+      const diffEarly = shiftStart.diff(actualIn, "minute", true);
+      if (diffEarly > (shift.grace_minutes || 0)) {
+        earlyOvertimeMinutes = Math.floor(diffEarly);
+      }
+    }
+
     // 🏆 OVERTIME CALCULATION
     // If worked more than shift duration, calculate OT
     if (finalWorkedMinutes > shiftDuration) {
@@ -441,60 +471,74 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         if (template && template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
           overtimeMinutes = template.max_overtime_mins;
         }
-
-        // Auto-generate overtime_data breakdown
-        overtimeMinutes = Math.max(0, overtimeMinutes);
-        if (overtimeMinutes > 0) {
-           overtimeMinutes = Math.floor(overtimeMinutes);
-        }
       }
     }
 
-    // 💸 FINE CALCULATION (Late Entry & Early Exit)
-    // ... keeping existing fine logic but ensuring it uses our new late/early mins
+    // 💸 FINE & BENEFIT CALCULATION (Using multiple case rules)
     if (template) {
         const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
-        const monthEnd = dayjs(date).endOf('month').format('YYYY-MM-DD');
 
-        // Check Late Entry Fine
-        if (lateMinutes > 0 && template.late_entry_fine_type !== 'NONE') {
-            const lateCount = await AttendanceDay.count({
-                where: {
-                    employee_id: employeeId,
-                    attendance_date: { [Op.between]: [monthStart, date] },
-                    late_minutes: { [Op.gt]: 0 },
-                    status: { [Op.ne]: 99 }
-                },
-                transaction
-            });
+        const getMatchingRule = (mins, rules) => {
+            if (!rules || !Array.isArray(rules)) return null;
+            return rules.find(r => mins >= r.from_mins && mins <= r.to_mins);
+        };
 
-            if ((lateCount + 1) > (template.late_entry_limit || 0)) {
-                if (template.late_entry_fine_type === 'FIXED') {
-                    fineAmount += parseFloat(template.late_entry_fine_value || 0);
+        // Late Entry Fine
+        if (lateMinutes > 0) {
+            const rule = getMatchingRule(lateMinutes, template.late_entry_rules);
+            if (rule) {
+                if (rule.type === 'FIXED') fineAmount += parseFloat(rule.value || 0);
+                else if (rule.type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(rule.value || 0);
+            } else if (template.late_entry_fine_type !== 'NONE') {
+                const lateCount = await AttendanceDay.count({
+                    where: {
+                        employee_id: employeeId,
+                        attendance_date: { [Op.between]: [monthStart, date] },
+                        late_minutes: { [Op.gt]: 0 },
+                        status: { [Op.ne]: 99 }
+                    },
+                    transaction
+                });
+                if ((lateCount + 1) > (template.late_entry_limit || 0)) {
+                    if (template.late_entry_fine_type === 'FIXED') fineAmount += parseFloat(template.late_entry_fine_value || 0);
+                    else if (template.late_entry_fine_type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(template.late_entry_fine_value || 0);
                 }
             }
         }
 
-        // Check Early Exit Fine
-        if (earlyOutMinutes > 0 && template.early_exit_fine_type !== 'NONE') {
-            const earlyExitCount = await AttendanceDay.count({
-                where: {
-                    employee_id: employeeId,
-                    attendance_date: { [Op.between]: [monthStart, date] },
-                    early_out_minutes: { [Op.gt]: 0 },
-                    status: { [Op.ne]: 99 }
-                },
-                transaction
-            });
-
-            if ((earlyExitCount + 1) > (template.early_exit_fine_limit || 0)) {
-                if (template.early_exit_fine_type === 'FIXED') {
-                    fineAmount += parseFloat(template.early_exit_fine_value || 0);
+        // Early Exit Fine
+        if (earlyOutMinutes > 0) {
+            const rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
+            if (rule) {
+                if (rule.type === 'FIXED') fineAmount += parseFloat(rule.value || 0);
+                else if (rule.type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(rule.value || 0);
+            } else if (template.early_exit_fine_type !== 'NONE') {
+                const earlyExitCount = await AttendanceDay.count({
+                    where: {
+                        employee_id: employeeId,
+                        attendance_date: { [Op.between]: [monthStart, date] },
+                        early_out_minutes: { [Op.gt]: 0 },
+                        status: { [Op.ne]: 99 }
+                    },
+                    transaction
+                });
+                if ((earlyExitCount + 1) > (template.early_exit_limit || 0)) {
+                    if (template.early_exit_fine_type === 'FIXED') fineAmount += parseFloat(template.early_exit_fine_value || 0);
+                    else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
                 }
             }
+        }
+
+        // OT Multiplier from rules (if any)
+        // OT Multiplier from rules (if any)
+        if (overtimeMinutes > 0) {
+            const otRule = getMatchingRule(overtimeMinutes, template.overtime_rules);
+            // This would influence payroll, but for summary we record the mins.
         }
     }
-  }
+}
+
+  finalWorkedMinutes = Math.max(0, finalWorkedMinutes);
 
   let status = 5; // Default ABSENT
   
@@ -522,6 +566,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     worked_minutes: Math.floor(finalWorkedMinutes),
     late_minutes: lateMinutes,
     early_out_minutes: earlyOutMinutes,
+    early_overtime_minutes: earlyOvertimeMinutes,
+    total_break_minutes: totalBreakMinutes,
     overtime_minutes: overtimeMinutes,
     fine_amount: fineAmount,
     status: status,
