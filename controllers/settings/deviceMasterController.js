@@ -1,8 +1,18 @@
 const { DeviceMaster } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
+const ApprovalEngine = require("../../helpers/approvalEngine");
+const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 
-// Create a new bank master record
+
+const STATUS = {
+    ACTIVE: 0,
+    INACTIVE: 1,
+    DELETED: 2,
+    PENDING_APPROVAL: 3
+};
+
+// Create a new device master record
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -25,8 +35,27 @@ exports.create = async (req, res) => {
         }
 
         const device_master = await commonQuery.createRecord(DeviceMaster, req.body, transaction);
+        const workflow = await ApprovalEngine.checkApprovalRequired(
+            MODULES.SETTINGS.DEVICE_MASTER.ID,
+            device_master.toJSON()
+        );
+
+        let approvalMsg = constants.DEVICE_MASTER_CREATED;
+
+        if (workflow) {
+            await ApprovalEngine.initiateApproval(
+                MODULES.SETTINGS.DEVICE_MASTER.ID,
+                device_master.id,
+                workflow.id,
+                transaction
+            );
+
+            // We assume 'approval_status' exists on Employee or is handled via mixin
+            await commonQuery.updateRecordById(DeviceMaster, device_master.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
+            approvalMsg = "constants.DEVICE_MASTER_CREATED_SEND_FOR_APPROVAL";
+        }
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_CREATED, device_master);
+        return res.success(approvalMsg, device_master);
 
     } catch (err) {
         await transaction.rollback();
