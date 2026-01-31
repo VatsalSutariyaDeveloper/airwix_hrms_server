@@ -4,10 +4,9 @@ const {
     LeaveTemplate,
     sequelize 
 } = require("../../models");
-const { commonQuery, handleError } = require("../../helpers");
+const { commonQuery, handleError, constants } = require("../../helpers");
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const dayjs = require("dayjs");
-const { NOT_FOUND } = require("../../helpers/responseCodes");
 
 /**
  * Controller to handle employee-specific leave balance and configuration.
@@ -26,8 +25,8 @@ const employeeLeaveBalanceController = {
             });
 
             if (!leaveBalances || leaveBalances.length === 0) {
-                return res.error(NOT_FOUND,"No leave balances found for this employee");
-            }
+            return res.error(constants.NOT_FOUND, { message: "No leave balances found for this employee" });
+        }
 
             // Map total_allocated to leave_count for frontend compatibility
             const mappedBalances = leaveBalances.map(b => {
@@ -55,7 +54,7 @@ const employeeLeaveBalanceController = {
             const { leaveBalances } = req.body; // Array of balance updates
 
             if (!Array.isArray(leaveBalances)) {
-                return res.error(BAD_REQUEST,"Invalid leave data");
+                return res.error(constants.INVALID_ID,"Invalid leave data");
             }
 
             const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);

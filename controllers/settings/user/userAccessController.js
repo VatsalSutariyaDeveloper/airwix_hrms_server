@@ -264,3 +264,66 @@ exports.sessionData = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+exports.switchCompany = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { company_id, branch_id, user_id } = getContext();
+
+    if (!company_id) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Company ID is required." });
+    }
+
+    // 1. Fetch User to check company_access
+    const user = await commonQuery.findOneRecord(User, { id: user_id, status: 0 }, {}, transaction);
+    if (!user) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "User not found." });
+    }
+
+    // 2. Validate Access
+    const companyAccessList = normalizeCompanyAccess(user.company_access || "");
+    
+    // Super Admin (role_id: 1) usually has access to everything, 
+    // otherwise check if the ID is in their access list
+    if (user.role_id !== 1 && !companyAccessList.includes(String(company_id))) {
+      await transaction.rollback();
+      return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
+    }
+
+    // 3. Validate the Company exists and is active
+    const company = await commonQuery.findOneRecord(CompanyMaster, { id: company_id, status: { [Op.ne]: 2 } }, {}, transaction);
+    if (!company) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "Selected company is inactive or not found." });
+    }
+
+    // 4. Generate New Token with updated company_id and branch_id
+    const newToken = jwt.sign(
+      {
+        id: user.id,
+        role_id: user.role_id,
+        branch_id: branch_id || user.branch_id, // Switch to new branch if provided, else keep current
+        company_id: company_id
+      },
+      process.env.JWT_SECRET || "your_jwt_secret",
+      { expiresIn: "1d" }
+    );
+
+    // Clear cache to ensure permissions refresh for the new company
+    clearUserCache(user.user_id || user.id);
+
+    await transaction.commit();
+
+    return res.ok({ 
+      token: newToken, 
+      message: "Switched company successfully",
+      current_company_id: company_id 
+    });
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};

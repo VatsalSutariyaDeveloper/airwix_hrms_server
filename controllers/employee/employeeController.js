@@ -47,6 +47,7 @@ const fs = require('fs');
 const FormData = require('form-data');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
+const { LOADIPHLPAPI } = require("dns/promises");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
@@ -1333,8 +1334,31 @@ exports.getWages = async(req, res) =>{
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
 
+        // Get current date and format it as YYYY-MM-DD for database query
+        const currentDate = new Date().toISOString().split('T')[0];
+
+        // Fetch attendance day record for employeeId and current date
+        const attendanceDay = await commonQuery.findOneRecord(
+            AttendanceDay,
+            {
+                employee_id: employeeId,
+                attendance_date: currentDate
+            },
+            {
+                attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
+            }
+        )
+
+        if(!attendanceDay ){
+            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
+        }
+
+        if(attendanceDay.first_in == null){
+            return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
+        }
+
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-            attributes: ['id', 'salary_template_id', 'company_id']
+            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template']
         });
 
         if (!employee) {
@@ -1362,15 +1386,16 @@ exports.getWages = async(req, res) =>{
         let workingDays = null;
         const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
         
-        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-                attributes: ['id', 'weekly_off_template', 'company_id']
-            });
-            
+        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') { 
+
             if (employee && employee.weekly_off_template) {
-                const weeklyOffTemplate = await commonQuery.findOneRecord(WeeklyOffTemplate, employee.weekly_off_template, {
-                    include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                });
+                const weeklyOffTemplate = await commonQuery.findOneRecord(
+                    WeeklyOffTemplate, 
+                    employee.weekly_off_template, 
+                    {
+                        include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                    }
+                );
                 
                 if (weeklyOffTemplate) {
                     const currentDate = new Date();                    
@@ -1409,7 +1434,9 @@ exports.getWages = async(req, res) =>{
             calculation_basis: employeeSalaryTemplate.lwp_calculation_basis,
             month_days: monthDays,
             working_days: workingDays,
-            month: new Date().getMonth() + 1 + " " + new Date().getFullYear(),
+            last_out: attendanceDay.last_out || null,
+            overtime_data: attendanceDay?.overtime_data || null,
+            fine_data: attendanceDay?.fine_data || null,
         };
 
         return res.success(constants.SUCCESS, responseData);

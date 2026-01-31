@@ -26,7 +26,7 @@ const employeeLeaveBalanceController = require("../controllers/employee/employee
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
-
+router.get("/switch-company", userAccessController.switchCompany);
 
 
 // ==========================
@@ -73,7 +73,7 @@ router.put("/company-configration/:id", companyCofigrationController.update);
 router.post("/utils/send-email", bufferFile(["attachments"]), utilsController.sendEmail);
 router.post("/utils/fetch-gst-details", utilsController.fetchGSTDetails);
 router.post("/utils/fetch-ifsc-details", utilsController.fetchIFSCDetails);
-
+router.post("/utils/fetch-pincode-details", utilsController.fetchPincodeDetails);
 
 
 
