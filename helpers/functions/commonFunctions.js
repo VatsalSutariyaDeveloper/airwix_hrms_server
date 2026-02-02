@@ -530,3 +530,116 @@ exports.updateDocumentUsedLimit = async (companyId, field, by=1, transaction) =>
         throw error;
     }
 };
+
+
+exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
+    if (!Array.isArray(days) || days.length === 0) {
+        return { working_days: null, off_days: 0 };
+    }
+
+    const year = referenceDate.getFullYear();
+    const month = referenceDate.getMonth(); // 0-11
+    const monthNames = ["January", "February", "March", "April", "May", "June",
+                       "July", "August", "September", "October", "November", "December"];
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    
+    // Get the actual number of days in the current month
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    console.log(`\n📅 Weekly Off Calculation for: ${monthNames[month]} ${year}`);
+    console.log(`📊 Total days in month: ${daysInMonth}`);
+        
+    console.log(`\n🎯 Weekly Off Rules Applied:`);
+    days.forEach((day, index) => {
+        if (day.is_off && day.status !== 2) {
+            const dayName = dayNames[day.day_of_week];
+            const weekText = day.week_no === 0 ? "All weeks" : `${getOrdinal(day.week_no)} week`;
+            console.log(`   ${index + 1}. ${dayName} - ${weekText}`);
+        }
+    });
+    
+    let offDaysCount = 0;
+    const offDates = new Set(); // Track specific dates that are off
+    const matchedRules = []; // Track which rules matched which dates
+
+    // Process each weekly off rule
+    days.forEach((day, ruleIndex) => {
+        if (day.is_off && day.status !== 2) {
+            const dayName = dayNames[day.day_of_week];
+            let ruleMatches = [];
+            
+            if (day.week_no === 0) {
+                // All weeks - find all occurrences of this day in the month
+                console.log(`\n🔍 Processing: ${dayName} (All weeks)`);
+                for (let date = 1; date <= daysInMonth; date++) {
+                    const currentDate = new Date(year, month, date);
+                    const dayOfWeek = currentDate.getDay();
+                    
+                    if (dayOfWeek === day.day_of_week) {
+                        offDates.add(date);
+                        ruleMatches.push(date);
+                        console.log(`   ✅ Matched: ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
+                    }
+                }
+            } else {
+                // Specific week - find the nth occurrence of this day in the month
+                console.log(`\n🔍 Processing: ${dayName} (${getOrdinal(day.week_no)} week)`);
+                let occurrenceCount = 0;
+                for (let date = 1; date <= daysInMonth; date++) {
+                    const currentDate = new Date(year, month, date);
+                    const dayOfWeek = currentDate.getDay();
+                    
+                    if (dayOfWeek === day.day_of_week) {
+                        occurrenceCount++;
+                        if (occurrenceCount === day.week_no) {
+                            offDates.add(date);
+                            ruleMatches.push(date);
+                            console.log(`   ✅ Matched: ${getOrdinal(day.week_no)} ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
+                            break; // Found the nth occurrence
+                        }
+                    }
+                }
+                
+                if (ruleMatches.length === 0) {
+                    console.log(`   ❌ No match found: ${getOrdinal(day.week_no)} ${dayName} does not exist in ${monthNames[month]} ${year}`);
+                }
+            }
+            
+            if (ruleMatches.length > 0) {
+                matchedRules.push({
+                    rule: `${dayName} (${day.week_no === 0 ? 'All weeks' : getOrdinal(day.week_no) + ' week'})`,
+                    matches: ruleMatches
+                });
+            }
+        }
+    });
+
+    offDaysCount = offDates.size;
+    const workingDays = daysInMonth - offDaysCount;
+    
+    console.log(`\n📈 Final Calculation Results:`);
+    console.log(`   🏖️ Total Off Days: ${offDaysCount}`);
+    console.log(`   💼 Working Days: ${workingDays}`);
+    console.log(`   📅 Total Days: ${daysInMonth}`);
+    console.log(`   🎯 Off Dates: [${Array.from(offDates).sort((a, b) => a - b).join(', ')}]`);
+    console.log(`   📊 Working Days Percentage: ${((workingDays / daysInMonth) * 100).toFixed(1)}%`);
+    console.log(`\n${'='.repeat(50)}\n`);
+
+    return {
+        working_days: Math.max(0, workingDays),
+        off_days: offDaysCount,
+        total_days_in_month: daysInMonth,
+        off_dates: Array.from(offDates).sort((a, b) => a - b)
+    };
+};
+
+// Helper function to get ordinal numbers (1st, 2nd, 3rd, 4th, etc.)
+function getOrdinal(num) {
+    const j = num % 10;
+    const k = Math.floor(num / 10) % 10;
+    if (k === 1) return num + 'th';
+    if (j === 1) return num + 'st';
+    if (j === 2) return num + 'nd';
+    if (j === 3) return num + 'rd';
+    return num + 'th';
+}

@@ -10,7 +10,11 @@ const {
     CompanyConfigration,
     RolePermission,
     AttendancePunch,    
-    AttendanceDay
+    AttendanceDay,
+    EmployeeSalaryTemplate,
+    SalaryComponent,
+    WeeklyOffTemplate,
+    WeeklyOffTemplateDay
 } = require("../../models");
 
 const {
@@ -28,7 +32,8 @@ const {
 const {
     generateSeriesNumber,
     updateSeriesNumber,
-    fixDecimals
+    fixDecimals,
+    calculateWorkingAndOffDays
 } = require("../../helpers/functions/commonFunctions");
 
 const { ENTITIES } = require('../../helpers/constants');
@@ -301,7 +306,7 @@ exports.update = async (req, res) => {
 
         // Validation
         const requiredFields = {
-            first_name: "First Name",
+            // first_name: "First Name",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -939,7 +944,11 @@ exports.getEmployeesByTemplate = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { field_name, value, is_access } = req.body;
-
+    
+    const fieldConfig = [
+        ["first_name", true, true],
+        ["employee_code", true, true],
+    ];
 
     // 1. Validate field name
     if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
@@ -990,7 +999,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
       { ...req.body, filter },
-      [],
+      fieldConfig,
       {
         attributes: ["id", "first_name", "employee_code", field_name]
       },
@@ -1330,3 +1339,97 @@ exports.facePunch = async (req, res) => {
         return res.error(statusCode, { message: errorMsg });
     }
 };
+
+exports.getWages = async(req, res) =>{
+    try{
+        const { employee_id : employeeId  } = req.body;
+        
+        if (!employeeId) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            attributes: ['id', 'salary_template_id', 'company_id']
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const employeeSalaryTemplate = await commonQuery.findOneRecord(
+            EmployeeSalaryTemplate, 
+            { 
+                employee_id: employeeId,
+                company_id: employee.company_id,
+                status: 0
+            },
+            {
+                attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis']
+            }
+        );
+
+        if (!employeeSalaryTemplate) {
+            return res.error(constants.NOT_FOUND, { message: "Salary template not found for this employee" });
+        }
+
+        let dailyWage = null;
+        let monthDays = null;
+        let workingDays = null;
+        const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
+        
+        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+            const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+                attributes: ['id', 'weekly_off_template', 'company_id']
+            });
+            
+            if (employee && employee.weekly_off_template) {
+                const weeklyOffTemplate = await commonQuery.findOneRecord(WeeklyOffTemplate, employee.weekly_off_template, {
+                    include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                });
+                
+                if (weeklyOffTemplate) {
+                    const currentDate = new Date();                    
+                    const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, currentDate);
+                    workingDays = result.working_days;
+                    monthDays = result.total_days_in_month;
+                    
+                    if (workingDays && workingDays > 0) {
+                        dailyWage = ctcMonthly / workingDays;
+                    }
+                }
+            }
+            
+            if (!workingDays) {
+                workingDays = 30;
+                monthDays = 30;
+                dailyWage = ctcMonthly / 30;
+            }
+        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
+            const currentDate = new Date();
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            monthDays = new Date(year, month + 1, 0).getDate();
+            dailyWage = ctcMonthly / monthDays;
+        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
+            monthDays = 30;
+            dailyWage = ctcMonthly / 30;
+        }
+
+        const hourlyWage = dailyWage ? dailyWage / 8 : null;
+
+        const responseData = {
+            ...employeeSalaryTemplate.toJSON(),
+            daily_wage: dailyWage ? parseFloat(dailyWage.toFixed(2)) : null,
+            hourly_wage: hourlyWage ? parseFloat(hourlyWage.toFixed(2)) : null,
+            calculation_basis: employeeSalaryTemplate.lwp_calculation_basis,
+            month_days: monthDays,
+            working_days: workingDays,
+            month: new Date().getMonth() + 1 + " " + new Date().getFullYear(),
+        };
+
+        return res.success(constants.SUCCESS, responseData);
+
+    }catch(err){
+        return handleError(err, res, req);
+    }
+}

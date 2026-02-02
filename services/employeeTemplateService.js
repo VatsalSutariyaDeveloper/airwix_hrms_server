@@ -5,15 +5,17 @@ const {
     WeeklyOffTemplateDay,
     LeaveTemplateCategory,
     SalaryTemplateTransaction,
+    SalaryTemplate,
     ShiftTemplate,
     PrintTemplate,
     EmployeeAttendanceTemplate,
     EmployeeHoliday,
     EmployeeWeeklyOff,
     EmployeeLeaveCategory,
-    EmployeeSalaryComponent,
     EmployeeShiftSetting,
     EmployeePrintTemplate,
+    EmployeeSalaryTemplate,
+    EmployeeSalaryTemplateTransaction,
     sequelize,
     Op
 } = require("../models");
@@ -37,7 +39,7 @@ class EmployeeTemplateService {
                 this.syncLeaveTemplate(employee.id, employee.leave_template, null, t),
                 this.syncSalaryTemplate(employee.id, employee.salary_template_id, null, t),
                 this.syncShiftTemplate(employee.id, employee.shift_template, null, t),
-                this.syncPrintTemplates(employee.id, null, t)
+                // this.syncPrintTemplates(employee.id, null, t)
             ];
 
             await Promise.all(jobs);
@@ -113,7 +115,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.softDeleteById(EmployeeHoliday, { employee_id: employeeId }, transaction, true);
+        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeHoliday, items, {}, transaction);
         }
@@ -132,7 +134,7 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.softDeleteById(EmployeeWeeklyOff, { employee_id: employeeId }, transaction, true);
+        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeWeeklyOff, items, {}, transaction);
         }
@@ -151,28 +153,70 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.softDeleteById(EmployeeLeaveCategory, { employee_id: employeeId }, transaction, true);
+        await commonQuery.hardDeleteRecords(EmployeeLeaveCategory, { employee_id: employeeId }, transaction);
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeLeaveCategory, items, {}, transaction);
         }
     }
 
     static async syncSalaryTemplate(employeeId, templateId, manualData, transaction) {
-        let items = manualData;
-        if (!items && templateId) {
-            items = await commonQuery.findAllRecords(SalaryTemplateTransaction, { salary_template_id: templateId, status: 0 }, {}, transaction);
-            items = items.map(i => {
-                const d = i.toJSON();
-                delete d.id; delete d.created_at; delete d.updated_at;
-                return { ...d, employee_id: employeeId, template_id: templateId };
-            });
+        // First sync the main salary template data
+        let templateData = manualData;
+        let masterComponents = null;
+
+        if (!templateData && templateId) {
+            const masterTemplate = await commonQuery.findOneRecord(SalaryTemplate, templateId, {
+                include: [{ model: SalaryTemplateTransaction }]
+            }, transaction);
+            
+            if (masterTemplate) {
+                templateData = masterTemplate.toJSON();
+                masterComponents = templateData.SalaryTemplateTransactions; // Capture related components
+                delete templateData.id; delete templateData.created_at; delete templateData.updated_at;
+                delete templateData.SalaryTemplateTransactions;
+            }
         }
 
-        if (!items || !Array.isArray(items)) return;
+        let employeeSalaryTemplateId = null;
 
-        await commonQuery.softDeleteById(EmployeeSalaryComponent, { employee_id: employeeId }, transaction, true);
-        if (items.length > 0) {
-            await commonQuery.bulkCreate(EmployeeSalaryComponent, items, {}, transaction);
+        if (templateData) {
+            const existingTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: employeeId }, {}, transaction);
+            const templatePayload = { 
+                ...templateData, 
+                employee_id: employeeId, 
+                template_id: templateId || (existingTemplate ? existingTemplate.template_id : null) 
+            };
+
+            if (existingTemplate) {
+                await commonQuery.updateRecordById(EmployeeSalaryTemplate, existingTemplate.id, templatePayload, transaction);
+                employeeSalaryTemplateId = existingTemplate.id;
+            } else {
+                const newRecord = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
+                employeeSalaryTemplateId = newRecord.id;
+            }
+        }
+
+        // Then sync the salary template transactions (Components)
+        let items = masterComponents;
+        if (!items && manualData && manualData.components) {
+            items = manualData.components;
+        }
+
+        if (items && Array.isArray(items)) {
+            const mappedItems = items.map(i => {
+                const d = i.toJSON ? i.toJSON() : i;
+                delete d.id; delete d.created_at; delete d.updated_at;
+                return { 
+                    ...d, 
+                    employee_id: employeeId, 
+                    employee_salary_template_id: employeeSalaryTemplateId 
+                };
+            });
+
+            await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction);
+            if (mappedItems.length > 0) {
+                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, mappedItems, {}, transaction);
+            }
         }
     }
 
@@ -198,26 +242,26 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncPrintTemplates(employeeId, manualData, transaction) {
-        let items = manualData;
-        if (!items) {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['company_id'] }, transaction);
-            if (!employee) return;
-            items = await commonQuery.findAllRecords(PrintTemplate, { company_id: employee.company_id, status: 0 }, {}, transaction);
-            items = items.map(i => {
-                const d = i.toJSON();
-                delete d.id; delete d.created_at; delete d.updated_at;
-                return { ...d, employee_id: employeeId, template_id: i.id };
-            });
-        }
+    // static async syncPrintTemplates(employeeId, manualData, transaction) {
+    //     let items = manualData;
+    //     if (!items) {
+    //         const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['company_id'] }, transaction);
+    //         if (!employee) return;
+    //         items = await commonQuery.findAllRecords(PrintTemplate, { company_id: employee.company_id, status: 0 }, {}, transaction);
+    //         items = items.map(i => {
+    //             const d = i.toJSON();
+    //             delete d.id; delete d.created_at; delete d.updated_at;
+    //             return { ...d, employee_id: employeeId, template_id: i.id };
+    //         });
+    //     }
 
-        if (!items || !Array.isArray(items)) return;
+    //     if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.softDeleteById(EmployeePrintTemplate, { employee_id: employeeId }, transaction, true);
-        if (items.length > 0) {
-            await commonQuery.bulkCreate(EmployeePrintTemplate, items, {}, transaction);
-        }
-    }
+    //     await commonQuery.softDeleteById(EmployeePrintTemplate, { employee_id: employeeId }, transaction, true);
+    //     if (items.length > 0) {
+    //         await commonQuery.bulkCreate(EmployeePrintTemplate, items, {}, transaction);
+    //     }
+    // }
 }
 
 module.exports = EmployeeTemplateService;

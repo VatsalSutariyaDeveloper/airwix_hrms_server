@@ -34,5 +34,9 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true // These are static rules, rarely change
   });
 
+  StatutoryPTRule.associate = (models) => {
+    StatutoryPTRule.belongsTo(models.StateMaster, { foreignKey: "state_id" });
+  };
+
   return StatutoryPTRule;
 };

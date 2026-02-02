@@ -21,6 +21,7 @@ module.exports = (sequelize, DataTypes) => {
         holiday_template: { type: DataTypes.INTEGER,defaultValue: 0 },
         leave_template: { type: DataTypes.INTEGER,defaultValue: 0 },
         shift_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        salary_template_id: { type: DataTypes.INTEGER,defaultValue: 0 },
         attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0 },
         geofence_template: { type: DataTypes.INTEGER,defaultValue: 0 },
         attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0 },
@@ -164,7 +165,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "userHolidays" });
         Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "userWeeklyOffs" });
         Employee.hasMany(models.EmployeeLeaveCategory, { foreignKey: "employee_id", as: "userLeaveCategories" });
-        Employee.hasMany(models.EmployeeSalaryComponent, { foreignKey: "employee_id", as: "userSalaryComponents" });
+        Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "userSalaryComponents" });
         Employee.hasOne(models.EmployeeShiftSetting, { foreignKey: "employee_id", as: "userShiftSetting" });
         Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "userPrintTemplates" });
     };

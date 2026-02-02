@@ -1,7 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const employeeController = require("../controllers/employee/employeeController");
+const employeeSalaryTemplateController = require("../controllers/employee/employeeSalaryTemplateController");
 const { bufferImage, bufferFile } = require("../helpers/fileUpload");
+
 const importController = require("../controllers/settings/import/importController");
 // const { bufferImage } = require("../helpers/fileUpload");
 
@@ -16,9 +18,13 @@ router.post("/get-employees-by-template", employeeController.getEmployeesByTempl
 router.post("/assign-role", employeeController.assignRole);
 router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.update);
 router.delete("/", employeeController.delete);
+router.post("/get-wages", employeeController.getWages);
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
 
+// Employee Salary Template Routes
+router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
+router.put("/salary-template/:employeeId", employeeSalaryTemplateController.updateTemplate);
 
 module.exports = router;
