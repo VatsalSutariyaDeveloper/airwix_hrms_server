@@ -266,3 +266,143 @@ exports.calculateBatchMonthlySalary = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.getEmployeePayslipList = async (req, res) => {
+    try {
+        const { employee_id } = req.body;
+        if (!employee_id) {
+            return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, {
+            employee_id,
+            status: { [Op.in]: [1, 2] } // Finalized or Paid
+        }, {
+            order: [['year', 'DESC'], ['month', 'DESC']]
+        });
+
+        const formattedList = payslips.map(p => {
+            const monthName = dayjs().month(p.month - 1).format('MMM');
+            return {
+                id: p.id,
+                month: p.month,
+                year: p.year,
+                month_year_string: `${monthName} ${p.year}`,
+                ctc: p.ctc_monthly,
+                net_payable: p.net_payable,
+                status: p.status,
+                status_text: p.status === 1 ? "Finalized" : "Paid"
+            };
+        });
+
+        return res.ok(formattedList);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getCalculationHistory = async (req, res) => {
+    try {
+        const { employee_id } = req.body;
+        if (!employee_id) {
+            return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
+        }
+
+        // Fetch all payslips (Drafts, Finalized, Paid) to show existing calculations
+        const payslips = await commonQuery.findAllRecords(Payslip, {
+            employee_id,
+            status: { [Op.in]: [0, 1, 2] } // 0: Draft, 1: Finalized, 2: Paid
+        }, {
+            order: [['year', 'DESC'], ['month', 'DESC']]
+        });
+
+        const list = payslips.map(p => {
+            const monthName = dayjs().month(p.month - 1).format('MMM');
+            return {
+                id: p.id,
+                month: p.month,
+                year: p.year,
+                month_year_string: `${monthName} ${p.year}`,
+                ctc: p.ctc_monthly,
+                net_payable: p.net_payable,
+                status: p.status,
+                status_text: p.status === 0 ? "Draft" : (p.status === 1 ? "Finalized" : "Paid")
+            };
+        });
+
+        return res.ok(list);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getAvailableMonthsForCalculation = async (req, res) => {
+    try {
+        const { employee_id } = req.body;
+        if (!employee_id) {
+            return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
+        }
+
+        // 1. Get unique months/years from AttendanceDay
+        // Using raw query for efficiency on large attendance tables
+        const attendanceMonths = await sequelize.query(`
+            SELECT DISTINCT 
+                EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
+                EXTRACT(YEAR FROM attendance_date)::INTEGER as year
+            FROM attendance_day
+            WHERE employee_id = :employee_id AND status != 99
+            ORDER BY year DESC, month DESC
+        `, {
+            replacements: { employee_id },
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        // 2. Get existing payslips to skip already finalized ones
+        const existingPayslips = await commonQuery.findAllRecords(Payslip, {
+            employee_id,
+            status: { [Op.ne]: 99 }
+        });
+
+        // 3. Combine and Format
+        const result = [];
+        for (const am of attendanceMonths) {
+            const existing = existingPayslips.find(p => p.month === am.month && p.year === am.year);
+            const monthName = dayjs().month(am.month - 1).format('MMM');
+            
+            let ctc = "0.00";
+            let net_payable = "0.00";
+            
+            if (existing) {
+                // Use values from existing payslip (Draft/Finalized/Paid)
+                ctc = existing.ctc_monthly;
+                net_payable = existing.net_payable;
+            } else {
+                try {
+                    // Dynamically calculate for months without a payslip record
+                    const summary = await performSalaryCalculation(employee_id, am.month, am.year);
+                    if (summary && summary.salary) {
+                        ctc = summary.salary.ctc_monthly;
+                        net_payable = summary.salary.netPayable;
+                    }
+                } catch (e) {
+                    // If calculation fails (e.g. template not mapped), fall back to 0
+                    console.error(`Calculation failed for ${monthName} ${am.year}:`, e.message);
+                }
+            }
+            
+            result.push({
+                month: am.month,
+                year: am.year,
+                label: `${monthName} ${am.year}`,
+                is_calculated: !!existing,
+                ctc,
+                net_payable,
+                status: existing ? (existing.status === 0 ? "Draft" : (existing.status === 1 ? "Finalized" : "Paid")) : "No Calculation"
+            });
+        }
+
+        return res.ok(result);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
