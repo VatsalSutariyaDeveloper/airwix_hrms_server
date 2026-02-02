@@ -4,8 +4,6 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const http = require("http");
 const os = require("os");
-
-dotenv.config({ path: ".env.local", override: true });
 dotenv.config({ path: ".env" });
 // const { initSocket } = require('./socket');
 const db = require("./models");
@@ -63,19 +61,19 @@ app.use((req, res, next) => {
 });
 
 app.use(responseFormatter);
-app.use("/auth", authRoutes);
+app.use("/api/auth", authRoutes);
 
 app.use(authMiddleware);
 app.use(checkPermission);
 
 // Load master routes
-app.use("/dashboard", dashboardRoutes);
-app.use("/settings", settingsRoutes);
-app.use("/administration", administrationRoutes);
-app.use("/subscription", subscriptionRoutes);
-app.use("/attendance", attendanceRoutes);
-app.use("/employee", employeeRoutes);
-app.use("/payroll", payrollRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/administration", administrationRoutes);
+app.use("/api/subscription", subscriptionRoutes);
+app.use("/api/attendance", attendanceRoutes);
+app.use("/api/employee", employeeRoutes);
+app.use("/api/payroll", payrollRoutes);
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS
