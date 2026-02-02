@@ -421,6 +421,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let earlyOutMinutes = 0;
   let overtimeMinutes = 0;
   let fineAmount = 0;
+  let earlyOvertimeMinutes = 0;
 
   if (shift) {
     const shiftStart = dayjs(`${date} ${shift.start_time}`);
@@ -450,7 +451,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
     }
 
-    let earlyOvertimeMinutes = 0;
     if (shift && template && template.early_overtime_allowed && firstIn) {
       const actualIn = dayjs(firstIn.punch_time);
       const diffEarly = shiftStart.diff(actualIn, "minute", true);
@@ -536,7 +536,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
             // This would influence payroll, but for summary we record the mins.
         }
     }
-}
+  }
 
   finalWorkedMinutes = Math.max(0, finalWorkedMinutes);
 

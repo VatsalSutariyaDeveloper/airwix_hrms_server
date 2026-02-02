@@ -243,19 +243,16 @@ exports.getStatesWithRules = async (req, res) => {
             {},
             {
                 attributes: ['state_id'],
-                group: ['state_id'],
                 include: [{ 
                     model: StateMaster, 
                     as: 'state',
-                    attributes: [] 
+                    attributes: ['id', 'state_name'] 
                 }],
-                attributes: [
-                    'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
-                ]
+                group: ['StatutoryLWFRule.state_id', 'state.id', 'state.state_name'],
             }
         );
         
-        const states = rules.map(r => r.StateMaster);
+        const states = rules.map(r => r.state).filter(Boolean);
         return res.ok(states);
     } catch (err) {
         return handleError(err, res, req);

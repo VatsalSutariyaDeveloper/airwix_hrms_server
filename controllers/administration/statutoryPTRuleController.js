@@ -249,19 +249,16 @@ exports.getStatesWithRules = async (req, res) => {
             {},
             {
                 attributes: ['state_id'],
-                group: ['state_id'],
                 include: [{ 
                     model: StateMaster, 
                     as: 'state',
-                    attributes: [] 
+                    attributes: ['id', 'state_name'] 
                 }],
-                attributes: [
-                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
-                ]
+                group: ['StatutoryPTRule.state_id', 'state.id', 'state.state_name'],
             }
         );
         
-        const states = rules.map(r => r.StateMaster);
+        const states = rules.map(r => r.state).filter(Boolean);
         return res.ok(states);
     } catch (err) {
         return handleError(err, res, req);

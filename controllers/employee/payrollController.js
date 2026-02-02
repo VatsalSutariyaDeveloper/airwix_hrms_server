@@ -104,7 +104,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         const comp = trans.SalaryComponent;
         const amount = parseFloat(trans.monthly_amount || 0);
         
-        if (comp.component_type === "EARNING") {
+        if (comp?.component_type === "EARNING") {
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,

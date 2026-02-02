@@ -77,6 +77,11 @@ class EmployeeTemplateService {
     // --- INTERNAL SYNC HELPERS ---
 
     static async syncAttendanceTemplate(employeeId, templateId, manualData, transaction) {
+        if (!templateId && !manualData) {
+            await commonQuery.softDeleteById(EmployeeAttendanceTemplate, { employee_id: employeeId }, transaction);
+            return;
+        }
+
         let data = manualData;
         if (!data && templateId) {
             const master = await commonQuery.findOneRecord(AttendanceTemplate, templateId, {}, transaction);
@@ -99,6 +104,11 @@ class EmployeeTemplateService {
     }
 
     static async syncHolidayTemplate(employeeId, templateId, manualData, transaction) {
+        if (!templateId && !manualData) {
+            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
+            return;
+        }
+
         let items = manualData;
         if (!items && templateId) {
             items = await commonQuery.findAllRecords(HolidayTransaction, { template_id: templateId, status: 0 }, {}, transaction);
@@ -118,6 +128,11 @@ class EmployeeTemplateService {
     }
 
     static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction) {
+        if (!templateId && !manualData) {
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
+            return;
+        }
+
         let items = manualData;
         if (!items && templateId) {
             items = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: templateId, status: 0 }, {}, transaction);
@@ -145,6 +160,12 @@ class EmployeeTemplateService {
     }
 
     static async syncSalaryTemplate(employeeId, templateId, manualData, transaction) {
+        if (!templateId && !manualData) {
+            await commonQuery.softDeleteById(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction);
+            await commonQuery.softDeleteById(EmployeeSalaryTemplate, { employee_id: employeeId }, transaction);
+            return;
+        }
+
         // First sync the main salary template data
         let templateData = manualData;
         let masterComponents = null;
@@ -206,6 +227,11 @@ class EmployeeTemplateService {
     }
 
     static async syncShiftTemplate(employeeId, templateId, manualData, transaction) {
+        if (!templateId && !manualData) {
+            await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
+            return;
+        }
+
         let data = manualData;
         if (!data && templateId) {
             const master = await commonQuery.findOneRecord(ShiftTemplate, templateId, {}, transaction);
