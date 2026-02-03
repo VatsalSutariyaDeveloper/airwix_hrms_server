@@ -75,11 +75,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // 3. Fetch Core Data (Parallel)
-<<<<<<< Updated upstream
-    const [companyList, sidebarModuleList, companySettings, allPermissions, employeeSettings] = await Promise.all([
-=======
-    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList] = await Promise.all([
->>>>>>> Stashed changes
+    const [companyList, sidebarModuleList, companySettings, allPermissions, employeeSettings, branchList] = await Promise.all([
       // A. Company List
       commonQuery.findAllRecords(CompanyMaster, where, {
         include: [
@@ -115,9 +111,8 @@ exports.sessionData = async (req, res) => {
         ]
       }, null, false),
 
-<<<<<<< Updated upstream
-      commonQuery.findAllRecords(EmployeeSettings, { company_id, status: 0 }, {}, null, false)
-=======
+      commonQuery.findAllRecords(EmployeeSettings, { company_id, status: 0 }, {}, null, false),
+
       // E. Branch List (Current Company)
       userData.role_id === 1 
         ? commonQuery.findAllRecords(BranchMaster, { company_id: company_id, status: 0 }, {}, null, false)
@@ -125,7 +120,6 @@ exports.sessionData = async (req, res) => {
             id: { [Op.in]: sequelize.literal(`(SELECT branch_id FROM user_company_roles WHERE user_id = ${user_id} AND company_id = ${company_id} AND status = 0)`) },
             status: 0 
           }, {}, null, false)
->>>>>>> Stashed changes
     ]);
 
     // Transform employeeSettings to key-value format
@@ -277,11 +271,8 @@ exports.sessionData = async (req, res) => {
       settings: settingsObject,
       companySubscription: finalSubscriptionData,
       planStatus: planStatus,
-<<<<<<< Updated upstream
-      employeeSettings: employeeSettingsObject
-=======
+      employeeSettings: employeeSettingsObject,
       branch_list: branchList || []
->>>>>>> Stashed changes
     };
 
     await transaction.commit();
