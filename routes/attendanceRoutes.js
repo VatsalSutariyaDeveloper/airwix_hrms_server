@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { bufferImage } = require("../helpers/fileUpload");
 
 const { 
   attendancePunch, 
@@ -12,7 +13,7 @@ const {
   getMonthlyAttendance
 }  = require("../controllers/attendance/attendanceController");
 
-router.post("/punch", attendancePunch);
+router.post("/punch", bufferImage("image"), attendancePunch);
 router.post("/summary", getAttendanceSummary);
 router.post("/update-day", updateAttendanceDay);
 router.post("/bulk-update-day", bulkUpdateAttendanceDay);

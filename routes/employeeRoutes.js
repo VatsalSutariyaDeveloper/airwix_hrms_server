@@ -11,6 +11,7 @@ const importController = require("../controllers/settings/import/importControlle
 
 router.post("/", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.create);
 router.post("/get-transactions", employeeController.getAll);
+router.post("/check-employee-code", employeeController.checkEmployeeCode);
 router.post("/get-punch", employeeController.getPunch);
 router.post("/dropdown-list", employeeController.dropdownList);
 router.get("/get-employeecode", employeeController.getEmployeeCode);

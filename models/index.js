@@ -95,6 +95,7 @@ const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, Dat
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
 const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
+const EmployeeSettings = require("./settings/employeeSettings")(sequelize, DataTypes);
 
 // Payroll models
 const Payslip = require("./payroll/payslip")(sequelize, DataTypes); 
@@ -196,6 +197,7 @@ const db = {
   EmployeeWeeklyOff,
   EmployeeShiftSetting,
   EmployeePrintTemplate,
+  EmployeeSettings,
 
   // Payroll
   Payslip,

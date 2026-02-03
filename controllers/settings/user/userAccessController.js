@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission,} = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, EmployeeSettings,} = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -75,7 +75,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // 3. Fetch Core Data (Parallel)
-    const [companyList, sidebarModuleList, companySettings, allPermissions] = await Promise.all([
+    const [companyList, sidebarModuleList, companySettings, allPermissions, employeeSettings] = await Promise.all([
       // A. Company List
       commonQuery.findAllRecords(CompanyMaster, where, {
         include: [
@@ -109,8 +109,18 @@ exports.sessionData = async (req, res) => {
           { model: ModuleMaster, as: 'module', attributes: ['module_name'] },
           { model: ModuleEntityMaster, as: 'entity', attributes: ['entity_name', 'cust_entity_name'] }
         ]
-      }, null, false)
+      }, null, false),
+
+      commonQuery.findAllRecords(EmployeeSettings, { company_id, status: 0 }, {}, null, false)
     ]);
+
+    // Transform employeeSettings to key-value format
+    const employeeSettingsObject = {};
+    if (employeeSettings && Array.isArray(employeeSettings)) {
+      for (const setting of employeeSettings) {
+        employeeSettingsObject[setting.settings_name] = setting.settings_value;
+      }
+    }
 
     // Validate Data
     if (!companyList || companyList.length === 0) {
@@ -252,7 +262,8 @@ exports.sessionData = async (req, res) => {
       currency: currencyDetails,
       settings: settingsObject,
       companySubscription: finalSubscriptionData,
-      planStatus: planStatus
+      planStatus: planStatus,
+      employeeSettings: employeeSettingsObject
     };
 
     await transaction.commit();

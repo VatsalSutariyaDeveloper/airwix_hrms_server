@@ -1,5 +1,5 @@
 const { punch, manualPunch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
-const { validateRequest, commonQuery, handleError } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate } = require("../../models");
 const { Op } = Sequelize;
@@ -23,12 +23,32 @@ exports.attendancePunch = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const result = await punch(req.body.employee_id, {
+    // Handle image upload if provided
+    let punchImage = null;
+    if (req.files && (req.files.image || req.files['image'])) {
+      const savedFiles = await uploadFile(
+        req, 
+        res, 
+        constants.PUNCH_IMAGE_FOLDER, 
+        t
+      );
+      punchImage = savedFiles.image || savedFiles['image'];
+      
+      if (!punchImage) {
+        await t.rollback();
+        return res.error(constants.SERVER_ERROR, { message: "Image upload failed" });
+      }
+    }
+
+    const result = await punch(
+      req.body.employee_id, 
+      {
       ...req.body,
       user_id: req.user.id,
       company_id: req.user.company_id,
       branch_id: req.user.branch_id,
-      ip_address: req.ip
+      ip_address: req.ip,
+      image_name: punchImage
     }, t);
     
     await t.commit();
@@ -476,9 +496,23 @@ exports.getAttendanceDayDetails = async (req, res) => {
       order: [["punch_time", "ASC"]]
     });
 
+    // 3. Add image URLs to punches
+    const punchesWithImages = punches.map(punch => {
+      const punchData = punch.get ? punch.toJSON() : punch;
+      
+      // Add full image URL if image_name exists
+      if (punchData.image_name) {
+        punchData.image_url = `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${punchData.image_name}`;
+      } else {
+        punchData.image_url = null;
+      }
+      
+      return punchData;
+    });
+
     return res.ok({
       attendanceDay: attendanceDay || null,
-      punches: punches
+      punches: punchesWithImages
     });
   } catch (err) {
     return handleError(err, res, req);

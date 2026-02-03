@@ -25,6 +25,7 @@ const departmentController = require("../controllers/settings/departmentControll
 const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
 const designationMasterController = require("../controllers/settings/designationMasterController");
 const incentiveTypeController = require("../controllers/settings/incentiveTypeController.js");
+const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -260,5 +261,11 @@ router.get("/incentive-type/:id", incentiveTypeController.getById);
 router.put("/incentive-type/:id", incentiveTypeController.update);
 router.delete("/incentive-type", incentiveTypeController.delete);
 router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
+
+
+router.post("/employee-settings/", employeeSettingsController.create);
+router.post("/employee-settings/get-transactions", employeeSettingsController.getAll);
+router.put("/employee-settings/", employeeSettingsController.update);
+
 
 module.exports = router;

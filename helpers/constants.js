@@ -12,6 +12,7 @@ const constants = {
   ATTENDANCE_LOG_FOLDER: "employee/attendance_log/",
   EMPLOYEE_DOC_FOLDER: "employee/docs/",
   EMPLOYEE_IMG_FOLDER: "employee/images/",
+  PUNCH_IMAGE_FOLDER: "punch_images/",
 
   /* =======================
    * COMMON / GENERIC

@@ -132,12 +132,12 @@ async function punch(employeeId, meta, transaction = null) {
   }
 
   // 5️⃣ Validation: Minimum 2 minutes gap between any consecutive punches
-  if (lastPunch) {
-    const minutesSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "minute", true);
-    if (minutesSinceLastPunch < 2) {
-      throw new Err("Please wait at least 2 minutes between punches");
-    }
-  }
+  // if (lastPunch) {
+  //   const minutesSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "minute", true);
+  //   if (minutesSinceLastPunch < 2) {
+  //     throw new Err("Please wait at least 2 minutes between punches");
+  //   }
+  // }
 
   // 4️⃣ Save raw punch
   const newPunch = await commonQuery.createRecord(AttendancePunch, {
@@ -369,7 +369,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       if (punches[i].punch_type === "IN" && punches[i + 1].punch_type === "OUT") {
         actualWorkedMinutes += dayjs(punches[i+1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true);
       } else if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
-        totalBreakMinutes += dayjs(punches[i+1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true);
+        totalBreakMinutes += Math.round(dayjs(punches[i+1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true));
       }
     }
   }

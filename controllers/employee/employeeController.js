@@ -14,7 +14,8 @@ const {
     EmployeeSalaryTemplate,
     SalaryComponent,
     WeeklyOffTemplate,
-    WeeklyOffTemplateDay
+    WeeklyOffTemplateDay,
+    EmployeeSettings
 } = require("../../models");
 
 const {
@@ -162,8 +163,19 @@ exports.create = async (req, res) => {
             });
         }
 
-        // 2. Generate Employee Code
-        // POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
+        if (POST.prefix || POST.number) {
+            if (!POST.number) {
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { message: "Number is required when storing employee settings" });
+            }
+
+            const settingsData = {
+                settings_name: POST.prefix, 
+                settings_value: POST.number,
+            };
+
+            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
+        }
 
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
@@ -173,8 +185,7 @@ exports.create = async (req, res) => {
             return res.error(constants.DATABASE_ERROR, { errors: constants.FAILED_TO_CREATE_RECORD });
         }
 
-        // Initialize all templates to user-wise tables (including leave balances)
-        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
+        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);   
 
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
@@ -668,6 +679,29 @@ exports.getAll = async (req, res) => {
 
         return res.ok(data);
     } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.checkEmployeeCode = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { employee_code } = req.body;
+        const emp = await commonQuery.findOneRecord(
+            Employee,
+            { employee_code },
+            {},
+            transaction
+        );
+
+        if (emp) {
+            await transaction.commit();
+            return res.error(constants.ALREADY_EXISTS);
+        }
+       
+        return res.ok({ exists: false });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
