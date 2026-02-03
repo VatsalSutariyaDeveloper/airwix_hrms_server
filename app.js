@@ -39,8 +39,20 @@ const server = http.createServer(app);
 // Initialize Socket.IO and pass it the http server instance
 // initSocket(server);
 
+app.use(responseFormatter);
 app.use(cors());
 app.use(express.json());
+// Catch and handle JSON parsing errors
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error(`🚨 JSON Parsing Error: ${err.message} from IP: ${req.ip}`);
+    return res.status(400).json({
+      success: false,
+      message: "Malformed JSON payload: " + err.message
+    });
+  }
+  next();
+});
 app.use(express.urlencoded({ extended: true }));
 // app.use(decryptRequest);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -62,7 +74,9 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(responseFormatter);
+app.get("/", (req, res) => res.send("HRMS Project Running Successfully"));
+
+// --- Auth Routes (Skip Middleware) ---
 app.use("/auth", authRoutes);
 
 app.use(authMiddleware);

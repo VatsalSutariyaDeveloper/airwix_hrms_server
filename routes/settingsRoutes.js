@@ -30,6 +30,7 @@ const employeeSettingsController = require("../controllers/settings/employeeSett
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
 router.get("/switch-company", userAccessController.switchCompany);
+router.get("/switch-branch", userAccessController.switchBranch);
 
 
 // ==========================

@@ -39,8 +39,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // 2. Fetch Attendance Data for the month
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
         employee_id,
-        attendance_date: { [Op.between]: [startDate, endDate] },
-        status: { [Op.ne]: 99 }
+        attendance_date: { [Op.between]: [startDate, endDate] }
     }, {}, transaction);
 
     // Step A: Aggregate Counts
@@ -121,7 +120,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     return {
         employee: {
             id: employee.id,
-            name: `${employee.first_name} ${employee.last_name}`,
+            name: employee.first_name,
             code: employee.employee_code,
             template: template.template_name
         },
@@ -194,7 +193,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             total_fine: summary.salary.totalFine,
             ot_amount: summary.salary.overtimeAmount,
             net_payable: summary.salary.netPayable,
-            breakdown_json: summary.breakdown,
+            break_down_json: summary.breakdown,
             status: 1, // Finalized
             user_id: req.user.id || 0,
             branch_id: summary.meta.branch_id,
@@ -251,7 +250,7 @@ exports.calculateBatchMonthlySalary = async (req, res) => {
                 const summary = await performSalaryCalculation(emp.id, month, year);
                 summaries.push(summary);
             } catch (err) {
-                errors.push({ employee_id: emp.id, name: `${emp.first_name} ${emp.last_name}`, error: err.message });
+                errors.push({ employee_id: emp.id, name: emp.first_name, error: err.message });
             }
         }
 
@@ -303,23 +302,40 @@ exports.getEmployeePayslipList = async (req, res) => {
 
 exports.getCalculationHistory = async (req, res) => {
     try {
-        const { employee_id } = req.body;
-        if (!employee_id) {
-            return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
-        }
+        // Configuration for searchable and sortable fields
+        const fieldConfig = [
+            ['year', false, true],
+            ['month', false, true],
+            ['status', false, true],
+            ['ctc_monthly', false, true],
+            ['net_payable', false, true],
+            ['employee.first_name', true, true],
+            ['employee.employee_code', true, true]
+        ];
 
-        // Fetch all payslips (Drafts, Finalized, Paid) to show existing calculations
-        const payslips = await commonQuery.findAllRecords(Payslip, {
-            employee_id,
-            status: { [Op.in]: [0, 1, 2] } // 0: Draft, 1: Finalized, 2: Paid
-        }, {
-            order: [['year', 'DESC'], ['month', 'DESC']]
-        });
+        const result = await commonQuery.fetchPaginatedData(
+            Payslip,
+            req.body,
+            fieldConfig,
+            {
+                include: [{
+                    model: Employee,
+                    as: "employee",
+                    attributes: ['id', 'first_name', 'employee_code']
+                }]
+            }
+        );
 
-        const list = payslips.map(p => {
+        // Format items for the response
+        result.items = result.items.map(p => {
             const monthName = dayjs().month(p.month - 1).format('MMM');
+            const firstName = p.employee?.first_name || "";
+            
             return {
                 id: p.id,
+                employee_id: p.employee_id,
+                employee_name: firstName.trim(),
+                employee_code: p.employee?.employee_code || "N/A",
                 month: p.month,
                 year: p.year,
                 month_year_string: `${monthName} ${p.year}`,
@@ -330,7 +346,7 @@ exports.getCalculationHistory = async (req, res) => {
             };
         });
 
-        return res.ok(list);
+        return res.ok(result);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -350,7 +366,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
                 EXTRACT(YEAR FROM attendance_date)::INTEGER as year
             FROM attendance_day
-            WHERE employee_id = :employee_id AND status != 99
+            WHERE employee_id = :employee_id AND status != 2
             ORDER BY year DESC, month DESC
         `, {
             replacements: { employee_id },
@@ -360,7 +376,6 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
         // 2. Get existing payslips to skip already finalized ones
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
             employee_id,
-            status: { [Op.ne]: 99 }
         });
 
         // 3. Combine and Format
@@ -402,6 +417,78 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
         }
 
         return res.ok(result);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get detailed data for a specific payslip by ID
+ */
+exports.getPayslipById = async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) {
+            return res.error("VALIDATION_ERROR", { message: "Payslip ID is required" });
+        }
+
+        const payslip = await commonQuery.findOneRecord(Payslip, id, {
+            include: [{
+                model: Employee,
+                as: "employee",
+                attributes: ['id', 'first_name', 'employee_code', 'designation', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
+                // Optional: include department name if needed
+            }]
+        });
+
+        if (!payslip) {
+            return res.error("NOT_FOUND", { message: "Payslip not found" });
+        }
+
+        const monthName = dayjs().month(payslip.month - 1).format('MMMM');
+        
+        // Final Formatting for UI "Data Pass"
+        const formattedData = {
+            id: payslip.id,
+            employee: {
+                id: payslip.employee?.id,
+                name: payslip.employee?.first_name,
+                code: payslip.employee?.employee_code,
+                designation: payslip.employee?.designation,
+                joining_date: payslip.employee?.joining_date,
+                uan: payslip.employee?.uan_number,
+                pan: payslip.employee?.pan_number,
+                bankName: payslip.employee?.bank_name,
+                accountNo: payslip.employee?.bank_account_number
+            },
+            period: {
+                month: payslip.month,
+                year: payslip.year,
+                label: `${monthName} ${payslip.year}`,
+                payDate: dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('DD/MM/YYYY')
+            },
+            attendance: {
+                present: payslip.present_days,
+                absent: payslip.absent_days,
+                leave: payslip.leave_days,
+                weekly_off: payslip.weekly_offs,
+                holiday: payslip.holidays,
+                lwp: payslip.lwp_days
+            },
+            salary: {
+                ctc: payslip.ctc_monthly,
+                perDay: payslip.per_day_salary,
+                netPayable: payslip.net_payable,
+                fine: payslip.total_fine,
+                overtime: payslip.ot_amount,
+                lwpDeduction: payslip.lwp_deduction
+            },
+            breakdown: payslip.break_down_json,
+            status: payslip.status,
+            status_text: payslip.status === 0 ? "Draft" : (payslip.status === 1 ? "Finalized" : "Paid")
+        };
+
+        return res.ok(formattedData);
     } catch (err) {
         return handleError(err, res, req);
     }
