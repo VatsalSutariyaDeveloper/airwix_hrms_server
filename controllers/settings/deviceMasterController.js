@@ -4,7 +4,6 @@ const { constants } = require("../../helpers/constants");
 const ApprovalEngine = require("../../helpers/approvalEngine");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 
-
 const STATUS = {
     ACTIVE: 0,
     INACTIVE: 1,
@@ -78,7 +77,7 @@ exports.getAll = async (req, res) => {
 
         return res.ok(data);
     } catch (err) {
-    return handleError(err, res, req);
+        return handleError(err, res, req);
     }
 };
 // Get By Id
@@ -97,18 +96,11 @@ exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         // Only validate fields sent in request
-        const fieldLabels = {
+
+        const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No"
         };
-
-        const requiredFields = {};
-
-        Object.keys(fieldLabels).forEach(key => {
-            if (req.body[key] !== undefined) {
-                requiredFields[key] = fieldLabels[key];
-            }
-        });
 
         const errors = await validateRequest(
             req.body,
@@ -127,7 +119,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(DeviceMaster, { id: req.params.id }, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(DeviceMaster, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -157,14 +149,6 @@ exports.delete = async (req, res) => {
         }
         let { ids } = req.body; // Accept array of ids
 
-        //normalize ids
-        if (Array.isArray(ids) && typeof ids[0] === "string") {
-            ids = ids[0]
-                .split(",")
-                .map(id => parseInt(id.trim()))
-                .filter(Boolean);
-        }
-
         // Validate that ids is an array and not empty
         if (!Array.isArray(ids) || ids.length === 0) {
             await transaction.rollback();
@@ -188,10 +172,8 @@ exports.delete = async (req, res) => {
 exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-
+    
         const { status, ids } = req.body; // expecting status in request body
-        // console.log("ID And Status:", ids, status);
-
         const requiredFields = {
             ids: "Select Any One Data",
             status: "Select Status"

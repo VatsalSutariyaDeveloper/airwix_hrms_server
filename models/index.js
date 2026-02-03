@@ -98,6 +98,8 @@ const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(se
 
 // Payroll models
 const Payslip = require("./payroll/payslip")(sequelize, DataTypes); 
+const IncentiveType = require("./settings/incentiveType")(sequelize, DataTypes);
+
 
 // Collect all models in one db object
 const db = {
@@ -197,6 +199,7 @@ const db = {
 
   // Payroll
   Payslip,
+  IncentiveType,
 };
 
 Object.keys(db).forEach(modelName => {

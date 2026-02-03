@@ -24,6 +24,7 @@ const salaryComponentController = require("../controllers/settings/salary/salary
 const departmentController = require("../controllers/settings/departmentController");
 const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
 const designationMasterController = require("../controllers/settings/designationMasterController");
+const incentiveTypeController = require("../controllers/settings/incentiveTypeController.js");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -247,5 +248,17 @@ router.get("/employee/download-errors", importEmployeeController.downloadErrorFi
 router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 // router.get("/download-errors", importEmployeeController.downloadErrorFile);
 // router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+
+// ==========================
+// INCENTIVE_TYPE
+// ==========================
+// Base Path: /incentive-type
+router.post("/incentive-type", incentiveTypeController.create);
+router.post("/incentive-type/get-transactions", incentiveTypeController.getAll);
+router.post("/incentive-type/dropdown-list", incentiveTypeController.dropdownList);
+router.get("/incentive-type/:id", incentiveTypeController.getById);
+router.put("/incentive-type/:id", incentiveTypeController.update);
+router.delete("/incentive-type", incentiveTypeController.delete);
+router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
 
 module.exports = router;

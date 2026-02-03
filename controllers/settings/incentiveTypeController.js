@@ -1,4 +1,4 @@
-const { DesignationMaster } = require("../../models");
+const { IncentiveType } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
@@ -7,13 +7,14 @@ exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const requiredFields = {
-            designation_name: "Designation Name",
+            name: "Name",
+            description: "Description",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
-                model: DesignationMaster,
-                fields: ["designation_name"],
+                model: IncentiveType,
+                fields: ["name"],
             }
         }, transaction);
 
@@ -22,9 +23,10 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        await commonQuery.createRecord(DesignationMaster, req.body, transaction);
+        await commonQuery.createRecord(IncentiveType, req.body, transaction);
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_CREATED);
+        return res.success(constants.INCENTIVE_TYPE_CREATED);
+
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -35,13 +37,16 @@ exports.create = async (req, res) => {
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["designation_name", true, true],
+            ["name", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
-            DesignationMaster,
+            IncentiveType,
             req.body,
             fieldConfig,
+            {
+                attributes: ['id', 'name', 'description', 'status']
+            }
         );
 
         return res.ok(data);
@@ -52,7 +57,7 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(DesignationMaster, req.params.id);
+        const record = await commonQuery.findOneRecord(IncentiveType, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -60,12 +65,13 @@ exports.getById = async (req, res) => {
     }
 };
 
-// Update designation record by ID
+// Update shift record by ID
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
+        // Only validate fields sent in request
         const requiredFields = {
-            designation_name: "Designation Name",
+            name: "Name",
         };
 
         const errors = await validateRequest(
@@ -73,8 +79,8 @@ exports.update = async (req, res) => {
             requiredFields,
             {
                 uniqueCheck: {
-                    model: DesignationMaster,
-                    fields: ["designation_name"],
+                    model: IncentiveType,
+                    fields: ["name"],
                     excludeId: req.params.id,
                 }
             },
@@ -85,22 +91,24 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(DesignationMaster, req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(IncentiveType, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_UPDATED);
+        return res.success(constants.INCENTIVE_TYPE_UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Soft delete a designrecord by ID
+// Soft delete a shift record by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
+    //multiple delete
+
     try {
         const requiredFields = {
             ids: "Select Data"
@@ -119,13 +127,13 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(DesignationMaster, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(IncentiveType, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_DELETED);
+        return res.success(constants.INCENTIVE_TYPE_DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -138,6 +146,7 @@ exports.updateStatus = async (req, res) => {
     try {
 
         const { status, ids } = req.body; // expecting status in request body
+        // console.log("ID And Status:", ids, status);
 
         const requiredFields = {
             ids: "Select Any One Data",
@@ -158,7 +167,7 @@ exports.updateStatus = async (req, res) => {
 
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
-            DesignationMaster,
+            IncentiveType,
             ids,
             { status },
             transaction
@@ -170,7 +179,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_UPDATED);
+        return res.success(constants.INCENTIVE_TYPE_UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -181,15 +190,15 @@ exports.updateStatus = async (req, res) => {
 exports.dropdownList = async (req, res) => {
     try {
         const fieldConfig = [
-            ["designation_name", true, true],
+            ["name", true, true],
         ];
 
         const result = await commonQuery.fetchPaginatedData(
-            DesignationMaster,
-            { ...req.body, status: 0 },
+            IncentiveType,
+           { ...req.body, status: 0 },
             fieldConfig,
             {
-                attributes: ['id', 'designation_name']
+                attributes: ['id', 'name']
             }
         );
 
