@@ -7,8 +7,7 @@ exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const requiredFields = {
-            designation_name: "Designation Name",
-            // mobile_no: "Mobile No",
+            designation_name: "Designation Name"
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
@@ -23,10 +22,9 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const designation_master = await commonQuery.createRecord(DesignationMaster, req.body, transaction);
+        await commonQuery.createRecord(DesignationMaster, req.body, transaction);
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_CREATED, designation_master);
-
+        return res.success(constants.DESIGNATION_MASTER_CREATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -66,18 +64,9 @@ exports.getById = async (req, res) => {
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        // Only validate fields sent in request
-        const fieldLabels = {
+        const requiredFields = {
             designation_name: "Designation Name",
         };
-
-        const requiredFields = {};
-
-        Object.keys(fieldLabels).forEach(key => {
-            if (req.body[key] !== undefined) {
-                requiredFields[key] = fieldLabels[key];
-            }
-        });
 
         const errors = await validateRequest(
             req.body,
@@ -96,13 +85,13 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(DesignationMaster, { id: req.params.id }, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(DesignationMaster, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.DESIGNATION_MASTER_UPDATED, updated);
+        return res.success(constants.DESIGNATION_MASTER_UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -112,8 +101,6 @@ exports.update = async (req, res) => {
 // Soft delete a shift record by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
-    //multiple delete
-
     try {
         const requiredFields = {
             ids: "Select Data"
@@ -124,15 +111,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        let { ids } = req.body; // Accept array of ids
-
-        //normalize ids
-        if (Array.isArray(ids) && typeof ids[0] === "string") {
-            ids = ids[0]
-                .split(",")
-                .map(id => parseInt(id.trim()))
-                .filter(Boolean);
-        }
+        let { ids } = req.body;
 
         // Validate that ids is an array and not empty
         if (!Array.isArray(ids) || ids.length === 0) {
@@ -158,8 +137,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
 
-        const { status, ids } = req.body; // expecting status in request body
-        // console.log("ID And Status:", ids, status);
+        const { status, ids } = req.body;
 
         const requiredFields = {
             ids: "Select Any One Data",
@@ -202,7 +180,6 @@ exports.updateStatus = async (req, res) => {
 // Get dropdown list of active designation masters
 exports.dropdownList = async (req, res) => {
     try {
-        // const result = await commonQuery.findAllRecords(StatutoryLWFRule, { status: 0 });
         const fieldConfig = [
             ["designation_name", true, true],
         ];

@@ -22,7 +22,7 @@ exports.create = async (req, res) => {
 
     await commonQuery.createRecord(Department, POST, transaction);
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_CREATED);
+    return res.success(constants.DEPARTMENT_MASTER_CREATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -49,12 +49,12 @@ exports.update = async (req, res) => {
     const existingDepartment = await commonQuery.findOneRecord(Department, { id });
     if (!existingDepartment) {
       await transaction.rollback();
-      return res.error(constants.DEPARTMENT_NOT_FOUND);
+      return res.error(constants.NOT_FOUND);
     }
 
     await commonQuery.updateRecordById(Department, id, POST, transaction);
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_UPDATED);
+    return res.success(constants.DEPARTMENT_MASTER_UPDATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -84,7 +84,7 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const record = await commonQuery.findOneRecord(Department, req.params.id);
-    if (!record || record.status === 2) return res.error(constants.DEPARTMENT_NOT_FOUND);
+    if (!record || record.status === 2) return res.error(constants.DEPARTMENT_MASTER_NOT_FOUND);
 
     return res.ok(record);
   } catch (err) {
@@ -117,7 +117,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_DELETED);
+    return res.success(constants.DEPARTMENT_MASTER_DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -146,7 +146,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_UPDATED);
+    return res.success(constants.DEPARTMENT_MASTER_UPDATED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);

@@ -245,5 +245,7 @@ router.patch("/designation/status", designationMasterController.updateStatus);
 // Base Path: /employee
 router.get("/employee/download-errors", importEmployeeController.downloadErrorFile);
 router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+// router.get("/download-errors", importEmployeeController.downloadErrorFile);
+// router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 module.exports = router;
