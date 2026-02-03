@@ -23,6 +23,8 @@ const CompanyMaster = require("./settings/company/companyMaster")(sequelize, Dat
 const CompanyConfigration = require("./settings/company/companyConfigration")(sequelize, DataTypes);
 const CompanyAddress = require("./settings/company/companyAddress")(sequelize, DataTypes);
 const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
+const DesignationMaster = require("./settings/designationMaster")(sequelize, DataTypes);
+
 
 // Auth models
 const User = require("./settings/user/user")(sequelize, DataTypes);
@@ -118,6 +120,7 @@ const db = {
   CompanyConfigration,
   CompanyAddress,
   DeviceMaster,
+  DesignationMaster,
 
   // SeriesTypeMaster
   SeriesTypeMaster,

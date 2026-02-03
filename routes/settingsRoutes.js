@@ -9,7 +9,7 @@ const companyCofigrationController = require("../controllers/settings/company/co
 const userController = require("../controllers/settings/user/userController");
 const rolePermissionController = require("../controllers/settings/user/rolePermissionController");
 const importController = require("../controllers/settings/import/importController");
-const importEmployeeController = require('../controllers/settings/import/importEmplyeeController.js');
+const importEmployeeController = require('../controllers/settings/import/importEmployeeController.js');
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftTemplateController = require("../controllers/settings/shiftTemplateController");
@@ -23,6 +23,7 @@ const salaryTemplateController = require("../controllers/settings/salary/salaryT
 const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
 const departmentController = require("../controllers/settings/departmentController");
 const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
+const designationMasterController = require("../controllers/settings/designationMasterController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -169,11 +170,6 @@ router.delete("/attendance-template", attendanceTemplateController.delete);
 router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
 router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
 
-// ==========================
-// 29. IMPORT EMPLOYEE ROUTES
-// ==========================
-// router.get("/download-errors", importEmployeeController.downloadErrorFile);
-router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 
 // ==========================
@@ -230,5 +226,24 @@ router.get("/department/:id", departmentController.getById);
 router.put("/department/:id", departmentController.update);
 router.delete("/department/", departmentController.delete);
 router.patch("/department/status", departmentController.updateStatus);
+
+// ==========================
+// 34. DESIGNATION MASTER
+// ==========================
+// Base Path: /designation
+router.post("/designation/", designationMasterController.create);
+router.post("/designation/get-transactions", designationMasterController.getAll);
+router.post("/designation/dropdown-list", designationMasterController.dropdownList);
+router.get("/designation/:id", designationMasterController.getById);
+router.put("/designation/:id", designationMasterController.update);
+router.delete("/designation/", designationMasterController.delete);
+router.patch("/designation/status", designationMasterController.updateStatus);
+
+// ==========================
+// 35. IMPORT EMPLOYEE ROUTES
+// ==========================
+// Base Path: /employee
+router.get("/employee/download-errors", importEmployeeController.downloadErrorFile);
+router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 module.exports = router;
