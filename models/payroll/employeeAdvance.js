@@ -3,7 +3,7 @@ module.exports = (sequelize, DataTypes) => {
     "EmployeeAdvance",
     {
       employee_id: { type: DataTypes.BIGINT, allowNull: false },
-      payroll_month: { type: DataTypes.DATEONLY, allowNull: false, comment: "Month for which advance is applicable" },
+      payroll_month: { type: DataTypes.STRING(7), allowNull: false, comment: "Month for which advance is applicable" },
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
       notes: { type: DataTypes.TEXT, allowNull: true },

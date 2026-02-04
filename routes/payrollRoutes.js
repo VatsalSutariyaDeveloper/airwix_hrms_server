@@ -18,7 +18,7 @@ router.post("/get-payslip-details", payrollController.getPayslipById);
 // Base Path: /employee-incentive
 router.post("/employee-incentive", employeeIncentiveController.create);
 router.post("/employee-incentive/get-transactions", employeeIncentiveController.getAll);
-router.post("/employee-incentive/dropdown-list", employeeIncentiveController.dropdownList);
+// router.post("/employee-incentive/dropdown-list", employeeIncentiveController.dropdownList);
 router.get("/employee-incentive/:id", employeeIncentiveController.getById);
 router.put("/employee-incentive/:id", employeeIncentiveController.update);
 router.delete("/employee-incentive", employeeIncentiveController.delete);
@@ -30,7 +30,7 @@ router.patch("/employee-incentive/status", employeeIncentiveController.updateSta
 // Base Path: /employee-advance
 router.post("/employee-advance", employeeAdvanceController.create);
 router.post("/employee-advance/get-transactions", employeeAdvanceController.getAll);
-router.post("/employee-advance/dropdown-list", employeeAdvanceController.dropdownList);
+// router.post("/employee-advance/dropdown-list", employeeAdvanceController.dropdownList);
 router.get("/employee-advance/:id", employeeAdvanceController.getById);
 router.put("/employee-advance/:id", employeeAdvanceController.update);
 router.delete("/employee-advance", employeeAdvanceController.delete);

@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     {
       employee_id: { type: DataTypes.BIGINT, allowNull: false },
       incentive_type_id: { type: DataTypes.BIGINT, allowNull: false, comment: "Reference to incentive master" },
-      payroll_month: { type: DataTypes.DATEONLY, allowNull: false, comment: "Month in which incentive is applied" },
+      payroll_month: { type: DataTypes.STRING(7), allowNull: false, comment: "Month in which incentive is applied" },
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       incentive_date: { type: DataTypes.DATEONLY, allowNull: false },
       notes: { type: DataTypes.TEXT, allowNull: true },
