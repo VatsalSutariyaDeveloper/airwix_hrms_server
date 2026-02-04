@@ -15,7 +15,7 @@ module.exports = (sequelize, DataTypes) => {
     // Special case for March (Some states like Maharashtra deduct more in March)
     march_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     gender: {
-      type: DataTypes.TINYINT,
+      type: DataTypes.SMALLINT,
       defaultValue: 3,
       comment: "1: Male, 2: Female, 3: All (Some states have different tax for women)"
     },
