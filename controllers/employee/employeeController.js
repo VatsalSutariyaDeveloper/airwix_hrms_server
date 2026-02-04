@@ -1387,9 +1387,9 @@ exports.getWages = async(req, res) =>{
             return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
         }
 
-        if(attendanceDay.first_in == null){
-            return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
-        }
+        // if(attendanceDay.first_in == null){
+        //     return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
+        // }
 
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template']

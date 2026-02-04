@@ -1,4 +1,4 @@
-const { punch, manualPunch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
+const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate } = require("../../models");
@@ -87,18 +87,30 @@ exports.getAttendanceSummary = async (req, res) => {
           model: AttendanceDay,
           as: "attendance_days",
           where: { attendance_date: targetDate },
-          required: false
+          required: false,
+          include: [
+            {
+              model: AttendancePunch,
+              as: "AttendancePunches",
+              required: false
+            },
+          ]
         },
         {
-          model: AttendancePunch,
-          as: "attendance_punches",
-          where: {
-            punch_time: {
-              [Op.between]: [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`]
-            }
-          },
-          required: false
+          model: ShiftTemplate,
+          as: "shiftTemplate",
+          attributes: ["id", "shift_name", "start_time", "end_time"]
         }
+        // {
+        //   model: AttendancePunch,
+        //   as: "attendance_punches",
+        //   where: {
+        //     punch_time: {
+        //       [Op.between]: [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`]
+        //     }
+        //   },
+        //   required: false
+        // }
       ],
       order: [['first_name', 'ASC']],
       attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'status']
@@ -135,7 +147,7 @@ exports.getAttendanceSummary = async (req, res) => {
 
     employees.forEach(emp => {
       const day = emp.attendance_days?.[0];
-      const punches = emp.attendance_punches || [];
+      const punches = emp.attendance_days?.[0]?.AttendancePunches || [];
 
       if (day) {
         if (day.status === 0) summary.present++;
@@ -154,6 +166,18 @@ exports.getAttendanceSummary = async (req, res) => {
         if (day.overtime_minutes === 0 && day.worked_minutes > 480) {
           totalOvertimeMins += (day.worked_minutes - 480);
         }
+
+        // Add full datetime for first_in/last_out
+        if (day.first_in) {
+          const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
+          day.first_in_full = firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate();
+        }
+        if (day.last_out) {
+          const lastOutPunch = punches.reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
+          day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
+        }
+        // Restore punches order
+        punches.sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time));
       } else {
         // No attendance day record yet for today
         if (!leaveEmployeeIds.has(emp.id)) {
@@ -202,8 +226,8 @@ exports.updateAttendanceDay = async (req, res) => {
       }
     } else if (req.body.status === 1) {
       if(!req.body.note){
-        requiredFields.first_in = "In Time";
-        requiredFields.last_out = "Out Time";
+        // requiredFields.first_in = "In Time";
+        // requiredFields.last_out = "Out Time";
       }
       requiredFields.leave_category_id = "Leave Category";
     }
@@ -214,7 +238,7 @@ exports.updateAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const { 
+    let { 
       employee_id, 
       attendance_date, 
       status, 
@@ -224,6 +248,8 @@ exports.updateAttendanceDay = async (req, res) => {
       early_out_minutes, 
       worked_minutes,
       overtime_minutes,
+      early_overtime_minutes,
+      total_break_minutes,
       fine_amount,
       leave_category_id,
       leave_session,
@@ -233,9 +259,117 @@ exports.updateAttendanceDay = async (req, res) => {
       note
     } = req.body;
 
-    // If times are provided manually, create corresponding AttendancePunch records
-    if (first_in || last_out) {
-      await manualPunch(employee_id, attendance_date, first_in, last_out, {
+    const day = await getOrCreateAttendanceDay(
+      employee_id,
+      attendance_date,
+      {
+        user_id: req.user.id,
+        company_id: req.user.company_id,
+        branch_id: req.user.branch_id,
+      },
+      t
+    );
+
+    let needsPunchUpdate = false;
+    let effectiveFirstIn = first_in;
+    let effectiveLastOut = last_out;
+    
+    // Determine Effective Status (Current DB status if not changing)
+    let effectiveStatus = status !== undefined ? status : day.status;
+
+    // 🛑 Prevent Automatic Status Upgrade (User Request: "don't let it change my status")
+    // If employee is Absent/Leave/Holiday (3,4,5,6) and frontend sends Present/HalfDay (0,1)
+    // We IGNORE the frontend status and keep the existing one UNLESS times are explicitly being updated.
+    const isExistingNonWorking = [3, 4, 5, 6].includes(day.status);
+    const isIncomingWorking = [0, 1].includes(status);
+    const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
+
+    if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate) {
+        effectiveStatus = day.status;
+        status = day.status; // Update local variable for payload
+    }
+
+    // Check if status is non-working (3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE)
+    const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
+
+    // Check if Times are explicitly provided (User modifying Time)
+    // isTimeUpdate already calculated above
+
+    if (isTimeUpdate) {
+        needsPunchUpdate = true;
+    }
+
+    if (isNonWorkingStatus) {
+        // Only clear punches if they are NOT being explicitly updated for WO(3) or HL(4)
+        const isPunchAllowed = [3, 4].includes(effectiveStatus) && isTimeUpdate;
+        
+        if (!isPunchAllowed) {
+             effectiveFirstIn = null;
+             effectiveLastOut = null;
+             needsPunchUpdate = false;
+        }
+    }
+
+    // 🔄 Auto-calculate Times if Overtime is Changed (ONLY if Time is NOT explicitly updated)
+    if (!isNonWorkingStatus && !isTimeUpdate && day.shift_id && (overtime_minutes !== undefined || early_overtime_minutes !== undefined || early_out_minutes !== undefined || late_minutes !== undefined)) {
+        const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
+        if (shift) {
+            needsPunchUpdate = true;
+
+            // Early Overtime -> Adjust First In
+            if (early_overtime_minutes !== undefined) {
+                // Construct Full Date Time for Shift Start
+                let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
+                // Handle case where shift start might technically be on prev day if late shift? (Less likely for start, but possible)
+                effectiveFirstIn = shiftStart.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+            }
+            // Late Entry -> Adjust First In (if not overridden by Early OT)
+            else if (late_minutes !== undefined) {
+                 let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
+                 effectiveFirstIn = shiftStart.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+            }
+
+            // Late Overtime -> Adjust Last Out
+            if (overtime_minutes !== undefined) {
+                let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
+                // Handle Night Shift Crossing Midnight
+                if (shift.is_night_shift || shift.end_time < shift.start_time) {
+                    shiftEnd = shiftEnd.add(1, 'day');
+                }
+
+                const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
+                    day_id: day.id,
+                    punch_type: 'OUT'
+                }, { order: [['punch_time', 'DESC']] }, t);
+
+                let baseTime = shiftEnd;
+
+                // 🌟 HYBRID LOGIC: If employee left EARLY (before shift end), 
+                // add OT to their actual leave time to "fill the gap" or extend.
+                // Otherwise (if they completed shift), add OT to Shift End.
+                if (lastOutPunch && dayjs(lastOutPunch.punch_time).isBefore(shiftEnd)) {
+                    baseTime = dayjs(lastOutPunch.punch_time);
+                }
+
+                const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
+                const lateOvertime = parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0);
+                
+                effectiveLastOut = baseTime.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
+            }
+            // Early Exit -> Adjust Last Out (if not overridden by OT)
+             else if (early_out_minutes !== undefined) {
+                let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
+                if (shift.is_night_shift || shift.end_time < shift.start_time) {
+                    shiftEnd = shiftEnd.add(1, 'day');
+                }
+                effectiveLastOut = shiftEnd.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+            }
+        }
+    }
+
+    // Only trigger punch update if strictly needed
+    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut)) {
+      await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
         branch_id: req.user.branch_id
@@ -251,34 +385,74 @@ exports.updateAttendanceDay = async (req, res) => {
       branch_id: req.user.branch_id
     };
 
-    if (first_in !== undefined) payload.first_in = first_in;
-    if (last_out !== undefined) payload.last_out = last_out;
-    if (late_minutes !== undefined) payload.late_minutes = late_minutes;
-    if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
-    if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-    if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-    if (fine_amount !== undefined) payload.fine_amount = fine_amount;
-    if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-    if (leave_session !== undefined) payload.leave_session = leave_session;
-    if (overtime_data !== undefined) payload.overtime_data = overtime_data;
-    if (fine_data !== undefined) payload.fine_data = fine_data;
+    // Clear data for non-working statuses
+    if ([3, 4, 5, 6].includes(status)) {
+        // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
+        const isPunchAllowed = [3, 4].includes(status) && (payload.first_in || payload.last_out || overtime_minutes);
+
+        if (!isPunchAllowed) {
+            payload.first_in = null;
+            payload.last_out = null;
+            payload.worked_minutes = 0;
+            payload.total_break_minutes = 0;
+            payload.overtime_minutes = 0;
+            payload.overtime_data = null;
+        } else {
+             // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
+            if (first_in !== undefined) payload.first_in = first_in;
+            if (last_out !== undefined) payload.last_out = last_out;
+            if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+            if (overtime_data !== undefined) {
+                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+            }
+        }
+
+        // Always clear these for non-working status
+        payload.late_minutes = 0;
+        payload.early_out_minutes = 0; 
+        payload.early_overtime_minutes = 0;
+        payload.fine_data = null;
+        
+        if (status !== 6) {
+            payload.leave_category_id = null;
+            payload.leave_session = null;
+        } else {
+             // For LEAVE (6), we MUST assign the category/session if provided
+             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+        }
+    } else {
+
+        if (first_in !== undefined) payload.first_in = first_in;
+        if (last_out !== undefined) payload.last_out = last_out;
+        
+        if (late_minutes !== undefined) payload.late_minutes = late_minutes;
+        if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
+        if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
+        if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+        if (overtime_data !== undefined) {
+             payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+        }
+        if (fine_data !== undefined) {
+             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+             payload.fine_data = finalFineData;
+             // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
+             if (finalFineData === null && fine_amount === undefined) {
+                 payload.fine_amount = 0;
+             }
+        }
+
+        if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
+        if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+        if (leave_session !== undefined) payload.leave_session = leave_session;
+    }
+
     if (is_locked !== undefined) payload.is_locked = is_locked;
     if (note !== undefined) payload.note = note;
 
-    const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-      employee_id, 
-      attendance_date,
-      status: { [Op.ne]: 99 } // Bypass commonQuery default status != 2 filter
-    }, {}, t);
-    let result;
-    if (existingRecord) {
-      result = await commonQuery.updateRecordById(AttendanceDay, { 
-        id: existingRecord.id, 
-        status: { [Op.ne]: 99 } 
-      }, payload, t);
-    } else {
-      result = await commonQuery.createRecord(AttendanceDay, payload, t);
-    }
+    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t);
 
     await t.commit();
     return res.success(constants.ATTENDANCE_UPDATED, result);
@@ -338,20 +512,36 @@ exports.deleteAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Employee ID and Date are required");
     }
 
-    // 1. Delete all raw punches for this day
-    await commonQuery.softDeleteById(AttendancePunch, {
-      employee_id,
-      punch_time: {
-        [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
-      }
-    }, t);
-
-    // 2. Delete the day summary
-    await commonQuery.softDeleteById(AttendanceDay, { 
+    // 1. Fetch the day to get ID
+    const day = await commonQuery.findOneRecord(AttendanceDay, { 
       employee_id, 
       attendance_date,
-      status: { [Op.ne]: 99 } // Bypass commonQuery status 2 filter
-    }, t);
+    }, {}, t);
+
+    if (day) {
+      // 2. Delete punches by day_id
+      await commonQuery.softDeleteById(AttendancePunch, {
+        day_id: day.id
+      }, t);
+
+      // 3. Delete the day summary
+      await commonQuery.softDeleteById(AttendanceDay, { 
+        id: day.id
+      }, t);
+    } else {
+       // Fallback: Delete by date range if day record not found (to be safe? or just return?)
+       // User emphasized matching day_id. If no day, effectively no day-bound punches.
+       // We can iterate punches by date and delete them? 
+       // But if day_id is enforced now, finding by date might delete orphaned punches?
+       // Let's stick to deleting if Day exists. If not, maybe we just return success or try unsafe delete?
+       // Safe delete by date range for backward compatibility:
+       await commonQuery.softDeleteById(AttendancePunch, {
+        employee_id,
+        punch_time: {
+           [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
+        }
+       }, t);
+    }
 
     await t.commit();
     return res.success(constants.DELETED);
@@ -407,26 +597,24 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       };
 
       if (status !== undefined) payload.status = status;
-      if (first_in !== undefined) payload.first_in = first_in;
-      if (last_out !== undefined) payload.last_out = last_out;
-      if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+            if (first_in !== undefined) payload.first_in = first_in;
+            if (last_out !== undefined) payload.last_out = last_out;
+             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
       if (leave_session !== undefined) payload.leave_session = leave_session;
       if (overtime_data !== undefined) payload.overtime_data = overtime_data;
       if (fine_data !== undefined) payload.fine_data = fine_data;
-      if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-      if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
       const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
         attendance_date,
-        status: { [Op.ne]: 99 }
       }, {}, t);
 
       if (existingRecord) {
         await commonQuery.updateRecordById(AttendanceDay, { 
-          id: existingRecord.id, 
-          status: { [Op.ne]: 99 } 
+          id: existingRecord.id,
         }, payload, t);
       } else {
         await commonQuery.createRecord(AttendanceDay, payload, t);
@@ -463,7 +651,6 @@ exports.getAttendanceDayDetails = async (req, res) => {
     const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id,
       attendance_date,
-      status: { [Op.ne]: 99 }
     }, {
       include: [
         {
@@ -481,38 +668,53 @@ exports.getAttendanceDayDetails = async (req, res) => {
           as: "LeaveCategory", 
           attributes: ["id", "leave_category_name"],
           required: false
+        },
+        {
+          model: AttendancePunch,
+          as: "AttendancePunches",
+          required: false,
+          order: [["punch_time", "ASC"]]
         }
       ]
     });
 
     // 2. Fetch all raw punches for this day
-    const punches = await commonQuery.findAllRecords(AttendancePunch, {
-      employee_id,
-      punch_time: {
-        [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
-      },
-      status: 0
-    }, {
-      order: [["punch_time", "ASC"]]
-    });
+    // const punches = await commonQuery.findAllRecords(AttendancePunch, {
+    //   employee_id,
+    //   punch_time: {
+    //     [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
+    //   },
+    //   status: 0
+    // }, {
+    //   order: [["punch_time", "ASC"]]
+    // });
 
-    // 3. Add image URLs to punches
-    const punchesWithImages = punches.map(punch => {
-      const punchData = punch.get ? punch.toJSON() : punch;
-      
-      // Add full image URL if image_name exists
-      if (punchData.image_name) {
-        punchData.image_url = `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${punchData.image_name}`;
-      } else {
-        punchData.image_url = null;
+    // 3. Process AttendanceDay and add image URLs to punches
+    let attendanceDayJson = null;
+    let punchesWithImages = [];
+
+    if (attendanceDay) {
+      attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
+
+      if (attendanceDayJson.AttendancePunches) {
+        punchesWithImages = attendanceDayJson.AttendancePunches.map(punch => {
+          // Add full image URL if image_name exists
+          if (punch.image_name) {
+            punch.image_url = `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${punch.image_name}`;
+          } else {
+            punch.image_url = null;
+          }
+          return punch;
+        });
+        
+        // Re-assign processed punches to the day object
+        attendanceDayJson.AttendancePunches = punchesWithImages;
       }
-      
-      return punchData;
-    });
+    }
 
     return res.ok({
-      attendanceDay: attendanceDay || null,
-      punches: punchesWithImages
+      attendanceDay: attendanceDayJson,
+      // punches: punchesWithImages
     });
   } catch (err) {
     return handleError(err, res, req);
@@ -566,7 +768,6 @@ exports.getMonthlyAttendance = async (req, res) => {
       attendance_date: {
         [Op.between]: [startDate, endDate]
       },
-      status: { [Op.ne]: 99 }
     }, {
       include: [
         {

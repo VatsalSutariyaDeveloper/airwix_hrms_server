@@ -4,6 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
+        day_id: { type: DataTypes.INTEGER, allowNull: false },
         punch_time: { type: DataTypes.DATE, allowNull: false },
         punch_type: { type: DataTypes.ENUM("IN", "OUT"), allowNull: false },
         image_name: DataTypes.STRING,
@@ -26,6 +27,10 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true,
     }
   );
+
+  // AttendancePunch.associate = (models) => {
+  //   AttendancePunch.belongsTo(models.AttendanceDay, { foreignKey: "day_id", as: "AttendanceDay" });
+  // };
 
   return AttendancePunch;
 };
