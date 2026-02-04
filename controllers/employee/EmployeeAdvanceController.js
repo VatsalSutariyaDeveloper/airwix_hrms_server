@@ -1,4 +1,4 @@
-const { EmployeeAdvance, Employee } = require("../../models");
+const { EmployeeAdvance, Employee, PaymentHistory } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
