@@ -14,7 +14,6 @@ router.post("/get-transactions", employeeController.getAll);
 router.post("/check-employee-code", employeeController.checkEmployeeCode);
 router.post("/get-punch", employeeController.getPunch);
 router.post("/dropdown-list", employeeController.dropdownList);
-router.get("/get-employeecode", employeeController.getEmployeeCode);
 router.post("/get-wages", employeeController.getWages);
 router.post("/assign-template", employeeController.assignTemplate);
 router.post("/get-employees-by-template", employeeController.getEmployeesByTemplate);

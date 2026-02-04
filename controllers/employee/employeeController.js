@@ -146,6 +146,20 @@ exports.create = async (req, res) => {
             },
         }, transaction);
 
+        if(req.body.employee_code){
+            const employeeCodeExists = await Employee.findOne({
+                where: {
+                    employee_code: req.body.employee_code,
+                },
+                transaction,
+            });
+            
+            if(employeeCodeExists){
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { employee_code: "Employee Code already exists" });
+            }
+        }
+
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
@@ -694,12 +708,7 @@ exports.checkEmployeeCode = async (req, res) => {
             transaction
         );
 
-        if (emp) {
-            await transaction.commit();
-            return res.error(constants.ALREADY_EXISTS);
-        }
-       
-        return res.ok({ exists: false });
+        return res.ok({ exists: !!emp });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -1476,43 +1485,6 @@ exports.getWages = async(req, res) =>{
         return res.success(constants.SUCCESS, responseData);
 
     }catch(err){
-        return handleError(err, res, req);
-    }
-}
-
-exports.getEmployeeCode = async (req, res) => {
-    try {
-        const employee = await commonQuery.findAllRecords(Employee, {
-            status: 0, 
-            employee_code: { [Op.ne]: null }
-        }, {
-            attributes: ['employee_code'],
-            order: [['id', 'DESC']],
-            limit: 1
-        });
-
-        if (!employee || employee.length === 0) {
-            return res.error(constants.NOT_FOUND, { message: "No employees found" });
-        }
-
-        const lastEmployeeCode = employee[0].employee_code;
-        
-        // Check if the code ends with digits
-        const match = lastEmployeeCode.match(/(\d+)$/);
-        
-        if (match) {
-            // Code has numeric part, increment it (e.g., "EM-11" -> "EM-12")
-            const numericPart = parseInt(match[1]);
-            const newNumericPart = numericPart + 1;
-            const newEmployeeCode = lastEmployeeCode.replace(/\d+$/, newNumericPart);
-            return res.success(constants.SUCCESS, { employee_code: newEmployeeCode });
-        } else {
-            // Code has no numeric part, add 1 (e.g., "EMP" -> "EMP-1")
-            const newEmployeeCode = lastEmployeeCode + "-1";
-            return res.success(constants.SUCCESS, { employee_code: newEmployeeCode });
-        }
-        
-    } catch (err) {
         return handleError(err, res, req);
     }
 }

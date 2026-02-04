@@ -1,25 +1,37 @@
 const { EmployeeAdvance, Employee } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-// Create a new record
+
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
+    const POST = req.body;
     try {
         const requiredFields = {
             employee_id: "Employee",
             payroll_month: "Payroll Month",
             amount: "Amount",
             payment_date: "Payment Date",
+            payment_mode: "Payment Mode",
         };
 
-        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        const errors = await validateRequest(POST, requiredFields, {}, transaction);
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        await commonQuery.createRecord(EmployeeAdvance, { ...req.body }, transaction);
+        const advance = await commonQuery.createRecord(EmployeeAdvance, POST, transaction);
+
+        const paymentHistoryData = {
+            employee_id: POST.employee_id,
+            ref_id: advance.id,
+            payment_date: POST.payment_date,
+            amount: POST.amount,
+            payment_mode: POST.payment_mode,
+        };
+
+        await commonQuery.createRecord(PaymentHistory, paymentHistoryData, transaction);
         await transaction.commit();
         return res.success(constants.EMPLOYEE_ADVANCE_CREATED);
 
@@ -29,7 +41,6 @@ exports.create = async (req, res) => {
     }
 };
 
-// Get all active records
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
@@ -223,4 +234,171 @@ exports.updateStatus = async (req, res) => {
 //     }
 // };
 
+exports.update = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    const POST = req.body;
+    try {
+        const requiredFields = {
+            employee_id: "Employee",
+            payroll_month: "Payroll Month",
+            amount: "Amount",
+            payment_date: "Payment Date",
+            payment_mode: "Payment Mode",
+        };
+        const errors = await validateRequest(
+            POST,
+            requiredFields,
+            {},
+            transaction
+        );
 
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+        const updated = await commonQuery.updateRecordById(EmployeeAdvance, req.params.id, POST, transaction);
+        if (!updated || updated.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+        const paymentHistoryData = {
+            employee_id: POST.employee_id,
+            ref_id: updated.id,
+            payment_date: POST.payment_date,
+            amount: POST.amount,
+            payment_mode: POST.payment_mode,
+        };
+
+        const paymentHistory = await commonQuery.updateRecordById(PaymentHistory, updated.id, paymentHistoryData, transaction);
+
+        if (!paymentHistory || paymentHistory.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+        await transaction.commit();
+        return res.success(constants.EMPLOYEE_ADVANCE_UPDATED);
+    } catch (err) {
+        await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.delete = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const requiredFields = {
+            ids: "Select Data"
+        };
+
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+        let { ids } = req.body; 
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_ID);
+        }
+
+        const deleted = await commonQuery.softDeleteById(EmployeeAdvance, ids, transaction);
+        if (!deleted) {
+            await transaction.rollback();
+            return res.error(constants.ALREADY_DELETED);
+        }
+
+        const paymentHistoryDeleted = await commonQuery.softDeleteById(PaymentHistory, { ref_id: ids }, transaction);
+        if (!paymentHistoryDeleted) {
+            await transaction.rollback();
+            return res.error(constants.ALREADY_DELETED);
+        }
+        
+        await transaction.commit();
+        return res.success(constants.EMPLOYEE_ADVANCE_DELETED);
+    } catch (err) {
+        await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.updateStatus = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+
+        const { status, ids } = req.body;   
+
+        const requiredFields = {
+            ids: "Select Any One Data",
+            status: "Select Status"
+        };
+
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_ID);
+        }
+
+        const updated = await commonQuery.updateRecordById(
+            EmployeeAdvance,
+            ids,
+            { status },
+            transaction
+        );
+
+        if (!updated || updated.status === 2) {
+            if (!transaction.finished) await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        const paymentHistoryUpdated = await commonQuery.updateRecordById(
+            PaymentHistory,
+            { ref_id: ids },
+            { status },
+            transaction
+        );
+
+        if (!paymentHistoryUpdated || paymentHistoryUpdated.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        await transaction.commit();
+        return res.success(constants.EMPLOYEE_ADVANCE_UPDATED);
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.view = async (req, res) => {
+    try {
+        const { employee_id } = req.body;
+        
+        if (!employee_id) {
+            return res.error(constants.INVALID_ID);
+        }
+        
+        const advances = await EmployeeAdvance.findAll({
+            where: { employee_id },
+            include: [
+                {
+                    model: PaymentHistory,
+                    as: 'paymentHistory',
+                    attributes: ['id', 'ref_id', 'amount', 'payment_date', 'payment_mode', 'status']
+                }
+            ]
+        });
+        
+        return res.success({
+            advances: advances || []
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

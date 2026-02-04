@@ -28,12 +28,13 @@ router.patch("/employee-incentive/status", employeeIncentiveController.updateSta
 // EMPLOYEE_ADVANCE
 // ==========================
 // Base Path: /employee-advance
-router.post("/employee-advance", employeeAdvanceController.create);
+router.post("/employee-advance/", employeeAdvanceController.create);
 router.post("/employee-advance/get-transactions", employeeAdvanceController.getAll);
 // router.post("/employee-advance/dropdown-list", employeeAdvanceController.dropdownList);
 router.get("/employee-advance/:id", employeeAdvanceController.getById);
 router.put("/employee-advance/:id", employeeAdvanceController.update);
 router.delete("/employee-advance", employeeAdvanceController.delete);
 router.patch("/employee-advance/status", employeeAdvanceController.updateStatus);
+router.post("/employee-advance/view", employeeAdvanceController.view);
 
 module.exports = router;

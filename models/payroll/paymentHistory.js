@@ -1,19 +1,18 @@
 module.exports = (sequelize, DataTypes) => {
-  const EmployeeAdvance = sequelize.define(
-    "EmployeeAdvance",
+  const PaymentHistory = sequelize.define(
+    "PaymentHistory",
     {
       employee_id: { type: DataTypes.INTEGER, allowNull: false },
-      payroll_month: { type: DataTypes.DATEONLY, allowNull: false, comment: "Month for which advance is applicable" },
-      amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+      ref_id: { type: DataTypes.INTEGER, allowNull: false },
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
-      notes: { type: DataTypes.TEXT, allowNull: true },
+      amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+      payment_type: { type: DataTypes.ENUM("Advance", "Salary"),defaultValue: "Advance", allowNull: false },
       payment_mode: {
         type: DataTypes.ENUM("Cash", "Bank"),
         allowNull: false,
         defaultValue: "Cash",
         comment: "Cash or Bank payment",
       },
-      adjusted_in_payroll: { type: DataTypes.BOOLEAN, defaultValue: false },
       status: { 
         type: DataTypes.SMALLINT, 
         defaultValue: 0, 
@@ -24,33 +23,23 @@ module.exports = (sequelize, DataTypes) => {
       company_id: { type: DataTypes.INTEGER, allowNull: false },
     },
     {
-      tableName: "employee_advances",
+      tableName: "payment_history",
       timestamps: true,
       underscored: true,
     }
   );
 
-  EmployeeAdvance.associate = (models) => {
-    EmployeeAdvance.belongsTo(models.Employee, {
+  PaymentHistory.associate = (models) => {
+    PaymentHistory.belongsTo(models.Employee, {
       foreignKey: "employee_id",
       as: "employee",
     });
-
-    EmployeeAdvance.belongsTo(models.CompanyMaster, {
-      foreignKey: "company_id",
-      as: "company",
-    });
-
-    EmployeeAdvance.belongsTo(models.BranchMaster, {
-      foreignKey: "branch_id",
-      as: "branch",
-    });
-
-    EmployeeAdvance.hasMany(models.PaymentHistory, {
+    
+    PaymentHistory.belongsTo(models.EmployeeAdvance, {
       foreignKey: "ref_id",
-      as: "paymentHistory",
+      as: "employee-advance",
     });
   };
 
-  return EmployeeAdvance;
+  return PaymentHistory;
 };
