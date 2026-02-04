@@ -290,7 +290,7 @@ exports.login = async (req, res) => {
     clearUserCache(user.user_id);
 
     await transaction.commit();
-    return res.ok({ token, user: userData, login_method: loginMethod });
+    return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: loginMethod });
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);

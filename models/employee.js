@@ -3,6 +3,7 @@ module.exports = (sequelize, DataTypes) => {
 
         employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
         department_id: { type: DataTypes.INTEGER },
+        designation_id: { type: DataTypes.INTEGER },
 
         // PROFILE INFORMATION ===
         profile_image: { type: DataTypes.STRING },

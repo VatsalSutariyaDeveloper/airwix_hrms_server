@@ -65,12 +65,39 @@ module.exports = (req, res, next) => {
   };
 
   /**
+   * Helper to format response codes into human-readable messages
+   * E.g. "USER_CREATED" -> "User Created"
+   */
+  const formatMessage = (code, defaultMsg = "Action successful") => {
+    if (!code) return defaultMsg;
+    
+    // 1. If code is a key in responseCodes, use its message
+    if (responseCodes[code] && typeof responseCodes[code] !== 'function' && responseCodes[code].message) {
+      return responseCodes[code].message;
+    }
+
+    // 2. If it's a string, format it (Replace _ with Space and Title Case)
+    if (typeof code === 'string') {
+      // Check if it's actually a message (contains spaces or lowercase letters)
+      if (code.includes(' ') || (/[a-z]/.test(code) && code.includes('_') === false)) {
+        return code;
+      }
+      
+      return code
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    }
+
+    return defaultMsg;
+  };
+
+  /**
    * OK RESPONSE (FETCH / READ)
    * Usage: res.ok(data) OR res.ok(data, "users")
    */
   res.ok = (data, rootKey = null) => {
     if (isApp()) {
-      // Logic: If rootKey is provided, wrap the data; otherwise return data as-is
       let finalData = data;
       if (rootKey && data) {
         finalData = { [rootKey]: data };
@@ -78,7 +105,7 @@ module.exports = (req, res, next) => {
 
       return res.json({
         status: true,
-        message: "Action successful",
+        message: formatMessage(null, "Data fetched successfully"),
         data: finalData
       });
     }
@@ -93,21 +120,18 @@ module.exports = (req, res, next) => {
    * Usage:
    * res.success(code)
    * res.success(code, data)
-   * res.success(code, data, "user")  <-- New Wrapper capability
+   * res.success(code, data, "user")
    */
   res.success = (code, data, rootKey = null) => {
     if (isApp()) {
-      
       let finalData = data || null;
-
-      // Logic: If rootKey is provided and data exists, wrap the data in that key
       if (rootKey && data) {
         finalData = { [rootKey]: data };
       }
 
       return res.json({
         status: true,
-        message: code,
+        message: formatMessage(code),
         data: finalData
       });
     }
@@ -133,9 +157,12 @@ module.exports = (req, res, next) => {
   res.error = (code, errors = null) => {
     const status = ERROR_HTTP_MAP[code] || 500;
     if (isApp()) {
+      // If errors is a string, it's the message. Otherwise try to format the code.
+      let message = typeof errors === 'string' ? errors : (errors?.message || formatMessage(code, "An error occurred"));
+      
       return res.status(status).json({
         status: false,
-        message: typeof errors === 'string' ? errors : (errors?.message || code),
+        message: message,
         data: errors
       });
     }
@@ -147,7 +174,7 @@ module.exports = (req, res, next) => {
     if (isApp()) {
       return res.status(status).json({
         status: false,
-        message: code,
+        message: formatMessage(code, "Validation failed"),
         data: data
       });
     }

@@ -41,6 +41,10 @@ exports.create = async (req, res) => {
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
             const breaks = req.body.breaks.map(b => ({
                 ...b,
+                start_buffer: b.start_buffer === "" ? null : b.start_buffer,
+                buffer_end: b.buffer_end === "" ? null : b.buffer_end,
+                start_time: b.start_time === "" ? null : b.start_time,
+                end_time: b.end_time === "" ? null : b.end_time,
                 shift_template_id: shifts.id,
                 user_id: req.user?.id || 0,
                 branch_id: req.body.branch_id || 0,
@@ -166,6 +170,10 @@ exports.update = async (req, res) => {
             
             const breaks = req.body.breaks.map(b => ({
                 ...b,
+                start_buffer: b.start_buffer === "" ? null : b.start_buffer,
+                buffer_end: b.buffer_end === "" ? null : b.buffer_end,
+                start_time: b.start_time === "" ? null : b.start_time,
+                end_time: b.end_time === "" ? null : b.end_time,
                 shift_template_id: req.params.id,
                 user_id: req.user?.id || 0,
                 branch_id: req.body.branch_id || 0,
