@@ -37,7 +37,7 @@ exports.sessionData = async (req, res) => {
       User,
       user_id,
       {
-        attributes: ['id', 'user_name', 'email', 'role_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
+        attributes: ['id', 'user_name', 'email', 'role_id', 'employee_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
         include: [{ 
             model: UserCompanyRoles, 
             as: "ComapanyRole", 

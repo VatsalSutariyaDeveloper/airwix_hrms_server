@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -729,7 +729,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
 exports.getMonthlyAttendance = async (req, res) => {
   try {
     const requiredFields = {
-      employee_id: "Employee",
+      // employee_id: "Employee",
       month_year: "Month & Year"
     };
 
@@ -738,7 +738,10 @@ exports.getMonthlyAttendance = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const { employee_id, month_year } = req.body;
+    let { employee_id, month_year } = req.body;
+    if(!employee_id){
+      employee_id = req.user.employee_id;
+    }
     
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")
     const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
@@ -774,12 +777,28 @@ exports.getMonthlyAttendance = async (req, res) => {
           model: ShiftTemplate,
           as: "ShiftTemplate",
           attributes: ["id", "shift_name", "start_time", "end_time"]
+        },
+        {
+          model: LeaveTemplateCategory,
+          as: "LeaveCategory",
+          attributes: ["id", "leave_category_name"]
         }
       ],
       order: [["attendance_date", "ASC"]]
     });
 
-    // 3. Fetch all raw punches for the month
+    // 2.1 Fetch Holidays for the month
+    const employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
+      employee_id,
+      date: { [Op.between]: [startDate, endDate] }
+    });
+
+    // 2.2 Fetch Weekly Offs for the employee
+    const employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+      employee_id,
+    });
+
+    // 3. Fetch all raw punches for the month with User info
     const punches = await commonQuery.findAllRecords(AttendancePunch, {
       employee_id,
       punch_time: {
@@ -787,44 +806,246 @@ exports.getMonthlyAttendance = async (req, res) => {
       },
       status: 0
     }, {
+      include: [{
+        model: User,
+        as: 'user',
+        attributes: ['id', 'user_name']
+      }],
       order: [["punch_time", "ASC"]]
     });
 
-    // 4. Map punches to their respective days
-    // We create a map of days in the month to ensure all days are represented if needed, 
-    // or just return the existing records.
-    const attendanceWithPunches = attendanceDays.map(day => {
-      const dayDate = day.attendance_date;
-      const dayPunches = punches.filter(p => 
-        dayjs(p.punch_time).format('YYYY-MM-DD') === dayDate
-      );
+    const summary = {
+      present: 0,
+      halfDay: 0,
+      absent: 0,
+      leave: 0,
+      fine: 0,
+      overtime: 0
+    };
+
+    let totalFineMins = 0;
+    let totalOvertimeMins = 0;
+
+    const allDays = [];
+    const daysInMonth = date.daysInMonth();
+    
+    const today = dayjs().format('YYYY-MM-DD');
+    for (let d = 1; d <= daysInMonth; d++) {
+      const curDate = date.date(d).format('YYYY-MM-DD');
+      const dayObj = dayjs(curDate);
       
-      const dayJson = day.get ? day.toJSON() : day;
-
-      // Status mapping for human-readable labels
-      const statusMap = {
-        0: "PRESENT",
-        1: "HALF DAY",
-        3: "WEEKLY OFF",
-        4: "HOLIDAY",
-        5: "ABSENT",
-        6: "LEAVE"
+      // Stop if date is in the future
+      if (dayObj.isAfter(dayjs(), 'day')) continue;
+      
+      const attendanceDay = attendanceDays.find(ad => ad.attendance_date === curDate);
+      const dayPunches = punches.filter(p => dayjs(p.punch_time).format('YYYY-MM-DD') === curDate);
+      
+      let dayData = {
+        date_display: dayObj.format("DD MMM"),
+        day_display: dayObj.format("dddd"),
+        attendance_date: curDate,
+        shift_name: "N/A",
+        time_range: "0:00 Hrs",
+        day_status: 5, // Default Absent
+        status: "Absent",
+        note: null,
+        punches: []
       };
 
-      return {
-        ...dayJson,
-        status_text: statusMap[day.status] || "UNKNOWN",
-        punches: dayPunches
-      };
-    });
+      if (attendanceDay) {
+        // Summary Counts
+        if (attendanceDay.status === 0) summary.present++;
+        else if (attendanceDay.status === 1) summary.halfDay++;
+        else if (attendanceDay.status === 5) summary.absent++;
+        else if (attendanceDay.status === 6) summary.leave++;
+
+        totalFineMins += (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
+
+        const shiftName = attendanceDay.ShiftTemplate?.shift_name || "N/A";
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
+        let statusText = statusMap[attendanceDay.status] || "Unknown";
+
+        if (attendanceDay.status === 6) {
+          statusText = attendanceDay.LeaveCategory?.leave_category_name || "Leave";
+        } else if (attendanceDay.status === 4) {
+          const h = employeeHolidays.find(h => h.date === curDate);
+          statusText = h ? h.name : "Holiday";
+        }
+
+        let timeRange = "0:00 Hrs";
+        if (attendanceDay.first_in && attendanceDay.last_out) {
+          timeRange = `${dayjs(attendanceDay.first_in, "HH:mm:ss").format("hh:mm a")} - ${dayjs(attendanceDay.last_out, "HH:mm:ss").format("hh:mm a")}`;
+        } else if (attendanceDay.first_in) {
+          timeRange = `${dayjs(attendanceDay.first_in, "HH:mm:ss").format("hh:mm a")} - Pending`;
+        }
+
+        let varianceStr = "";
+        const dayFine = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        if (dayFine > 0) {
+          varianceStr = ` [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
+        } else if ((attendanceDay.overtime_minutes || 0) > 0) {
+          const ot = parseInt(attendanceDay.overtime_minutes);
+          varianceStr = ` [+ ${Math.floor(ot / 60)}:${(ot % 60).toString().padStart(2, '0')} Hrs]`;
+        }
+
+        dayData = {
+          ...dayData,
+          shift_name: shiftName,
+          time_range: timeRange + varianceStr,
+          day_status: attendanceDay.status,
+          status: statusText,
+          note: attendanceDay.note,
+          punches: dayPunches.map(p => ({
+            id: p.id,
+            time: dayjs(p.punch_time).format("hh:mm a"),
+            date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
+            type: p.punch_type,
+            punch_by: p.user?.user_name || "System",
+            image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${p.image_name}` : null,
+            punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.ip_address || 'App'}`
+          })).reverse()
+        };
+      } else {
+        // No attendance record - Check Holiday
+        const holiday = employeeHolidays.find(h => h.date === curDate);
+        if (holiday) {
+          dayData.status = holiday.name || "Holiday";
+          dayData.day_status = 4;
+        } else {
+          // Check Weekly Off
+          const dayOfWeek = dayObj.day(); // 0 is Sunday
+          const weekOfMonth = Math.ceil(dayObj.date() / 7);
+          const isWO = employeeWeeklyOffs.find(wo => 
+            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth)
+          );
+          if (isWO) {
+            dayData.status = "Weekly Off";
+            dayData.day_status = 3;
+          }
+        }
+        
+        // Count as Absent if not Today/Future and not WO/Holiday
+        if (dayData.day_status === 5 && dayObj.isBefore(dayjs(), 'day')) {
+            summary.absent++;
+        }
+      }
+      
+      allDays.push(dayData);
+    }
+
+    // Finalize Summary Formatting
+    summary.fine = `- ${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
+    summary.overtime = `${Math.floor(totalOvertimeMins / 60)}:${(totalOvertimeMins % 60).toString().padStart(2, '0')}`;
 
     return res.ok({
       employeeDetails: employee,
       month_year: date.format('MMMM YYYY'),
-      startDate,
-      endDate,
-      attendance: attendanceWithPunches
-    }, "employee");
+      summary,
+      attendance: allDays.reverse() // DESC order
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Get Leave Summary (Balance & History)
+ * Grouped by Month for History
+ */
+exports.getLeaveSummary = async (req, res) => {
+  try {
+    let { employee_id } = req.body;
+    if(!employee_id){
+      employee_id = req.user.employee_id;
+    }
+
+    if (!employee_id) {
+       return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
+    }
+
+    // 1. Fetch Leave Balances
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+      employee_id,
+      status: 0
+    });
+
+    // 2. Fetch Leave Requests for History (Ordered by date)
+    const history = await commonQuery.findAllRecords(LeaveRequest, {
+      employee_id,
+      status: 0
+    }, {
+      include: [
+        {
+          model: LeaveTemplateCategory,
+          as: "category",
+          attributes: ["id", "leave_category_name"]
+        }
+      ],
+      order: [["start_date", "DESC"]]
+    });
+
+    // 3. Format Balances
+    let totalUsed = 0;
+    let totalLeft = 0;
+    const formattedBalances = balances.map(b => {
+      const used = parseFloat(b.used_leaves || 0);
+      const allocated = parseFloat(b.total_allocated || 0);
+      const left = allocated - used;
+      
+      totalUsed += used;
+      totalLeft += left;
+
+      return {
+        id: b.id,
+        leave_name: b.leave_category_name,
+        balance: `${left.toFixed(1)} Left`,
+        to_be_accrued: 0 // Following design
+      };
+    });
+
+    // 4. Group History by Month
+    const groupedHistory = [];
+    history.forEach(leave => {
+      const monthYear = dayjs(leave.start_date).format("MMM, YYYY");
+      let group = groupedHistory.find(g => g.month_label === monthYear);
+      
+      if (!group) {
+        group = {
+          month_label: monthYear,
+          total_days: 0,
+          leaves: []
+        };
+        groupedHistory.push(group);
+      }
+
+      // Only count approved leaves in the monthly header count if needed, 
+      // but usually the header shows total requested in that month
+      group.total_days += parseFloat(leave.total_days || 0);
+      
+      const start = dayjs(leave.start_date);
+      const end = dayjs(leave.end_date);
+      const dateRange = `${start.format("D MMM, ddd")} - ${end.format("D MMM, ddd")}`;
+
+      group.leaves.push({
+        id: leave.id,
+        date_range: dateRange,
+        duration_display: `${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}`,
+        reason: leave.reason || "",
+        status: leave.approval_status,
+        status_color: leave.approval_status === 'APPROVED' ? '#10B981' : (leave.approval_status === 'REJECTED' ? '#EF4444' : '#F59E0B')
+      });
+    });
+
+    return res.ok({
+      leave_balance: {
+        total_balance_text: `${totalLeft.toFixed(1)} Leaves`,
+        categories: formattedBalances,
+        total_used_text: `${totalUsed.toFixed(1)} Days`
+      },
+      leave_history: groupedHistory
+    });
+
   } catch (err) {
     return handleError(err, res, req);
   }
