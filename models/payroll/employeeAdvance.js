@@ -30,12 +30,12 @@ module.exports = (sequelize, DataTypes) => {
       as: "employee",
     });
 
-    EmployeeAdvance.belongsTo(models.Company, {
+    EmployeeAdvance.belongsTo(models.CompanyMaster, {
       foreignKey: "company_id",
       as: "company",
     });
 
-    EmployeeAdvance.belongsTo(models.Branch, {
+    EmployeeAdvance.belongsTo(models.BranchMaster, {
       foreignKey: "branch_id",
       as: "branch",
     });

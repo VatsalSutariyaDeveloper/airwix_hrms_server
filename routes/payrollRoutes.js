@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const payrollController = require("../controllers/employee/payrollController");
-const employeeIncentive = require("../controllers/employee/employeeIncentiveController");
+const employeeIncentiveController = require("../controllers/employee/employeeIncentiveController");
+const employeeAdvanceController = require("../controllers/employee/EmployeeAdvanceController");
 
 router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
@@ -15,12 +16,24 @@ router.post("/get-payslip-details", payrollController.getPayslipById);
 // EMPLOYEE_INCENTIVE
 // ==========================
 // Base Path: /employee-incentive
-router.post("/employee-incentive", employeeIncentive.create);
-router.post("/employee-incentive/get-transactions", employeeIncentive.getAll);
-router.post("/employee-incentive/dropdown-list", employeeIncentive.dropdownList);
-router.get("/employee-incentive/:id", employeeIncentive.getById);
-router.put("/employee-incentive/:id", employeeIncentive.update);
-router.delete("/employee-incentive", employeeIncentive.delete);
-router.patch("/employee-incentive/status", employeeIncentive.updateStatus);
+router.post("/employee-incentive", employeeIncentiveController.create);
+router.post("/employee-incentive/get-transactions", employeeIncentiveController.getAll);
+router.post("/employee-incentive/dropdown-list", employeeIncentiveController.dropdownList);
+router.get("/employee-incentive/:id", employeeIncentiveController.getById);
+router.put("/employee-incentive/:id", employeeIncentiveController.update);
+router.delete("/employee-incentive", employeeIncentiveController.delete);
+router.patch("/employee-incentive/status", employeeIncentiveController.updateStatus);
+
+// ==========================
+// EMPLOYEE_ADVANCE
+// ==========================
+// Base Path: /employee-advance
+router.post("/employee-advance", employeeAdvanceController.create);
+router.post("/employee-advance/get-transactions", employeeAdvanceController.getAll);
+router.post("/employee-advance/dropdown-list", employeeAdvanceController.dropdownList);
+router.get("/employee-advance/:id", employeeAdvanceController.getById);
+router.put("/employee-advance/:id", employeeAdvanceController.update);
+router.delete("/employee-advance", employeeAdvanceController.delete);
+router.patch("/employee-advance/status", employeeAdvanceController.updateStatus);
 
 module.exports = router;
