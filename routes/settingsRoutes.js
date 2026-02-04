@@ -92,10 +92,7 @@ router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), u
 router.get("/user/:id", userController.getById);
 router.delete("/user/", userController.delete);
 router.patch("/user/status", userController.updateStatus);
-// Password management
-router.post("/user/setup-password", userController.setPassword);
-router.post("/user/forgot-password", userController.forgotPassword);
-router.get("/user/verify-token/:token", userController.verifySetupToken);
+// Password management (Moved to public auth routes)
 
 
 // ==========================
