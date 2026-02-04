@@ -21,7 +21,7 @@ module.exports = (sequelize, DataTypes) => {
     net_payable: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     
     // JSON details for breakdown
-    breakdown_json: { type: DataTypes.JSON, allowNull: true },
+    break_down_json: { type: DataTypes.JSON, allowNull: true },
     
     status: { 
         type: DataTypes.SMALLINT, 
@@ -35,6 +35,7 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     tableName: "payslips",
     timestamps: true,
+    underscored: true,
     indexes: [
         { unique: true, fields: ['employee_id', 'month', 'year', 'status'], where: { status: [0, 1, 2] } }
     ]

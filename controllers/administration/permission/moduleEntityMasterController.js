@@ -400,3 +400,19 @@ exports.updateStatus = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+// Dropdown List of Module Entity Master
+exports.dropdownList = async (req, res) => {
+  try {
+    const record = await commonQuery.findAllRecords(
+      ModuleEntityMaster,
+      { status: 0 },
+      { attributes: ["id", "entity_name"], order: ["entity_name"] },
+      null,
+      false
+    );
+    return res.ok(record);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};

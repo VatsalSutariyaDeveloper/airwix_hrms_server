@@ -53,12 +53,7 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(AttendanceTemplate, req.params.id, {
-            include: [
-                { model: sequelize.models.HolidayTemplate, as: "HolidayTemplate", attributes: ["id", "name"] },
-                { model: sequelize.models.WeeklyOffTemplate, as: "WeeklyOffTemplate", attributes: ["id", "name"] }
-            ]
-        });
+        const record = await commonQuery.findOneRecord(AttendanceTemplate, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {

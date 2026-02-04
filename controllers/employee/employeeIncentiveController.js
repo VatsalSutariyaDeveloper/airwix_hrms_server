@@ -1,60 +1,29 @@
-const { DeviceMaster } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
+const { EmployeeIncentive, Employee, IncentiveType } = require("../../models");
+const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const ApprovalEngine = require("../../helpers/approvalEngine");
-const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 
-const STATUS = {
-    ACTIVE: 0,
-    INACTIVE: 1,
-    DELETED: 2,
-    PENDING_APPROVAL: 3
-};
-
-// Create a new device master record
+// Create a new record
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const requiredFields = {
-            device_name: "Device Name",
-            mobile_no: "Mobile No",
+            employee_id: "Employee",
+            incentive_type_id: "Incentive Type Id",
+            payroll_month: "Payroll Month",
+            amount: "Amount",
+            incentive_date: "Incentive Date",
         };
 
-        const errors = await validateRequest(req.body, requiredFields, {
-            uniqueCheck: {
-                model: DeviceMaster,
-                fields: ["device_name"],
-                excludeId: req.params.id,
-            }
-        }, transaction);
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const device_master = await commonQuery.createRecord(DeviceMaster, req.body, transaction);
-        const workflow = await ApprovalEngine.checkApprovalRequired(
-            MODULES.SETTINGS.DEVICE_MASTER.ID,
-            device_master.toJSON()
-        );
-
-        let approvalMsg = constants.DEVICE_MASTER_CREATED;
-
-        if (workflow) {
-            await ApprovalEngine.initiateApproval(
-                MODULES.SETTINGS.DEVICE_MASTER.ID,
-                device_master.id,
-                workflow.id,
-                transaction
-            );
-
-            // We assume 'approval_status' exists on Employee or is handled via mixin
-            await commonQuery.updateRecordById(DeviceMaster, device_master.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
-            approvalMsg = "constants.DEVICE_MASTER_CREATED_SEND_FOR_APPROVAL";
-        }
+        await commonQuery.createRecord(EmployeeIncentive, { ...req.body }, transaction);
         await transaction.commit();
-        return res.success(approvalMsg, device_master);
+        return res.success(constants.EMPLOYEE_INCENTIVE_CREATED);
 
     } catch (err) {
         await transaction.rollback();
@@ -62,18 +31,57 @@ exports.create = async (req, res) => {
     }
 };
 
-// Get all active shift records
+// Get all active records
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["device_name", true, true],
+            ["payroll_month", true, true],
+            ["incentive_date", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
-            DeviceMaster,
+            EmployeeIncentive,
             req.body,
             fieldConfig,
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        required: false,
+                        attributes: [["first_name", "employee_name"]],
+                        where: { status: { [Op.ne]: 2 } },
+                    },
+                    {
+                        model: IncentiveType,
+                        as: "incentiveType",
+                        required: false,
+                        attributes: [["name", "incentive_type_name"]],
+                        where: { status: { [Op.ne]: 2 } },
+                    },
+                ],
+                raw: true,
+                nest: false,   // IMPORTANT
+                subQuery: false,
+            }
         );
+        data.items = data.items.map(item => {
+            const employeeName = item["employee.employee_name"] || "";
+            const incentiveTypeName = item["incentiveType.incentive_type_name"] || "";
+
+            // remove unwanted keys
+            delete item["employee.employee_name"];
+            delete item["incentiveType.incentive_type_name"];
+            // ❌ remove ids from response
+            delete item.employee_id;
+            delete item.incentive_type_id;
+
+            return {
+                ...item,
+                employee_name: employeeName,
+                incentive_type_name: incentiveTypeName,
+            };
+        });
 
         return res.ok(data);
     } catch (err) {
@@ -83,7 +91,7 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(DeviceMaster, req.params.id);
+        const record = await commonQuery.findOneRecord(EmployeeIncentive, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -91,27 +99,23 @@ exports.getById = async (req, res) => {
     }
 };
 
-// Update shift record by ID
+// Update record by ID
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         // Only validate fields sent in request
-
         const requiredFields = {
-            device_name: "Device Name",
-            mobile_no: "Mobile No"
+            employee_id: "Employee Id",
+            incentive_type_id: "incentive_type_id",
+            payroll_month: "Payroll Month",
+            amount: "Amount",
+            incentive_date: "Incentive Date",
         };
 
         const errors = await validateRequest(
             req.body,
             requiredFields,
-            {
-                uniqueCheck: {
-                    model: DeviceMaster,
-                    fields: ["device_name"],
-                    excludeId: req.params.id,
-                }
-            },
+            {},
             transaction
         );
 
@@ -119,24 +123,23 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(DeviceMaster, req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(EmployeeIncentive, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_UPDATED, updated);
+        return res.success(constants.EMPLOYEE_INCENTIVE_UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Soft delete a shift record by ID
+// Soft delete a record by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
     //multiple delete
-
     try {
         const requiredFields = {
             ids: "Select Data"
@@ -155,25 +158,25 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(DeviceMaster, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(EmployeeIncentive, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_DELETED);
+        return res.success(constants.EMPLOYEE_INCENTIVE_DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
-
 // Update Status 
 exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-    
+
         const { status, ids } = req.body; // expecting status in request body
+
         const requiredFields = {
             ids: "Select Any One Data",
             status: "Select Status"
@@ -193,7 +196,7 @@ exports.updateStatus = async (req, res) => {
 
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
-            DeviceMaster,
+            EmployeeIncentive,
             ids,
             { status },
             transaction
@@ -205,19 +208,33 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_UPDATED);
+        return res.success(constants.EMPLOYEE_INCENTIVE_UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Get dropdown list of active device masters
-exports.dropdownList = async (req, res) => {
-    try {
-        const result = await commonQuery.findAllRecords(DeviceMaster, { status: 0 });
-        return res.ok(result);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
+// Get dropdown list of active designation masters
+// exports.dropdownList = async (req, res) => {
+//     try {
+//         const fieldConfig = [
+//             ["payroll_month", true, true],
+//             ["incentive_date", true, true],
+//         ];
+//         const result = await commonQuery.fetchPaginatedData(
+//             EmployeeIncentive,
+//             { ...req.body, status: 0 },
+//             fieldConfig,
+//             {
+//                 attributes: ['id', 'employee_id', 'incentive_type_id', 'payroll_month', 'amount', 'incentive_date']
+//             }
+//         );
+
+//         return res.ok(result);
+//     } catch (err) {
+//         return handleError(err, res, req);
+//     }
+// };
+
+

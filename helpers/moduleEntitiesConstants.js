@@ -201,6 +201,10 @@ export const MODULES = {
     "TAX_GROUPS": {
       "ID": 51,
       "NAME": "Tax Groups"
+    },
+    "DEVICE_MASTER": {
+      "ID": 51,
+      "NAME": "Device Master"
     }
   },
   "ADMINISTRATION": {

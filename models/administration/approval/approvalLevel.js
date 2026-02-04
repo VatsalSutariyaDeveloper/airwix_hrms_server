@@ -6,7 +6,8 @@ module.exports = (sequelize, DataTypes) => {
     approver_id: { type: DataTypes.INTEGER, allowNull: false, comment: "Ref ID of Role or User" },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
+    company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0=Active, 1=Inactive, 2=Deleted, 3=Pending Approval" },
   }, {
     tableName: "approval_levels",
     timestamps: true,

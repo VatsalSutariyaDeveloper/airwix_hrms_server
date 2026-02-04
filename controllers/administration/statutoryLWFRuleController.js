@@ -47,6 +47,16 @@ exports.getAll = async (req, res) => {
             StatutoryLWFRule,
             req.body,
             fieldConfig,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
+                ]
+            }
         );
 
         return res.ok(data);
@@ -69,6 +79,16 @@ exports.dropdownList = async (req, res) => {
             StatutoryLWFRule,
             req.body,
             fieldConfig,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
+                ]
+            }
         );
 
         return res.ok(result);
@@ -80,7 +100,20 @@ exports.dropdownList = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(StatutoryLWFRule, req.params.id);
+        const record = await commonQuery.findOneRecord(
+            StatutoryLWFRule, 
+            req.params.id,
+            {
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: [] 
+                }],
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
+                ]
+            }
+        );
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -210,12 +243,16 @@ exports.getStatesWithRules = async (req, res) => {
             {},
             {
                 attributes: ['state_id'],
-                group: ['StatutoryLWFRule.state_id', 'StateMaster.id', 'StateMaster.state_name'],
-                include: [{ model: StateMaster, attributes: ['id', ['state_name', 'name']] }]
+                include: [{ 
+                    model: StateMaster, 
+                    as: 'state',
+                    attributes: ['id', 'state_name'] 
+                }],
+                group: ['StatutoryLWFRule.state_id', 'state.id', 'state.state_name'],
             }
         );
         
-        const states = rules.map(r => r.StateMaster);
+        const states = rules.map(r => r.state).filter(Boolean);
         return res.ok(states);
     } catch (err) {
         return handleError(err, res, req);

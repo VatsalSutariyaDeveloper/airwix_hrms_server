@@ -9,7 +9,7 @@ const companyCofigrationController = require("../controllers/settings/company/co
 const userController = require("../controllers/settings/user/userController");
 const rolePermissionController = require("../controllers/settings/user/rolePermissionController");
 const importController = require("../controllers/settings/import/importController");
-const importEmployeeController = require('../controllers/settings/import/importEmplyeeController.js');
+const importEmployeeController = require('../controllers/settings/import/importEmployeeController.js');
 const utilsController = require("../controllers/settings/utilsController");
 const userAccessController = require("../controllers/settings/user/userAccessController");
 const shiftTemplateController = require("../controllers/settings/shiftTemplateController");
@@ -22,10 +22,15 @@ const leaveRequestController = require("../controllers/settings/leave/leaveReque
 const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
 const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
 const departmentController = require("../controllers/settings/departmentController");
+const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
+const designationMasterController = require("../controllers/settings/designationMasterController");
+const incentiveTypeController = require("../controllers/settings/incentiveTypeController.js");
+const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
-
+router.get("/switch-company", userAccessController.switchCompany);
+router.get("/switch-branch", userAccessController.switchBranch);
 
 
 // ==========================
@@ -72,7 +77,7 @@ router.put("/company-configration/:id", companyCofigrationController.update);
 router.post("/utils/send-email", bufferFile(["attachments"]), utilsController.sendEmail);
 router.post("/utils/fetch-gst-details", utilsController.fetchGSTDetails);
 router.post("/utils/fetch-ifsc-details", utilsController.fetchIFSCDetails);
-
+router.post("/utils/fetch-pincode-details", utilsController.fetchPincodeDetails);
 
 
 
@@ -168,11 +173,6 @@ router.delete("/attendance-template", attendanceTemplateController.delete);
 router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
 router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
 
-// ==========================
-// 29. IMPORT EMPLOYEE ROUTES
-// ==========================
-// router.get("/download-errors", importEmployeeController.downloadErrorFile);
-router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 
 // ==========================
@@ -195,7 +195,7 @@ router.post("/leave-request/get-transactions", leaveRequestController.getAll);
 router.post("/leave-request/pending-approvals", leaveRequestController.getPendingApprovals);
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
-router.get("/leave-balance/:employeeId", leaveRequestController.getEmployeeBalance);
+router.get("/leave-balance/:employeeId", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================
 // 31. Salary Template ROUTES
@@ -229,5 +229,44 @@ router.get("/department/:id", departmentController.getById);
 router.put("/department/:id", departmentController.update);
 router.delete("/department/", departmentController.delete);
 router.patch("/department/status", departmentController.updateStatus);
+
+// ==========================
+// 34. DESIGNATION MASTER
+// ==========================
+// Base Path: /designation
+router.post("/designation/", designationMasterController.create);
+router.post("/designation/get-transactions", designationMasterController.getAll);
+router.post("/designation/dropdown-list", designationMasterController.dropdownList);
+router.get("/designation/:id", designationMasterController.getById);
+router.put("/designation/:id", designationMasterController.update);
+router.delete("/designation/", designationMasterController.delete);
+router.patch("/designation/status", designationMasterController.updateStatus);
+
+// ==========================
+// 35. IMPORT EMPLOYEE ROUTES
+// ==========================
+// Base Path: /employee
+router.get("/employee/download-errors", importEmployeeController.downloadErrorFile);
+router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+// router.get("/download-errors", importEmployeeController.downloadErrorFile);
+// router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+
+// ==========================
+// INCENTIVE_TYPE
+// ==========================
+// Base Path: /incentive-type
+router.post("/incentive-type", incentiveTypeController.create);
+router.post("/incentive-type/get-transactions", incentiveTypeController.getAll);
+router.post("/incentive-type/dropdown-list", incentiveTypeController.dropdownList);
+router.get("/incentive-type/:id", incentiveTypeController.getById);
+router.put("/incentive-type/:id", incentiveTypeController.update);
+router.delete("/incentive-type", incentiveTypeController.delete);
+router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
+
+
+router.post("/employee-settings/", employeeSettingsController.create);
+router.post("/employee-settings/get-transactions", employeeSettingsController.getAll);
+router.put("/employee-settings/", employeeSettingsController.update);
+
 
 module.exports = router;

@@ -187,3 +187,49 @@ exports.fetchIFSCDetails = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+exports.fetchPincodeDetails = async (req, res) => {
+  try {
+    const { pincode } = req.body;
+
+    if (!pincode) {
+      return res.status(400).json({
+        code: 400,
+        status: "BAD_REQUEST",
+        message: "Pincode is required",
+      });
+    }
+
+    const apiUrl = `https://api.postalpincode.in/pincode/${pincode}`;
+    const response = await axios.get(apiUrl);    
+    const apiResult = response.data[0];
+    
+    // Check if API returned success
+    if (apiResult?.Status === "Success" && apiResult?.PostOffice) {
+      const postOffice = apiResult.PostOffice[0];
+      
+      const data = {
+        CITY: postOffice?.District,
+        STATE: postOffice?.State,
+        COUNTRY: postOffice?.Country
+      };
+
+      return res.status(200).json({
+        code: 200,
+        status: "SUCCESS",
+        message: "Pincode details fetched successfully",
+        data: data,
+      });
+    } 
+    else{
+      return res.status(404).json({
+        code: 404,
+        status: "NOT_FOUND",
+        message: "Pincode not found",
+      });
+    }
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};

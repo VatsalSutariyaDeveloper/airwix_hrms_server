@@ -23,6 +23,9 @@ const CompanyMaster = require("./settings/company/companyMaster")(sequelize, Dat
 const CompanyConfigration = require("./settings/company/companyConfigration")(sequelize, DataTypes);
 const CompanyAddress = require("./settings/company/companyAddress")(sequelize, DataTypes);
 const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
+const DesignationMaster = require("./settings/designationMaster")(sequelize, DataTypes);
+const BranchMaster = require("./settings/branchMaster")(sequelize, DataTypes);
+
 
 // Auth models
 const User = require("./settings/user/user")(sequelize, DataTypes);
@@ -71,7 +74,7 @@ const HolidayTransaction = require("./settings/holidayTransaction")(sequelize, D
 // Leave models
 const LeaveTemplate = require("./settings/leave/leaveTemplate")(sequelize, DataTypes);
 const LeaveTemplateCategory = require("./settings/leave/leaveTemplateCategory")(sequelize, DataTypes);
-const LeaveBalance = require("./settings/leave/leaveBalance")(sequelize, DataTypes);
+const EmployeeLeaveBalance = require("./employeeData/EmployeeLeaveBalance")(sequelize, DataTypes);
 const LeaveRequest = require("./settings/leave/leaveRequest")(sequelize, DataTypes);
 
 // Salary models
@@ -91,12 +94,16 @@ const PrintTemplate = require("./settings/printTemplate")(sequelize, DataTypes);
 const EmployeeAttendanceTemplate = require("./employeeData/EmployeeAttendanceTemplate")(sequelize, DataTypes);
 const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, DataTypes);
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
-const EmployeeLeaveCategory = require("./employeeData/EmployeeLeaveCategory")(sequelize, DataTypes);
 const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
+const EmployeeSettings = require("./settings/employeeSettings")(sequelize, DataTypes);
 
 // Payroll models
 const Payslip = require("./payroll/payslip")(sequelize, DataTypes); 
+const IncentiveType = require("./settings/incentiveType")(sequelize, DataTypes);
+const EmployeeIncentive = require("./payroll/employeeIncentive")(sequelize, DataTypes);
+const EmployeeAdvance = require("./payroll/employeeAdvance")(sequelize, DataTypes);
+const PaymentHistory = require("./payroll/paymentHistory")(sequelize, DataTypes);
 
 // Collect all models in one db object
 const db = {
@@ -119,6 +126,8 @@ const db = {
   CompanyConfigration,
   CompanyAddress,
   DeviceMaster,
+  DesignationMaster,
+  BranchMaster,
 
   // SeriesTypeMaster
   SeriesTypeMaster,
@@ -166,7 +175,6 @@ const db = {
   // Leave
   LeaveTemplate,
   LeaveTemplateCategory,
-  LeaveBalance,
   LeaveRequest,
 
   // Salary
@@ -188,14 +196,19 @@ const db = {
 
   // Employee Specific Data
   EmployeeAttendanceTemplate,
+  EmployeeLeaveBalance, // Added EmployeeLeaveBalance
   EmployeeHoliday,
   EmployeeWeeklyOff,
-  EmployeeLeaveCategory,
   EmployeeShiftSetting,
   EmployeePrintTemplate,
+  EmployeeSettings,
 
   // Payroll
   Payslip,
+  IncentiveType,
+  EmployeeIncentive,
+  EmployeeAdvance,
+  PaymentHistory,
 };
 
 Object.keys(db).forEach(modelName => {

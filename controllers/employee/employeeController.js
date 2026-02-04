@@ -14,7 +14,8 @@ const {
     EmployeeSalaryTemplate,
     SalaryComponent,
     WeeklyOffTemplate,
-    WeeklyOffTemplateDay
+    WeeklyOffTemplateDay,
+    EmployeeSettings
 } = require("../../models");
 
 const {
@@ -47,6 +48,7 @@ const fs = require('fs');
 const FormData = require('form-data');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
+const { LOADIPHLPAPI } = require("dns/promises");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
@@ -144,6 +146,20 @@ exports.create = async (req, res) => {
             },
         }, transaction);
 
+        if(req.body.employee_code){
+            const employeeCodeExists = await Employee.findOne({
+                where: {
+                    employee_code: req.body.employee_code,
+                },
+                transaction,
+            });
+            
+            if(employeeCodeExists){
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { employee_code: "Employee Code already exists" });
+            }
+        }
+
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
@@ -161,8 +177,19 @@ exports.create = async (req, res) => {
             });
         }
 
-        // 2. Generate Employee Code
-        // POST.employee_code = await generateSeriesNumber(POST.series_id, transaction, Employee, "employee_code");
+        if (POST.prefix || POST.number) {
+            if (!POST.number) {
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { message: "Number is required when storing employee settings" });
+            }
+
+            const settingsData = {
+                settings_name: POST.prefix, 
+                settings_value: POST.number,
+            };
+
+            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
+        }
 
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
@@ -172,13 +199,7 @@ exports.create = async (req, res) => {
             return res.error(constants.DATABASE_ERROR, { errors: constants.FAILED_TO_CREATE_RECORD });
         }
 
-        // Initialize Leave Balance if template is assigned
-        if (POST.leave_template) {
-            await LeaveBalanceService.initializeBalance(employee.id, POST.leave_template, transaction);
-        }
-
-        // Sync all templates to user-wise tables
-        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
+        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);   
 
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
@@ -240,7 +261,6 @@ exports.create = async (req, res) => {
         POST.role_id = 2;
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
         if (POST.employee_type == 1) {
-            POST.role_id = 2;
             // Validation for user fields
             const userRequiredFields = { role_id: "Role" };
             userRequiredFields.mobile_no = "Mobile No";
@@ -374,16 +394,6 @@ exports.update = async (req, res) => {
             }
         }
 
-        // Sync or Initialize Leave Balance if template is provided/changed
-        if (POST.leave_template) {
-            if (parseInt(POST.leave_template) !== parseInt(existingEmployee.leave_template)) {
-                // Template Changed -> Sync (Cleanup old categories + Init new ones)
-                await LeaveBalanceService.syncEmployeeBalances(id, POST.leave_template, transaction);
-            } else {
-                // Just ensure balance exists (e.g. if it was never initialized)
-                await LeaveBalanceService.initializeBalance(id, POST.leave_template, transaction);
-            }
-        }
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];
@@ -466,6 +476,7 @@ exports.update = async (req, res) => {
         // }
 
         // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
+        POST.role_id = 2;
         if (POST.employee_type == 1) {
             const loginType = parseInt(POST.login_type) || 1;
 
@@ -682,6 +693,24 @@ exports.getAll = async (req, res) => {
 
         return res.ok(data);
     } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.checkEmployeeCode = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { employee_code } = req.body;
+        const emp = await commonQuery.findOneRecord(
+            Employee,
+            { employee_code },
+            {},
+            transaction
+        );
+
+        return res.ok({ exists: !!emp });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
@@ -1348,8 +1377,31 @@ exports.getWages = async(req, res) =>{
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
 
+        // Get current date and format it as YYYY-MM-DD for database query
+        const currentDate = new Date().toISOString().split('T')[0];
+
+        // Fetch attendance day record for employeeId and current date
+        const attendanceDay = await commonQuery.findOneRecord(
+            AttendanceDay,
+            {
+                employee_id: employeeId,
+                attendance_date: currentDate
+            },
+            {
+                attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
+            }
+        )
+
+        if(!attendanceDay ){
+            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
+        }
+
+        // if(attendanceDay.first_in == null){
+        //     return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
+        // }
+
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-            attributes: ['id', 'salary_template_id', 'company_id']
+            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template']
         });
 
         if (!employee) {
@@ -1377,15 +1429,16 @@ exports.getWages = async(req, res) =>{
         let workingDays = null;
         const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
         
-        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-                attributes: ['id', 'weekly_off_template', 'company_id']
-            });
-            
+        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') { 
+
             if (employee && employee.weekly_off_template) {
-                const weeklyOffTemplate = await commonQuery.findOneRecord(WeeklyOffTemplate, employee.weekly_off_template, {
-                    include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                });
+                const weeklyOffTemplate = await commonQuery.findOneRecord(
+                    WeeklyOffTemplate, 
+                    employee.weekly_off_template, 
+                    {
+                        include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                    }
+                );
                 
                 if (weeklyOffTemplate) {
                     const currentDate = new Date();                    
@@ -1424,7 +1477,9 @@ exports.getWages = async(req, res) =>{
             calculation_basis: employeeSalaryTemplate.lwp_calculation_basis,
             month_days: monthDays,
             working_days: workingDays,
-            month: new Date().getMonth() + 1 + " " + new Date().getFullYear(),
+            last_out: attendanceDay.last_out || null,
+            overtime_data: attendanceDay?.overtime_data || null,
+            fine_data: attendanceDay?.fine_data || null,
         };
 
         return res.success(constants.SUCCESS, responseData);

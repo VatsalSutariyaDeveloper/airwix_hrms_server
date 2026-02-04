@@ -1,53 +1,45 @@
-const { validateRequest, commonQuery, handleError, sequelize, getCompanySetting } = require("../../helpers");
+const { DesignationMaster } = require("../../models");
+const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const db = require("../../models");
-const StatutoryPTRule = db.StatutoryPTRule;
-//CREATE
+
+// Create a new bank master record
 exports.create = async (req, res) => {
+    const transaction = await sequelize.transaction();
     try {
-        const transaction = await sequelize.transaction();
         const requiredFields = {
-            state_id: "State Id",
-            min_salary: "Minimum Salary",
-            // max_salary: "Max Salary",
-            monthly_amount: "Monthly Amount",
-            // march_amount: "March Amount",
-            gender: "Gender",
+            designation_name: "Designation Name",
         };
 
-        const errors = await validateRequest(
-            req.body,
-            requiredFields,
-            {},
-            transaction
-        );
+        const errors = await validateRequest(req.body, requiredFields, {
+            uniqueCheck: {
+                model: DesignationMaster,
+                fields: ["designation_name"],
+            }
+        }, transaction);
+
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        await commonQuery.createRecord(StatutoryPTRule, req.body, transaction);
+
+        await commonQuery.createRecord(DesignationMaster, req.body, transaction);
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_CREATED);
+        return res.success(constants.DESIGNATION_MASTER_CREATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Get all status shift records
+// Get all active shift records
 exports.getAll = async (req, res) => {
-    console.log(req.data);
     try {
-
         const fieldConfig = [
-            ["min_salary", true, true],
-            ["max_salary", true, true],
-            ["monthly_amount", true, true],
-            // ["gender", true, true],
+            ["designation_name", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
-            StatutoryPTRule,
+            DesignationMaster,
             req.body,
             fieldConfig,
         );
@@ -57,34 +49,10 @@ exports.getAll = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
-// Get dropdown list of status device masters
-exports.dropdownList = async (req, res) => {
-    try {
-        // const result = await commonQuery.findAllRecords(StatutoryPTRule, { status: 0 });
-        const fieldConfig = [
-            ["min_salary", true, true],
-            ["max_salary", true, true],
-            ["monthly_amount", true, true],
-            ["gender", true, true],
-        ];
-
-        const result = await commonQuery.fetchPaginatedData(
-            StatutoryPTRule,
-            req.body,
-            fieldConfig,
-        );
-
-        return res.ok(result);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(StatutoryPTRule, req.params.id);
+        const record = await commonQuery.findOneRecord(DesignationMaster, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -92,45 +60,45 @@ exports.getById = async (req, res) => {
     }
 };
 
-// Update Data by ID
+// Update designation record by ID
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const requiredFields = {
-            state_id: "State Id",
-            min_salary: "Minimum Salary",
-            // max_salary: "Max Salary",
-            monthly_amount: "Monthly Amount",
-            // march_amount: "March Amount",
-            gender: "Gender",
+            designation_name: "Designation Name",
         };
 
         const errors = await validateRequest(
             req.body,
             requiredFields,
-            {},
+            {
+                uniqueCheck: {
+                    model: DesignationMaster,
+                    fields: ["designation_name"],
+                    excludeId: req.params.id,
+                }
+            },
             transaction
         );
-
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(StatutoryPTRule, req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(DesignationMaster, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_UPDATED);
+        return res.success(constants.DESIGNATION_MASTER_UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Soft delete by IDs
+// Soft delete a designrecord by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -143,7 +111,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const { ids } = req.body; // Accept array of ids
+        let { ids } = req.body; // Accept array of ids
 
         // Validate that ids is an array and not empty
         if (!Array.isArray(ids) || ids.length === 0) {
@@ -151,13 +119,13 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(StatutoryPTRule, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(DesignationMaster, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_DELETED);
+        return res.success(constants.DESIGNATION_MASTER_DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -173,7 +141,7 @@ exports.updateStatus = async (req, res) => {
 
         const requiredFields = {
             ids: "Select Any One Data",
-            status: "Select status"
+            status: "Select Status"
         };
 
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
@@ -190,7 +158,7 @@ exports.updateStatus = async (req, res) => {
 
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
-            StatutoryPTRule,
+            DesignationMaster,
             ids,
             { status },
             transaction
@@ -202,9 +170,31 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_UPDATED);
+        return res.success(constants.DESIGNATION_MASTER_UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+// Get dropdown list of active designation masters
+exports.dropdownList = async (req, res) => {
+    try {
+        const fieldConfig = [
+            ["designation_name", true, true],
+        ];
+
+        const result = await commonQuery.fetchPaginatedData(
+            DesignationMaster,
+            { ...req.body, status: 0 },
+            fieldConfig,
+            {
+                attributes: ['id', 'designation_name']
+            }
+        );
+
+        return res.ok(result);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };

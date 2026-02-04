@@ -11,6 +11,8 @@ module.exports = (sequelize, DataTypes) => {
         worked_minutes: DataTypes.INTEGER,
         late_minutes: DataTypes.INTEGER,
         early_out_minutes: DataTypes.INTEGER,
+        early_overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
+        total_break_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         status: {
             type: DataTypes.SMALLINT,
             defaultValue: 0,
@@ -39,6 +41,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "ShiftTemplate" });
     AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "Employee" });
     AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "LeaveCategory" });
+    AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "AttendancePunches" });
   };
 
   return AttendanceDay;

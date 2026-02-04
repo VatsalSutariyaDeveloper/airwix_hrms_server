@@ -19,6 +19,8 @@ const companySettingsMasterController = require("../controllers/administration/c
 const statutoryPTRuleController = require("../controllers/administration/statutoryPTRuleController");
 const statutoryLWFRuleController = require("../controllers/administration/statutoryLWFRuleController");
 const holidayController = require("../controllers/settings/holidayController");
+const approvalActionController = require("../controllers/administration/approvalActionController");
+const approvalMasterController = require("../controllers/administration/approvalMasterController");
 
 
 // --- Helper to safely get handler ---
@@ -50,6 +52,7 @@ router.get("/module-entity/:id", moduleEntityMasterController.getById);
 router.put("/module-entity/:id", moduleEntityMasterController.update);
 router.delete("/module-entity/", moduleEntityMasterController.delete);
 router.patch("/module-entity/status", moduleEntityMasterController.updateStatus);
+router.post("/module-entity/dropdown-list", moduleEntityMasterController.dropdownList);
 
 // Module Permission Type (Base: /module-permission-type)
 router.post("/module-permission-type/", modulePermissionTypeMasterController.create);
@@ -152,5 +155,14 @@ router.delete("/statutory-pt-rule", statutoryPTRuleController.delete);
 router.post("/statutory-pt-rule/dropdown-list", statutoryPTRuleController.dropdownList);
 router.patch("/statutory-pt-rule/status", statutoryPTRuleController.updateStatus);
 router.post("/statutory-pt-rule/states", statutoryPTRuleController.getStatesWithRules);
+
+//approval action
+router.post("/approval/my-pending", approvalActionController.getMyPendingApprovals);
+router.post("/approval/take-action", approvalActionController.takeAction);
+router.post("/approval/get-approval-history", approvalActionController.getApprovalHistory);
+
+//approval master 
+
+router.post("/approval/type/configure", approvalMasterController.configureApprovalType);
 
 module.exports = router;

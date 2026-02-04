@@ -67,7 +67,14 @@ exports.getAll = async (req, res) => {
         "created_at",
         "updated_at",
       ],
-      group: ['rolePermission.id'],
+      group: [
+        'rolePermission.id',
+        'rolePermission.role_name',
+        'rolePermission.permissions',
+        'rolePermission.status',
+        'rolePermission.created_at',
+        'rolePermission.updated_at'
+      ],
     }
   );
   return res.ok(data);

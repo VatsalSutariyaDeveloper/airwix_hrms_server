@@ -20,7 +20,7 @@ const { MODULES } = require("../../helpers/moduleEntitiesConstants");
  */
 exports.getMyPendingApprovals = async (req, res) => {
     try {
-        const { user_id, company_id, role_id } = req.body; // Injected via Auth Middleware usually
+        const { user_id, company_id, role_id } = req.user; // Injected via Auth Middleware usually
 
         // 1. Fetch all PENDING requests
         // Note: For high volume, we should optimize this query to filter by user/role at SQL level

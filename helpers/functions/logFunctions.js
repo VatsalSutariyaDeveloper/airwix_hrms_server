@@ -1,4 +1,4 @@
-const { ActivityLog, Logs } = require("../../models"); 
+const { ActivityLog, Logs, sequelize } = require("../../models"); 
 const { generateLogMessage } = require("./logMessageGenerator"); // Assuming you have this
 const fs = require('fs');
 const path = require('path');

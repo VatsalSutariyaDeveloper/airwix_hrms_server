@@ -1,54 +1,52 @@
-const { validateRequest, commonQuery, handleError, sequelize, getCompanySetting } = require("../../helpers");
+const { IncentiveType } = require("../../models");
+const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const db = require("../../models");
-const StatutoryLWFRule = db.StatutoryLWFRule;
 
-
-// Create a new Currency 
+// Create a new bank master record
 exports.create = async (req, res) => {
+    const transaction = await sequelize.transaction();
     try {
-        const transaction = await sequelize.transaction();
         const requiredFields = {
-            state_id: "State Id",
-            employee_contribution: "Employee Contribution",
-            employer_contribution: "Employer Contribution",
-            deduction_months: "Deduction Months",
+            name: "Name",
+            description: "Description",
         };
 
-       const errors = await validateRequest(
-            req.body,
-            requiredFields,
-            {},
-            transaction
-        );
-
+        const errors = await validateRequest(req.body, requiredFields, {
+            uniqueCheck: {
+                model: IncentiveType,
+                fields: ["name"],
+            }
+        }, transaction);
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        await commonQuery.createRecord(StatutoryLWFRule, req.body, transaction);
+
+        await commonQuery.createRecord(IncentiveType, req.body, transaction);
         await transaction.commit();
-        return res.success(constants.STATUTORY_LWF_RULE_MASTER_CREATED);
+        return res.success(constants.INCENTIVE_TYPE_CREATED);
+
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Get all status shift records
+// Get all active shift records
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["employee_contribution", true, true],
-            ["employer_contribution", true, true],
-            ["deduction_months", true, true],
+            ["name", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
-            StatutoryLWFRule,
+            IncentiveType,
             req.body,
             fieldConfig,
+            {
+                attributes: ['id', 'name', 'description', 'status']
+            }
         );
 
         return res.ok(data);
@@ -56,33 +54,10 @@ exports.getAll = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
-// Get dropdown list of status device masters
-exports.dropdownList = async (req, res) => {
-    try {
-        // const result = await commonQuery.findAllRecords(StatutoryLWFRule, { status: 0 });
-         const fieldConfig = [
-            ["employee_contribution", true, true],
-            ["employer_contribution", true, true],
-            ["deduction_months", true, true],
-        ];
-
-        const result = await commonQuery.fetchPaginatedData(
-            StatutoryLWFRule,
-            req.body,
-            fieldConfig,
-        );
-
-        return res.ok(result);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(StatutoryLWFRule, req.params.id);
+        const record = await commonQuery.findOneRecord(IncentiveType, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -90,45 +65,50 @@ exports.getById = async (req, res) => {
     }
 };
 
-// Update Data by ID
+// Update shift record by ID
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
+        // Only validate fields sent in request
         const requiredFields = {
-            state_id: "State Id",
-            employee_contribution: "Employee Contribution",
-            employer_contribution: "Employer Contribution",
-            deduction_months: "Deduction Months",
+            name: "Name",
         };
 
         const errors = await validateRequest(
             req.body,
             requiredFields,
-            {},
+            {
+                uniqueCheck: {
+                    model: IncentiveType,
+                    fields: ["name"],
+                    excludeId: req.params.id,
+                }
+            },
             transaction
         );
-
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(StatutoryLWFRule, req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(IncentiveType, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_LWF_RULE_MASTER_UPDATED);
+        return res.success(constants.INCENTIVE_TYPE_UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// Soft delete by IDs
+// Soft delete a shift record by ID
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
+    //multiple delete
+
     try {
         const requiredFields = {
             ids: "Select Data"
@@ -139,7 +119,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const { ids } = req.body; // Accept array of ids
+        let { ids } = req.body; // Accept array of ids
 
         // Validate that ids is an array and not empty
         if (!Array.isArray(ids) || ids.length === 0) {
@@ -147,13 +127,13 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(StatutoryLWFRule, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(IncentiveType, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_LWF_RULE_MASTER_DELETED);
+        return res.success(constants.INCENTIVE_TYPE_DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -166,10 +146,11 @@ exports.updateStatus = async (req, res) => {
     try {
 
         const { status, ids } = req.body; // expecting status in request body
+        // console.log("ID And Status:", ids, status);
 
         const requiredFields = {
             ids: "Select Any One Data",
-            status: "Select status"
+            status: "Select Status"
         };
 
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
@@ -186,7 +167,7 @@ exports.updateStatus = async (req, res) => {
 
         // Update only the status field by id
         const updated = await commonQuery.updateRecordById(
-            StatutoryLWFRule,
+            IncentiveType,
             ids,
             { status },
             transaction
@@ -198,9 +179,31 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.STATUTORY_LWF_RULE_MASTER_UPDATED);
+        return res.success(constants.INCENTIVE_TYPE_UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+// Get dropdown list of active designation masters
+exports.dropdownList = async (req, res) => {
+    try {
+        const fieldConfig = [
+            ["name", true, true],
+        ];
+
+        const result = await commonQuery.fetchPaginatedData(
+            IncentiveType,
+           { ...req.body, status: 0 },
+            fieldConfig,
+            {
+                attributes: ['id', 'name']
+            }
+        );
+
+        return res.ok(result);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };
