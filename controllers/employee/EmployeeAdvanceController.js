@@ -75,6 +75,37 @@ exports.getAll = async (req, res) => {
                 ]
             },
         );
+
+        // Get monthly totals
+        const monthlyTotals = await EmployeeAdvance.findAll({
+            attributes: [
+                "payroll_month",
+                [sequelize.fn('SUM', sequelize.col('amount')), 'total_amount'],
+                [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+            ],
+            where: { status: { [Op.ne]: 2 } }, // Exclude cancelled records
+            group: ['payroll_month'],
+            order: [['payroll_month', 'DESC']]
+        });
+
+        // Create a map of payroll_month to totals
+        const totalsMap = {};
+        monthlyTotals.forEach(total => {
+            totalsMap[total.payroll_month] = {
+                total_amount: total.dataValues.total_amount,
+                count: total.dataValues.count
+            };
+        });
+
+        // Attach monthly totals to each record
+        if (data.items && Array.isArray(data.items)) {
+            data.items.forEach(record => {
+                if (record.payroll_month && totalsMap[record.payroll_month]) {
+                    record.dataValues.monthly_total = totalsMap[record.payroll_month];
+                }
+            });
+        }
+
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
@@ -423,5 +454,3 @@ exports.getAllPaymentHistory = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
-
