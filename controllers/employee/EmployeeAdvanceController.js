@@ -406,3 +406,28 @@ exports.view = async (req, res) => {
     }
 };
 
+exports.getAllPaymentHistory = async (req, res) => {
+    try {
+        const fieldConfig = [
+            ["payroll_month", true, true],
+            ["payment_date", true, true],
+            ["amount", true, true]
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            PaymentHistory,
+            req.body,
+            fieldConfig,
+            {
+                include: [
+                    { model: Employee, as: 'employee', attributes: ['id', 'employee_code', 'first_name', 'mobile_no'] }
+                ]
+            }
+        );
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+

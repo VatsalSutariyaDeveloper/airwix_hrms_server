@@ -37,5 +37,6 @@ router.put("/employee-advance/:id", employeeAdvanceController.update);
 router.delete("/employee-advance", employeeAdvanceController.delete);
 router.patch("/employee-advance/status", employeeAdvanceController.updateStatus);
 router.post("/employee-advance/view", employeeAdvanceController.view);
+router.post("/payment-history/get-transactions", employeeAdvanceController.getAllPaymentHistory);
 
 module.exports = router;
