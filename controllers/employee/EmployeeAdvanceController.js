@@ -401,16 +401,21 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
-exports.view = async (req, res) => {
+exports.advanceView = async (req, res) => {
     try {
-        const { employee_id } = req.body;
+        const { employee_id, payroll_month } = req.body;
         
         if (!employee_id) {
             return res.error(constants.INVALID_ID);
         }
         
+        const whereCondition = { employee_id };
+        if (payroll_month) {
+            whereCondition.payroll_month = payroll_month;
+        }
+        
         const advances = await EmployeeAdvance.findAll({
-            where: { employee_id },
+            where: whereCondition,
             include: [
                 {
                     model: Employee,
@@ -449,6 +454,30 @@ exports.getAllPaymentHistory = async (req, res) => {
                 ]
             }
         );
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.paymentHistoryView = async (req, res) => {
+    try {
+        const { payment_history_id } = req.body;
+        
+        if (!payment_history_id) {
+            return res.error(constants.INVALID_ID);
+        }
+
+        const data = await commonQuery.findAllRecords(
+            PaymentHistory,
+            { id: payment_history_id },
+            {
+                include: [
+                    { model: EmployeeAdvance, as: 'employee-advance', attributes: ['id', 'employee_id', 'amount', 'payroll_month', 'status'] }
+                ]
+            }
+        );
+        
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
