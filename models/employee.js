@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
         employee_code: { type: DataTypes.STRING },
         first_name: { type: DataTypes.STRING },
         mobile_no: { type: DataTypes.STRING },
-        designation:{ type: DataTypes.STRING },
+        // designation:{ type: DataTypes.STRING },
         attendance_supervisor:{ type: DataTypes.INTEGER },
         is_attendance_supervisor:{ type: DataTypes.BOOLEAN, defaultValue: false },
         reporting_manager:{ type: DataTypes.INTEGER },

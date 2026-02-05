@@ -388,6 +388,11 @@ exports.view = async (req, res) => {
             where: { employee_id },
             include: [
                 {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['id', 'employee_code', 'first_name', 'mobile_no']
+                },
+                {
                     model: PaymentHistory,
                     as: 'paymentHistory',
                     attributes: ['id', 'ref_id', 'amount', 'payment_date', 'payment_mode', 'status']
@@ -395,10 +400,9 @@ exports.view = async (req, res) => {
             ]
         });
         
-        return res.success({
-            advances: advances || []
-        });
+       return res.ok(advances);
     } catch (err) {
         return handleError(err, res, req);
     }
 };
+
