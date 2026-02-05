@@ -411,11 +411,19 @@ exports.advanceView = async (req, res) => {
         
         const whereCondition = { employee_id };
         if (payroll_month) {
-            whereCondition.payroll_month = payroll_month;
+            const yearMonth = payroll_month.substring(0, 7);
+            whereCondition[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('TO_CHAR', sequelize.col('payroll_month'), 'YYYY-MM'),
+                    yearMonth
+                )
+            ];
         }
         
-        const advances = await EmployeeAdvance.findAll({
-            where: whereCondition,
+        const advances = await commonQuery.findAllRecords(
+            EmployeeAdvance,
+            whereCondition,
+            {
             include: [
                 {
                     model: Employee,
@@ -430,7 +438,17 @@ exports.advanceView = async (req, res) => {
             ]
         });
         
-       return res.ok(advances);
+        // Calculate total amount
+        const totalAmount = advances.reduce((sum, advance) => {
+            return sum + parseFloat(advance.amount || 0);
+        }, 0);
+        
+        const response = {
+            data: advances,
+            total_amount: totalAmount.toFixed(2)
+        };
+        
+       return res.ok(response);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -461,25 +479,33 @@ exports.getAllPaymentHistory = async (req, res) => {
 };
 
 exports.paymentHistoryView = async (req, res) => {
-    try {
-        const { payment_history_id } = req.body;
-        
-        if (!payment_history_id) {
-            return res.error(constants.INVALID_ID);
-        }
+   try{
+    const { payment_history_id } = req.body;
 
-        const data = await commonQuery.findAllRecords(
-            PaymentHistory,
-            { id: payment_history_id },
-            {
-                include: [
-                    { model: EmployeeAdvance, as: 'employee-advance', attributes: ['id', 'employee_id', 'amount', 'payroll_month', 'status'] }
-                ]
-            }
-        );
-        
-        return res.ok(data);
-    } catch (err) {
-        return handleError(err, res, req);
+    if (!payment_history_id) {
+        return res.error(constants.INVALID_ID);
     }
+
+    const paymentHistory = await commonQuery.findOneRecord(
+        PaymentHistory, 
+        payment_history_id,
+        {
+            include: [
+                {
+                    model: EmployeeAdvance,
+                    as: 'employee-advance',
+                    attributes: ['id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
+                }
+            ]
+        }
+    );
+
+    if (!paymentHistory) {
+        return res.error(constants.NOT_FOUND);
+    }
+
+    return res.ok(paymentHistory);
+   }catch(err){
+    return handleError(err, res, req);
+   }
 };
