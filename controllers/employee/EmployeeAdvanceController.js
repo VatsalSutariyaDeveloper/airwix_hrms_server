@@ -59,28 +59,22 @@ exports.getAll = async (req, res) => {
                         model: Employee,
                         as: "employee",
                         required: false,
-                        attributes: [["first_name", "employee_name"]],
-                        where: { status: { [Op.ne]: 2 } },
+                        attributes: [],
                     }
                 ],
-                raw: true,
-                nest: false,   // IMPORTANT
-                subQuery: false,
-            }
+                attributes: [
+                    "id", 
+                    "employee_id", 
+                    "payroll_month", 
+                    "payment_date", 
+                    "amount", 
+                    "payment_mode",
+                    "adjusted_in_payroll",
+                    "status",
+                    "employee.first_name"
+                ]
+            },
         );
-           data.items = data.items.map(item => {
-            const employeeName = item["employee.employee_name"] || "";
-            // remove unwanted keys
-            delete item["employee.employee_name"];
-            // ❌ remove ids from response
-            delete item.employee_id;
-
-            return {
-                ...item,
-                employee_name: employeeName,
-            };
-        });
-
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
