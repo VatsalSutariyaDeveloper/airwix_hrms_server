@@ -104,7 +104,7 @@ module.exports = (req, res, next) => {
       }
 
       return res.json({
-        status: true,
+        success: true,
         message: formatMessage(null, "Data fetched successfully"),
         data: finalData
       });
@@ -130,7 +130,7 @@ module.exports = (req, res, next) => {
       }
 
       return res.json({
-        status: true,
+        success: true,
         message: formatMessage(code),
         data: finalData
       });
@@ -161,7 +161,7 @@ module.exports = (req, res, next) => {
       let message = typeof errors === 'string' ? errors : (errors?.message || formatMessage(code, "An error occurred"));
       
       return res.status(status).json({
-        status: false,
+        success: false,
         message: message,
         data: errors
       });
@@ -173,7 +173,7 @@ module.exports = (req, res, next) => {
     const status = ERROR_HTTP_MAP[code] || 400;
     if (isApp()) {
       return res.status(status).json({
-        status: false,
+        success: false,
         message: formatMessage(code, "Validation failed"),
         data: data
       });
