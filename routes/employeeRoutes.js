@@ -5,8 +5,9 @@ const employeeSalaryTemplateController = require("../controllers/employee/employ
 const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
 const employeeAttendanceController = require("../controllers/employee/employeeAttendanceController");
 const { bufferImage, bufferFile } = require("../helpers/fileUpload");
+const { uploadExcelToDisk } = require("../helpers/fileUpload");
+const importEmployeeController = require("../controllers/settings/import/importEmployeeController");
 
-const importController = require("../controllers/settings/import/importController");
 // const { bufferImage } = require("../helpers/fileUpload");
 
 router.post("/", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.create);
@@ -23,6 +24,7 @@ router.get("/:id", employeeController.getById);
 router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.update);
 router.delete("/", employeeController.delete);
 router.post("/invite-user", employeeController.inviteUser);
+router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);

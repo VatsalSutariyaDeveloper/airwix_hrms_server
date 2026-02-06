@@ -23,12 +23,11 @@ exports.importData = async (req, res) => {
     // 1. Validate Basic Request
     const indentErrors = await validateRequest(req.body, {
       entity_name: "Select Entity",
-      field_mapping: "Select Mapping Fields",
     });
 
     if (indentErrors) {
       if (req.file && req.file.path) fs.unlinkSync(req.file.path);
-      return res.error(constants.VALIDATION_ERROR, { errors: indentErrors });
+      return res.error(constants.VALIDATION_ERROR,  indentErrors );
     }
 
     let workerScriptPath = null;
