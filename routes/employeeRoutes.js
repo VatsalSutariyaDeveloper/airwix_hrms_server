@@ -33,7 +33,7 @@ router.put("/salary-template/:employeeId", employeeSalaryTemplateController.upda
 
 // Employee Leave Balance Routes
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
-router.put("/leave-balance", employeeLeaveBalanceController.updateByEmployeeId);
+router.put("/leave-balance/:id", employeeLeaveBalanceController.updateByEmployeeId);
 
 // Employee Attendance Routes (Shift & Weekly Off)
 router.get("/shift-setting/:employeeId", employeeAttendanceController.getShiftSetting);

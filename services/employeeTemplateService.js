@@ -21,6 +21,8 @@ const {
 } = require("../models");
 const { commonQuery } = require("../helpers");
 const LeaveBalanceService = require("./leaveBalanceService");
+const { rebuildAttendanceDay } = require("../helpers/attendanceHelper");
+const dayjs = require("dayjs");
 
 class EmployeeTemplateService {
     /**
@@ -125,6 +127,9 @@ class EmployeeTemplateService {
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeHoliday, items, {}, transaction);
         }
+
+        // Trigger attendance rebuild for current month to reflect new holidays
+        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
     }
 
     static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction) {
@@ -149,6 +154,9 @@ class EmployeeTemplateService {
         if (items.length > 0) {
             await commonQuery.bulkCreate(EmployeeWeeklyOff, items, {}, transaction);
         }
+
+        // Trigger attendance rebuild for current month to reflect new off days
+        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
     }
 
     static async syncLeaveTemplate(employeeId, templateId, manualData, transaction) {
@@ -269,6 +277,26 @@ class EmployeeTemplateService {
 
         if (payloads.length > 0) {
             await commonQuery.bulkCreate(EmployeeShiftSetting, payloads, {}, transaction);
+        }
+
+        // Trigger attendance rebuild for current month to reflect new shift timings
+        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+    }
+
+    /**
+     * Rebuilds attendance for the current month for an employee.
+     */
+    static async rebuildCurrentMonthAttendance(employeeId, transaction = null) {
+        const today = dayjs();
+        const startOfMonth = today.startOf('month');
+        const endOfMonth = today.endOf('month'); // Or today? Usually current month means the whole month.
+        
+        // Loop through all days of the current month
+        let current = startOfMonth;
+        while (current.isBefore(endOfMonth) || current.isSame(endOfMonth, 'day')) {
+            const dateStr = current.format('YYYY-MM-DD');
+            await rebuildAttendanceDay(employeeId, dateStr, {}, transaction);
+            current = current.add(1, 'day');
         }
     }
 

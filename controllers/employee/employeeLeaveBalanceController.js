@@ -17,9 +17,27 @@ exports.getByEmployeeId = async (req, res) => {
             employeeId = req.user.employee_id;
         }
 
+        // Fetch employee to get cycle information
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        });
+
+        const dayjs = require("dayjs");
+        let cycle_info = { start: null, end: null, period: "" };
+        let activeYear = null;
+        
+        if (employee && employee.leaveTemplate) {
+            const { start, end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
+            cycle_info.start = start.format('YYYY-MM-DD');
+            cycle_info.end = end.format('YYYY-MM-DD');
+            cycle_info.period = `${start.format('MMM\'YY')} - ${end.format('MMM\'YY')}`;
+            activeYear = start.year();
+        }
+
         const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, { 
             employee_id: employeeId,
-            status: 0 // Fetch active balances
+            status: 0, // Fetch active balances
+            ...(activeYear ? { year: activeYear } : {})
         });
 
         if (!leaveBalances || leaveBalances.length === 0) {
@@ -35,7 +53,10 @@ exports.getByEmployeeId = async (req, res) => {
             };
         });
 
-        return res.success("Employee leave balances fetched successfully", mappedBalances);
+        return res.success("Employee leave balances fetched successfully", {
+            balances: mappedBalances,
+            cycle_info
+        });
     } catch (error) {
         return handleError(error, res, req);
     }
@@ -73,10 +94,18 @@ exports.updateByEmployeeId = async (req, res) => {
                 const newTotal = parseFloat(bal.leave_count !== undefined ? bal.leave_count : bal.total_allocated || 0);
                 const used = parseFloat(existingBalance.used_leaves || 0);
                 const carryForward = parseFloat(existingBalance.carry_forward_leaves || 0);
+                const isPaid = bal.is_paid !== undefined ? bal.is_paid : existingBalance.is_paid;
+
+                let pending = (newTotal + carryForward) - used;
+                
+                // If it's unpaid leave OR if the allocation is 0, keep pending at 0 to avoid negative values
+                if (!isPaid || newTotal === 0) {
+                    pending = 0;
+                }
 
                 const updateData = {
                     total_allocated: newTotal,
-                    pending_leaves: (newTotal + carryForward) - used,
+                    pending_leaves: pending,
                     leave_category_name: bal.leave_category_name || existingBalance.leave_category_name,
                     unused_leave_rule: bal.unused_leave_rule || existingBalance.unused_leave_rule,
                     carry_forward_limit: bal.carry_forward_limit !== undefined ? bal.carry_forward_limit : existingBalance.carry_forward_limit,

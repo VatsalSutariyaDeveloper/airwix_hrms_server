@@ -3,6 +3,7 @@ const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTra
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
+const LeaveBalanceService = require("../services/leaveBalanceService");
 
 /**
  * Helper to parse time/datetime
@@ -225,6 +226,20 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     return;
   }
 
+  // Find all IN punches on the target date
+  const inPunches = await commonQuery.findAllRecords(AttendancePunch, {
+      employee_id: employeeId,
+      punch_type: "IN",
+      punch_time: {
+        [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+      },
+      status: 0,
+  }, {
+    order: [["punch_time", "ASC"]],
+  }, transaction);
+
+  const hasPunches = inPunches.length > 0;
+
   // 0️⃣ Check if there's an approved Leave for this date
   const approvedLeave = await commonQuery.findOneRecord(LeaveRequest, {
       employee_id: employeeId,
@@ -234,11 +249,30 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status: 0
   }, {}, transaction);
 
-  if (approvedLeave) {
+  // IF PUNCHES EXIST: Cancel any overlapping Leave
+  if (hasPunches && approvedLeave) {
+    if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
+        // Single day leave - Cancel it
+        await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
+    } else {
+        // Multi-day leave - Refund balance for THIS day and mark as cancelled (simplest way to fulfill user request)
+        await LeaveBalanceService.adjustLeaveBalance(employeeId, approvedLeave.leave_category_id, -1, transaction);
+        await commonQuery.updateRecordById(LeaveRequest, approvedLeave.id, { 
+            approval_status: 'CANCELLED',
+            note: `Auto-cancelled due to punch on ${date}`
+        }, transaction);
+    }
+    // Continue reconstruction with punches...
+  }
+
+  // IF NO PUNCHES and APPROVED LEAVE: Apply Leave and Return
+  if (!hasPunches && approvedLeave) {
     const leavePayload = {
         employee_id: employeeId,
         attendance_date: date,
         status: 6, // LEAVE
+        shift_id: null,
+        leave_category_id: approvedLeave.leave_category_id,
         user_id: meta.user_id || 0,
         branch_id: meta.branch_id || 0,
         company_id: meta.company_id || 0,
@@ -250,6 +284,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }, {}, transaction);
 
     if (existingDay1) {
+        await syncAttendanceToLeaveBalance(employeeId, existingDay1, leavePayload, transaction);
         await commonQuery.updateRecordById(AttendanceDay, existingDay1.id, leavePayload, transaction);
     } else {
         await commonQuery.createRecord(AttendanceDay, leavePayload, transaction);
@@ -299,18 +334,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   if (empShift) {
     shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
   }
-
-  // Find all IN punches on the target date to help with dynamic shift selection
-  const inPunches = await commonQuery.findAllRecords(AttendancePunch, {
-      employee_id: employeeId,
-      punch_type: "IN",
-      punch_time: {
-        [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
-      },
-      status: 0,
-  }, {
-    order: [["punch_time", "ASC"]],
-  }, transaction);
 
   const firstInPunch = inPunches[0];
 
@@ -389,6 +412,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       employee_id: employeeId,
       attendance_date: date,
       status: emptyStatus,
+      shift_id: (isWeeklyOff || isHoliday) ? null : (shift ? shift.id : null),
       user_id: meta.user_id || 0,
       branch_id: meta.branch_id || 0,
       company_id: meta.company_id || 0,
@@ -407,13 +431,21 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     };
 
     if (existingDay) {
-      if (emptyStatus === 6) {
-          delete payload.leave_category_id;
-          delete payload.leave_session;
+      // If manually adjusting status, incorporate the category/session from meta or preserve existing
+      if ([1, 6].includes(emptyStatus)) {
+          payload.leave_category_id = meta.leave_category_id || existingDay.leave_category_id;
+          payload.leave_session = meta.leave_session || existingDay.leave_session;
       }
-
+      
+      await syncAttendanceToLeaveBalance(employeeId, existingDay, payload, transaction);
       await commonQuery.updateRecordById(AttendanceDay, existingDay.id, payload, transaction);
     } else {
+      // For NEW records, if status is 1 or 6, take category from meta
+      if ([1, 6].includes(emptyStatus)) {
+          payload.leave_category_id = meta.leave_category_id;
+          payload.leave_session = meta.leave_session;
+      }
+      await syncAttendanceToLeaveBalance(employeeId, null, payload, transaction);
       await commonQuery.createRecord(AttendanceDay, payload, transaction);
     }
     return;
@@ -737,10 +769,18 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     employee_id: employeeId, 
     attendance_date: date,
   }, {}, transaction);
-  
+
+  // If status is 1 (HALF_DAY) or 6 (LEAVE), we need category from meta or existing record
+  if ([1, 6].includes(status)) {
+      attendancePayload.leave_category_id = meta.leave_category_id || existingDay2?.leave_category_id;
+      attendancePayload.leave_session = meta.leave_session || existingDay2?.leave_session;
+  }
+
   if (existingDay2) {
+    await syncAttendanceToLeaveBalance(employeeId, existingDay2, attendancePayload, transaction);
     await commonQuery.updateRecordById(AttendanceDay, existingDay2.id, attendancePayload, transaction);
   } else {
+    await syncAttendanceToLeaveBalance(employeeId, null, attendancePayload, transaction);
     await commonQuery.createRecord(AttendanceDay, attendancePayload, transaction);
   }
 }
@@ -850,10 +890,44 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   await rebuildAttendanceDay(employeeId, date, { ...meta, preserveStatus: true }, transaction);
 }
 
+/**
+ * Syncs attendance status shifts to employee leave balance and history (LeaveRequest).
+ * Comparison between OLD state and NEW state of the day.
+ */
+async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction) {
+  const getDeduction = (status) => {
+      if (Number(status) === 6) return 1.0; // LEAVE
+      if (Number(status) === 1) return 0.5; // HALF_DAY
+      return 0;
+  };
+
+  const date = (newDay && newDay.attendance_date) ? newDay.attendance_date : (oldDay ? oldDay.attendance_date : null);
+  if (!date) return;
+
+  const oldStatus = oldDay ? Number(oldDay.status) : null;
+  const oldCategoryId = oldDay ? oldDay.leave_category_id : null;
+  const oldDeduction = (oldCategoryId && oldStatus !== null) ? getDeduction(oldStatus) : 0;
+
+  const newStatus = newDay ? Number(newDay.status) : null;
+  const newCategoryId = newDay ? newDay.leave_category_id : null;
+  const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
+
+  // CASE 1: Status changed AWAY from Leave/HalfDay (Refund)
+  if (oldDeduction > 0 && newDeduction === 0) {
+      await LeaveBalanceService.syncLeaveRecord(employeeId, date, oldCategoryId, 0, transaction);
+  }
+  // CASE 2: Status is NOW Leave/HalfDay (Deduct/Create)
+  else if (newDeduction > 0) {
+      // Even if oldDeduction was > 0, syncLeaveRecord handles updates (Category/Amount change)
+      await LeaveBalanceService.syncLeaveRecord(employeeId, date, newCategoryId, newDeduction, transaction);
+  }
+}
+
 module.exports = {
   punch,
   rebuildAttendanceDay,
   manualPunch,
   getOrCreateAttendanceDay,
+  syncAttendanceToLeaveBalance,
 };
 

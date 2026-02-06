@@ -198,7 +198,7 @@ exports.getById = async (req, res) => {
             raw.document_url = null;
         }
 
-        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, {});
+        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template);
         const totalLevels = template ? template.approval_levels : 1;
         const levelConfigs = template ? (template.levels || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
@@ -358,7 +358,7 @@ exports.updateStatus = async (req, res) => {
 // 6. Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
-        const userId = req.user.id;
+        // const employeeId = req.body.employee_id;
         const requests = await commonQuery.findAllRecords(LeaveRequest, {
             approval_status: { [Op.in]: ["PENDING", "PARTIALLY_APPROVED"] },
             status: 0
@@ -384,6 +384,7 @@ exports.getPendingApprovals = async (req, res) => {
 
         for (const request of requests) {
             const employee = request.employee;
+            const employeeId = employee.id;
             // The initial query already includes employee.leaveTemplate
             if (!employee || !employee.leaveTemplate) continue;
 
@@ -438,6 +439,85 @@ exports.getPendingApprovals = async (req, res) => {
 
         return res.ok(pendingForUser);
     } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+// 7. Cancel Leave Request (by Employee)
+exports.cancelLeave = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const employeeId = req.user.employee_id;
+
+        // 1. Fetch Request
+        const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {}, transaction);
+        if (!leaveRequest || leaveRequest.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        // 2. Authorization Check (Only owner can cancel via this API)
+        if (leaveRequest.employee_id !== employeeId && !req.user.is_super_admin) {
+             await transaction.rollback();
+             return res.error("UNAUTHORIZED", { message: "You can only cancel your own leave requests" });
+        }
+
+        // 3. Status Check
+        if (leaveRequest.approval_status === "CANCELLED" || leaveRequest.approval_status === "REJECTED") {
+            await transaction.rollback();
+            return res.error("INVALID_OPERATION", { message: `Request is already ${leaveRequest.approval_status}` });
+        }
+
+        const oldStatus = leaveRequest.approval_status;
+
+        // 4. Restore Balance
+        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+            employee_id: leaveRequest.employee_id,
+            leave_category_id: leaveRequest.leave_category_id,
+            year: new Date(leaveRequest.start_date).getFullYear(),
+            status: 0
+        }, {}, transaction);
+
+        if (balance) {
+            const balanceUpdate = {
+                used_leaves: parseFloat(balance.used_leaves || 0) - parseFloat(leaveRequest.total_days)
+            };
+            if (balance.is_paid) {
+                balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves || 0) + parseFloat(leaveRequest.total_days);
+            }
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
+        }
+
+        // 5. Update Request Status immediately so rebuildAttendanceDay sees the change
+        const history = leaveRequest.approval_history || [];
+        history.push({
+            level: leaveRequest.current_level,
+            action: "CANCELLED_BY_EMPLOYEE",
+            by: req.user?.id,
+            at: new Date()
+        });
+
+        await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, {
+            approval_status: "CANCELLED",
+            approval_history: history
+        }, transaction);
+
+        // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
+        if (oldStatus === "APPROVED") {
+            const start = dayjs(leaveRequest.start_date);
+            const end = dayjs(leaveRequest.end_date);
+            const diff = end.diff(start, 'day');
+            for (let i = 0; i <= diff; i++) {
+                const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+            }
+        }
+
+        await transaction.commit();
+        return res.success("LEAVE_CANCELLED");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };

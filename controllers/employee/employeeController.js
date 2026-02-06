@@ -51,6 +51,7 @@ const LeaveBalanceService = require("../../services/leaveBalanceService");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
 const { LOADIPHLPAPI } = require("dns/promises");
 
+const dayjs = require("dayjs");
 const crypto = require("crypto");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
@@ -299,13 +300,23 @@ exports.update = async (req, res) => {
             "shift_template"
         ];
 
+        const joiningDateChanged = POST.joining_date !== undefined && 
+            dayjs(POST.joining_date).isValid() && 
+            dayjs(POST.joining_date).format('YYYY-MM-DD') !== dayjs(existingEmployee.joining_date).format('YYYY-MM-DD');
+
         for (const field of templateFields) {
-            if (POST[field] !== undefined) {
-                // If the user passed manual data for this template (e.g., in a field like 'manual_leave_data')
+            const hasManualData = POST[`manual_${field}_data`] !== undefined;
+            const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
+
+            // For leave template, we also sync if joining date changed
+            const shouldSyncLeave = field === 'leave_template' && (fieldValueChanged || joiningDateChanged);
+            // For other templates, we sync if the value changed or if manual data is provided
+            const shouldSyncOthers = field !== 'leave_template' && (fieldValueChanged || hasManualData);
+
+            if (shouldSyncLeave || shouldSyncOthers || (field === 'leave_template' && hasManualData)) {
                 const manualDataKey = `manual_${field}_data`;
                 const manualData = POST[manualDataKey] || null;
-                
-                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field], manualData, transaction);
+                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field] !== undefined ? POST[field] : existingEmployee[field], manualData, transaction);
             }
         }
 

@@ -1,5 +1,6 @@
 const { ShiftTemplate, ShiftBreak, Employee } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, constants } = require("../../helpers");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 // Create a new bank master record
 exports.create = async (req, res) => {
@@ -180,6 +181,12 @@ exports.update = async (req, res) => {
                 company_id: req.body.company_id || 0
             }));
             await commonQuery.createBulk(ShiftBreak, breaks, transaction);
+        }
+
+        // Trigger sync for all employees using this template
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
+        for (const emp of employeesToSync) {
+            await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'shift_template', req.params.id, null, transaction);
         }
 
         await transaction.commit();

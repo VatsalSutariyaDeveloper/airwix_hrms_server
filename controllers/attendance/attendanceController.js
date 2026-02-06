@@ -1,4 +1,4 @@
-const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay } = require("../../helpers/attendanceHelper");
+const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance } = require("../../models");
@@ -393,6 +393,7 @@ exports.updateAttendanceDay = async (req, res) => {
         if (!isPunchAllowed) {
             payload.first_in = null;
             payload.last_out = null;
+            payload.shift_id = null;
             payload.worked_minutes = 0;
             payload.total_break_minutes = 0;
             payload.overtime_minutes = 0;
@@ -451,6 +452,9 @@ exports.updateAttendanceDay = async (req, res) => {
 
     if (is_locked !== undefined) payload.is_locked = is_locked;
     if (note !== undefined) payload.note = note;
+
+    // Synchronize leave balance based on status changes (Half Day/Leave)
+    await syncAttendanceToLeaveBalance(employee_id, day, payload, t);
 
     const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t);
 
@@ -519,6 +523,9 @@ exports.deleteAttendanceDay = async (req, res) => {
     }, {}, t);
 
     if (day) {
+      // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
+      await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+
       // 2. Delete punches by day_id
       await commonQuery.softDeleteById(AttendancePunch, {
         day_id: day.id
@@ -529,12 +536,10 @@ exports.deleteAttendanceDay = async (req, res) => {
         id: day.id
       }, t);
     } else {
-       // Fallback: Delete by date range if day record not found (to be safe? or just return?)
-       // User emphasized matching day_id. If no day, effectively no day-bound punches.
-       // We can iterate punches by date and delete them? 
-       // But if day_id is enforced now, finding by date might delete orphaned punches?
-       // Let's stick to deleting if Day exists. If not, maybe we just return success or try unsafe delete?
-       // Safe delete by date range for backward compatibility:
+       // Fallback: Delete punches and also clear any leave record for this date
+       const LeaveBalanceService = require("../../services/leaveBalanceService");
+       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
+
        await commonQuery.softDeleteById(AttendancePunch, {
         employee_id,
         punch_time: {
@@ -597,20 +602,36 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       };
 
       if (status !== undefined) payload.status = status;
-            if (first_in !== undefined) payload.first_in = first_in;
-            if (last_out !== undefined) payload.last_out = last_out;
-             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+      if (first_in !== undefined) payload.first_in = first_in;
+      if (last_out !== undefined) payload.last_out = last_out;
+
+      // Clear non-working data for status 3,4,5,6 if no times provided
+      if ([3, 4, 5, 6].includes(status)) {
+        const isTimeProvided = first_in !== undefined || last_out !== undefined;
+        if (!isTimeProvided) {
+            payload.first_in = null;
+            payload.last_out = null;
+            payload.shift_id = null;
+            payload.worked_minutes = 0;
+            payload.overtime_minutes = 0;
+        }
+      }
+
+      if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
       if (leave_session !== undefined) payload.leave_session = leave_session;
       if (overtime_data !== undefined) payload.overtime_data = overtime_data;
       if (fine_data !== undefined) payload.fine_data = fine_data;
-        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+      if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+      if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
       const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
         attendance_date,
       }, {}, t);
+
+      // Synchronize leave balance based on status changes (Half Day/Leave)
+      await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t);
 
       if (existingRecord) {
         await commonQuery.updateRecordById(AttendanceDay, { 
