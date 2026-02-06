@@ -309,6 +309,11 @@ exports.update = async (req, res) => {
             }
         }
 
+        // 4. Sync User Status if provided
+        if (POST.status !== undefined) {
+            await commonQuery.updateRecordById(User, { employee_id: id }, { status: POST.status }, transaction, false, false);
+        }
+
 
         // 3. Sync Family Members
         const incomingFamily = POST.family_details || [];
@@ -429,6 +434,9 @@ exports.delete = async (req, res) => {
 
         // 3. Soft Delete associated Family Members
         await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
+
+        // 4. Soft Delete associated Users
+        await commonQuery.softDeleteById(User, { employee_id: ids }, transaction);
 
         // // 4. Delete Physical Files
         // const fileColumns = [
@@ -617,6 +625,9 @@ exports.updateStatus = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.NO_RECORDS_FOUND);
         }
+
+        // Update associated Users status
+        await commonQuery.updateRecordById(User, { employee_id: ids }, { status }, transaction, false, false);
 
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
@@ -1309,66 +1320,47 @@ exports.inviteUser = async (req, res) => {
         // Check if user already exists
         let user = await commonQuery.findOneRecord(User, { employee_id }, {}, transaction);
 
-        if (user) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "User account already exists for this employee" });
+        if (!user) {
+            // This case should theoretically not happen with auto-creation, but handle it for legacy employees
+            const role_id = 5; 
+            const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
+
+            user = await commonQuery.createRecord(User, {
+                user_name: employee.first_name,
+                email: employee.email,
+                mobile_no: employee.mobile_no,
+                employee_id: employee.id,
+                role_id: role_id,
+                company_id: employee.company_id,
+                branch_id: employee.branch_id,
+                company_access: employee.company_id,
+                permission: rolePermission ? rolePermission.permissions : null,
+                status: 1,
+                is_activated: false
+            }, transaction);
+
+            await commonQuery.createRecord(UserCompanyRoles, {
+                user_id: user.id,
+                role_id: role_id,
+                branch_id: employee.branch_id,
+                company_id: employee.company_id,
+                permissions: user.permission,
+                status: 0
+            }, transaction);
         }
 
-        // Create user if not exists
-        // if (!employee.email) {
-        //     await transaction.rollback();
-        //     return res.error(constants.VALIDATION_ERROR, { message: "Employee does not have an email address" });
-        // }
-
-        // Check if email already used by another user
-        // const emailExists = await commonQuery.findOneRecord(User, { email: employee.email }, {}, transaction);
-        // if (emailExists) {
-        //     await transaction.rollback();
-        //     return res.error(constants.VALIDATION_ERROR, { message: "Email is already associated with another user" });
-        // }
-
-        // Get permissions from role (assuming default role 2 for employee)
-        const role_id = 5; 
-        const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
-
-        const userData = {
-            user_name: employee.first_name,
-            email: employee.email,
-            mobile_no: employee.mobile_no,
-            employee_id: employee.id,
-            role_id: role_id,
-            company_id: employee.company_id,
-            branch_id: employee.branch_id,
-            company_access: JSON.stringify([employee.company_id]),
-            permission: rolePermission ? rolePermission.permissions : null,
-            status: 0
-        };
-
-        user = await commonQuery.createRecord(User, userData, transaction);
-
-        await commonQuery.createRecord(UserCompanyRoles, {
-            user_id: user.id,
-            role_id: role_id,
-            branch_id: employee.branch_id,
-            company_id: employee.company_id,
-            permissions: userData.permission,
-            status: 0
-        }, transaction);
-    
-
-        // Generate Password Setup Token
-        const rawToken = crypto.randomBytes(64).toString("hex");
-        const hashedToken = crypto.createHash("sha256").update(rawToken).digest("hex");
-        const expires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry for invite link
+        // Generate Activation Code
+        const activation_code = crypto.randomBytes(20).toString("hex");
 
         await commonQuery.updateRecordById(User, user.id, {
-            reset_password_token: hashedToken,
-            reset_password_expires: expires
+            activation_code: activation_code,
+            is_activated: false, // Ensure it's reset to false
+            status: 1 // Keep inactive
         }, transaction);
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL}settings/user/verify-token/${rawToken}`;
+        const setupLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${activation_code}`;
 
         // Send WhatsApp Notification (Async)
         const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);

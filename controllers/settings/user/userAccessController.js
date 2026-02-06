@@ -173,7 +173,7 @@ exports.sessionData = async (req, res) => {
     // Currency
     let currencyDetails = null;
     if (currentCompany.currency_id) {
-      const currencyData = await commonQuery.findOneRecord(CurrencyMaster, { id: settingsObject.default_currency || 67 }); // Default to INR if missing
+      const currencyData = await commonQuery.findOneRecord(CurrencyMaster, { id: settingsObject.default_currency || 67 }, {}, null, false, false); // Default to INR if missing
       if (currencyData) {
         currencyDetails = { 
             currency_id: currencyData.id, 
@@ -274,6 +274,13 @@ exports.sessionData = async (req, res) => {
       employeeSettings: employeeSettingsObject,
       branch_list: branchList || []
     };
+
+    if(enrichedUserData.role_id === 5) {
+      delete sessionData.company_list;
+      delete sessionData.sidebarModule;
+      delete sessionData.settings;
+      delete sessionData.branch_list;
+    }
 
     await transaction.commit();
     return res.ok(sessionData);

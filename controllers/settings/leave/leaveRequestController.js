@@ -1,5 +1,5 @@
 const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize } = require("../../../models");
-const { validateRequest, commonQuery, handleError } = require("../../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay } = require("../../../helpers/attendanceHelper");
@@ -20,6 +20,10 @@ exports.create = async (req, res) => {
             end_date: "End Date",
             total_days: "Total Days",
         };
+
+        if(!req.body.employee_id){
+            req.body.employee_id = req.user.employee_id
+        }
 
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
         if (errors) {
@@ -99,8 +103,18 @@ exports.create = async (req, res) => {
         }
 
         // Create Leave Request
+        const POST = { ...req.body };
+
+        // Handle File Upload
+        if (req.files && Object.keys(req.files).length > 0) {
+            const savedFiles = await uploadFile(req, res, constants.LEAVE_DOC_FOLDER, transaction);
+            if (savedFiles.document) {
+                POST.document = savedFiles.document;
+            }
+        }
+
         const leaveRequest = await commonQuery.createRecord(LeaveRequest, {
-            ...req.body,
+            ...POST,
             approval_status: "PENDING",
             current_level: 1,
             approval_history: []
@@ -139,11 +153,19 @@ exports.getAll = async (req, res) => {
             }
         );
 
-        // Add a "progression" summary for the UI
+        // Add a "progression" summary for the UI and document URL
         data.rows = data?.rows?.map(row => {
             const raw = row.get({ plain: true });
             const total = raw.employee?.leaveTemplate?.approval_levels || 1;
             raw.tracking_summary = `${raw.approval_status} (Stage ${raw.current_level} of ${total})`;
+
+            if (raw.document) {
+                const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
+                raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
+            } else {
+                raw.document_url = null;
+            }
+
             return raw;
         });
 
@@ -167,6 +189,15 @@ exports.getById = async (req, res) => {
         if (!leaveRequest) return res.error(constants.NOT_FOUND);
 
         const raw = leaveRequest.get({ plain: true });
+
+        // Add document URL
+        if (raw.document) {
+            const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
+            raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
+        } else {
+            raw.document_url = null;
+        }
+
         const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, {});
         const totalLevels = template ? template.approval_levels : 1;
         const levelConfigs = template ? (template.levels || []) : [];
@@ -394,7 +425,14 @@ exports.getPendingApprovals = async (req, res) => {
                 }
             }
             if (isAuthorized) {
-                pendingForUser.push(request);
+                const raw = request.get({ plain: true });
+                if (raw.document) {
+                    const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
+                    raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
+                } else {
+                    raw.document_url = null;
+                }
+                pendingForUser.push(raw);
             }
         }
 

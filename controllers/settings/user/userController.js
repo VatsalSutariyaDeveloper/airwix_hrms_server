@@ -220,6 +220,10 @@ exports.create = async (req, res) => {
       req.body.password = await bcrypt.hash(req.body.password, salt);
     }
 
+    // Generate Activation Code
+    req.body.activation_code = crypto.randomBytes(20).toString("hex");
+    req.body.is_activated = false;
+
     const newUser = await commonQuery.createRecord(User, req.body, transaction);
 
     await commonQuery.createRecord(UserCompanyRoles, {
@@ -234,13 +238,19 @@ exports.create = async (req, res) => {
     await updateDocumentUsedLimit(req.body.company_id, 'users', 1, transaction);
 
     await transaction.commit();
-    // return res.status(201).json({
-    //   code: 201,
-    //   status: "SUCCESS",
-    //   message: `${ENTITY} created and password setup email sent`,
-    //   data: newUser,
-    // });
-    return res.success(constants.USER_CREATED);
+    
+    const activationLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${req.body.activation_code}`;
+
+    return res.success(constants.USER_CREATED, {
+      user: {
+        id: newUser.id,
+        user_name: newUser.user_name,
+        email: newUser.email,
+        mobile_no: newUser.mobile_no,
+        activation_code: req.body.activation_code,
+        activation_link: activationLink
+      }
+    });
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
