@@ -409,7 +409,10 @@ exports.getCalculationHistory = async (req, res) => {
 
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
-        const { employee_id } = req.body;
+        let { employee_id } = req.body;
+        if (!employee_id) {
+            employee_id = req.user.employee_id;
+        }
         if (!employee_id) {
             return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
         }
@@ -578,7 +581,10 @@ exports.getPayslipById = async (req, res) => {
 
 exports.getSalaryOverview = async (req, res) => {
     try {
-        const { employee_id } = req.body;
+        let { employee_id } = req.body;
+        if (!employee_id) {
+            employee_id = req.user.employee_id;
+        }
         if (!employee_id) {
             return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
         }

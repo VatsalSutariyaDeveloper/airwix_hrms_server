@@ -2,8 +2,7 @@ const { LeaveTemplate, LeaveTemplateCategory, sequelize, Employee } = require(".
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { ENTITIES, constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
-
-const ENTITY = "Leave Template";
+const LeaveBalanceService = require("../../../services/leaveBalanceService");
 
 // Create
 exports.create = async (req, res) => {
@@ -117,6 +116,12 @@ exports.update = async (req, res) => {
                     await commonQuery.createRecord(LeaveTemplateCategory, catData, transaction);
                 }
             }
+        }
+
+        // 3. Sync all employees assigned to this template
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { leave_template: id, status: 0 }, { attributes: ['id'] }, transaction);
+        for (const emp of employeesToSync) {
+            await LeaveBalanceService.syncEmployeeBalances(emp.id, id, transaction);
         }
 
         await transaction.commit();

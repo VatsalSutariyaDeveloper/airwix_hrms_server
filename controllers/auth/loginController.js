@@ -48,8 +48,14 @@ exports.sendLoginOtp = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
     }
 
-    // 2. Check User Exists (Must exist for login)
-    const user = await commonQuery.findOneRecord(User, { mobile_no, status: 0 }, {}, transaction, false, false);
+    // 2. Check User Exists (Must find Active OR Inactive for first login/activation)
+    const user = await User.findOne({ 
+      where: { 
+        mobile_no, 
+        status: { [Op.in]: [0, 1] } 
+      }, 
+      transaction 
+    });
     
     if (!user) {
       await transaction.rollback();
@@ -102,7 +108,13 @@ exports.login = async (req, res) => {
     if (email && password) {
         // CASE 1: Email & Password
         loginMethod = "PASSWORD";
-        user = await commonQuery.findOneRecord(User, { email, status: 0 }, {}, transaction, false, false);
+        user = await User.findOne({ 
+          where: { 
+            email, 
+            status: { [Op.in]: [0, 1] } 
+          }, 
+          transaction 
+        });
         
         if (!user) {
             await transaction.rollback();
@@ -119,8 +131,14 @@ exports.login = async (req, res) => {
         // CASE 2: Mobile & OTP
         loginMethod = "OTP";
         
-        // 1. Find User
-        user = await commonQuery.findOneRecord(User, { mobile_no, status: 0 }, {}, transaction, false, false);
+        // 1. Find User (Active or Inactive)
+        user = await User.findOne({ 
+          where: { 
+            mobile_no, 
+            status: { [Op.in]: [0, 1] } 
+          }, 
+          transaction 
+        });
         if (!user) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
@@ -146,12 +164,47 @@ exports.login = async (req, res) => {
         return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Password OR Mobile/OTP." });
     }
 
-    // --- B. COMMON LOGIN CHECKS (Company, Branch, etc.) ---
+    // --- B. COMMON LOGIN CHECKS (Activation, Company, Branch, etc.) ---
 
-    // 1. Validate Company
+    const verify_code = req.body.verify_code; // User refers to it as verify-code/verify_code
+
+    // 0. Activation Logic
+    if (verify_code) {
+        // If code is provided, verify it
+        if (user.activation_code === verify_code) {
+            // Activate User
+            await commonQuery.updateRecordById(User, user.id, {
+                is_activated: true,
+                activation_code: null,
+                status: 0 // Mark as Active
+            }, transaction, false, false);
+            user.is_activated = true;
+            user.status = 0;
+        } else if (!user.is_activated) {
+            // Code provided but incorrect for an unactivated user
+            await transaction.rollback();
+            return res.error(400, { message: "Invalid activation code." });
+        }
+        // If user is already active and code matches or is ignored, we just proceed.
+    } else {
+        // No code provided, enforce activation
+        if (!user.is_activated) {
+            await transaction.rollback();
+            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+        }
+    }
+
+    // 1. Enforce Platform Restriction (Employee = App Only)
+    const access_by = req.body.access_by === "application" ? "application" : "web login";
+    if (user.role_id === 5 && access_by !== "application") {
+        await transaction.rollback();
+        return res.error(403, { message: "Employee accounts can only be accessed via the mobile application." });
+    }
+    
+    // 2. Validate Company
     if (!user.company_id) {
-      await transaction.rollback();
-      return res.error(401, "No company linked to your account.");
+        await transaction.rollback();
+        return res.error(401, "No company linked to your account.");
     }
 
     const company = await commonQuery.findOneRecord(
@@ -214,8 +267,6 @@ exports.login = async (req, res) => {
 
     const companyList = await commonQuery.findAllRecords(CompanyMaster, where, {raw: true}, null, false);
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
-
-    const access_by = req.body.access_by === "application" ? "application" : "web login";
 
     if(user.role_id != 1){
       const employee = await commonQuery.findOneRecord(

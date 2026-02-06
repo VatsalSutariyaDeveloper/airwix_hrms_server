@@ -220,6 +220,10 @@ exports.create = async (req, res) => {
       req.body.password = await bcrypt.hash(req.body.password, salt);
     }
 
+    // Generate Activation Code
+    req.body.activation_code = crypto.randomBytes(20).toString("hex");
+    req.body.is_activated = false;
+
     const newUser = await commonQuery.createRecord(User, req.body, transaction);
 
     await commonQuery.createRecord(UserCompanyRoles, {
@@ -234,21 +238,29 @@ exports.create = async (req, res) => {
     await updateDocumentUsedLimit(req.body.company_id, 'users', 1, transaction);
 
     await transaction.commit();
-    // return res.status(201).json({
-    //   code: 201,
-    //   status: "SUCCESS",
-    //   message: `${ENTITY} created and password setup email sent`,
-    //   data: newUser,
-    // });
-    return res.success(constants.USER_CREATED);
+    
+    const activationLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${req.body.activation_code}`;
+
+    return res.success(constants.USER_CREATED, {
+      user: {
+        id: newUser.id,
+        user_name: newUser.user_name,
+        email: newUser.email,
+        mobile_no: newUser.mobile_no,
+        activation_code: req.body.activation_code,
+        activation_link: activationLink
+      }
+    });
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
   }
 };
 
+const { tokenHelper } = require("../../../helpers");
+
 /**
- * Verify token (GET)
+ * Verify token (GET) - Updated to support Direct "Magic" Login
  */
 exports.verifySetupToken = async (req, res) => {
   try {
@@ -260,20 +272,54 @@ exports.verifySetupToken = async (req, res) => {
     const user = await commonQuery.findOneRecord(User, {
       reset_password_token: hashedToken,
       reset_password_expires: { [Op.gt]: new Date() },
-    }, {}, null, false, false);
+    }, {
+        include: [
+            { 
+              model: UserCompanyRoles, 
+              as: "user_company_roles", 
+              where: { status: 0 }, 
+              required: false,
+              include: [{ model: RolePermission, as: "role", attributes: ["role_name", "permissions"] }]
+            }
+        ]
+    }, null, false, false);
 
     if (!user) {
       return res.status(400).json({
         code: 400,
         status: "INVALID_OR_EXPIRED",
-        message: "Token is invalid or has expired",
+        message: "Invitation link is invalid or has expired",
       });
     }
+
+    // --- Generate Login Session (Magic Login) ---
+    const companyId = user.company_id;
+    const loginToken = tokenHelper.generateToken(user, companyId, "magic link");
+
+    // Prepare User Data (Matching standard login response)
+    const activeRole = user.user_company_roles?.[0];
+    const userData = {
+      id: user.id,
+      role_id: user.role_id,
+      user_name: user.user_name,
+      email: user.email,
+      mobile_no: user.mobile_no,
+      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
+      role_name: activeRole?.role?.role_name,
+      permission: activeRole?.role?.permissions || user.permission,
+      company_id: companyId,
+      branch_id: user.branch_id,
+    };
+
+    // Note: We don't clear the reset_password_token yet so they can still SET a password if the UI requires it,
+    // but the user is effectively "Logged In" now.
 
     return res.json({
       code: 200,
       status: "SUCCESS",
-      message: "Token is valid",
+      message: "Magic login successful",
+      token: loginToken,
+      user: userData,
       data: { email: user.email },
     });
   } catch (err) {

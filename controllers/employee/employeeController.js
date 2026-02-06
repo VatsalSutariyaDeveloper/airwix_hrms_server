@@ -27,6 +27,7 @@ const {
     sequelize,
     constants,
     Op,
+    whatsappService,
     fileExists
 } = require("../../helpers");
 
@@ -49,6 +50,9 @@ const FormData = require('form-data');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
 const { LOADIPHLPAPI } = require("dns/promises");
+
+const dayjs = require("dayjs");
+const crypto = require("crypto");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
@@ -214,94 +218,6 @@ exports.create = async (req, res) => {
 
             await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
         }
-
-        // ------------------------------------------------------------------
-        // 🚀 APPROVAL INTEGRATION
-        // ------------------------------------------------------------------
-        const workflow = await ApprovalEngine.checkApprovalRequired(
-            MODULES.HR.EMPLOYEE.ID,
-            employee.toJSON()
-        );
-
-        let approvalMsg = constants.EMPLOYEE_CREATED;
-
-        if (workflow) {
-            await ApprovalEngine.initiateApproval(
-                MODULES.HR.EMPLOYEE.ID,
-                employee.id,
-                workflow.id,
-                transaction
-            );
-
-            // We assume 'approval_status' exists on Employee or is handled via mixin
-            await commonQuery.updateRecordById(Employee, employee.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
-            approvalMsg = constants.EMPLOYEE_CREATED_SEND_FOR_APPROVAL;
-        }
-
-        // 6. Create User Account if requested OR if role is allowed in Company Configuration
-        // const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
-        //     setting_key: 'app_access_roles',
-        //     status: 0
-        // }, {}, transaction);
-
-        // let rolesNeedingUser = [];
-        // if (companyConfig && companyConfig.setting_value) {
-        //     try {
-        //         // Expecting JSON array or comma-separated string
-        //         rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
-        //             ? JSON.parse(companyConfig.setting_value) 
-        //             : companyConfig.setting_value;
-        //         if (!Array.isArray(rolesNeedingUser)) {
-        //             rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-        //         }
-        //     } catch (e) {
-        //         rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-        //     }
-        // }
-        POST.role_id = 2;
-        // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
-        if (POST.employee_type == 1) {
-            // Validation for user fields
-            const userRequiredFields = { role_id: "Role" };
-            userRequiredFields.mobile_no = "Mobile No";
-
-            const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
-            if (userErrors) {
-                await transaction.rollback();
-                return res.error(constants.VALIDATION_ERROR, userErrors);
-            }
-
-            // Get permissions from role
-            const rolePermission = await commonQuery.findOneRecord(
-                RolePermission,
-                POST.role_id,
-                {},
-                transaction
-            );
-
-            const userData = {
-                ...POST,
-                user_name: POST.first_name,
-                comapny_access: req.user.companyId,
-                employee_id: employee.id,
-                status: 0
-            };
-
-            if (POST.password) {
-                const salt = await bcrypt.genSalt(10);
-                userData.password = await bcrypt.hash(POST.password, salt);
-            }
-
-            const newUser = await commonQuery.createRecord(User, userData, transaction);
-
-            await commonQuery.createRecord(UserCompanyRoles, {
-                user_id: newUser.id,
-                role_id: POST.role_id,
-                permissions: rolePermission ? rolePermission.permissions : null,
-                status: 0
-            }, transaction);
-        }
-
         await transaction.commit();
         return res.success(constants.EMPLOYEE_CREATED);
 
@@ -384,14 +300,29 @@ exports.update = async (req, res) => {
             "shift_template"
         ];
 
+        const joiningDateChanged = POST.joining_date !== undefined && 
+            dayjs(POST.joining_date).isValid() && 
+            dayjs(POST.joining_date).format('YYYY-MM-DD') !== dayjs(existingEmployee.joining_date).format('YYYY-MM-DD');
+
         for (const field of templateFields) {
-            if (POST[field] !== undefined) {
-                // If the user passed manual data for this template (e.g., in a field like 'manual_leave_data')
+            const hasManualData = POST[`manual_${field}_data`] !== undefined;
+            const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
+
+            // For leave template, we also sync if joining date changed
+            const shouldSyncLeave = field === 'leave_template' && (fieldValueChanged || joiningDateChanged);
+            // For other templates, we sync if the value changed or if manual data is provided
+            const shouldSyncOthers = field !== 'leave_template' && (fieldValueChanged || hasManualData);
+
+            if (shouldSyncLeave || shouldSyncOthers || (field === 'leave_template' && hasManualData)) {
                 const manualDataKey = `manual_${field}_data`;
                 const manualData = POST[manualDataKey] || null;
-                
-                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field], manualData, transaction);
+                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field] !== undefined ? POST[field] : existingEmployee[field], manualData, transaction);
             }
+        }
+
+        // 4. Sync User Status if provided
+        if (POST.status !== undefined) {
+            await commonQuery.updateRecordById(User, { employee_id: id }, { status: POST.status }, transaction, false, false);
         }
 
 
@@ -424,124 +355,6 @@ exports.update = async (req, res) => {
                 await commonQuery.createRecord(EmployeeFamilyMember, memberPayload, transaction);
             }
         }
-
-        // ------------------------------------------------------------------
-        // 🚀 RE-APPROVAL LOGIC
-        // ------------------------------------------------------------------
-
-        // Cancel any existing PENDING requests
-        await commonQuery.updateRecordById(ApprovalRequest, {
-            entity_id: id,
-            module_entity_id: MODULES.HR.EMPLOYEE.ID,
-            status: 'PENDING'
-        }, { status: 'CANCELLED' }, transaction);
-
-        // Check Approval Again
-        const workflow = await ApprovalEngine.checkApprovalRequired(
-            MODULES.HR.EMPLOYEE.ID,
-            updatedEmployee.toJSON()
-        );
-
-        if (workflow) {
-            await ApprovalEngine.initiateApproval(
-                MODULES.HR.EMPLOYEE.ID,
-                id,
-                workflow.id,
-                transaction
-            );
-
-            await commonQuery.updateRecordById(Employee, id, { approval_status: STATUS.PENDING_APPROVAL }, transaction);
-        } else {
-            await commonQuery.updateRecordById(Employee, id, { approval_status: 0 }, transaction);
-        }
-
-        // 4. Create/Update User Account if requested OR if role is allowed in Company Configuration
-        // const companyConfig = await commonQuery.findOneRecord(CompanyConfigration, {
-        //     setting_key: 'app_access_roles',
-        //     status: 0
-        // }, {}, transaction);
-
-        // let rolesNeedingUser = [];
-        // if (companyConfig && companyConfig.setting_value) {
-        //     try {
-        //         rolesNeedingUser = typeof companyConfig.setting_value === 'string' 
-        //             ? JSON.parse(companyConfig.setting_value) 
-        //             : companyConfig.setting_value;
-        //         if (!Array.isArray(rolesNeedingUser)) {
-        //             rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-        //         }
-        //     } catch (e) {
-        //         rolesNeedingUser = companyConfig.setting_value.split(',').map(id => parseInt(id.trim()));
-        //     }
-        // }
-
-        // const isAppAccessRole = rolesNeedingUser.includes(parseInt(POST.role_id));
-        POST.role_id = 2;
-        if (POST.employee_type == 1) {
-            const loginType = parseInt(POST.login_type) || 1;
-
-            // Check if user already exists for this employee
-            let existingUser = await commonQuery.findOneRecord(User, { employee_id: id }, {}, transaction);
-
-            const userData = {
-                ...POST,
-                user_name: POST.first_name,
-                comapny_access: req.user.companyId,
-                employee_id: id,
-                status: 0
-            };
-
-            if (POST.role_id) {
-                const rolePermission = await commonQuery.findOneRecord(
-                    RolePermission,
-                    POST.role_id,
-                    {},
-                    transaction
-                );
-                userData.permission = rolePermission ? rolePermission.permissions : null;
-            }
-
-            if (POST.password) {
-                const salt = await bcrypt.genSalt(10);
-                userData.password = await bcrypt.hash(POST.password, salt);
-            }
-
-            if (existingUser) {
-                await commonQuery.updateRecordById(User, existingUser.id, userData, transaction);
-
-                if (POST.role_id) {
-                    await commonQuery.updateRecordById(UserCompanyRoles, { user_id: existingUser.id }, {
-                        role_id: POST.role_id,
-                        permissions: userData.permission
-                    }, transaction);
-                }
-            } else {
-                // Validation for new user
-                const userRequiredFields = { role_id: "Role" };
-                if (loginType === 1) userRequiredFields.mobile_no = "Mobile No";
-                else if (loginType === 2) {
-                    userRequiredFields.email = "Email";
-                    userRequiredFields.password = "Password";
-                }
-
-                const userErrors = await validateRequest(POST, userRequiredFields, {}, transaction);
-                if (userErrors) {
-                    await transaction.rollback();
-                    return res.error(constants.VALIDATION_ERROR, userErrors);
-                }
-
-                const newUser = await commonQuery.createRecord(User, userData, transaction);
-                await commonQuery.createRecord(UserCompanyRoles, {
-                    user_id: newUser.id,
-                    role_id: POST.role_id,
-                    permissions: userData.permission,
-                    status: 0
-                }, transaction);
-            }
-        } else {
-            await commonQuery.softDeleteById(User, { employee_id: id }, transaction);
-        }
-
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
     } catch (err) {
@@ -633,6 +446,9 @@ exports.delete = async (req, res) => {
         // 3. Soft Delete associated Family Members
         await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
 
+        // 4. Soft Delete associated Users
+        await commonQuery.softDeleteById(User, { employee_id: ids }, transaction);
+
         // // 4. Delete Physical Files
         // const fileColumns = [
         //     'permanent_address_proof_doc',
@@ -677,14 +493,15 @@ exports.getAll = async (req, res) => {
             fieldConfig,
             {
                 include: [
-                    { model: User, as: "created_by", attributes: [], required: false },
+                    { model: User, as: "created_by", attributes: ["user_name"], required: false },
+                    { model: User, as: "linked_user", attributes: ["id"], required: false },
                 ],
                 attributes: [
                     "id",
                     "first_name",
                     "employee_code",
+                    "mobile_no",
                     "created_at",
-                    "created_by.user_name"
                 ]
             },
             true,
@@ -820,6 +637,9 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NO_RECORDS_FOUND);
         }
 
+        // Update associated Users status
+        await commonQuery.updateRecordById(User, { employee_id: ids }, { status }, transaction, false, false);
+
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
     } catch (err) {
@@ -873,9 +693,9 @@ exports.assignRole = async(req, res) => {
         // 3. Determine role_id based on field_name
         let newRoleId;
         if (field_name === 'is_reporting_manager') {
-            newRoleId = 13;
+            newRoleId = 4;
         } else if (field_name === 'is_attendance_supervisor') {
-            newRoleId = 12;
+            newRoleId = 3;
         }
         
         // 4. Get permissions from RolePermission table
@@ -1488,3 +1308,83 @@ exports.getWages = async(req, res) =>{
         return handleError(err, res, req);
     }
 }
+
+/**
+ * Generates a user account for an existing employee and provides a setup link.
+ */
+exports.inviteUser = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { employee_id } = req.body;
+
+        if (!employee_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { employee_id: "Employee ID is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        // Check if user already exists
+        let user = await commonQuery.findOneRecord(User, { employee_id }, {}, transaction);
+
+        if (!user) {
+            // This case should theoretically not happen with auto-creation, but handle it for legacy employees
+            const role_id = 5; 
+            const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
+
+            user = await commonQuery.createRecord(User, {
+                user_name: employee.first_name,
+                email: employee.email,
+                mobile_no: employee.mobile_no,
+                employee_id: employee.id,
+                role_id: role_id,
+                company_id: employee.company_id,
+                branch_id: employee.branch_id,
+                company_access: employee.company_id,
+                permission: rolePermission ? rolePermission.permissions : null,
+                status: 1,
+                is_activated: false
+            }, transaction);
+
+            await commonQuery.createRecord(UserCompanyRoles, {
+                user_id: user.id,
+                role_id: role_id,
+                branch_id: employee.branch_id,
+                company_id: employee.company_id,
+                permissions: user.permission,
+                status: 0
+            }, transaction);
+        }
+
+        // Generate Activation Code
+        const activation_code = crypto.randomBytes(20).toString("hex");
+
+        await commonQuery.updateRecordById(User, user.id, {
+            activation_code: activation_code,
+            is_activated: false, // Ensure it's reset to false
+            status: 1 // Keep inactive
+        }, transaction);
+
+        await transaction.commit();
+
+        const setupLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${activation_code}`;
+
+        // Send WhatsApp Notification (Async)
+        const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
+
+        return res.success("Invitation generated successfully", {
+            setup_link: setupLink,
+            user_id: user.id,
+            email: user.email,
+            whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
+        });
+
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};

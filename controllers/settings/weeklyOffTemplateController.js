@@ -2,6 +2,7 @@ const { WeeklyOffTemplate, WeeklyOffTemplateDay, User, Employee } = require("../
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { calculateWorkingAndOffDays } = require("../../helpers/functions/commonFunctions");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -165,6 +166,17 @@ exports.update = async (req, res) => {
                 } else {
                     await commonQuery.createRecord(WeeklyOffTemplateDay, dayPayload, transaction);
                 }
+            }
+        }
+
+        // Trigger sync for all employees using this template
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction);
+        for (const emp of employeesToSync) {
+            // First sync the weekly off data
+            await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'weekly_off_template', id, null, transaction);
+            // Then re-sync their shift template because shift settings depend on off-days (they skip off-days)
+            if (emp.shift_template) {
+                await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'shift_template', emp.shift_template, null, transaction);
             }
         }
 

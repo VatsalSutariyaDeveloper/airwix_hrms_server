@@ -22,6 +22,7 @@ router.patch("/status", employeeController.updateStatus);
 router.get("/:id", employeeController.getById);
 router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.update);
 router.delete("/", employeeController.delete);
+router.post("/invite-user", employeeController.inviteUser);
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
@@ -31,8 +32,8 @@ router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getT
 router.put("/salary-template/:employeeId", employeeSalaryTemplateController.updateTemplate);
 
 // Employee Leave Balance Routes
-router.get("/leave-balance/:employeeId", employeeLeaveBalanceController.getByEmployeeId);
-router.put("/leave-balance/:employeeId", employeeLeaveBalanceController.updateByEmployeeId);
+router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
+router.put("/leave-balance/:id", employeeLeaveBalanceController.updateByEmployeeId);
 
 // Employee Attendance Routes (Shift & Weekly Off)
 router.get("/shift-setting/:employeeId", employeeAttendanceController.getShiftSetting);

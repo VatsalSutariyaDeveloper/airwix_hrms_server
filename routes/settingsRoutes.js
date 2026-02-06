@@ -24,7 +24,7 @@ const salaryComponentController = require("../controllers/settings/salary/salary
 const departmentController = require("../controllers/settings/departmentController");
 const employeeLeaveBalanceController = require("../controllers/employee/employeeLeaveBalanceController");
 const designationMasterController = require("../controllers/settings/designationMasterController");
-const incentiveTypeController = require("../controllers/settings/incentiveTypeController.js");
+const incentiveTypeController = require("../controllers/settings/incentiveTypeController");
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 
 //Session Data
@@ -92,10 +92,7 @@ router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), u
 router.get("/user/:id", userController.getById);
 router.delete("/user/", userController.delete);
 router.patch("/user/status", userController.updateStatus);
-// Password management
-router.post("/user/setup-password", userController.setPassword);
-router.post("/user/forgot-password", userController.forgotPassword);
-router.get("/user/verify-token/:token", userController.verifySetupToken);
+// Password management (Moved to public auth routes)
 
 
 // ==========================
@@ -190,12 +187,13 @@ router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateControlle
 // ==========================
 // 30. LEAVE REQUEST & BALANCE ROUTES
 // ==========================
-router.post("/leave-request", leaveRequestController.create);
+router.post("/leave-request", bufferFile(["document"]), leaveRequestController.create);
 router.post("/leave-request/get-transactions", leaveRequestController.getAll);
 router.post("/leave-request/pending-approvals", leaveRequestController.getPendingApprovals);
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
-router.get("/leave-balance/:employeeId", employeeLeaveBalanceController.getByEmployeeId);
+router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
+router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================
 // 31. Salary Template ROUTES

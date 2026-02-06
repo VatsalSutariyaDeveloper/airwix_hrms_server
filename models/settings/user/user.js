@@ -17,6 +17,8 @@ module.exports = (sequelize, DataTypes) => {
     reset_password_token: { type: DataTypes.STRING(255), allowNull: true },
     reset_password_expires: { type: DataTypes.DATE, allowNull: true },
     status: { type: DataTypes.INTEGER, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
+    is_activated: { type: DataTypes.BOOLEAN, defaultValue: false },
+    activation_code: { type: DataTypes.STRING(255), allowNull: true },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },

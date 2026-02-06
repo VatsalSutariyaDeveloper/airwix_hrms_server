@@ -9,9 +9,16 @@ const loginHistoryController = require("../controllers/auth/loginHistoryControll
 // ==========================
 // 1. PUBLIC ROUTES (No Auth Required)
 // ==========================
+const userController = require("../controllers/settings/user/userController");
+
 router.post("/login", loginController.login);
 router.post("/login/send-otp", loginController.sendLoginOtp);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
+
+// Password Management (Public)
+router.post("/user/setup-password", userController.setPassword);
+router.post("/user/forgot-password", userController.forgotPassword);
+router.get("/user/verify-token/:token", userController.verifySetupToken);
 
 // ==========================
 // 2. PROTECTED ROUTES (Auth Required)

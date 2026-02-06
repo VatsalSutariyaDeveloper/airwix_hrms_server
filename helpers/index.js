@@ -53,6 +53,8 @@ const { getContext } = require("../utils/requestContext");
     reloadRoutePermissions,
     getRoutePermissionId,
     otpService,
+    tokenHelper: require("./tokenHelper"),
+    whatsappService: require("./whatsappService"),
     Err,
     fail
 };
