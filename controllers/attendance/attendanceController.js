@@ -376,6 +376,26 @@ exports.updateAttendanceDay = async (req, res) => {
       }, t);
     }
  
+     // Handle manualPunch with status 1,2,3,5 - delete punches for today
+    if ([1, 3, 4, 6].includes(req.body.status)) {
+      const today = dayjs().format('YYYY-MM-DD');
+      console.log("update manualPunch for status 1,2,3,5 - deleting punches for today");
+      const deletedPunches = await commonQuery.updateRecordById(
+        AttendancePunch, 
+        {
+        employee_id: employee_id,
+        punch_time: {
+          [Op.between]: [`${today} 00:00:00`, `${today} 23:59:59`]
+        },
+        device_id: "MANUAL",
+        status: 0
+        }, 
+        {
+          status: 2
+        }, 
+        t);
+    }
+
      const payload = {
       employee_id,
       attendance_date,
