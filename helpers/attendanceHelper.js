@@ -587,12 +587,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         { 
             employee_id: employeeId,
             status: 0,
-            company_id: meta.company_id
         },
         { attributes: ['ctc_monthly', 'lwp_calculation_basis'] },
         transaction,
-        false, // forceReload
-        false // requireTenantFields
+        false
     );
 
     if (employeeSalaryTemplate) {
