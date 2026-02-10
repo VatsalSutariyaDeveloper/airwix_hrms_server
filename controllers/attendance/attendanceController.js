@@ -77,11 +77,22 @@ exports.getAttendanceSummary = async (req, res) => {
     const { date, staff_type, shift_id } = req.body;
     const targetDate = date || new Date().toISOString().split("T")[0];
 
-    const employeeWhere = { status: 0 };
+    const employeeWhere = { status: 0 , ...req.body };
     if (staff_type) employeeWhere.employee_type = staff_type;
 
+    const fieldConfig = [
+    ["first_name", true, true],
+    ["employee_code", true, true],
+    ["employee_type", true, true],
+    ["status", true, true],
+  ];
+
     // Fetch all employees with their attendance for target date
-    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+    const employees = await commonQuery.fetchPaginatedData(
+      Employee, 
+      employeeWhere, 
+      fieldConfig, 
+      {
       include: [
         {
           model: AttendanceDay,
@@ -113,7 +124,7 @@ exports.getAttendanceSummary = async (req, res) => {
         // }
       ],
       order: [['first_name', 'ASC']],
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'status']
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status']
     });
 
     // Fetch leave requests for target date
@@ -127,7 +138,7 @@ exports.getAttendanceSummary = async (req, res) => {
     const leaveEmployeeIds = new Set(leaves.map(l => l.employee_id));
 
     let summary = {
-      totalStaff: employees.length,
+      totalStaff: employees.items.length,
       present: 0,
       absent: 0,
       halfDay: 0,
@@ -145,7 +156,7 @@ exports.getAttendanceSummary = async (req, res) => {
     let totalOvertimeMins = 0;
     let totalFineMins = 0;
 
-    employees.forEach(emp => {
+    employees.items.forEach(emp => {
       const day = emp.attendance_days?.[0];
       const punches = emp.attendance_days?.[0]?.AttendancePunches || [];
 
@@ -202,7 +213,7 @@ exports.getAttendanceSummary = async (req, res) => {
     summary.overtimeHours = `${Math.floor(totalOvertimeMins / 60)}h ${totalOvertimeMins % 60}m`;
     summary.fineHours = `${Math.floor(totalFineMins / 60)}h ${totalFineMins % 60}m`;
 
-    return res.ok({ summary, items: employees });
+    return res.ok({ summary, items: employees.items });
   } catch (err) {
     return handleError(err, res, req);
   }
