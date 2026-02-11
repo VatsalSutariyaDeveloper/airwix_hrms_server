@@ -208,6 +208,10 @@ async function punch(employeeId, meta, transaction = null) {
 }
 
 async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = null) {
+  if (meta.onlyCreateNonWorking && meta.skipIfPunchesExist) {
+    const exists = await AttendanceDay.count({ where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction });
+    if (exists > 0) return;
+  }
   const employee = await commonQuery.findOneRecord(Employee, employeeId, {
     include: [{ model: AttendanceTemplate, as: "attendanceTemplate" }],
   }, transaction);
@@ -287,6 +291,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         await syncAttendanceToLeaveBalance(employeeId, existingDay1, leavePayload, transaction);
         await commonQuery.updateRecordById(AttendanceDay, existingDay1.id, leavePayload, transaction);
     } else {
+        await syncAttendanceToLeaveBalance(employeeId, null, leavePayload, transaction);
         await commonQuery.createRecord(AttendanceDay, leavePayload, transaction);
     }
     return;
@@ -406,6 +411,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // Unless we want to strictly enforce calendar? User requested "don't change my status".
     if (existingDay && [3, 4, 5, 6].includes(existingDay.status)) {
         emptyStatus = existingDay.status;
+    }
+
+    // [MOD] If onlyCreateNonWorking is set, skip creating status 5 (ABSENT)
+    if (meta.onlyCreateNonWorking && emptyStatus === 5) {
+        return;
     }
 
     const payload = {
@@ -921,11 +931,113 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 }
 
+/**
+ * Bulk sync attendance records for WO/Holiday/Leave for a set of employees.
+ * This is 100x faster than calling rebuildAttendanceDay in a loop.
+ */
+async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction = null) {
+    if (!employeeIds.length) return;
+
+    const { AttendanceDay, Employee, HolidayTransaction, WeeklyOffTemplateDay, LeaveRequest } = require("../models");
+    const { Op } = require("sequelize");
+    const dayjs = require("dayjs");
+
+    // 1. Fetch existing records to skip
+    const existingRecords = await AttendanceDay.findAll({
+        where: {
+            attendance_date: date,
+            employee_id: { [Op.in]: employeeIds },
+            status: { [Op.ne]: 2 }
+        },
+        attributes: ['employee_id'],
+        transaction
+    });
+    const existingEmpIds = new Set(existingRecords.map(r => r.employee_id));
+    const missingEmpIds = employeeIds.filter(id => !existingEmpIds.has(id));
+
+    if (missingEmpIds.length === 0) return;
+
+    // 2. Fetch employees with their template IDs
+    const employees = await Employee.findAll({
+        where: { id: { [Op.in]: missingEmpIds } },
+        attributes: ['id', 'weekly_off_template', 'holiday_template', 'company_id', 'branch_id'],
+        transaction
+    });
+
+    // 3. Fetch all unique Holiday and Weekly Off templates needed
+    const holidayTemplateIds = [...new Set(employees.map(e => e.holiday_template).filter(id => id > 0))];
+    const weeklyOffTemplateIds = [...new Set(employees.map(e => e.weekly_off_template).filter(id => id > 0))];
+
+    const [holidays, weeklyOffs, leaveRequests] = await Promise.all([
+        HolidayTransaction.findAll({
+            where: { template_id: { [Op.in]: holidayTemplateIds }, date, status: 0 },
+            transaction
+        }),
+        WeeklyOffTemplateDay.findAll({
+            where: { 
+                template_id: { [Op.in]: weeklyOffTemplateIds }, 
+                day_of_week: dayjs(date).day(),
+                status: 0,
+                [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
+            },
+            transaction
+        }),
+        LeaveRequest.findAll({
+            where: {
+                employee_id: { [Op.in]: missingEmpIds },
+                start_date: { [Op.lte]: date },
+                end_date: { [Op.gte]: date },
+                approval_status: 'APPROVED',
+                status: 0
+            },
+            transaction
+        })
+    ]);
+
+    const holidayMap = new Map(holidays.map(h => [h.template_id, h]));
+    const weeklyOffMap = new Map(weeklyOffs.filter(w => w.is_off).map(w => [w.template_id, w]));
+    const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
+
+    const payloads = [];
+    for (const emp of employees) {
+        let status = null;
+        let leave_cat = null;
+
+        if (leaveMap.has(emp.id)) {
+            status = 6;
+            leave_cat = leaveMap.get(emp.id).leave_category_id;
+        } else if (holidayMap.has(emp.holiday_template)) {
+            status = 4;
+        } else if (weeklyOffMap.has(emp.weekly_off_template)) {
+            status = 3;
+        }
+
+        if (status) {
+            payloads.push({
+                employee_id: emp.id,
+                attendance_date: date,
+                status,
+                leave_category_id: leave_cat,
+                company_id: meta.company_id || emp.company_id,
+                branch_id: meta.branch_id || emp.branch_id,
+                user_id: meta.user_id || 0,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        }
+    }
+
+    if (payloads.length > 0) {
+        await AttendanceDay.bulkCreate(payloads, { transaction });
+    }
+}
+
 module.exports = {
   punch,
   rebuildAttendanceDay,
   manualPunch,
   getOrCreateAttendanceDay,
   syncAttendanceToLeaveBalance,
+  bulkSyncAttendanceDays
 };
 

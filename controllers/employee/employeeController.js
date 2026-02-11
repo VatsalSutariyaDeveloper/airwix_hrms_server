@@ -494,7 +494,7 @@ exports.getAll = async (req, res) => {
             {
                 include: [
                     { model: User, as: "created_by", attributes: ["user_name"], required: false },
-                    { model: User, as: "linked_user", attributes: ["id"], required: false },
+                    { model: User, as: "linked_user", attributes: ["id", "is_activated"], required: false },
                 ],
                 attributes: [
                     "id",
