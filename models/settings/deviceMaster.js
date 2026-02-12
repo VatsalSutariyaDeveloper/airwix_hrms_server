@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
             mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,
-                defaultValue: 3,
+                defaultValue: 0,
                 comment: "0: Active, 1: Inactive, 2: Deleted, 3: Pending"
             },
             user_id: { type: DataTypes.INTEGER, allowNull: true },

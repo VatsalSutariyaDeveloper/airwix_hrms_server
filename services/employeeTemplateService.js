@@ -57,20 +57,20 @@ class EmployeeTemplateService {
      * @param {Object|Array|null} manualData - Optional custom data to save directly
      * @param {Object} transaction 
      */
-    static async syncSpecificTemplate(employeeId, fieldName, templateId = null, manualData = null, transaction = null) {
+    static async syncSpecificTemplate(employeeId, fieldName, templateId = null, manualData = null, transaction = null, skipRebuild = false) {
         switch (fieldName) {
             case 'attendance_setting_template':
                 return this.syncAttendanceTemplate(employeeId, templateId, manualData, transaction);
             case 'holiday_template':
-                return this.syncHolidayTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             case 'weekly_off_template':
-                return this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             case 'leave_template':
                 return this.syncLeaveTemplate(employeeId, templateId, manualData, transaction);
             case 'salary_template_id':
                 return this.syncSalaryTemplate(employeeId, templateId, manualData, transaction);
             case 'shift_template':
-                return this.syncShiftTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             default:
                 return null;
         }
@@ -105,7 +105,7 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncHolidayTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
             return;
@@ -129,10 +129,12 @@ class EmployeeTemplateService {
         }
 
         // Trigger attendance rebuild for current month to reflect new holidays
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
-    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
             return;
@@ -156,7 +158,9 @@ class EmployeeTemplateService {
         }
 
         // Trigger attendance rebuild for current month to reflect new off days
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
     static async syncLeaveTemplate(employeeId, templateId, manualData, transaction) {
@@ -234,7 +238,7 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncShiftTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
             return;
@@ -280,7 +284,9 @@ class EmployeeTemplateService {
         }
 
         // Trigger attendance rebuild for current month to reflect new shift timings
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
     /**

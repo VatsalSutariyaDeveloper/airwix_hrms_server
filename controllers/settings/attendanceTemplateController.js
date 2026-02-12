@@ -26,7 +26,7 @@ exports.create = async (req, res) => {
 
         const attendance_template = await commonQuery.createRecord(AttendanceTemplate, POST, transaction);
         await transaction.commit();
-        return res.success(constants.ATTENDANCE_TEMPLATE_CREATED, attendance_template);
+        return res.success(constants.CREATED, attendance_template);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -93,7 +93,7 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.ATTENDANCE_TEMPLATE_UPDATED, updated);
+        return res.success(constants.UPDATED, updated);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -126,7 +126,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.ATTENDANCE_TEMPLATE_DELETED);
+        return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -171,7 +171,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.ATTENDANCE_TEMPLATE_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);

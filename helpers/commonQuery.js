@@ -526,7 +526,10 @@ module.exports = {
             const likeVal = `%${reqBody?.search}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
-                return { [finalKey]: { [Op.iLike]: likeVal } };
+                return sequelize.where(
+                    sequelize.cast(sequelize.col(finalKey.replace(/\$/g, '')), 'TEXT'),
+                    { [Op.iLike]: likeVal }
+                );
             } else {
                 return sequelize.where(dbCol, { [Op.iLike]: likeVal });
             }
@@ -537,10 +540,12 @@ module.exports = {
 
       // Sorting
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
+      console.log("Sortable Fields:", sortableFields);
       let order = [['createdAt', 'DESC']];
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
-        order = [[reqBody?.sortBy, reqBody?.sortDirection === "descending" ? "DESC" : "ASC"]];
+        order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
       }
+      
 
       // Execution
       let data = await module.exports.findAllRecords(

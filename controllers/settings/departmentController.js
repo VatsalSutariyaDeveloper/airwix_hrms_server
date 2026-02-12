@@ -2,8 +2,6 @@ const { sequelize, handleError, validateRequest, commonQuery } = require("../../
 const { constants } = require("../../helpers/constants");
 const { Department } = require("../../models");
 
-
-
 exports.create = async (req, res) => {
   const transaction = await sequelize.transaction();
   const POST = req.body;
@@ -13,7 +11,12 @@ exports.create = async (req, res) => {
       name: "Name",
     };
 
-    const errors = await validateRequest(POST, requiredFields, {}, transaction);
+    const errors = await validateRequest(POST, requiredFields, {
+      uniqueCheck: {
+          model: Department,
+          fields: ["name"],
+      }
+    }, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -22,7 +25,7 @@ exports.create = async (req, res) => {
 
     await commonQuery.createRecord(Department, POST, transaction);
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_MASTER_CREATED);
+    return res.success(constants.CREATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -54,7 +57,7 @@ exports.update = async (req, res) => {
 
     await commonQuery.updateRecordById(Department, id, POST, transaction);
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_MASTER_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -84,7 +87,7 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const record = await commonQuery.findOneRecord(Department, req.params.id);
-    if (!record || record.status === 2) return res.error(constants.DEPARTMENT_MASTER_NOT_FOUND);
+    if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
 
     return res.ok(record);
   } catch (err) {
@@ -117,7 +120,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_MASTER_DELETED);
+    return res.success(constants.DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -146,7 +149,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DEPARTMENT_MASTER_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);

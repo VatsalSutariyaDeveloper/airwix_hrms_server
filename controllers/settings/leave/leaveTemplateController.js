@@ -48,7 +48,7 @@ exports.create = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.LEAVE_TEMPLATE_CREATED, template);
+        return res.success(constants.CREATED, template);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -125,7 +125,7 @@ exports.update = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.LEAVE_TEMPLATE_UPDATED, updatedTemplate);
+        return res.success(constants.UPDATED, updatedTemplate);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -217,7 +217,7 @@ exports.delete = async (req, res) => {
         await commonQuery.softDeleteById(LeaveTemplateCategory, { leave_template_id: { [Op.in]: ids } }, transaction);
 
         await transaction.commit();
-        return res.ok(constants.LEAVE_TEMPLATE_DELETED);
+        return res.ok(constants.DELETED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -266,7 +266,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.ok(constants.LEAVE_TEMPLATE_UPDATED);
+        return res.ok(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);

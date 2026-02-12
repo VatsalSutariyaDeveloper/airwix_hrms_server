@@ -9,7 +9,7 @@ const {
     UserCompanyRoles,
     CompanyConfigration,
     RolePermission,
-    AttendancePunch,    
+    AttendancePunch,
     AttendanceDay,
     EmployeeSalaryTemplate,
     SalaryComponent,
@@ -57,7 +57,7 @@ const crypto = require("crypto");
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
 
-const DEBUG_MODE = true; 
+const DEBUG_MODE = true;
 
 // Helper for conditional logging
 const debugLog = (tag, message, data = "") => {
@@ -150,15 +150,15 @@ exports.create = async (req, res) => {
             },
         }, transaction);
 
-        if(req.body.employee_code){
+        if (req.body.employee_code) {
             const employeeCodeExists = await Employee.findOne({
                 where: {
                     employee_code: req.body.employee_code,
                 },
                 transaction,
             });
-            
-            if(employeeCodeExists){
+
+            if (employeeCodeExists) {
                 await transaction.rollback();
                 return res.error(constants.VALIDATION_ERROR, { employee_code: "Employee Code already exists" });
             }
@@ -188,7 +188,7 @@ exports.create = async (req, res) => {
             }
 
             const settingsData = {
-                settings_name: POST.prefix, 
+                settings_name: POST.prefix,
                 settings_value: POST.number,
             };
 
@@ -203,7 +203,7 @@ exports.create = async (req, res) => {
             return res.error(constants.DATABASE_ERROR, { errors: constants.FAILED_TO_CREATE_RECORD });
         }
 
-        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);   
+        await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
 
         // 4. Update Series
         // await updateSeriesNumber(POST.series_id, transaction);
@@ -300,8 +300,8 @@ exports.update = async (req, res) => {
             "shift_template"
         ];
 
-        const joiningDateChanged = POST.joining_date !== undefined && 
-            dayjs(POST.joining_date).isValid() && 
+        const joiningDateChanged = POST.joining_date !== undefined &&
+            dayjs(POST.joining_date).isValid() &&
             dayjs(POST.joining_date).format('YYYY-MM-DD') !== dayjs(existingEmployee.joining_date).format('YYYY-MM-DD');
 
         for (const field of templateFields) {
@@ -551,11 +551,11 @@ exports.getPunch = async (req, res) => {
                         model: AttendancePunch,
                         as: 'attendance_punches',
                         attributes: [
-                            'id', 
-                            'punch_time', 
-                            'punch_type', 
-                            'image_name', 
-                            'device_id', 
+                            'id',
+                            'punch_time',
+                            'punch_type',
+                            'image_name',
+                            'device_id',
                         ],
                         required: false,
                         order: [['punch_time', 'DESC']]
@@ -563,7 +563,7 @@ exports.getPunch = async (req, res) => {
                 ],
                 attributes: [
                     "id",
-                    "first_name", 
+                    "first_name",
                     "employee_code",
                     "created_at",
                 ]
@@ -574,8 +574,8 @@ exports.getPunch = async (req, res) => {
 
         // Generate image URLs for attendance punches
         if (data.items && data.items.length > 0) {
-            data.items = data.items.map(employee => {                
-                const plainEmployee = employee.toJSON ? employee.toJSON() : employee;                
+            data.items = data.items.map(employee => {
+                const plainEmployee = employee.toJSON ? employee.toJSON() : employee;
                 if (plainEmployee.attendance_punches && plainEmployee.attendance_punches.length > 0) {
                     plainEmployee.attendance_punches = plainEmployee.attendance_punches.map(punch => {
                         const plainPunch = punch.toJSON ? punch.toJSON() : punch;
@@ -599,23 +599,23 @@ exports.getPunch = async (req, res) => {
  * Dropdown list for Select inputs.
  */
 exports.dropdownList = async (req, res) => {
-  try {
-    const POST = req.body;
-      const fieldConfig = [
-          ["first_name", true, true],
+    try {
+        const POST = req.body;
+        const fieldConfig = [
+            ["first_name", true, true],
         ];
 
-    const data = await commonQuery.fetchPaginatedData(
-      Employee,
-      { ...POST, status: 0 },
-      fieldConfig,
-      {},
-      false,
-    );
-    return res.ok(data);
-  } catch (err) {
-    return handleError(err, res, req);
-  }
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            { ...POST, status: 0 },
+            fieldConfig,
+            {},
+            false,
+        );
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
 };
 
 /**
@@ -648,12 +648,12 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
-exports.assignRole = async(req, res) => {
+exports.assignRole = async (req, res) => {
     const transaction = await sequelize.transaction();
     const { company_id } = getContext();
     const POST = req.body;
 
-     try{
+    try {
         const { ids, field_name } = req.body;
 
         const requiredFields = {
@@ -672,24 +672,24 @@ exports.assignRole = async(req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Invalid field_name. Must be 'is_attendance_supervisor' or 'is_reporting_manager'" });
         }
-         
+
         // 1. Update employees field to true for all provided IDs
         const employeeUpdateData = { [field_name]: true };
         const updatedEmployees = await commonQuery.updateRecordById(Employee, ids, employeeUpdateData, transaction);
-        
+
         if (!updatedEmployees) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "No employees found" });
         }
-        
+
         // 2. Find associated users for all updated employees
         const users = await commonQuery.findAllRecords(User, { employee_id: { [Op.in]: ids } }, {}, transaction);
-        
+
         if (!users || users.length === 0) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "No users found for the provided employees" });
         }
-      
+
         // 3. Determine role_id based on field_name
         let newRoleId;
         if (field_name === 'is_reporting_manager') {
@@ -697,37 +697,37 @@ exports.assignRole = async(req, res) => {
         } else if (field_name === 'is_attendance_supervisor') {
             newRoleId = 3;
         }
-        
+
         // 4. Get permissions from RolePermission table
         const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
-        
+
         // 5. Update all users and their roles
         const updatePromises = users.map(async (user) => {
             // Update user role_id
             await commonQuery.updateRecordById(User, user.id, { role_id: newRoleId }, transaction);
-            
+
             // Update UserCompanyRoles with role_id and permissions
             return commonQuery.updateRecordById(
                 UserCompanyRoles,
                 { user_id: user.id, company_id: company_id },
-                { 
+                {
                     role_id: newRoleId,
                     permissions: rolePermission.permissions
                 },
                 transaction, false, false
             );
         });
-        
+
         await Promise.all(updatePromises);
-        
+
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
-        
-     }catch (err) {
+
+    } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
-}   
+}
 
 /**
  * Bulk Update Template for Employees
@@ -749,36 +749,53 @@ exports.assignTemplate = async (req, res) => {
             return res.error(constants.EMPLOYEE_DATA_IS_REQUIRED_AND_MUST_BE_AN_ARRAY);
         }
 
-        // 3. Process Updates
-        for (const emp of employees) {
-            if (emp.id && emp.value !== undefined) {
-                // Fetch current record to check if template is actually changing
+        // 3. Process Updates in Chunks for Concurrency
+        const CHUNK_SIZE = 10;
+        const employeeIdsToRebuild = [];
 
-                const existing = await commonQuery.findOneRecord(Employee, emp.id, { attributes: ['id', 'leave_template'] }, transaction);
+        for (let i = 0; i < employees.length; i += CHUNK_SIZE) {
+            const chunk = employees.slice(i, i + CHUNK_SIZE);
 
-                if (!existing) {
-                    continue;
+            await Promise.all(chunk.map(async (emp) => {
+                if (emp.id && emp.value !== undefined) {
+                    // Update each employee record
+                    await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
+
+                    // Sync the specific template that was assigned
+                    // We pass skipRebuild = true to avoid heavy calculations inside the transaction loop
+                    await EmployeeTemplateService.syncSpecificTemplate(emp.id, field_name, emp.value, null, transaction, true);
+
+                    employeeIdsToRebuild.push(emp.id);
                 }
-                // Update each employee record
-                await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
-
-                // Sync the specific template that was assigned
-                await EmployeeTemplateService.syncSpecificTemplate(emp.id, field_name, emp.value, null, transaction);
-
-                // Special handling for leave_template assignments
-                if (field_name === 'leave_template') {
-                    const oldVal = existing ? existing.leave_template : null;
-                    const newVal = emp.value;
-
-                    if (parseInt(oldVal) !== parseInt(newVal)) {
-                        await LeaveBalanceService.syncEmployeeBalances(emp.id, newVal, transaction);
-                    }
-                }
-            }
+            }));
         }
 
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_UPDATED);
+
+        // 4. Send Success Response immediately
+        res.success(constants.EMPLOYEE_UPDATED);
+
+        // 5. Trigger Background Rebuild (Fire and Forget)
+        // Only necessary for templates that affect attendance calculations: Shift, Holiday, WeeklyOff
+        if (['shift_template', 'holiday_template', 'weekly_off_template'].includes(field_name)) {
+            (async () => {
+                try {
+                    console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
+                    // We process rebuilds sequentially or with limited concurrency to avoid overwhelming the DB
+                    // Since this is background, we don't use the main transaction.
+                    for (const empId of employeeIdsToRebuild) {
+                        try {
+                            await EmployeeTemplateService.rebuildCurrentMonthAttendance(empId, null);
+                        } catch (rebuildErr) {
+                            console.error(`[Background] Error rebuilding attendance for employee ${empId}:`, rebuildErr);
+                        }
+                    }
+                    console.log(`[Background] Completed attendance rebuild.`);
+                } catch (err) {
+                    console.error("[Background] Global error in attendance rebuild task:", err);
+                }
+            })();
+        }
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -790,104 +807,104 @@ exports.assignTemplate = async (req, res) => {
  * Get Employees by Template Field
  */
 exports.getEmployeesByTemplate = async (req, res) => {
-  const transaction = await sequelize.transaction();
-  try {
-    const { field_name, value, is_access } = req.body;
-    
-    const fieldConfig = [
-        ["first_name", true, true],
-        ["employee_code", true, true],
-    ];
+    const transaction = await sequelize.transaction();
+    try {
+        const { field_name, value, is_access } = req.body;
 
-    // 1. Validate field name
-    if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
-      await transaction.rollback();
-      return res.error(constants.INVALID_FIELD_NAME);
-    }
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["employee_code", true, true],
+        ];
 
-    // 2. Validate is_access
-    if (is_access === undefined || is_access === null) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, {
-        message: "is_access is required"
-      });
-    }
+        // 1. Validate field name
+        if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_FIELD_NAME);
+        }
 
-    // 3. Validate value
-    if (value === undefined || value === null) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, {
-        message: "Value is required"
-      });
-    }
+        // 2. Validate is_access
+        if (is_access === undefined || is_access === null) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, {
+                message: "is_access is required"
+            });
+        }
 
-    // 4. Base filter
-    const filter = {
-      status: 0
-    };
+        // 3. Validate value
+        if (value === undefined || value === null) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, {
+                message: "Value is required"
+            });
+        }
 
-    const accessFlag = is_access === true || is_access === "true";
-
-    // 5. Apply condition
-    if (accessFlag) {
-      filter[field_name] = value;
-    } else {
-      filter[field_name] = 0;
-    }
-
-    // 6. Fetch counts in parallel
-    const assignFilter = { status: 0, [field_name]: value };
-    const notAssignFilter = { status: 0, [field_name]: 0 };
-
-    const [assignedCount, notAssignedCount] = await Promise.all([
-      commonQuery.countRecords(Employee, assignFilter, {}, false),
-      commonQuery.countRecords(Employee, notAssignFilter, {}, false)
-    ]);
-
-    // 7. Fetch employees
-    const employees = await commonQuery.fetchPaginatedData(
-      Employee,
-      { ...req.body, filter },
-      fieldConfig,
-      {
-        attributes: ["id", "first_name", "employee_code", field_name]
-      },
-      false
-    );
-
-    // 8. Add computed flag
-    if (employees?.items?.length) {
-      employees.items = employees.items.map(emp => {
-        const plainEmp = emp.toJSON();
-        return {
-          ...plainEmp,
-          [`is_${field_name}`]: plainEmp[field_name] == value
+        // 4. Base filter
+        const filter = {
+            status: 0
         };
-      });
+
+        const accessFlag = is_access === true || is_access === "true";
+
+        // 5. Apply condition
+        if (accessFlag) {
+            filter[field_name] = value;
+        } else {
+            filter[field_name] = 0;
+        }
+
+        // 6. Fetch counts in parallel
+        const assignFilter = { status: 0, [field_name]: value };
+        const notAssignFilter = { status: 0, [field_name]: 0 };
+
+        const [assignedCount, notAssignedCount] = await Promise.all([
+            commonQuery.countRecords(Employee, assignFilter, {}, false),
+            commonQuery.countRecords(Employee, notAssignFilter, {}, false)
+        ]);
+
+        // 7. Fetch employees
+        const employees = await commonQuery.fetchPaginatedData(
+            Employee,
+            { ...req.body, filter },
+            fieldConfig,
+            {
+                attributes: ["id", "first_name", "employee_code", field_name]
+            },
+            false
+        );
+
+        // 8. Add computed flag
+        if (employees?.items?.length) {
+            employees.items = employees.items.map(emp => {
+                const plainEmp = emp.toJSON();
+                return {
+                    ...plainEmp,
+                    [`is_${field_name}`]: plainEmp[field_name] == value
+                };
+            });
+        }
+
+        // 9. Attach counts
+        employees.assign_staff_count = assignedCount;
+        employees.not_assign_staff_count = notAssignedCount;
+
+        await transaction.commit();
+        return res.ok(employees);
+
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
     }
-
-    // 9. Attach counts
-    employees.assign_staff_count = assignedCount;
-    employees.not_assign_staff_count = notAssignedCount;
-
-    await transaction.commit();
-    return res.ok(employees);
-
-  } catch (err) {
-    if (!transaction.finished) await transaction.rollback();
-    return handleError(err, res, req);
-  }
 };
 
 const calculateCosineDistance = (descriptor1, descriptor2) => {
     // 1. Safety Check
     if (!descriptor1 || !descriptor2) {
-        if(DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
-        return 1.0; 
+        if (DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
+        return 1.0;
     }
-    
+
     if (descriptor1.length !== descriptor2.length) {
-        if(DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
+        if (DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
         return 1.0;
     }
 
@@ -903,7 +920,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 
     // 2. Avoid division by zero
     if (normA === 0 || normB === 0) {
-        if(DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
+        if (DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
         return 1.0;
     }
 
@@ -913,11 +930,11 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
     // 4. Return Distance
     // ArcFace cosine distance: 0 = Same, 1+ = Different
     const distance = 1 - similarity;
-    
+
     // Log first few calculations to check if numbers are valid
     // if(DEBUG_MODE && Math.random() < 0.05) console.log(`🧮 [Math] Dist: ${distance.toFixed(4)} | Sim: ${similarity.toFixed(4)}`);
-    
-    return distance; 
+
+    return distance;
 };
 
 /**
@@ -933,7 +950,7 @@ exports.registerFace = async (req, res) => {
         const { id } = req.body;
 
         // Check if image file exists
-        if (!req.files || (!req.files.image && !req.files['image'])) { 
+        if (!req.files || (!req.files.image && !req.files['image'])) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
         }
@@ -948,15 +965,15 @@ exports.registerFace = async (req, res) => {
         // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/users/images/'
         // We pass 'employee.profile_image' as the last argument so 'uploadFile' automatically deletes the OLD photo.
         const savedFiles = await uploadFile(
-            req, 
-            res, 
+            req,
+            res,
             constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
             transaction,
             employee.profile_image     // ✅ Delete old image if exists
         );
 
-        const filename = savedFiles.image; 
-        
+        const filename = savedFiles.image;
+
         if (!filename) {
             await transaction.rollback();
             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
@@ -965,13 +982,13 @@ exports.registerFace = async (req, res) => {
         // 2. Send to Python to get Face Embedding
         // We read the file we just saved to ensure Python sees exactly what is on disk
         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
-        
+
         let faceDescriptor;
         try {
             const fileBuffer = fs.readFileSync(fullFilePath);
 
             const formData = new FormData();
-            formData.append('image', fileBuffer, filename); 
+            formData.append('image', fileBuffer, filename);
 
             const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
                 headers: { ...formData.getHeaders() }
@@ -983,9 +1000,9 @@ exports.registerFace = async (req, res) => {
                 throw new Error(aiResponse.data.message);
             }
         } catch (aiError) {
-            await transaction.rollback(); 
+            await transaction.rollback();
             // Optional: Delete the file we just wrote since the process failed
-            try { fs.unlinkSync(fullFilePath); } catch(e) {}
+            try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
             console.error("AI Service Error:", aiError.message);
             return res.error(constants.SERVER_ERROR, { message: "AI Processing Failed: " + aiError.message });
@@ -1031,14 +1048,14 @@ exports.facePunch = async (req, res) => {
         // 🚀 PARALLEL TASK 1: Call AI Service
         const getEmbeddingTask = (async () => {
             const formData = new FormData();
-            formData.append('image', imageBuffer, originalName); 
-            
+            formData.append('image', imageBuffer, originalName);
+
             try {
                 debugLog("AI-Call", "Sending to Python...");
                 const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
                     headers: { ...formData.getHeaders() }
                 });
-                
+
                 if (aiResponse.data.status) {
                     const vec = aiResponse.data.embedding;
                     debugLog("AI-Res", `Got Vector. Length: ${vec.length}, First 3 vals: [${vec[0]}, ${vec[1]}, ${vec[2]}]`);
@@ -1060,7 +1077,7 @@ exports.facePunch = async (req, res) => {
             face_descriptor: { [Op.ne]: null }
         }, {
             attributes: ['id', 'first_name', 'employee_code', 'face_descriptor'], // Changed first_name to father_name based on your prev code
-            raw: true 
+            raw: true
         });
 
         // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
@@ -1073,30 +1090,30 @@ exports.facePunch = async (req, res) => {
 
         // --- MATCHING LOGIC ---
         let bestMatch = null;
-        let minDistance = 1.0; 
+        let minDistance = 1.0;
 
         // Loop Counter to limit debug logs
-        let logCounter = 0; 
+        let logCounter = 0;
 
         for (const emp of employees) {
             let storedVector = emp.face_descriptor;
-            
+
             // 🔍 DEBUGGING DATA TYPES
             // Often DB returns JSONB as Object, but sometimes Text as String.
             const typeBefore = typeof storedVector;
-            
+
             if (typeof storedVector === 'string') {
-                try { 
-                    storedVector = JSON.parse(storedVector); 
-                } catch(e) {
-                    if(DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
-                    continue; 
+                try {
+                    storedVector = JSON.parse(storedVector);
+                } catch (e) {
+                    if (DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
+                    continue;
                 }
             }
-            
+
             // Double check it's an array
             if (!Array.isArray(storedVector)) {
-                if(DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
+                if (DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
                 continue;
             }
 
@@ -1122,28 +1139,28 @@ exports.facePunch = async (req, res) => {
         let savedFilename;
         if (bestMatch && minDistance < FACE_MATCH_THRESHOLD) {
             const transaction = await sequelize.transaction();
-            
+
             try {
                 const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
                 savedFilename = savedFiles.image || savedFiles['image'];
-                
+
                 const now = new Date();
                 const attendancePunch = await commonQuery.createRecord(AttendancePunch, {
                     employee_id: bestMatch.id,
                     punch_time: now,
-                    punch_type: "IN", 
+                    punch_type: "IN",
                     image_name: savedFilename
                 }, transaction);
-                
+
                 const today = now.toISOString().split('T')[0];
-               
+
                 await commonQuery.createRecord(AttendanceDay, {
                     employee_id: bestMatch.id,
                     attendance_date: today,
                 }, transaction);
-            
-                await transaction.commit();                
-                
+
+                await transaction.commit();
+
                 return res.success("Punch Successful", {
                     employee: bestMatch.first_name,
                     employee_code: bestMatch.employee_code,
@@ -1166,18 +1183,18 @@ exports.facePunch = async (req, res) => {
             const minutes = String(now.getMinutes()).padStart(2, '0');
             const ampm = hours >= 12 ? 'PM' : 'AM';
             hours = hours % 12;
-            hours = hours ? hours : 12; 
+            hours = hours ? hours : 12;
             const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
             const dateStr = `${day}-${month}-${year}`;
             const ext = path.extname(originalName);
             const customFilename = `${Date.now()}_punch_${dateStr}__${timeStr}${ext}`;
-            
+
             // Use uploadFile with custom filename
             const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
             savedFilename = savedFiles.image || savedFiles['image'];
-            
-            return res.error(constants.FACE_NOT_RECOGNIZED, { 
-                message: `Face Not Recognized (Match: ${matchPercentage}%)` 
+
+            return res.error(constants.FACE_NOT_RECOGNIZED, {
+                message: `Face Not Recognized (Match: ${matchPercentage}%)`
             });
         }
 
@@ -1189,10 +1206,10 @@ exports.facePunch = async (req, res) => {
     }
 };
 
-exports.getWages = async(req, res) =>{
-    try{
-        const { employee_id : employeeId  } = req.body;
-        
+exports.getWages = async (req, res) => {
+    try {
+        const { employee_id: employeeId } = req.body;
+
         if (!employeeId) {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
@@ -1212,7 +1229,7 @@ exports.getWages = async(req, res) =>{
             }
         )
 
-        if(!attendanceDay ){
+        if (!attendanceDay) {
             return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
         }
 
@@ -1229,8 +1246,8 @@ exports.getWages = async(req, res) =>{
         }
 
         const employeeSalaryTemplate = await commonQuery.findOneRecord(
-            EmployeeSalaryTemplate, 
-            { 
+            EmployeeSalaryTemplate,
+            {
                 employee_id: employeeId,
                 company_id: employee.company_id,
                 status: 0
@@ -1248,30 +1265,30 @@ exports.getWages = async(req, res) =>{
         let monthDays = null;
         let workingDays = null;
         const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
-        
-        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') { 
+
+        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
 
             if (employee && employee.weekly_off_template) {
                 const weeklyOffTemplate = await commonQuery.findOneRecord(
-                    WeeklyOffTemplate, 
-                    employee.weekly_off_template, 
+                    WeeklyOffTemplate,
+                    employee.weekly_off_template,
                     {
                         include: [{ model: WeeklyOffTemplateDay, as: "days" }]
                     }
                 );
-                
+
                 if (weeklyOffTemplate) {
-                    const currentDate = new Date();                    
+                    const currentDate = new Date();
                     const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, currentDate);
                     workingDays = result.working_days;
                     monthDays = result.total_days_in_month;
-                    
+
                     if (workingDays && workingDays > 0) {
                         dailyWage = ctcMonthly / workingDays;
                     }
                 }
             }
-            
+
             if (!workingDays) {
                 workingDays = 30;
                 monthDays = 30;
@@ -1304,7 +1321,7 @@ exports.getWages = async(req, res) =>{
 
         return res.success(constants.SUCCESS, responseData);
 
-    }catch(err){
+    } catch (err) {
         return handleError(err, res, req);
     }
 }
@@ -1333,7 +1350,7 @@ exports.inviteUser = async (req, res) => {
 
         if (!user) {
             // This case should theoretically not happen with auto-creation, but handle it for legacy employees
-            const role_id = 5; 
+            const role_id = 5;
             const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
 
             user = await commonQuery.createRecord(User, {

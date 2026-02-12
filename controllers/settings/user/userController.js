@@ -238,10 +238,10 @@ exports.create = async (req, res) => {
     await updateDocumentUsedLimit(req.body.company_id, 'users', 1, transaction);
 
     await transaction.commit();
-    
+
     const activationLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${req.body.activation_code}`;
 
-    return res.success(constants.USER_CREATED, {
+    return res.success(constants.CREATED, {
       user: {
         id: newUser.id,
         user_name: newUser.user_name,
@@ -273,15 +273,15 @@ exports.verifySetupToken = async (req, res) => {
       reset_password_token: hashedToken,
       reset_password_expires: { [Op.gt]: new Date() },
     }, {
-        include: [
-            { 
-              model: UserCompanyRoles, 
-              as: "user_company_roles", 
-              where: { status: 0 }, 
-              required: false,
-              include: [{ model: RolePermission, as: "role", attributes: ["role_name", "permissions"] }]
-            }
-        ]
+      include: [
+        {
+          model: UserCompanyRoles,
+          as: "user_company_roles",
+          where: { status: 0 },
+          required: false,
+          include: [{ model: RolePermission, as: "role", attributes: ["role_name", "permissions"] }]
+        }
+      ]
     }, null, false, false);
 
     if (!user) {
@@ -607,7 +607,7 @@ exports.update = async (req, res) => {
     clearUserCache(req.params.id);
 
     await transaction.commit();
-    return res.success(constants.USER_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -625,7 +625,7 @@ exports.getAll = async (req, res) => {
       ["user_name", true, true],
       ["email", true, true],
       ["mobile_no", true, true],
-      ["address", true, false],
+      // ["address", true, false],
       ["role_name", true, false],
     ];
 
@@ -810,7 +810,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.USER_DELETED);
+    return res.success(constants.DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -854,7 +854,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.USER_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);

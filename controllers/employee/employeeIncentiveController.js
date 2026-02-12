@@ -23,7 +23,7 @@ exports.create = async (req, res) => {
 
         await commonQuery.createRecord(EmployeeIncentive, { ...req.body }, transaction);
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_INCENTIVE_CREATED);
+        return res.success(constants.CREATED);
 
     } catch (err) {
         await transaction.rollback();
@@ -129,7 +129,7 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_INCENTIVE_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -164,7 +164,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_INCENTIVE_DELETED);
+        return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -208,7 +208,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.EMPLOYEE_INCENTIVE_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
