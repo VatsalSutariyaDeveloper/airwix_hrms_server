@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -335,9 +335,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     order: [["effective_from", "DESC"]],
   }, transaction);
 
-  let shift = null;
+  const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
+  let shift;
   if (empShift) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, { include: shiftInclude }, transaction);
   }
 
   const firstInPunch = inPunches[0];
@@ -347,7 +348,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const allShifts = await commonQuery.findAllRecords(ShiftTemplate, {
       company_id: employee.company_id,
       status: 0
-    }, {}, transaction);
+    }, { include: shiftInclude }, transaction);
 
     if (allShifts.length > 0) {
       const punchTimeOnly = dayjs(firstInPunch.punch_time).format("HH:mm:ss");
@@ -375,7 +376,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Fallback to employee's default shift template if still no shift found
   if (!shift && employee.shift_template) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, { include: shiftInclude }, transaction);
   }
 
   let allPunches = [];
@@ -462,67 +463,97 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     return;
   }
 
-  const firstIn = punches.find((p) => p.punch_type === "IN");
-  const lastOut = [...punches].reverse().find((p) => p.punch_type === "OUT");
+  // --- REFACTORED WORKED TIME & BREAK CALCULATION ---
+  // 1. Determine the Restricted Work Window
+  let pIn = firstIn ? dayjs(firstIn.punch_time) : null;
+  let pOut = lastOut ? dayjs(lastOut.punch_time) : null;
 
-  let actualWorkedMinutes = 0;
-  let totalBreakMinutes = 0;
+  if (shift && pIn && pOut) {
+    const shiftStart = dayjs(`${date} ${shift.start_time}`);
+    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
+    if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
 
-  if (template && !template.deduct_breaks_from_total) {
-    if (firstIn && lastOut) {
-      actualWorkedMinutes = dayjs(lastOut.punch_time).diff(dayjs(firstIn.punch_time), "minute", true);
+    if (shift.punch_in && shift.punch_in_time) {
+      const [h, m] = (shift.punch_in_time || "00:00:00").split(":");
+      const limitMins = parseInt(h) * 60 + parseInt(m);
+      const earliest = shiftStart.subtract(limitMins, "minute");
+      if (pIn.isBefore(earliest)) pIn = earliest;
     }
-  } else {
-    for (let i = 0; i < punches.length - 1; i++) {
-      if (punches[i].punch_type === "IN" && punches[i + 1].punch_type === "OUT") {
-        actualWorkedMinutes += dayjs(punches[i+1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true);
-      } else if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
-        totalBreakMinutes += Math.round(dayjs(punches[i+1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true));
+    if (shift.punch_out && shift.punch_out_time) {
+      const [h, m] = (shift.punch_out_time || "00:00:00").split(":");
+      const limitMins = parseInt(h) * 60 + parseInt(m);
+      const latest = shiftEnd.add(limitMins, "minute");
+      if (pOut.isAfter(latest)) pOut = latest;
+    }
+  }
+
+  // Calculate Total Span
+  let totalSpanMinutes = (pIn && pOut) ? Math.max(0, pOut.diff(pIn, "minute", true)) : 0;
+
+  // 2. Identify Total Break Time (Actual Gaps + Mandatory Unpaid Scheduled Breaks)
+  let actualGapsMins = 0;
+  for (let i = 0; i < punches.length - 1; i++) {
+    if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
+      actualGapsMins += Math.round(dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true));
+    }
+  }
+
+  let scheduledBreaksMins = 0;
+  if (shift && shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks) && pIn && pOut) {
+    for (const sb of shift.ShiftBreaks) {
+      if (sb.pay_type === "Unpaid" && sb.break_type === "Intervals") {
+        if (sb.start_time && sb.end_time) {
+          const bStart = dayjs(`${date} ${sb.start_time}`);
+          let bEnd = dayjs(`${date} ${sb.end_time}`);
+          if (bEnd.isBefore(bStart)) bEnd = bEnd.add(1, 'day');
+
+          // Intersection with work period
+          const intersectStart = dayjs(Math.max(bStart.valueOf(), pIn.valueOf()));
+          const intersectEnd = dayjs(Math.min(bEnd.valueOf(), pOut.valueOf()));
+
+          if (intersectEnd.isAfter(intersectStart)) {
+            const sbMins = intersectEnd.diff(intersectStart, "minute");
+            
+            // Deduct any already captured gaps
+            let coveredByGap = 0;
+            for (let i = 0; i < punches.length - 1; i++) {
+              if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
+                const gS = dayjs(punches[i].punch_time);
+                const gE = dayjs(punches[i + 1].punch_time);
+                const overlapS = dayjs(Math.max(gS.valueOf(), intersectStart.valueOf()));
+                const overlapE = dayjs(Math.min(gE.valueOf(), intersectEnd.valueOf()));
+                if (overlapE.isAfter(overlapS)) coveredByGap += overlapE.diff(overlapS, "minute");
+              }
+            }
+            scheduledBreaksMins += Math.max(0, Math.round(sbMins - coveredByGap));
+          }
+        }
       }
     }
   }
 
-  let finalWorkedMinutes = actualWorkedMinutes;
+  totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
 
+  // 3. Final Deduction Logic
+  let breakToDeduct = totalBreakMinutes;
   if (template) {
-    if (template.deduct_breaks_from_total) {
-      if (template.break_rules && Array.isArray(template.break_rules) && template.break_rules.length > 0) {
-        // Multi-tier break rules
-        const rule = template.break_rules.find(r => totalBreakMinutes >= r.from_mins && totalBreakMinutes <= r.to_mins);
-        if (rule) {
-           // If it says "FIXED" value for a break rule, it might mean "Fixed Deduction" or "Fixed Paid"
-           // Let's assume the value in Rule determines deduction behavior.
-           // For simplicity: if rule found, we use it to determine how much is PAID vs DEDUCTED.
-           // However, to keep it consistent with user request, we just apply the found rule.
-           // For now, let's stick to the core logic: deduct what is NOT in paid allowance.
-           // If user specifically added tiers, we can implement more complex deduction here.
-           finalWorkedMinutes -= totalBreakMinutes; // Start by deducting all
-           const paidAllowance = rule.value || 0; // Value is 'Paid Allowance' for that tier
-           finalWorkedMinutes += Math.min(totalBreakMinutes, paidAllowance);
-        } else {
-           finalWorkedMinutes -= totalBreakMinutes;
-        }
-      } else if (template.paid_break_duration_mins > 0) {
-        const breakToDeduct = Math.max(0, totalBreakMinutes - template.paid_break_duration_mins);
-        finalWorkedMinutes -= breakToDeduct;
-      } else {
-        finalWorkedMinutes -= totalBreakMinutes;
-      }
+    if (template.break_rules?.length > 0) {
+      const rule = template.break_rules.find(r => totalBreakMinutes >= r.from_mins && totalBreakMinutes <= r.to_mins);
+      if (rule) breakToDeduct = Math.max(0, totalBreakMinutes - (parseFloat(rule.value) || 0));
+    } else if (template.paid_break_duration_mins > 0) {
+      breakToDeduct = Math.max(0, totalBreakMinutes - template.paid_break_duration_mins);
     }
+  }
 
+  let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakToDeduct);
 
-    if (!template.include_overtime_in_total && shift) {
-      const shiftStart = dayjs(`${date} ${shift.start_time}`);
-      let shiftEnd = dayjs(`${date} ${shift.end_time}`);
-      if (shift.is_night_shift || shift.end_time < shift.start_time) {
-        shiftEnd = shiftEnd.add(1, "day");
-      }
-      const shiftDuration = shiftEnd.diff(shiftStart, "minute");
-
-      if (finalWorkedMinutes > shiftDuration) {
-        finalWorkedMinutes = shiftDuration;
-      }
-    }
+  // 4. Overtime Trimming (Optional, if not included in total)
+  if (template && !template.include_overtime_in_total && shift) {
+    const shiftStart = dayjs(`${date} ${shift.start_time}`);
+    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
+    if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
+    const shiftDuration = shiftEnd.diff(shiftStart, "minute");
+    if (finalWorkedMinutes > shiftDuration) finalWorkedMinutes = shiftDuration;
   }
 
   let lateMinutes = 0;
