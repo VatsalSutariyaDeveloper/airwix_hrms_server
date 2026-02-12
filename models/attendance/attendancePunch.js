@@ -29,8 +29,8 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   AttendancePunch.associate = (models) => {
-    AttendancePunch.belongsTo(models.AttendanceDay, { foreignKey: "day_id", as: "AttendanceDay" });
-    AttendancePunch.belongsTo(models.Employee, { foreignKey: "employee_id", as: "Employee" });
+    AttendancePunch.belongsTo(models.AttendanceDay, { foreignKey: "day_id", as: "attendanceDay" });
+    AttendancePunch.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendancePunch.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
   };
 

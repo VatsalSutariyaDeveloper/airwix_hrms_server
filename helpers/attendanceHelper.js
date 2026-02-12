@@ -1,8 +1,9 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
+const { constants } = require("./constants");
 const LeaveBalanceService = require("../services/leaveBalanceService");
 
 /**
@@ -244,10 +245,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   const hasPunches = inPunches.length > 0;
 
-  // 0️⃣ Check if there's an approved Leave for this date
   const approvedLeave = await commonQuery.findOneRecord(LeaveRequest, {
       employee_id: employeeId,
-      approval_status: "APPROVED",
+      approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
       start_date: { [Op.lte]: date },
       end_date: { [Op.gte]: date },
       status: 0
@@ -262,7 +262,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         // Multi-day leave - Refund balance for THIS day and mark as cancelled (simplest way to fulfill user request)
         await LeaveBalanceService.adjustLeaveBalance(employeeId, approvedLeave.leave_category_id, -1, transaction);
         await commonQuery.updateRecordById(LeaveRequest, approvedLeave.id, { 
-            approval_status: 'CANCELLED',
+            approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
             note: `Auto-cancelled due to punch on ${date}`
         }, transaction);
     }
@@ -437,7 +437,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       overtime_data: null,
       fine_data: null,
       leave_category_id: null,
-      leave_session: null
+      leave_session: null,
+      note: emptyStatus === 4 ? "System: Holiday restored (No punches found)" : (emptyStatus === 3 ? "System: Weekly Off restored (No punches found)" : (existingDay?.note || null))
     };
 
     if (existingDay) {
@@ -938,78 +939,92 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
 async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction = null) {
     if (!employeeIds.length) return;
 
-    const { AttendanceDay, Employee, HolidayTransaction, WeeklyOffTemplateDay, LeaveRequest } = require("../models");
-    const { Op } = require("sequelize");
-    const dayjs = require("dayjs");
-
     // 1. Fetch existing records to skip
-    const existingRecords = await AttendanceDay.findAll({
-        where: {
-            attendance_date: date,
-            employee_id: { [Op.in]: employeeIds },
-            status: { [Op.ne]: 2 }
-        },
+    const existingRecords = await commonQuery.findAllRecords(
+      AttendanceDay,
+      {
+        attendance_date: date,
+        employee_id: { [Op.in]: employeeIds },
+        status: { [Op.ne]: 2 }
+      },
+      {
         attributes: ['employee_id'],
         transaction
-    });
+      }
+    );
     const existingEmpIds = new Set(existingRecords.map(r => r.employee_id));
     const missingEmpIds = employeeIds.filter(id => !existingEmpIds.has(id));
 
     if (missingEmpIds.length === 0) return;
 
-    // 2. Fetch employees with their template IDs
-    const employees = await Employee.findAll({
-        where: { id: { [Op.in]: missingEmpIds } },
-        attributes: ['id', 'weekly_off_template', 'holiday_template', 'company_id', 'branch_id'],
+    // 2. Fetch employees for mapping (mostly for company/branch context)
+    const employees = await commonQuery.findAllRecords(
+      Employee,
+      {
+        id: { [Op.in]: missingEmpIds }
+      },
+      {
+        attributes: ['id', 'company_id', 'branch_id'],
         transaction
-    });
+      }
+    );
 
-    // 3. Fetch all unique Holiday and Weekly Off templates needed
-    const holidayTemplateIds = [...new Set(employees.map(e => e.holiday_template).filter(id => id > 0))];
-    const weeklyOffTemplateIds = [...new Set(employees.map(e => e.weekly_off_template).filter(id => id > 0))];
-
+    // 3. Fetch all potential non-working day triggers in bulk
     const [holidays, weeklyOffs, leaveRequests] = await Promise.all([
-        HolidayTransaction.findAll({
-            where: { template_id: { [Op.in]: holidayTemplateIds }, date, status: 0 },
-            transaction
-        }),
-        WeeklyOffTemplateDay.findAll({
-            where: { 
-                template_id: { [Op.in]: weeklyOffTemplateIds }, 
-                day_of_week: dayjs(date).day(),
-                status: 0,
-                [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
-            },
-            transaction
-        }),
-        LeaveRequest.findAll({
-            where: {
-                employee_id: { [Op.in]: missingEmpIds },
-                start_date: { [Op.lte]: date },
-                end_date: { [Op.gte]: date },
-                approval_status: 'APPROVED',
-                status: 0
-            },
-            transaction
-        })
+        commonQuery.findAllRecords(
+          EmployeeHoliday,
+          {
+            employee_id: { [Op.in]: missingEmpIds },
+            date,
+            status: 0
+          },
+          { transaction }
+        ),
+        commonQuery.findAllRecords(
+          EmployeeWeeklyOff,
+          {
+            employee_id: { [Op.in]: missingEmpIds },
+            day_of_week: dayjs(date).day(),
+            status: 0,
+            is_off: true,
+            [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
+          },
+          { transaction }
+        ),
+        commonQuery.findAllRecords(
+          LeaveRequest,
+          {
+            employee_id: { [Op.in]: missingEmpIds },
+            start_date: { [Op.lte]: date },
+            end_date: { [Op.gte]: date },
+            approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+            status: 0
+          },
+          { transaction }
+        )
     ]);
 
-    const holidayMap = new Map(holidays.map(h => [h.template_id, h]));
-    const weeklyOffMap = new Map(weeklyOffs.filter(w => w.is_off).map(w => [w.template_id, w]));
+    // MAPS: employeeId -> Record
+    const holidayMap = new Map(holidays.map(h => [h.employee_id, h]));
+    const weeklyOffMap = new Map(weeklyOffs.map(w => [w.employee_id, w]));
     const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
 
     const payloads = [];
     for (const emp of employees) {
         let status = null;
         let leave_cat = null;
+        let note = null;
 
         if (leaveMap.has(emp.id)) {
-            status = 6;
+            status = 6; // LEAVE
             leave_cat = leaveMap.get(emp.id).leave_category_id;
-        } else if (holidayMap.has(emp.holiday_template)) {
-            status = 4;
-        } else if (weeklyOffMap.has(emp.weekly_off_template)) {
-            status = 3;
+            note = "System: Leave auto-detected";
+        } else if (holidayMap.has(emp.id)) {
+            status = 4; // HOLIDAY
+            note = `System: Holiday auto-detected (${holidayMap.get(emp.id).name || 'Holiday'})`;
+        } else if (weeklyOffMap.has(emp.id)) {
+            status = 3; // WEEKLY_OFF
+            note = "System: Weekly Off auto-detected";
         }
 
         if (status) {
@@ -1021,6 +1036,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
                 company_id: meta.company_id || emp.company_id,
                 branch_id: meta.branch_id || emp.branch_id,
                 user_id: meta.user_id || 0,
+                note: note,
                 created_at: new Date(),
                 updated_at: new Date()
             });
@@ -1028,7 +1044,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     }
 
     if (payloads.length > 0) {
-        await AttendanceDay.bulkCreate(payloads, { transaction });
+        await commonQuery.bulkCreate(AttendanceDay, payloads, {}, transaction);
     }
 }
 

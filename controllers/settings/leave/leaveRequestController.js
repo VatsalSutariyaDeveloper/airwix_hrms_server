@@ -44,7 +44,7 @@ exports.create = async (req, res) => {
         // Check for Overlapping Leaves
         const overlap = await commonQuery.findOneRecord(LeaveRequest, {
             employee_id,
-            approval_status: { [Op.ne]: "REJECTED" },
+            approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
             status: 0,
             [Op.or]: [
                 {
@@ -115,7 +115,7 @@ exports.create = async (req, res) => {
 
         const leaveRequest = await commonQuery.createRecord(LeaveRequest, {
             ...POST,
-            approval_status: "PENDING",
+            approval_status: constants.LEAVE_APPROVAL_STATUS.PENDING,
             current_level: 1,
             approval_history: []
         }, transaction);
@@ -156,8 +156,16 @@ exports.getAll = async (req, res) => {
         // Add a "progression" summary for the UI and document URL
         data.rows = data?.rows?.map(row => {
             const raw = row.get({ plain: true });
-            const total = raw.employee?.leaveTemplate?.approval_levels || 1;
-            raw.tracking_summary = `${raw.approval_status} (Stage ${raw.current_level} of ${total})`;
+            const statusLabels = {
+                [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
+                [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "APPROVED",
+                [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "REJECTED",
+                [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+                [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
+            };
+            const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+            raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level} of ${total})`;
 
             if (raw.document) {
                 const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
@@ -217,9 +225,9 @@ exports.getById = async (req, res) => {
                 const user = approvers.find(u => u.id === (levelHistory?.approved_by || levelHistory?.by));
                 if (user) actionPersonnel = user.user_name;
             } else if (i === raw.current_level) {
-                if (raw.approval_status === "REJECTED" || raw.approval_status === "CANCELLED") {
+                if (raw.approval_status === constants.LEAVE_APPROVAL_STATUS.REJECTED || raw.approval_status === constants.LEAVE_APPROVAL_STATUS.CANCELLED) {
                     stageStatus = levelHistory ? "REJECTED" : "CANCELLED";
-                } else if (raw.approval_status === "APPROVED") {
+                } else if (raw.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
                     stageStatus = "COMPLETED";
                 } else {
                     stageStatus = "PENDING";
@@ -237,7 +245,9 @@ exports.getById = async (req, res) => {
         }
 
         raw.timeline = timeline;
-        raw.next_action_at_level = totalLevels === raw.current_level && (raw.approval_status === "APPROVED" || raw.approval_status === "REJECTED" || raw.approval_status === "CANCELLED") ? null : raw.current_level;
+        raw.next_action_at_level = totalLevels === raw.current_level && 
+            [constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED].includes(Number(raw.approval_status)) 
+            ? null : raw.current_level;
 
         return res.ok(raw);
     } catch (err) {
@@ -259,7 +269,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         const oldStatus = leaveRequest.approval_status;
-        if (oldStatus !== "PENDING" && oldStatus !== "PARTIALLY_APPROVED") {
+        if (oldStatus !== constants.LEAVE_APPROVAL_STATUS.PENDING && oldStatus !== constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
             await transaction.rollback();
             return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
         }
@@ -277,7 +287,7 @@ exports.updateStatus = async (req, res) => {
         const currentLevel = leaveRequest.current_level;
         const totalLevels = template.approval_levels || 1;
 
-        if (approval_status === "APPROVED") {
+        if (String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED") {
             const history = leaveRequest.approval_history || [];
             history.push({
                 level: currentLevel,
@@ -291,10 +301,10 @@ exports.updateStatus = async (req, res) => {
             };
 
             if (currentLevel < totalLevels && !req.user?.is_super_admin) {
-                updateData.approval_status = "PARTIALLY_APPROVED";
+                updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED;
                 updateData.current_level = currentLevel + 1;
             } else {
-                updateData.approval_status = "APPROVED";
+                updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.APPROVED;
                 updateData.approved_by = approved_by || req.user?.id;
                 
                 if (req.user?.is_super_admin && currentLevel < totalLevels) {
@@ -305,7 +315,7 @@ exports.updateStatus = async (req, res) => {
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
 
-            if (updateData.approval_status === "APPROVED") {
+            if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
                 const diff = end.diff(start, 'day');
@@ -315,7 +325,12 @@ exports.updateStatus = async (req, res) => {
                 }
             }
         } 
-        else if (approval_status === "REJECTED" || approval_status === "CANCELLED") {
+        else if (
+            String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.REJECTED) || 
+            String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.CANCELLED) ||
+            approval_status === "REJECTED" || 
+            approval_status === "CANCELLED"
+        ) {
             const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: leaveRequest.employee_id,
                 leave_category_id: leaveRequest.leave_category_id,
@@ -341,7 +356,7 @@ exports.updateStatus = async (req, res) => {
             });
 
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, {
-                approval_status: approval_status,
+                approval_status: (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? constants.LEAVE_APPROVAL_STATUS.REJECTED : constants.LEAVE_APPROVAL_STATUS.CANCELLED,
                 approved_by: approved_by || req.user?.id,
                 approval_history: history
             }, transaction);
@@ -360,7 +375,7 @@ exports.getPendingApprovals = async (req, res) => {
     try {
         // const employeeId = req.body.employee_id;
         const requests = await commonQuery.findAllRecords(LeaveRequest, {
-            approval_status: { [Op.in]: ["PENDING", "PARTIALLY_APPROVED"] },
+            approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
             status: 0
         }, {
             include: [
@@ -464,9 +479,12 @@ exports.cancelLeave = async (req, res) => {
         }
 
         // 3. Status Check
-        if (leaveRequest.approval_status === "CANCELLED" || leaveRequest.approval_status === "REJECTED") {
+        if (
+            Number(leaveRequest.approval_status) === constants.LEAVE_APPROVAL_STATUS.CANCELLED || 
+            Number(leaveRequest.approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED
+        ) {
             await transaction.rollback();
-            return res.error("INVALID_OPERATION", { message: `Request is already ${leaveRequest.approval_status}` });
+            return res.error("INVALID_OPERATION", { message: `Request is already processed` });
         }
 
         const oldStatus = leaveRequest.approval_status;
@@ -499,12 +517,12 @@ exports.cancelLeave = async (req, res) => {
         });
 
         await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, {
-            approval_status: "CANCELLED",
+            approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
             approval_history: history
         }, transaction);
 
         // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
-        if (oldStatus === "APPROVED") {
+        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
             const start = dayjs(leaveRequest.start_date);
             const end = dayjs(leaveRequest.end_date);
             const diff = end.diff(start, 'day');

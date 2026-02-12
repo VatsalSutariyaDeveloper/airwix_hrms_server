@@ -145,8 +145,8 @@ module.exports = (sequelize, DataTypes) => {
     Employee.associate = function (models) {
         Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
-        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
-        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendance_days" });
+        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendancePunches" });
+        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendanceDays" });
 
         // Reporting Hierarchy
         Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
