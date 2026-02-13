@@ -162,14 +162,14 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
 
         // User-Wise Template Data
-        Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "userAttendanceTemplate" });
-        Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "userHolidays" });
-        Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "userWeeklyOffs" });
-        Employee.hasMany(models.EmployeeLeaveBalance, { foreignKey: "employee_id", as: "userLeaveBalances" });
-        Employee.hasOne(models.EmployeeSalaryTemplate, { foreignKey: "employee_id", as: "userSalaryTemplate" });
-        Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "userSalaryComponents" });
-        Employee.hasOne(models.EmployeeShiftSetting, { foreignKey: "employee_id", as: "userShiftSetting" });
-        Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "userPrintTemplates" });
+        Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "employeeAttendanceTemplate" });
+        Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "employeeHolidays" });
+        Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "employeeWeeklyOffs" });
+        Employee.hasMany(models.EmployeeLeaveBalance, { foreignKey: "employee_id", as: "employeeLeaveBalances" });
+        Employee.hasOne(models.EmployeeSalaryTemplate, { foreignKey: "employee_id", as: "employeeSalaryTemplate" });
+        Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "employeeSalaryComponents" });
+        Employee.hasMany(models.EmployeeShift, { foreignKey: "employee_id", as: "employeeShifts" });
+        Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "employeePrintTemplates" });
     };
 
     return Employee;

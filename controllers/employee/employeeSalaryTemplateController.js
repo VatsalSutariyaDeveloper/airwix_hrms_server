@@ -1,5 +1,6 @@
 
 const {
+    Employee,
     EmployeeSalaryTemplate,
     EmployeeSalaryTemplateTransaction,
     SalaryComponent,
@@ -17,19 +18,20 @@ const employeeSalaryTemplateController = {
         try {
             const { employeeId } = req.params;
 
-            const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, {
-                employee_id: employeeId
-            }, {
-                include: [{
-                    model: EmployeeSalaryTemplateTransaction,
-                    as: "EmployeeSalaryTemplateTransactions",
+            const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, 
+                { employee_id: employeeId }, 
+                {
                     include: [{
-                        model: SalaryComponent,
-                        as: "component",
-                        attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
+                        model: EmployeeSalaryTemplateTransaction,
+                        as: "employeeSalaryTemplateTransactions",
+                        include: [{
+                            model: SalaryComponent,
+                            as: "component",
+                            attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
+                        }]
                     }]
-                }]
-            });
+                }
+            );
 
             if (!template) {
                 return res.success(null, "No salary template assigned to this employee");
@@ -49,6 +51,7 @@ const employeeSalaryTemplateController = {
         try {
             const { employeeId } = req.params;
             const {
+                salary_template_id,
                 template_name,
                 staff_type,
                 salary_type,
@@ -66,6 +69,7 @@ const employeeSalaryTemplateController = {
 
             const templatePayload = {
                 employee_id: employeeId,
+                template_id: salary_template_id || null,
                 template_name,
                 staff_type,
                 salary_type,
@@ -84,7 +88,18 @@ const employeeSalaryTemplateController = {
                 employeeTemplate = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
             }
 
-            // 2. Update components (hard delete and bulk create for simplicity in employee-specific overrides)
+            // 2. Update Employee table with template ID and statutory eligibility
+            const employeeUpdatePayload = {
+                salary_template_id: salary_template_id || 0,
+                pf_eligible: statutory_config?.employee_pf?.enabled || false,
+                esi_eligible: statutory_config?.employee_esi?.enabled || false,
+                pt_eligible: statutory_config?.pt?.enabled || false,
+                lwf_eligible: statutory_config?.employee_lwf?.enabled || false,
+            };
+
+            await commonQuery.updateRecordById(Employee, employeeId, employeeUpdatePayload, transaction);
+
+            // 3. Update components (hard delete and bulk create for simplicity in employee-specific overrides)
             if (Array.isArray(components)) {
                 await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, {
                     employee_id: employeeId
@@ -97,7 +112,7 @@ const employeeSalaryTemplateController = {
                     component_category: comp.component_category,
                     monthly_amount: comp.monthly_amount,
                     yearly_amount: comp.yearly_amount,
-                    included_in_ctc: comp.included_in_ctc || true,
+                    included_in_ctc: comp.included_in_ctc ?? true,
                     is_employer_contribution: comp.is_employer_contribution || false,
                     company_id: req.user?.company_id || 0,
                     branch_id: req.user?.branch_id || 0,

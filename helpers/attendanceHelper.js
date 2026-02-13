@@ -209,6 +209,21 @@ async function punch(employeeId, meta, transaction = null) {
 }
 
 async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = null) {
+  // Helper to map multiplier to ID
+  const getRateIdAndAmount = (minutes, wage, multiplier) => {
+    let rateId = 5; // Default 1x Salary
+    const m = parseFloat(multiplier || 1);
+
+    if (m === 1) rateId = 5;
+    else if (m === 1.5) rateId = 6;
+    else if (m === 2) rateId = 7;
+    else if (m === 3) rateId = 8;
+    else rateId = 2; // Fixed Per Hour for custom multipliers
+
+    const amount = parseFloat(((minutes / 60) * wage * m).toFixed(2));
+    return { rateId, amount };
+  };
+
   if (meta.onlyCreateNonWorking && meta.skipIfPunchesExist) {
     const exists = await AttendanceDay.count({ where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction });
     if (exists > 0) return;
@@ -326,64 +341,54 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (weeklyOff) isWeeklyOff = true;
   }
   // 3️⃣ Fetch assigned Shift for this employee and date
+  const dayOfWeek = dayjs(date).day();
   const empShift = await commonQuery.findOneRecord(EmployeeShift, {
     employee_id: employeeId,
-    effective_from: { [Op.lte]: date },
-    [Op.or]: [{ effective_to: null }, { effective_to: { [Op.gte]: date } }],
+    day_of_week: dayOfWeek,
     status: 0,
-  }, {
-    order: [["effective_from", "DESC"]],
-  }, transaction);
+  }, {}, transaction);
 
   const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
-  let shift;
+  let shift = null;
+  // 1. Try provided shift_id from meta
+  if (meta.shift_id) {
+    shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, { include: shiftInclude }, transaction);
+  }
 
-  if (meta.shift_id !== undefined) {
-    if (meta.shift_id) {
-      shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, { include: shiftInclude }, transaction);
-    }
-  } else {
-    if (!shift && empShift) {
-      shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, { include: shiftInclude }, transaction);
-    }
+  // 2. Fallback to specific EmployeeShift assignment for that date
+  if (!shift && empShift) {
+    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, { include: shiftInclude }, transaction);
+  }
 
-    const firstInPunch = inPunches[0];
+  // 3. Fallback to Auto-matching based on First In punch
+  const firstInPunch = inPunches[0];
+  if (!shift && firstInPunch) {
+    const allShifts = await commonQuery.findAllRecords(ShiftTemplate, {
+      company_id: employee.company_id,
+      status: 0
+    }, { include: shiftInclude }, transaction);
 
-    // If no fixed shift Assigned, try to find the best matching shift based on first_in time
-    if (!shift && firstInPunch) {
-      const allShifts = await commonQuery.findAllRecords(ShiftTemplate, {
-        company_id: employee.company_id,
-        status: 0
-      }, { include: shiftInclude }, transaction);
+    if (allShifts.length > 0) {
+      const punchTimeOnly = dayjs(firstInPunch.punch_time).format("HH:mm:ss");
+      const punchDate = dayjs(`${date} ${punchTimeOnly}`);
+      let bestShift = null;
+      let minDiff = Infinity;
 
-      if (allShifts.length > 0) {
-        const punchTimeOnly = dayjs(firstInPunch.punch_time).format("HH:mm:ss");
-        const punchDate = dayjs(`${date} ${punchTimeOnly}`);
-
-        let bestShift = null;
-        let minDiff = Infinity;
-
-        for (const s of allShifts) {
-          const shiftStart = dayjs(`${date} ${s.start_time}`);
-          // Calculate difference in minutes
-          let diff = Math.abs(punchDate.diff(shiftStart, "minute"));
-
-          // Handle cases where punch might be just before midnight for a 12:30 AM shift, etc.
-          // But for most cases, simple diff is enough.
-
-          if (diff < minDiff) {
-            minDiff = diff;
-            bestShift = s;
-          }
+      for (const s of allShifts) {
+        const shiftStart = dayjs(`${date} ${s.start_time}`);
+        let diff = Math.abs(punchDate.diff(shiftStart, "minute"));
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestShift = s;
         }
-        shift = bestShift;
       }
+      shift = bestShift;
     }
+  }
 
-    // Fallback to employee's default shift template if still no shift found
-    if (!shift && employee.shift_template) {
-      shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, { include: shiftInclude }, transaction);
-    }
+  // 4. Fallback to employee's default shift template
+  if (!shift && employee.shift_template) {
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, { include: shiftInclude }, transaction);
   }
 
   let allPunches = [];
@@ -474,42 +479,71 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const firstIn = punches.find(p => p.punch_type === "IN");
   const lastOut = [...punches].reverse().find(p => p.punch_type === "OUT");
 
-  // 1. Determine the Restricted Work Window
-  let pIn = firstIn ? dayjs(firstIn.punch_time) : null;
-  let pOut = lastOut ? dayjs(lastOut.punch_time) : null;
+  let shiftWorkedMins = 0;
+  let earlyOTMins = 0;
+  let lateOTMins = 0;
+  let totalBreakMinutes = 0;
+  let actualGapsMins = 0;
+  let scheduledBreaksMins = 0;
 
-  if (shift && pIn && pOut && !meta.bypassShiftRestrictions) {
-    const shiftStart = dayjs(`${date} ${shift.start_time}`);
-    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
+  let shiftStart = null;
+  let shiftEnd = null;
+
+  if (shift) {
+    shiftStart = dayjs(`${date} ${shift.start_time}`);
+    shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
+  }
 
-    if (shift.punch_in && shift.punch_in_time) {
-      const [h, m] = (shift.punch_in_time || "00:00:00").split(":");
-      const limitMins = parseInt(h) * 60 + parseInt(m);
-      const earliest = shiftStart.subtract(limitMins, "minute");
-      if (pIn.isBefore(earliest)) pIn = earliest;
-    }
-    if (shift.punch_out && shift.punch_out_time) {
-      const [h, m] = (shift.punch_out_time || "00:00:00").split(":");
-      const limitMins = parseInt(h) * 60 + parseInt(m);
-      const latest = shiftEnd.add(limitMins, "minute");
-      if (pOut.isAfter(latest)) pOut = latest;
+  // 1. Calculate Gross Minutes in each region (Shift, Early OT, Late OT)
+  for (let i = 0; i < punches.length - 1; i++) {
+    if (punches[i].punch_type === "IN" && punches[i + 1].punch_type === "OUT") {
+      const pS = dayjs(punches[i].punch_time);
+      const pE = dayjs(punches[i + 1].punch_time);
+
+      if (shift) {
+        // Shift Part
+        const sOverlapStart = dayjs(Math.max(pS.valueOf(), shiftStart.valueOf()));
+        const sOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftEnd.valueOf()));
+        if (sOverlapEnd.isAfter(sOverlapStart)) {
+          shiftWorkedMins += sOverlapEnd.diff(sOverlapStart, "minute");
+        }
+
+        // Early OT Part (Before Shift Start)
+        if (pS.isBefore(shiftStart)) {
+          const eOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftStart.valueOf()));
+          if (eOverlapEnd.isAfter(pS)) {
+            earlyOTMins += eOverlapEnd.diff(pS, "minute");
+          }
+        }
+
+        // Late OT Part (After Shift End)
+        if (pE.isAfter(shiftEnd)) {
+          const lOverlapStart = dayjs(Math.max(pS.valueOf(), shiftEnd.valueOf()));
+          if (pE.isAfter(lOverlapStart)) {
+            lateOTMins += pE.diff(lOverlapStart, "minute");
+          }
+        }
+      } else {
+        // No Shift - All is regular work time? Or all is OT? 
+        // Typically, without a shift, we just count it as worked time.
+        shiftWorkedMins += pE.diff(pS, "minute");
+      }
     }
   }
 
-  // Calculate Total Span
-  let totalSpanMinutes = (pIn && pOut) ? Math.max(0, pOut.diff(pIn, "minute", true)) : 0;
-
-  // 2. Identify Total Break Time (Actual Gaps + Mandatory Unpaid Scheduled Breaks)
-  let actualGapsMins = 0;
+  // 2. Identify Actual Gaps (Break time between punch pairs)
   for (let i = 0; i < punches.length - 1; i++) {
     if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
       actualGapsMins += Math.round(dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true));
     }
   }
 
-  let scheduledBreaksMins = 0;
-  if (shift && shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks) && pIn && pOut) {
+  // 3. Identify Scheduled Breaks (Unpaid intervals defined in shift)
+  if (shift && shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks) && firstIn && lastOut) {
+    const pIn = dayjs(firstIn.punch_time);
+    const pOut = dayjs(lastOut.punch_time);
+    
     for (const sb of shift.ShiftBreaks) {
       if (sb.pay_type === "Unpaid" && sb.break_type === "Intervals") {
         if (sb.start_time && sb.end_time) {
@@ -546,9 +580,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
 
-  let totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
+  totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
 
-  // 3. Final Deduction Logic
+  // 4. Final Break Deduction Logic
   let breakToDeduct = totalBreakMinutes;
   if (template) {
     if (template.break_rules?.length > 0) {
@@ -559,7 +593,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
 
+  const totalSpanMinutes = shiftWorkedMins + earlyOTMins + lateOTMins;
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakToDeduct);
+
+  // --- REFACTORED OVERTIME LOGIC ---
+  let overtimeMinutes = earlyOTMins + lateOTMins;
+  // If breaks took away more than regular shift work, deduct remainder from OT
+  if (breakToDeduct > shiftWorkedMins) {
+    const remainingBreak = breakToDeduct - shiftWorkedMins;
+    overtimeMinutes = Math.max(0, overtimeMinutes - remainingBreak);
+  }
+
+  // Regular worked minutes = Total Net - Post-break OT
+  let regularWorkedMinutes = Math.max(0, finalWorkedMinutes - overtimeMinutes);
 
   // 4. Overtime Trimming (Optional, if not included in total)
   let expectedShiftWorkMinutes = 0;
@@ -584,29 +630,28 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   if (template && !template.include_overtime_in_total && shift) {
-    if (finalWorkedMinutes > expectedShiftWorkMinutes) finalWorkedMinutes = expectedShiftWorkMinutes;
+    finalWorkedMinutes = regularWorkedMinutes;
   }
 
   let lateMinutes = 0;
   let earlyOutMinutes = 0;
-  let overtimeMinutes = 0;
   let fineAmount = 0;
-  let earlyOvertimeMinutes = 0;
+  let earlyOvertimeMinutes = earlyOTMins;
+  if (overtimeMinutes < (earlyOTMins + lateOTMins)) {
+    earlyOvertimeMinutes = Math.min(earlyOTMins, overtimeMinutes);
+  }
   let lateOtData = { rate: 0, amount: 0, minutes: 0 };
   let earlyOtData = { rate: 0, amount: 0, minutes: 0 };
+  
   let fineData = {
     late_entry: { minutes: 0, amount: 0, rate: 5 },
     early_exit: { minutes: 0, amount: 0, rate: 5 },
-    excess_breaks: { minutes: 0, amount: 0, rate: 5 }
+    excess_breaks: { minutes: 0, amount: 0, rate: 5 },
+    // shortage: { minutes: 0, amount: 0, rate: 5 }
   };
 
   if (shift) {
-    const shiftStart = dayjs(`${date} ${shift.start_time}`);
-    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
-    if (shift.is_night_shift || shift.end_time < shift.start_time) {
-      shiftEnd = shiftEnd.add(1, "day");
-    }
-    const shiftDuration = shiftEnd.diff(shiftStart, "minute");
+    // expectedShiftWorkMinutes already calculated at 624
 
     if (firstIn) {
       const actualIn = dayjs(firstIn.punch_time);
@@ -620,9 +665,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (lastOut) {
       const actualOut = dayjs(lastOut.punch_time);
-
-      // EARLY EXIT CALCULATION - Skip for Weekly Off and Holiday
-      // Check both Template-derived flags AND Manual Status from existing record
       const isManualNonWorking = existingDay && [3, 4].includes(existingDay.status);
 
       if (!isWeeklyOff && !isHoliday && !isManualNonWorking) {
@@ -633,28 +675,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
     }
 
-    if (shift && template && template.early_overtime_allowed && firstIn) {
-      const actualIn = dayjs(firstIn.punch_time);
-      const diffEarly = shiftStart.diff(actualIn, "minute", true);
-      if (diffEarly > (shift.grace_minutes || 0)) {
-        earlyOvertimeMinutes = Math.floor(diffEarly);
+    // 🏆 OVERTIME REFINEMENT
+    // overtimeMinutes already calculated and break-deducted above
+
+    if (template && template.overtime_allowed) {
+      if (overtimeMinutes < (template.min_overtime_mins || 0)) {
+        const diff = overtimeMinutes;
+        overtimeMinutes = 0;
+        if (template.include_overtime_in_total) {
+          finalWorkedMinutes -= diff;
+        }
       }
-    }
-
-    // 🏆 OVERTIME CALCULATION
-    if (finalWorkedMinutes > expectedShiftWorkMinutes) {
-      const extraMinutes = finalWorkedMinutes - expectedShiftWorkMinutes;
-
-      // Respect template min OT settings
-      if (!template || (template.overtime_allowed && extraMinutes >= (template.min_overtime_mins || 0))) {
-        overtimeMinutes = Math.floor(extraMinutes);
-
-        if (template && template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
-          overtimeMinutes = template.max_overtime_mins;
+      if (template.max_overtime_mins > 0 && overtimeMinutes > template.max_overtime_mins) {
+        const diff = overtimeMinutes - template.max_overtime_mins;
+        overtimeMinutes = template.max_overtime_mins;
+        if (template.include_overtime_in_total) {
+          finalWorkedMinutes -= diff;
         }
       }
     }
-
     // 💸 FINE & BENEFIT CALCULATION
     const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
 
@@ -727,6 +766,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               fineAmount += res.amount;
             }
           }
+        } else {
+          // AUTO FINE: Default to 1x salary deduction if no rules specified
+          const res = getRateIdAndAmount(lateMinutes, hourlyWage, 1);
+          fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+          fineAmount += res.amount;
         }
       }
 
@@ -765,6 +809,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               fineAmount += res.amount;
             }
           }
+        } else {
+          // AUTO FINE: Default to 1x salary deduction if no rules specified
+          const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 1);
+          fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+          fineAmount += res.amount;
         }
       }
 
@@ -778,22 +827,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           fineAmount += res.amount;
         }
       }
+      // Shortage Fine (Work hours less than shift hours)
+      // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
+      //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;
+      //   // Check if there's a specific rule or just default to 1x salary deduction
+      //   const res = getRateIdAndAmount(shortageMins, hourlyWage, 1);
+      //   fineData.shortage = { minutes: shortageMins, amount: res.amount, rate: res.rateId };
+      //   fineAmount += res.amount;
+      // }
     }
-
-    // Helper to map multiplier to ID
-    const getRateIdAndAmount = (minutes, wage, multiplier) => {
-      let rateId = 5; // Default 1x Salary
-      const m = parseFloat(multiplier || 1);
-
-      if (m === 1) rateId = 5;
-      else if (m === 1.5) rateId = 6;
-      else if (m === 2) rateId = 7;
-      else if (m === 3) rateId = 8;
-      else rateId = 2; // Fixed Per Hour for custom multipliers
-
-      const amount = parseFloat(((minutes / 60) * wage * m).toFixed(2));
-      return { rateId, amount };
-    };
 
     // Late OT Calculation (Standard Overtime) - Now runs even without template
     if (overtimeMinutes > 0) {
@@ -806,7 +848,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       lateOtData.minutes = overtimeMinutes;
     }
 
-    // Early OT Calculation - Now runs even without template
     if (earlyOvertimeMinutes > 0) {
       const earlyOtRule = template ? getMatchingRule(earlyOvertimeMinutes, template.early_overtime_rules) : null;
       const multiplier = (earlyOtRule && earlyOtRule.value) ? earlyOtRule.value : 1;
@@ -867,7 +908,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shift_id: shift ? shift.id : null,
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
     last_out: lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null,
-    worked_minutes: Math.floor(finalWorkedMinutes),
+    worked_minutes: Math.floor(regularWorkedMinutes),
     late_minutes: lateMinutes,
     early_out_minutes: earlyOutMinutes,
     early_overtime_minutes: earlyOvertimeMinutes,
@@ -881,6 +922,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       (fineData.late_entry.minutes === 0 && fineData.late_entry.amount === 0) &&
       (fineData.early_exit.minutes === 0 && fineData.early_exit.amount === 0) &&
       (fineData.excess_breaks.minutes === 0 && fineData.excess_breaks.amount === 0)
+      // (fineData.shortage.minutes === 0 && fineData.shortage.amount === 0)
     ) ? null : fineData,
     fine_amount: fineAmount,
     status: status,

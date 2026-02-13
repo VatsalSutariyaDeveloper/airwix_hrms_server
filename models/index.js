@@ -94,7 +94,6 @@ const PrintTemplate = require("./settings/printTemplate")(sequelize, DataTypes);
 const EmployeeAttendanceTemplate = require("./employeeData/EmployeeAttendanceTemplate")(sequelize, DataTypes);
 const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, DataTypes);
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
-const EmployeeShiftSetting = require("./employeeData/EmployeeShiftSetting")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 const EmployeeSettings = require("./settings/employeeSettings")(sequelize, DataTypes);
 
@@ -199,7 +198,6 @@ const db = {
   EmployeeLeaveBalance, // Added EmployeeLeaveBalance
   EmployeeHoliday,
   EmployeeWeeklyOff,
-  EmployeeShiftSetting,
   EmployeePrintTemplate,
   EmployeeSettings,
 

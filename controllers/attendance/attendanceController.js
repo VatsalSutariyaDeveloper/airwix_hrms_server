@@ -410,59 +410,51 @@ exports.updateAttendanceDay = async (req, res) => {
         }
     }
 
-    // 🔄 Auto-calculate Times if Overtime is Changed (ONLY if Time is NOT explicitly updated)
+    // 🔄 Auto-calculate Times if Overtime/Fine is Adjusted (and Times are NOT explicitly provided)
     if (!isNonWorkingStatus && !isTimeUpdate && day.shift_id && (overtime_minutes !== undefined || early_overtime_minutes !== undefined || early_out_minutes !== undefined || late_minutes !== undefined)) {
         const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
         if (shift) {
             needsPunchUpdate = true;
 
-            // Early Overtime -> Adjust First In
+            const firstInPunch = await commonQuery.findOneRecord(AttendancePunch, {
+                day_id: day.id,
+                punch_type: 'IN',
+                status: 0
+            }, { order: [['punch_time', 'ASC']] }, t);
+
+            const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
+                day_id: day.id,
+                punch_type: 'OUT',
+                status: 0
+            }, { order: [['punch_time', 'DESC']] }, t);
+
+            // 1. EARLY OVERTIME or LATE ENTRY (Affects First In)
             if (early_overtime_minutes !== undefined) {
-                // Construct Full Date Time for Shift Start
-                let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
-                // Handle case where shift start might technically be on prev day if late shift? (Less likely for start, but possible)
-                effectiveFirstIn = shiftStart.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
+                effectiveFirstIn = baseIn.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
             }
-            // Late Entry -> Adjust First In (if not overridden by Early OT)
             else if (late_minutes !== undefined) {
-                 let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
-                 effectiveFirstIn = shiftStart.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
+                effectiveFirstIn = baseIn.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
             }
 
-            // Late Overtime -> Adjust Last Out
-            if (overtime_minutes !== undefined) {
-                let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
-                // Handle Night Shift Crossing Midnight
-                if (shift.is_night_shift || shift.end_time < shift.start_time) {
-                    shiftEnd = shiftEnd.add(1, 'day');
-                }
-
-                const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
-                    day_id: day.id,
-                    punch_type: 'OUT'
-                }, { order: [['punch_time', 'DESC']] }, t);
-
-                let baseTime = shiftEnd;
-
-                // 🌟 HYBRID LOGIC: If employee left EARLY (before shift end), 
-                // add OT to their actual leave time to "fill the gap" or extend.
-                // Otherwise (if they completed shift), add OT to Shift End.
-                if (lastOutPunch && dayjs(lastOutPunch.punch_time).isBefore(shiftEnd)) {
-                    baseTime = dayjs(lastOutPunch.punch_time);
-                }
-
-                const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
-                const lateOvertime = parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0);
-                
-                effectiveLastOut = baseTime.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
-            }
-            // Early Exit -> Adjust Last Out (if not overridden by OT)
-             else if (early_out_minutes !== undefined) {
+            // 2. LATE OVERTIME or EARLY EXIT (Affects Last Out)
+            if (overtime_minutes !== undefined || early_out_minutes !== undefined) {
                 let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
                 if (shift.is_night_shift || shift.end_time < shift.start_time) {
                     shiftEnd = shiftEnd.add(1, 'day');
                 }
-                effectiveLastOut = shiftEnd.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+
+                let baseOut = lastOutPunch ? dayjs(lastOutPunch.punch_time) : shiftEnd;
+
+                if (overtime_minutes !== undefined) {
+                    const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
+                    const lateOvertime = Math.max(0, parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0));
+                    effectiveLastOut = baseOut.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                }
+                else if (early_out_minutes !== undefined) {
+                    effectiveLastOut = baseOut.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                }
             }
         }
     }
@@ -503,7 +495,7 @@ exports.updateAttendanceDay = async (req, res) => {
       branch_id: req.user.branch_id
     };
     
-    if (shift_id !== undefined) payload.shift_id = shift_id;
+    if (shift_id) payload.shift_id = shift_id;
 
     // Clear data for non-working statuses
     if ([3, 4, 5, 6].includes(status)) {

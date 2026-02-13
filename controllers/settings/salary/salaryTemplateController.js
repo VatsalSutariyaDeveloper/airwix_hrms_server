@@ -159,9 +159,11 @@ exports.getById = async (req, res) => {
       include: [
         {
           model: SalaryTemplateTransaction,
+          as: "salaryTemplateTransactions",
           include: [
             {
               model: SalaryComponent,
+              as: "component",
               attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
             }
           ]

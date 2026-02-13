@@ -21,11 +21,13 @@ module.exports = (sequelize, DataTypes) => {
 
   SalaryTemplateTransaction.associate = models => {
     SalaryTemplateTransaction.belongsTo(models.SalaryTemplate, {
-      foreignKey: "salary_template_id"
+      foreignKey: "salary_template_id",
+      as: "salaryTemplate"
     });
 
     SalaryTemplateTransaction.belongsTo(models.SalaryComponent, {
-      foreignKey: "component_id"
+      foreignKey: "component_id",
+      as: "component"
     });
   };
 

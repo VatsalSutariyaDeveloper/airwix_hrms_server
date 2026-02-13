@@ -12,7 +12,7 @@ const {
     EmployeeHoliday,
     EmployeeWeeklyOff,
     EmployeeLeaveBalance,
-    EmployeeShiftSetting,
+    EmployeeShift,
     EmployeePrintTemplate,
     EmployeeSalaryTemplate,
     EmployeeSalaryTemplateTransaction,
@@ -212,6 +212,22 @@ class EmployeeTemplateService {
                 const newRecord = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
                 employeeSalaryTemplateId = newRecord.id;
             }
+
+            // Sync Employee table fields
+            const sc = templateData.statutory_config;
+            if (sc) {
+                await commonQuery.updateRecordById(Employee, employeeId, {
+                    salary_template_id: templateId || 0,
+                    pf_eligible: sc?.employee_pf?.enabled || false,
+                    esi_eligible: sc?.employee_esi?.enabled || false,
+                    pt_eligible: sc?.pt?.enabled || false,
+                    lwf_eligible: sc?.employee_lwf?.enabled || false,
+                }, transaction);
+            } else {
+                 await commonQuery.updateRecordById(Employee, employeeId, {
+                    salary_template_id: templateId || 0
+                }, transaction);
+            }
         }
 
         // Then sync the salary template transactions (Components)
@@ -240,7 +256,7 @@ class EmployeeTemplateService {
 
     static async syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
-            await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
             return;
         }
 
@@ -258,7 +274,7 @@ class EmployeeTemplateService {
         if (!data) return;
 
         // 1. Clear existing day-wise settings for this employee
-        await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
 
         // 2. Fetch Weekly Offs for this employee to identify "All Week" offs
         const weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
@@ -280,7 +296,7 @@ class EmployeeTemplateService {
             }));
 
         if (payloads.length > 0) {
-            await commonQuery.bulkCreate(EmployeeShiftSetting, payloads, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
         }
 
         // Trigger attendance rebuild for current month to reflect new shift timings
