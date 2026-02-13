@@ -15,7 +15,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
 
-    // 1. Fetch Employee with Salary Mapping
+    // 1. Fetch Employee with Salary Mapping & Overrides
     const employee = await commonQuery.findOneRecord(Employee, employee_id, {
         include: [
             {
@@ -25,16 +25,28 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     model: SalaryTemplateTransaction,
                     include: [{ model: SalaryComponent }]
                 }]
+            },
+            {
+                model: EmployeeSalaryTemplate,
+                as: "userSalaryTemplate",
+                include: [{
+                    model: EmployeeSalaryTemplateTransaction,
+                    as: "employeeSalaryTemplateTransactions",
+                    include: [{ model: SalaryComponent, as: "component" }]
+                }]
             }
         ]
     }, transaction);
-
-    if (!employee || !employee.salaryTemplate) {
+console.log("employee",employee)
+    if (!employee || (!employee.salaryTemplate && !employee.userSalaryTemplate)) {
         return fail("Employee or Salary Template not found. Please map the employee first.");
     }
 
-    const template = employee.salaryTemplate;
-    const components = template.SalaryTemplateTransactions || [];
+    // Determine which template to use (Override vs Base)
+    const template = employee.userSalaryTemplate || employee.salaryTemplate;
+    const components = employee.userSalaryTemplate
+        ? (employee.userSalaryTemplate.employeeSalaryTemplateTransactions || [])
+        : (employee.salaryTemplate.SalaryTemplateTransactions || []);
 
     // 2. Fetch Attendance Data for the month
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
@@ -119,9 +131,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const deductions = [];
 
     components.forEach(trans => {
-        const comp = trans.SalaryComponent;
+        const comp = trans.component || trans.SalaryComponent || trans;
         const amount = parseFloat(trans.monthly_amount || 0);
-
         if (comp?.component_type === "EARNING") {
             earnings.push({
                 name: comp.component_name,
@@ -656,6 +667,7 @@ exports.getSalaryOverview = async (req, res) => {
                     date_range: `01 ${monthName}'${yearShort} - ${dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
                     net_receivable: payslip.net_payable,
                     payable_days: payableDays.toFixed(1),
+                    lwp_days: payslip.lwp_days || 0,
                     earnings: {
                         total: totalEarn.toFixed(2),
                         breakdown: earnList
@@ -667,7 +679,8 @@ exports.getSalaryOverview = async (req, res) => {
                     payments: paymentsVal.toFixed(2),
                     adjustments: adjustmentsVal.toFixed(2),
                     ot_amount: ot.toFixed(2),
-                    fine_amount: fine.toFixed(2)
+                    fine_amount: fine.toFixed(2),
+                    ctc_monthly: payslip.ctc_monthly
                 });
             } else {
                 // 3. Dynamic Calculation
@@ -717,6 +730,7 @@ exports.getSalaryOverview = async (req, res) => {
                         date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
                         net_receivable: netPayable.toFixed(2),
                         payable_days: payableDays.toFixed(1),
+                        lwp_days: summary.attendance.totalLWP,
                         earnings: {
                             total: totalEarn.toFixed(2),
                             breakdown: earnList
@@ -728,7 +742,8 @@ exports.getSalaryOverview = async (req, res) => {
                         payments: paymentsVal.toFixed(2),
                         adjustments: adjustmentsVal.toFixed(2),
                         ot_amount: ot.toFixed(2),
-                        fine_amount: fine.toFixed(2)
+                        fine_amount: fine.toFixed(2),
+                        ctc_monthly: summary.salary.ctc_monthly
                     });
                 } catch (e) {
                     console.error(`Calculation failed for overview ${m.month}/${m.year}:`, e.message);

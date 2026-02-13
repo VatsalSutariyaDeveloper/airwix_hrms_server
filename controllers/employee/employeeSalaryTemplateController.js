@@ -1,9 +1,9 @@
 
-const { 
-    EmployeeSalaryTemplate, 
-    EmployeeSalaryTemplateTransaction, 
+const {
+    EmployeeSalaryTemplate,
+    EmployeeSalaryTemplateTransaction,
     SalaryComponent,
-    sequelize 
+    sequelize
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
@@ -17,12 +17,17 @@ const employeeSalaryTemplateController = {
         try {
             const { employeeId } = req.params;
 
-            const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { 
-                employee_id: employeeId 
+            const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, {
+                employee_id: employeeId
             }, {
                 include: [{
                     model: EmployeeSalaryTemplateTransaction,
-                    as: "EmployeeSalaryTemplateTransactions"
+                    as: "EmployeeSalaryTemplateTransactions",
+                    include: [{
+                        model: SalaryComponent,
+                        as: "component",
+                        attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
+                    }]
                 }]
             });
 
@@ -43,7 +48,7 @@ const employeeSalaryTemplateController = {
         const transaction = await sequelize.transaction();
         try {
             const { employeeId } = req.params;
-            const { 
+            const {
                 template_name,
                 staff_type,
                 salary_type,
@@ -51,12 +56,12 @@ const employeeSalaryTemplateController = {
                 ctc_yearly,
                 lwp_calculation_basis,
                 statutory_config,
-                components 
+                components
             } = req.body;
 
             // 1. Update or Create EmployeeSalaryTemplate
-            let employeeTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { 
-                employee_id: employeeId 
+            let employeeTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, {
+                employee_id: employeeId
             }, {}, transaction);
 
             const templatePayload = {
@@ -81,21 +86,19 @@ const employeeSalaryTemplateController = {
 
             // 2. Update components (hard delete and bulk create for simplicity in employee-specific overrides)
             if (Array.isArray(components)) {
-                await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { 
-                    employee_id: employeeId 
+                await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, {
+                    employee_id: employeeId
                 }, transaction);
 
                 const componentPayloads = components.map(comp => ({
                     employee_id: employeeId,
                     employee_salary_template_id: employeeTemplate.id,
                     component_id: comp.component_id,
-                    component_name: comp.component_name,
-                    component_type: comp.component_type,
                     component_category: comp.component_category,
                     monthly_amount: comp.monthly_amount,
                     yearly_amount: comp.yearly_amount,
-                    included_in_ctc: comp.included_in_ctc,
-                    is_employer_contribution: comp.is_employer_contribution,
+                    included_in_ctc: comp.included_in_ctc || true,
+                    is_employer_contribution: comp.is_employer_contribution || false,
                     company_id: req.user?.company_id || 0,
                     branch_id: req.user?.branch_id || 0,
                     user_id: req.user?.id || 0
