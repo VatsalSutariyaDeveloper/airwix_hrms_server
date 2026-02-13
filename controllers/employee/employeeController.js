@@ -524,7 +524,7 @@ exports.checkEmployeeCode = async (req, res) => {
             {},
             transaction
         );
-
+        await transaction.commit();
         return res.ok({ exists: !!emp });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
