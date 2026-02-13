@@ -114,8 +114,8 @@ exports.create = async (req, res) => {
 };
 
 exports.getAll = async (req, res) => {
+
   try {
-    const POST = req.body;
     const fieldConfig = [
       ["template_name", true, true],
       ["template_code", true, true],
@@ -123,15 +123,12 @@ exports.getAll = async (req, res) => {
       ["salary_type", true, false],
       ["ctc_monthly", true, false],
       ["lwp_calculation_basis", true, false],
-      ["status", true, false],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryTemplate,
-      { ...POST, status: 0 },
+      { ...req.body, status: 0 },
       fieldConfig,
-      null,
-      false
     );
 
     return res.ok(data);

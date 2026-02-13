@@ -239,7 +239,6 @@ exports.createRoutePermission = async (req, res) => {
 exports.getAllRoutePermissions = async (req, res) => {
     try {
         const fieldConfig = [
-            ["method", false, true],
             ["path_pattern", true, true],
         ];
 
@@ -262,7 +261,6 @@ exports.getAllRoutePermissions = async (req, res) => {
                 }],
                 attributes: [
                     'id',
-                    'method',
                     'path_pattern',
                     'permission_id',
                     'permission.slug',
