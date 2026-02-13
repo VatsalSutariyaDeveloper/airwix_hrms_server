@@ -337,7 +337,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
   let shift;
-  if (empShift) {
+  
+  if (meta.shift_id) {
+    shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, { include: shiftInclude }, transaction);
+  }
+
+  if (!shift && empShift) {
     shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, { include: shiftInclude }, transaction);
   }
 
@@ -464,11 +469,14 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // --- REFACTORED WORKED TIME & BREAK CALCULATION ---
+  const firstIn = punches.find(p => p.punch_type === "IN");
+  const lastOut = [...punches].reverse().find(p => p.punch_type === "OUT");
+
   // 1. Determine the Restricted Work Window
   let pIn = firstIn ? dayjs(firstIn.punch_time) : null;
   let pOut = lastOut ? dayjs(lastOut.punch_time) : null;
 
-  if (shift && pIn && pOut) {
+  if (shift && pIn && pOut && !meta.bypassShiftRestrictions) {
     const shiftStart = dayjs(`${date} ${shift.start_time}`);
     let shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
@@ -502,37 +510,41 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   if (shift && shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks) && pIn && pOut) {
     for (const sb of shift.ShiftBreaks) {
       if (sb.pay_type === "Unpaid" && sb.break_type === "Intervals") {
-        if (sb.start_time && sb.end_time) {
-          const bStart = dayjs(`${date} ${sb.start_time}`);
-          let bEnd = dayjs(`${date} ${sb.end_time}`);
-          if (bEnd.isBefore(bStart)) bEnd = bEnd.add(1, 'day');
+          if (sb.start_time && sb.end_time) {
+            let bStart = dayjs(`${date} ${sb.start_time}`);
+            let bEnd = dayjs(`${date} ${sb.end_time}`);
+            if (bEnd.isBefore(bStart)) bEnd = bEnd.add(1, 'day');
 
-          // Intersection with work period
-          const intersectStart = dayjs(Math.max(bStart.valueOf(), pIn.valueOf()));
-          const intersectEnd = dayjs(Math.min(bEnd.valueOf(), pOut.valueOf()));
-
-          if (intersectEnd.isAfter(intersectStart)) {
-            const sbMins = intersectEnd.diff(intersectStart, "minute");
-            
-            // Deduct any already captured gaps
-            let coveredByGap = 0;
-            for (let i = 0; i < punches.length - 1; i++) {
-              if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
-                const gS = dayjs(punches[i].punch_time);
-                const gE = dayjs(punches[i + 1].punch_time);
-                const overlapS = dayjs(Math.max(gS.valueOf(), intersectStart.valueOf()));
-                const overlapE = dayjs(Math.min(gE.valueOf(), intersectEnd.valueOf()));
-                if (overlapE.isAfter(overlapS)) coveredByGap += overlapE.diff(overlapS, "minute");
-              }
+            // 🌙 Night Shift Edge Case: Adjust break window for overnight shifts
+            if (bStart.isBefore(pIn.subtract(6, 'hour'))) {
+                bStart = bStart.add(1, 'day');
+                bEnd = bEnd.add(1, 'day');
             }
-            scheduledBreaksMins += Math.max(0, Math.round(sbMins - coveredByGap));
+
+            const intersectStart = dayjs(Math.max(bStart.valueOf(), pIn.valueOf()));
+            const intersectEnd = dayjs(Math.min(bEnd.valueOf(), pOut.valueOf()));
+
+            if (intersectEnd.isAfter(intersectStart)) {
+              const sbMins = intersectEnd.diff(intersectStart, "minute");
+              
+              let coveredByGap = 0;
+              for (let i = 0; i < punches.length - 1; i++) {
+                if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
+                  const gS = dayjs(punches[i].punch_time);
+                  const gE = dayjs(punches[i + 1].punch_time);
+                  const overlapS = dayjs(Math.max(gS.valueOf(), intersectStart.valueOf()));
+                  const overlapE = dayjs(Math.min(gE.valueOf(), intersectEnd.valueOf()));
+                  if (overlapE.isAfter(overlapS)) coveredByGap += overlapE.diff(overlapS, "minute");
+                }
+              }
+              scheduledBreaksMins += Math.max(0, Math.round(sbMins - coveredByGap));
+            }
           }
-        }
       }
     }
   }
 
-  totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
+  let totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
 
   // 3. Final Deduction Logic
   let breakToDeduct = totalBreakMinutes;
@@ -548,12 +560,29 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakToDeduct);
 
   // 4. Overtime Trimming (Optional, if not included in total)
-  if (template && !template.include_overtime_in_total && shift) {
+  let expectedShiftWorkMinutes = 0;
+  if (shift) {
     const shiftStart = dayjs(`${date} ${shift.start_time}`);
     let shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
-    const shiftDuration = shiftEnd.diff(shiftStart, "minute");
-    if (finalWorkedMinutes > shiftDuration) finalWorkedMinutes = shiftDuration;
+    
+    let netMins = shiftEnd.diff(shiftStart, "minute");
+    // Deduct unpaid breaks from shift duration to get net expected work
+    if (shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks)) {
+        for (const sb of shift.ShiftBreaks) {
+            if (sb.pay_type === "Unpaid") {
+                const bS = dayjs(`${date} ${sb.start_time}`);
+                let bE = dayjs(`${date} ${sb.end_time}`);
+                if (bE.isBefore(bS)) bE = bE.add(1, "day");
+                netMins -= Math.max(0, bE.diff(bS, "minute"));
+            }
+        }
+    }
+    expectedShiftWorkMinutes = netMins;
+  }
+
+  if (template && !template.include_overtime_in_total && shift) {
+    if (finalWorkedMinutes > expectedShiftWorkMinutes) finalWorkedMinutes = expectedShiftWorkMinutes;
   }
 
   let lateMinutes = 0;
@@ -563,6 +592,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let earlyOvertimeMinutes = 0;
   let lateOtData = { rate: 0, amount: 0, minutes: 0 };
   let earlyOtData = { rate: 0, amount: 0, minutes: 0 };
+  let fineData = {
+    late_entry: { minutes: 0, amount: 0, rate: 5 },
+    early_exit: { minutes: 0, amount: 0, rate: 5 },
+    excess_breaks: { minutes: 0, amount: 0, rate: 5 }
+  };
 
   if (shift) {
     const shiftStart = dayjs(`${date} ${shift.start_time}`);
@@ -606,8 +640,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
 
     // 🏆 OVERTIME CALCULATION
-    if (finalWorkedMinutes > shiftDuration) {
-      const extraMinutes = finalWorkedMinutes - shiftDuration;
+    if (finalWorkedMinutes > expectedShiftWorkMinutes) {
+      const extraMinutes = finalWorkedMinutes - expectedShiftWorkMinutes;
       
       // Respect template min OT settings
       if (!template || (template.overtime_allowed && extraMinutes >= (template.min_overtime_mins || 0))) {
@@ -660,8 +694,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         if (lateMinutes > 0) {
             const rule = getMatchingRule(lateMinutes, template.late_entry_rules);
             if (rule) {
-                if (rule.type === 'FIXED') fineAmount += parseFloat(rule.value || 0);
-                else if (rule.type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(rule.value || 0);
+                if (rule.type === 'FIXED') {
+                    fineAmount += parseFloat(rule.value || 0);
+                    fineData.late_entry = { minutes: lateMinutes, amount: parseFloat(rule.value || 0), rate: 2 }; // Fixed rate ID
+                } else if (rule.type === 'MINUTE_DEDUCTION') {
+                    finalWorkedMinutes -= parseFloat(rule.value || 0);
+                } else if (rule.type === 'DEDUCTION') {
+                    const res = getRateIdAndAmount(lateMinutes, hourlyWage, rule.value || 1);
+                    fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+                    fineAmount += res.amount;
+                }
             } else if (template.late_entry_fine_type !== 'NONE') {
                 const lateCount = await AttendanceDay.count({
                     where: {
@@ -672,8 +714,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                     transaction
                 });
                 if ((lateCount + 1) > (template.late_entry_limit || 0)) {
-                    if (template.late_entry_fine_type === 'FIXED') fineAmount += parseFloat(template.late_entry_fine_value || 0);
-                    else if (template.late_entry_fine_type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(template.late_entry_fine_value || 0);
+                    if (template.late_entry_fine_type === 'FIXED') {
+                         fineAmount += parseFloat(template.late_entry_fine_value || 0);
+                         fineData.late_entry = { minutes: lateMinutes, amount: parseFloat(template.late_entry_fine_value || 0), rate: 2 };
+                    } else if (template.late_entry_fine_type === 'MINUTE_DEDUCTION') {
+                        finalWorkedMinutes -= parseFloat(template.late_entry_fine_value || 0);
+                    } else if (template.late_entry_fine_type === 'DEDUCTION') {
+                         const res = getRateIdAndAmount(lateMinutes, hourlyWage, template.late_entry_fine_value || 1);
+                         fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+                         fineAmount += res.amount;
+                    }
                 }
             }
         }
@@ -682,8 +732,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         if (earlyOutMinutes > 0) {
             const rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
             if (rule) {
-                if (rule.type === 'FIXED') fineAmount += parseFloat(rule.value || 0);
-                else if (rule.type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(rule.value || 0);
+                if (rule.type === 'FIXED') {
+                    fineAmount += parseFloat(rule.value || 0);
+                    fineData.early_exit = { minutes: earlyOutMinutes, amount: parseFloat(rule.value || 0), rate: 2 };
+                } else if (rule.type === 'MINUTE_DEDUCTION') {
+                    finalWorkedMinutes -= parseFloat(rule.value || 0);
+                } else if (rule.type === 'DEDUCTION') {
+                    const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, rule.value || 1);
+                    fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+                    fineAmount += res.amount;
+                }
             } else if (template.early_exit_fine_type !== 'NONE') {
                 const earlyExitCount = await AttendanceDay.count({
                     where: {
@@ -694,9 +752,28 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                     transaction
                 });
                 if ((earlyExitCount + 1) > (template.early_exit_limit || 0)) {
-                    if (template.early_exit_fine_type === 'FIXED') fineAmount += parseFloat(template.early_exit_fine_value || 0);
-                    else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
+                    if (template.early_exit_fine_type === 'FIXED') {
+                        fineAmount += parseFloat(template.early_exit_fine_value || 0);
+                        fineData.early_exit = { minutes: earlyOutMinutes, amount: parseFloat(template.early_exit_fine_value || 0), rate: 2 };
+                    } else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') {
+                        finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
+                    } else if (template.early_exit_fine_type === 'DEDUCTION') {
+                        const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, template.early_exit_fine_value || 1);
+                        fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+                        fineAmount += res.amount;
+                    }
                 }
+            }
+        }
+
+        // Excess Break Fine
+        if (totalBreakMinutes > (template.paid_break_duration_mins || 0)) {
+            const excessMins = totalBreakMinutes - (template.paid_break_duration_mins || 0);
+            const rule = getMatchingRule(excessMins, template.break_rules);
+            if (rule && rule.type === 'DEDUCTION') {
+                const res = getRateIdAndAmount(excessMins, hourlyWage, rule.value || 1);
+                fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
+                fineAmount += res.amount;
             }
         }
     }
@@ -798,6 +875,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         (lateOtData.minutes === 0 && lateOtData.amount === 0 && lateOtData.rate === 0) &&
         (earlyOtData.minutes === 0 && earlyOtData.amount === 0 && earlyOtData.rate === 0)
     ) ? null : { late_ot: lateOtData, early_ot: earlyOtData },
+    fine_data: (
+        (fineData.late_entry.minutes === 0 && fineData.late_entry.amount === 0) &&
+        (fineData.early_exit.minutes === 0 && fineData.early_exit.amount === 0) &&
+        (fineData.excess_breaks.minutes === 0 && fineData.excess_breaks.amount === 0)
+    ) ? null : fineData,
     fine_amount: fineAmount,
     status: status,
     user_id: meta.user_id || 0,

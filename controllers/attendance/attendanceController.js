@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -144,14 +144,16 @@ exports.getAttendanceSummary = async (req, res) => {
               {
                 model: ShiftTemplate,
                 as: "shiftTemplate",
-                attributes: ["id", "shift_name", "start_time", "end_time"]
+                attributes: ["id", "shift_name", "start_time", "end_time"],
+                include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
               }
             ]
           },
           {
             model: ShiftTemplate,
             as: "shiftTemplate",
-            attributes: ["id", "shift_name", "start_time", "end_time"]
+            attributes: ["id", "shift_name", "start_time", "end_time"],
+            include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
           }
         ],
         order: [['first_name', 'ASC']],
@@ -353,7 +355,8 @@ exports.updateAttendanceDay = async (req, res) => {
       overtime_data,
       fine_data,
       is_locked,
-      note
+      note,
+      shift_id
     } = req.body;
 
     const day = await getOrCreateAttendanceDay(
@@ -469,7 +472,9 @@ exports.updateAttendanceDay = async (req, res) => {
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id
+        branch_id: req.user.branch_id,
+        shift_id: shift_id,
+        bypassShiftRestrictions: true
       }, t);
     }
  
@@ -489,7 +494,6 @@ exports.updateAttendanceDay = async (req, res) => {
         }, 
         { status: 2 }, t);
     }
-
      const payload = {
       employee_id,
       attendance_date,
@@ -498,6 +502,8 @@ exports.updateAttendanceDay = async (req, res) => {
       company_id: req.user.company_id,
       branch_id: req.user.branch_id
     };
+    
+    if (shift_id !== undefined) payload.shift_id = shift_id;
 
     // Clear data for non-working statuses
     if ([3, 4, 5, 6].includes(status)) {
