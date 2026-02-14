@@ -112,6 +112,7 @@ async function buildWhere(whereInput, applyDefaults = true) {
       console.warn("⚠️ Failed to fetch company settings:", err.message);
     }
 
+    settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
     const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
     // C. Branch Logic
