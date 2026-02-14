@@ -46,6 +46,19 @@ exports.getAll = async (req, res) => {
             req.body,
             fieldConfig,
         );
+
+        if (records.items && Array.isArray(records.items)) {
+            for (const record of records.items) {
+                const employeeCount = await commonQuery.countRecords(
+                    Employee,
+                    { attendance_setting_template: record.id, status: 0 },
+                    {},
+                    false
+                );
+                record.dataValues.employee_count = employeeCount;
+            }
+        }
+
         return res.ok(records);
     } catch (err) {
         return handleError(err, res, req);

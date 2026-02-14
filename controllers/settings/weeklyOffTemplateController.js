@@ -59,31 +59,22 @@ exports.getAll = async (req, res) => {
             WeeklyOffTemplate,
             req.body,
             fieldConfig,
-            { 
-                include: { model: User, as: "user", attributes: [] },
-                attributes: ["id", "name", "status", "user.user_name"] 
-            }
+            {}
         );
 
         if (records.items && Array.isArray(records.items)) {
-            records.items = await Promise.all(
-                records.items.map(async (record) => {
-                    const employeeCount = await commonQuery.countRecords(
-                        Employee,
-                        { weekly_off_template: record.id, status: 0 },
-                        {},
-                        false
-                    );
-                    
-                    return {
-                        ...(record.toJSON ? record.toJSON() : record),
-                        employee_count: employeeCount
-                    };
-                })
-            );
+            for (const record of records.items) {
+                const employeeCount = await commonQuery.countRecords(
+                    Employee,
+                    { weekly_off_template: record.id, status: 0 },
+                    {},
+                    false
+                );
+                record.dataValues.employee_count = employeeCount;
+            }
         }
-        
-    return res.ok(records);
+
+        return res.ok(records);
     } catch (err) {
         return handleError(err, res, req);
     }

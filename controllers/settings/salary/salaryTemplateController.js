@@ -132,6 +132,18 @@ exports.getAll = async (req, res) => {
       fieldConfig,
     );
 
+    if (data.items && Array.isArray(data.items)) {
+      for (const record of data.items) {
+        const employeeCount = await commonQuery.countRecords(
+          Employee,
+          { salary_template_id: record.id, status: 0 },
+          {},
+          false
+        );
+        record.dataValues.employee_count = employeeCount;
+      }
+    }
+
     return res.ok(data);
   } catch (err) {
     return handleError(err, res, req);
