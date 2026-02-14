@@ -1,4 +1,5 @@
-const { sequelize, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent } = require("../../../models");
+const { sequelize, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Employee } = require("../../../models");
+const EmployeeTemplateService = require("../../../services/employeeTemplateService");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
@@ -254,6 +255,12 @@ exports.update = async (req, res) => {
       }));
 
       await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+    }
+
+    // Trigger sync for all employees using this template
+    const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
+    for (const emp of employeesToSync) {
+        await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'salary_template_id', id, null, transaction);
     }
 
     await transaction.commit();

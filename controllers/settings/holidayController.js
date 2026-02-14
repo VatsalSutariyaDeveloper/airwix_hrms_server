@@ -2,8 +2,6 @@ const { sequelize, handleError, validateRequest, commonQuery } = require("../../
 const { constants } = require("../../helpers/constants");
 const { Holiday } = require("../../models");
 
-
-
 exports.create = async (req, res) => {
   const transaction = await sequelize.transaction();
   const POST = req.body;
@@ -22,7 +20,7 @@ exports.create = async (req, res) => {
 
     await commonQuery.createRecord(Holiday, POST, transaction);
     await transaction.commit();
-    return res.success(constants.HOLIDAY_CREATED);
+    return res.success(constants.CREATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -49,12 +47,12 @@ exports.update = async (req, res) => {
     const existingHoliday = await commonQuery.findOneRecord(Holiday, { id }, {}, transaction);
     if (!existingHoliday) {
       await transaction.rollback();
-      return res.error(constants.HOLIDAY_NOT_FOUND);
+      return res.error(constants.NOT_FOUND);
     }
 
     await commonQuery.updateRecordById(Holiday, id, POST, transaction);
     await transaction.commit();
-    return res.success(constants.HOLIDAY_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
@@ -85,7 +83,7 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const record = await commonQuery.findOneRecord(Holiday, req.params.id);
-    if (!record || record.status === 2) return res.error(constants.HOLIDAY_NOT_FOUND);
+    if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
 
     return res.ok(record);
   } catch (err) {
@@ -118,7 +116,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.HOLIDAY_DELETED);
+    return res.success(constants.DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -147,7 +145,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.HOLIDAY_UPDATED);
+    return res.success(constants.UPDATED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);

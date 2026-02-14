@@ -1,6 +1,7 @@
 const { sequelize, handleError, validateRequest, commonQuery } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { AttendanceTemplate } = require("../../models");
+const { AttendanceTemplate, Employee } = require("../../models");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -92,6 +93,13 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
+
+        // Trigger sync for all employees using this template
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { attendance_setting_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
+        for (const emp of employeesToSync) {
+            await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'attendance_setting_template', req.params.id, null, transaction);
+        }
+
         await transaction.commit();
         return res.success(constants.UPDATED, updated);
     } catch (err) {

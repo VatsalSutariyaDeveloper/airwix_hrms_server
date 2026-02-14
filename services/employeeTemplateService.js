@@ -184,14 +184,14 @@ class EmployeeTemplateService {
 
         if (!templateData && templateId) {
             const masterTemplate = await commonQuery.findOneRecord(SalaryTemplate, templateId, {
-                include: [{ model: SalaryTemplateTransaction }]
+                include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
             }, transaction);
             
             if (masterTemplate) {
                 templateData = masterTemplate.toJSON();
-                masterComponents = templateData.SalaryTemplateTransactions; // Capture related components
+                masterComponents = templateData.salaryTemplateTransactions; // Capture related components
                 delete templateData.id; delete templateData.created_at; delete templateData.updated_at;
-                delete templateData.SalaryTemplateTransactions;
+                delete templateData.salaryTemplateTransactions;
             }
         }
 
