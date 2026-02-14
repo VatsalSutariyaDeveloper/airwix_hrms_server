@@ -2,14 +2,20 @@ const { sequelize, CompanyMaster, User, BranchMaster, GodownMaster, RolePermissi
 const { validateRequest, commonQuery, handleError, uploadFile, deleteFile, Op, getCompanySubscription, fileExists, initializeCompanySettings, constants } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 
-const ensureSingleDefault = async (POST, transaction) => {  
-  if (POST.is_default === 1 || POST.is_default === '1') {
+const ensureSingleDefault = async (POST, existing, transaction) => {  
+  if (POST.is_default == 1 || POST.is_default == '1') {
+    const parentId = existing.company_id || existing.id;
 
     await commonQuery.updateRecordById(
       CompanyMaster,
-      { user_id: POST.user_id },
+      { [Op.or]: [
+            { id: parentId },
+            { company_id: parentId }
+          ],
+          id: { [Op.ne]: existing.id },
+          status: { [Op.ne]: 2 }},
       { is_default: 2 },
-      transaction
+        transaction
     );
   }
 };
@@ -29,14 +35,14 @@ const parseJsonFields = (body) => {
   });
 };
 
-const ASSOCIATED_MODELS = [
-   {
-    model: CompanyAddress, key: "company_addresses", as: "addresses",
-    include: [{ model: CountryMaster, as: "country", attributes: ["id", "country_name"] },
-    { model: StateMaster, as: "state", attributes: ["id", "state_name"] }
-  ]
-  },
-]
+// const ASSOCIATED_MODELS = [
+//    {
+//     model: CompanyAddress, key: "company_addresses", as: "addresses",
+//     include: [{ model: CountryMaster, as: "country", attributes: ["id", "country_name"] },
+//     { model: StateMaster, as: "state", attributes: ["id", "state_name"] }
+//   ]
+//   },
+// ]
 
 /**
  * Create Company with auto-generated company_code
@@ -46,22 +52,22 @@ exports.create = async (req, res) => {
   try {
     parseJsonFields(req.body);
 
-    const { company_id, user_id, branch_id } = req.body;
+    const { company_id, user_id, branch_id } = req.user;
 
-    const companyPlan = await getCompanySubscription(company_id);
-    if(companyPlan.companies_limit <= companyPlan.used_companies){
-      await transaction.rollback();
-      return res.error(constants.LIMIT_EXCEEDED, constants.COMPANY_LIMIT_REACHED);
-    }
+    // const companyPlan = await getCompanySubscription(company_id);
+    // if(companyPlan.companies_limit <= companyPlan.used_companies){
+    //   await transaction.rollback();
+    //   return res.error(constants.LIMIT_EXCEEDED, constants.COMPANY_LIMIT_REACHED);
+    // }
 
     if(req.body.company_name === undefined || req.body.company_name.trim() === ""){
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, { company_name: "Company Name is required" });
     }
-    if(req.body.mobile_no === undefined || req.body.mobile_no.trim() === ""){
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile Number is required" });
-    }
+    // if(req.body.mobile_no === undefined || req.body.mobile_no.trim() === ""){
+    //   await transaction.rollback();
+    //   return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile Number is required" });
+    // }
 
     const parentCompany = await commonQuery.findOneRecord(
       CompanyMaster,
@@ -116,7 +122,7 @@ exports.create = async (req, res) => {
     }
     
     // Find the last company to determine the next sequential code.
-    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, {}, { order: [["company_code", "DESC"]] }, transaction, false, false);
+    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, { status: { [Op.or]: [0,1,2]} }, { order: [["company_code", "DESC"]] }, transaction, false, false);
 
     let nextNumber = 1;
     if (lastCompany && lastCompany.company_code) {
@@ -157,8 +163,6 @@ exports.create = async (req, res) => {
       }
     }
 
-    let companyId = record?.company_id || record?.id || 0;
-    req.body.company_id = companyId;
     req.body.business_type_id = record?.business_type_id;
 
     // 1. Create the Company Master record
@@ -171,7 +175,9 @@ exports.create = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.INTERNAL_SERVER_ERROR, { message: "Failed to create company." });
     }
-    await updateDocumentUsedLimit(company_id, 'companies', 1, transaction);
+
+
+    // await updateDocumentUsedLimit(company_id, 'companies', 1, transaction);
 
     // 4. Create the default Branch ("Main Branch")
     const branchPayload = {
@@ -189,57 +195,11 @@ exports.create = async (req, res) => {
     const newBranch = await commonQuery.createRecord(
         BranchMaster,
         branchPayload,
-        transaction
+        transaction,
+        false
     );
-
-    // 5. Create the default Godown ("Main Warehouse")
-    const godownPayload = {
-        name: "Main Warehouse",
-        address: req.body.address || newCompany.address || null,
-        user_id: user_id,
-        branch_id: newBranch.id,
-        company_id: newCompany.id,
-    };
-
-    await commonQuery.createRecord(
-        GodownMaster,
-        godownPayload,
-        transaction
-    );
-
-    const RolePermissions = await commonQuery.findOneRecord(RolePermission, { company_id: -1, status: 0 }, {}, transaction, false, false);
-
-    const userPayload = {
-      role_id: 1,
-      user_name: " Super Admin", 
-      role_id: RolePermissions.id,
-      permission: RolePermissions.permissions,
-      user_id: user_id,
-      branch_id: newBranch.id,
-      company_id: newCompany.id,
-      company_access: JSON.stringify([newCompany.id]),
-    };
-
-    await commonQuery.createRecord(
-      User,
-      userPayload,
-      transaction
-    );
-
-    // Create associated models (addresses)
-    const commonData = {
-      company_id: newCompany.id,
-      user_id: user_id,
-      branch_id: newBranch.id,
-    };
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
-
-    for (const { model, key } of ASSOCIATED_MODELS) {
-      if (Array.isArray(req.body[key]) && req.body[key].length > 0) {
-        await commonQuery.bulkCreate(model, req.body[key], commonData, transaction);
-      }
-    }
 
     await transaction.commit();
     return res.success(constants.COMPANY_CREATED, newCompany); 
@@ -282,15 +242,15 @@ exports.getCompanies = async (req, res) => {
     let companyId = record.company_id || record.id;
 
     const includeOptions = [
-      ...ASSOCIATED_MODELS.map(({ model, as, include }) => ({
-        model,
-        as,
-        where: { status: { [Op.ne]: 2 } },
-        required: false,
-        separate: true,
-        order: [["createdAt", "ASC"]],
-        ...(include && { include }),
-      })),
+      // ...ASSOCIATED_MODELS.map(({ model, as, include }) => ({
+      //   model,
+      //   as,
+      //   where: { status: { [Op.ne]: 2 } },
+      //   required: false,
+      //   separate: true,
+      //   order: [["createdAt", "ASC"]],
+      //   ...(include && { include }),
+      // })),
     ];
 
     const result = await commonQuery.findAllRecords(CompanyMaster, {
@@ -327,15 +287,15 @@ exports.getCompanies = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const includeOptions = [
-      ...ASSOCIATED_MODELS.map(({ model, as, include }) => ({
-        model,
-        as,
-        where: { status: { [Op.ne]: 2 } },
-        required: false,
-        separate: true,
-        order: [["createdAt", "ASC"]],
-        ...(include && { include }),
-      })),
+      // ...ASSOCIATED_MODELS.map(({ model, as, include }) => ({
+      //   model,
+      //   as,
+      //   where: { status: { [Op.ne]: 2 } },
+      //   required: false,
+      //   separate: true,
+      //   order: [["createdAt", "ASC"]],
+      //   ...(include && { include }),
+      // })),
     ];
 
     // Fetch the company record by ID
@@ -405,7 +365,7 @@ exports.update = async (req, res) => {
 
     if (!existing || existing.status === 2) {
       await transaction.rollback();
-      return res.error(constants.COMPANY_NOT_FOUND);
+      return res.error(constants.COMPANY_NOT_FOUND, { company_id: "Company not found" });
     }
 
     delete POST.company_id;
@@ -420,32 +380,34 @@ exports.update = async (req, res) => {
       }
     }
 
-    await ensureSingleDefault(POST, transaction);
+    await ensureSingleDefault(POST, existing, transaction);
 
     const updated = await commonQuery.updateRecordById(
       CompanyMaster,
       req.params.id,
       POST,
-      transaction
+      transaction,
+      false,
+      false
     );
 
     if (!updated || updated.status === 2) {
       await transaction.rollback();
-      return res.error(constants.COMPANY_NOT_FOUND);
+      return res.error(constants.COMPANY_NOT_FOUND, { company_id: "Company not found" });
     }
 
     // Sync associated models (addresses)
-    const commonData = {
-      user_id: POST.user_id,
-      branch_id: POST.branch_id,
-      company_id: POST.company_id,
-    };
+    // const commonData = {
+    //   user_id: POST.user_id,
+    //   branch_id: POST.branch_id,
+    //   company_id: POST.company_id,
+    // };
 
-    for (const { model, key } of ASSOCIATED_MODELS) {
-      if (Array.isArray(POST[key])) {
-        await syncChildData(model, POST[key], req.params.id, commonData, transaction);
-      }
-    }
+    // for (const { model, key } of ASSOCIATED_MODELS) {
+    //   if (Array.isArray(POST[key])) {
+    //     await syncChildData(model, POST[key], req.params.id, commonData, transaction);
+    //   }
+    // }
 
     await transaction.commit();
     return res.success(constants.COMPANY_UPDATED, updated);
@@ -462,21 +424,21 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const deleted = await commonQuery.softDeleteById(CompanyMaster, req.params.id,  transaction);
+    const deleted = await commonQuery.softDeleteById(CompanyMaster, req.params.id,  transaction, false);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);
     }
 
     // Cascade delete associated models
-    for (const { model } of ASSOCIATED_MODELS) {
-      await commonQuery.softDeleteById(
-        model,
-        { company_id: req.params.id },
-        null,
-        transaction
-      );
-    }
+    // for (const { model } of ASSOCIATED_MODELS) {
+    //   await commonQuery.softDeleteById(
+    //     model,
+    //     { company_id: req.params.id },
+    //     null,
+    //     transaction
+    //   );
+    // }
 
     await transaction.commit();
     return res.success(constants.COMPANY_DELETED);

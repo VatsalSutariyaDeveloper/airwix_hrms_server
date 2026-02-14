@@ -849,12 +849,12 @@ exports.getEmployeesByTemplate = async (req, res) => {
         if (accessFlag) {
             filter[field_name] = value;
         } else {
-            filter[field_name] = 0;
+            filter[field_name] = { [Op.or]: [0, null] };
         }
 
         // 6. Fetch counts in parallel
         const assignFilter = { status: 0, [field_name]: value };
-        const notAssignFilter = { status: 0, [field_name]: 0 };
+        const notAssignFilter = { status: 0, [field_name]: { [Op.or]: [0, null] } };
 
         const [assignedCount, notAssignedCount] = await Promise.all([
             commonQuery.countRecords(Employee, assignFilter, {}, false),

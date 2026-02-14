@@ -14,8 +14,8 @@ exports.create = async (req, res) => {
       state_id: "State",
       city: "City",
       pincode: "Pincode",
-      user_id: "User",
-      company_id: "Company"
+      // user_id: "User",
+      // company_id: "Company"
     };
 
     const errors = await validateRequest(req.body, requiredFields, {
@@ -28,7 +28,7 @@ exports.create = async (req, res) => {
 
     if (errors) {
       await transaction.rollback();
-      return res.error("VALIDATION_ERROR", { errors });
+      return res.error("VALIDATION_ERROR", errors);
     }
 
     const result = await commonQuery.createRecord(BranchMaster, req.body, transaction);
@@ -50,8 +50,8 @@ exports.update = async (req, res) => {
       state_id: "State",
       city: "City",
       pincode: "Pincode",
-      user_id: "User",
-      company_id: "Company"
+      // user_id: "User",
+      // company_id: "Company"
     };
 
     const errors = await validateRequest(req.body, requiredFields, {
@@ -65,7 +65,7 @@ exports.update = async (req, res) => {
 
     if (errors) {
       await transaction.rollback();
-      return res.error("VALIDATION_ERROR", { errors });
+      return res.error("VALIDATION_ERROR", errors);
     }
 
     const updated = await commonQuery.updateRecordById(BranchMaster, req.params.id, req.body, transaction);
@@ -90,19 +90,19 @@ exports.getById = async (req, res) => {
         include: [
           { model: CountryMaster, as: "country", attributes: [] },
           { model: StateMaster, as: "state", attributes: [] },
-          { model: ZoneMaster, as: "zone", attributes: [] },
+          // { model: ZoneMaster, as: "zone", attributes: [] },
         ],
         attributes: [
           "id", "branch_name", "city", "pincode", "status",
-          "country_id", ["country.country_name", "country_name"],
-          "state_id", ["state.state_name", "state_name"],
-          "zone_id", ["zone.zone_name", "zone_name"]
+          "country_id", "country.country_name", 
+          "state_id", "state.state_name", 
+          // "zone_id", "zone.zone_name", 
         ]
       }
     );
 
     if (!record || record.status === 2) return res.error("NOT_FOUND");
-    return res.success("FETCH", ENTITY, record);
+    return res.success("FETCH", record);
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -116,7 +116,7 @@ exports.getAll = async (req, res) => {
       ["city", true, true],
       ["country_name", true, true],
       ["state_name", true, true],
-      ["zone_name", true, true],
+      // ["zone_name", true, true],
     ];
     const data = await commonQuery.fetchPaginatedData(
       BranchMaster,
@@ -126,18 +126,21 @@ exports.getAll = async (req, res) => {
         include: [
           { model: CountryMaster, as: "country", attributes: [], required:false },
           { model: StateMaster, as: "state", attributes: [], required:false },
-          { model: ZoneMaster, as: "zone", attributes: [], required:false },
+          // { model: ZoneMaster, as: "zone", attributes: [], required:false },
         ],
         attributes: [
           "id", "branch_name", "city", "pincode", "status",
-          ["country.country_name", "country_name"],
-          ["state.state_name", "state_name"],
-          ["zone.zone_name", "zone_name"]
+          "country.country_name", 
+          "state.state_name", 
+          // "zone.zone_name", 
+
+          // [sequelize.col("country.country_name"), "country_name"],
+          // [sequelize.col("state.state_name"), "state_name"],
         ]
       }
     );
 
-    return res.success("FETCH", ENTITY, data);
+    return res.success("FETCH", data);
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -158,7 +161,7 @@ exports.dropdownList = async (req, res) => {
         ]
       },
     );
-    return res.success("FETCH", ENTITY, record);
+    return res.success("FETCH", record);
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -175,7 +178,7 @@ exports.delete = async (req, res) => {
     const errors = await validateRequest(req.body, requiredFields, {}, transaction);
     if (errors) {
       await transaction.rollback();
-      return res.error("VALIDATION_ERROR", { errors });
+      return res.error("VALIDATION_ERROR", errors);
     }
     const { ids } = req.body; // Accept array of ids
     
@@ -213,7 +216,7 @@ exports.updateStatus = async (req, res) => {
     const errors = await validateRequest(req.body, requiredFields, {}, transaction);
     if (errors) {
       await transaction.rollback();
-      return res.error("VALIDATION_ERROR", { errors });
+      return res.error("VALIDATION_ERROR", errors);
     }
     
     // Validate that ids is an array and not empty
