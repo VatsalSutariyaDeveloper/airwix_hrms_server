@@ -44,6 +44,18 @@ const parseJsonFields = (body) => {
 //   },
 // ]
 
+
+const updateUserAccess = async (userId, newId, accessField = 'company_access', transaction = null) => {
+  const user = await commonQuery.findOneRecord(User, userId, { attributes: ['id', accessField] }, transaction, false, false);
+  if (user) {
+    let accessList = (user[accessField] || '').split(',').filter(Boolean);
+    if (!accessList.includes(String(newId))) {
+      accessList.push(String(newId));
+      await commonQuery.updateRecordById(User, user.id, { [accessField]: accessList.join(',') }, transaction, false, false);
+    }
+  }
+};
+
 /**
  * Create Company with auto-generated company_code
  */
@@ -53,6 +65,7 @@ exports.create = async (req, res) => {
     parseJsonFields(req.body);
 
     const { company_id, user_id, branch_id } = req.user;
+    // const user_id = authUserId;
 
     // const companyPlan = await getCompanySubscription(company_id);
     // if(companyPlan.companies_limit <= companyPlan.used_companies){
@@ -200,6 +213,19 @@ exports.create = async (req, res) => {
     );
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
+
+    // Update company_access for the creator and Super Admins
+    await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
+
+    // If the creator is not a Super Admin, also update the company_access for all Super Admins
+    if (req.user.role_id != 1) {
+      const superAdmins = await commonQuery.findAllRecords(User, { role_id: 1, status: 0 }, { attributes: ['id'] }, transaction, false);
+      if (superAdmins && superAdmins.length > 0) {
+        for (const admin of superAdmins) {
+          await updateUserAccess(admin.id, newCompany.id, 'company_access', transaction);
+        }
+      }
+    }
 
     await transaction.commit();
     return res.success(constants.COMPANY_CREATED, newCompany); 
