@@ -9,20 +9,35 @@ module.exports = (sequelize, DataTypes) => {
     track_in_out: { type: DataTypes.BOOLEAN, defaultValue: true },
     require_punch_out: { type: DataTypes.BOOLEAN, defaultValue: false },
     allow_multiple_punches: { type: DataTypes.BOOLEAN, defaultValue: true },
+    
+    // Late Entry
     late_entry_limit: { type: DataTypes.INTEGER, defaultValue: 0 },
-    late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION'), defaultValue: 'NONE' },
+    late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
     late_entry_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+    late_entry_rules: { type: DataTypes.JSON, defaultValue: [] },
+
+    // Early Exit
     early_exit_limit: { type: DataTypes.INTEGER, defaultValue: 0 },
-    early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION'), defaultValue: 'NONE' },
+    early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
     early_exit_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+    early_exit_rules: { type: DataTypes.JSON, defaultValue: [] },
+
+    // Overtime
     overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
     min_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     max_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+    overtime_rules: { type: DataTypes.JSON, defaultValue: [] },
+
+    early_overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: false },
+    early_overtime_rules: { type: DataTypes.JSON, defaultValue: [] },
+
+    // Absenteeism & Breaks
     auto_mark_absent: { type: DataTypes.BOOLEAN, defaultValue: false },
     auto_absent_buffer_days: { type: DataTypes.INTEGER, defaultValue: 2 },
     deduct_breaks_from_total: { type: DataTypes.BOOLEAN, defaultValue: false },
     include_overtime_in_total: { type: DataTypes.BOOLEAN, defaultValue: true },
     paid_break_duration_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+    break_rules: { type: DataTypes.JSON, defaultValue: [] },
 
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },

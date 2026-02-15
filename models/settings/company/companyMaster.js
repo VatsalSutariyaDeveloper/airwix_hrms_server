@@ -4,6 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     company_name: { type: DataTypes.STRING(100), allowNull: false },
     legal_name: { type: DataTypes.STRING(100), allowNull: true },
     address: { type: DataTypes.TEXT(), allowNull: true },
+    address2: { type: DataTypes.TEXT, allowNull: true },
     country_id: { type: DataTypes.INTEGER, allowNull: true },
     state_id: { type: DataTypes.INTEGER, allowNull: true },
     city: { type: DataTypes.STRING(100), allowNull: true },

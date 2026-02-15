@@ -12,7 +12,7 @@ const {
     EmployeeHoliday,
     EmployeeWeeklyOff,
     EmployeeLeaveBalance,
-    EmployeeShiftSetting,
+    EmployeeShift,
     EmployeePrintTemplate,
     EmployeeSalaryTemplate,
     EmployeeSalaryTemplateTransaction,
@@ -57,20 +57,20 @@ class EmployeeTemplateService {
      * @param {Object|Array|null} manualData - Optional custom data to save directly
      * @param {Object} transaction 
      */
-    static async syncSpecificTemplate(employeeId, fieldName, templateId = null, manualData = null, transaction = null) {
+    static async syncSpecificTemplate(employeeId, fieldName, templateId = null, manualData = null, transaction = null, skipRebuild = false) {
         switch (fieldName) {
             case 'attendance_setting_template':
                 return this.syncAttendanceTemplate(employeeId, templateId, manualData, transaction);
             case 'holiday_template':
-                return this.syncHolidayTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             case 'weekly_off_template':
-                return this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             case 'leave_template':
                 return this.syncLeaveTemplate(employeeId, templateId, manualData, transaction);
             case 'salary_template_id':
                 return this.syncSalaryTemplate(employeeId, templateId, manualData, transaction);
             case 'shift_template':
-                return this.syncShiftTemplate(employeeId, templateId, manualData, transaction);
+                return this.syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild);
             default:
                 return null;
         }
@@ -105,7 +105,7 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncHolidayTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
             return;
@@ -129,10 +129,12 @@ class EmployeeTemplateService {
         }
 
         // Trigger attendance rebuild for current month to reflect new holidays
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
-    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
             return;
@@ -156,7 +158,9 @@ class EmployeeTemplateService {
         }
 
         // Trigger attendance rebuild for current month to reflect new off days
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
     static async syncLeaveTemplate(employeeId, templateId, manualData, transaction) {
@@ -180,14 +184,14 @@ class EmployeeTemplateService {
 
         if (!templateData && templateId) {
             const masterTemplate = await commonQuery.findOneRecord(SalaryTemplate, templateId, {
-                include: [{ model: SalaryTemplateTransaction }]
+                include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
             }, transaction);
             
             if (masterTemplate) {
                 templateData = masterTemplate.toJSON();
-                masterComponents = templateData.SalaryTemplateTransactions; // Capture related components
+                masterComponents = templateData.salaryTemplateTransactions; // Capture related components
                 delete templateData.id; delete templateData.created_at; delete templateData.updated_at;
-                delete templateData.SalaryTemplateTransactions;
+                delete templateData.salaryTemplateTransactions;
             }
         }
 
@@ -207,6 +211,22 @@ class EmployeeTemplateService {
             } else {
                 const newRecord = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
                 employeeSalaryTemplateId = newRecord.id;
+            }
+
+            // Sync Employee table fields
+            const sc = templateData.statutory_config;
+            if (sc) {
+                await commonQuery.updateRecordById(Employee, employeeId, {
+                    salary_template_id: templateId || 0,
+                    pf_eligible: sc?.employee_pf?.enabled || false,
+                    esi_eligible: sc?.employee_esi?.enabled || false,
+                    pt_eligible: sc?.pt?.enabled || false,
+                    lwf_eligible: sc?.employee_lwf?.enabled || false,
+                }, transaction);
+            } else {
+                 await commonQuery.updateRecordById(Employee, employeeId, {
+                    salary_template_id: templateId || 0
+                }, transaction);
             }
         }
 
@@ -234,9 +254,9 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncShiftTemplate(employeeId, templateId, manualData, transaction) {
+    static async syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false) {
         if (!templateId && !manualData) {
-            await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
             return;
         }
 
@@ -254,7 +274,7 @@ class EmployeeTemplateService {
         if (!data) return;
 
         // 1. Clear existing day-wise settings for this employee
-        await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { employee_id: employeeId }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
 
         // 2. Fetch Weekly Offs for this employee to identify "All Week" offs
         const weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
@@ -276,11 +296,13 @@ class EmployeeTemplateService {
             }));
 
         if (payloads.length > 0) {
-            await commonQuery.bulkCreate(EmployeeShiftSetting, payloads, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
         }
 
         // Trigger attendance rebuild for current month to reflect new shift timings
-        await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        if (!skipRebuild) {
+            await this.rebuildCurrentMonthAttendance(employeeId, transaction);
+        }
     }
 
     /**

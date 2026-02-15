@@ -167,7 +167,7 @@ exports.update = async (req, res) => {
 
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
             // Delete old breaks (Soft delete or Hard delete based on preference, here we replace)
-            await commonQuery.deleteRecords(ShiftBreak, { shift_template_id: req.params.id }, transaction);
+            await commonQuery.softDeleteById(ShiftBreak, { shift_template_id: req.params.id }, transaction);
             
             const breaks = req.body.breaks.map(b => ({
                 ...b,
@@ -180,7 +180,7 @@ exports.update = async (req, res) => {
                 branch_id: req.body.branch_id || 0,
                 company_id: req.body.company_id || 0
             }));
-            await commonQuery.createBulk(ShiftBreak, breaks, transaction);
+            await commonQuery.bulkCreate(ShiftBreak, breaks, {}, transaction);
         }
 
         // Trigger sync for all employees using this template

@@ -17,9 +17,9 @@ module.exports = (sequelize, DataTypes) => {
             total_days: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
             reason: { type: DataTypes.TEXT, allowNull: true },
             approval_status: { 
-                type: DataTypes.STRING(20), 
-                defaultValue: "PENDING",
-                comment: "PENDING, PARTIALLY_APPROVED, APPROVED, REJECTED, CANCELLED" 
+                type: DataTypes.INTEGER, 
+                defaultValue: 0,
+                comment: "0=PENDING, 1=PARTIALLY_APPROVED, 2=DELETED, 3=APPROVED, 4=REJECTED, 5=CANCELLED" 
             },
             current_level: { 
                 type: DataTypes.INTEGER, 

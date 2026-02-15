@@ -1,10 +1,11 @@
-const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance } = require("../../helpers/attendanceHelper");
+const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
+const LeaveBalanceService = require("../../services/leaveBalanceService");
 dayjs.extend(customParseFormat);
 
 /**
@@ -74,135 +75,233 @@ exports.getAttendanceSummary = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const { date, staff_type, shift_id } = req.body;
-    const targetDate = date || new Date().toISOString().split("T")[0];
+    const { date, staff_type, shift_id, page, limit, search, filter } = req.body;
+    const targetDate = date || dayjs().format("YYYY-MM-DD");
 
-    const employeeWhere = { status: 0 };
-    if (staff_type) employeeWhere.employee_type = staff_type;
+    // 1. Prepare base filters for Employee list
+    const consolidatedFilter = { ...(filter || {}), status: 0 };
+    if (staff_type) consolidatedFilter.employee_type = staff_type;
+    if (shift_id) consolidatedFilter.shift_template = shift_id;
 
-    // Fetch all employees with their attendance for target date
-    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
-      include: [
-        {
-          model: AttendanceDay,
-          as: "attendance_days",
-          where: { attendance_date: targetDate },
-          required: false,
-          include: [
-            {
-              model: AttendancePunch,
-              as: "AttendancePunches",
-              required: false
-            },
-          ]
-        },
-        {
-          model: ShiftTemplate,
-          as: "shiftTemplate",
-          attributes: ["id", "shift_name", "start_time", "end_time"]
+    // Create a shared employee filter for all summary queries
+    const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id };
+    if (search) {
+      employeeWhere[Op.or] = [
+        { first_name: { [Op.iLike]: `%${search}%` } },
+        { employee_code: { [Op.iLike]: `%${search}%` } }
+      ];
+    }
+
+    // 1.5 AUTO-SYNC: Create records for WO/Holiday/Leave if missing
+    // This allows them to show up in summary and list immediately.
+    try {
+        const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
+        if (isPastOrToday) {
+            const employeesToSync = await Employee.findAll({
+                where: employeeWhere,
+                attributes: ['id', 'company_id', 'branch_id']
+            });
+
+            if (employeesToSync.length > 0) {
+              await bulkSyncAttendanceDays(
+                employeesToSync.map(e => e.id),
+                targetDate,
+                { 
+                  user_id: req.user.id, 
+                  company_id: req.user.company_id, 
+                  branch_id: req.user.branch_id 
+                }
+              );
+            }
         }
-        // {
-        //   model: AttendancePunch,
-        //   as: "attendance_punches",
-        //   where: {
-        //     punch_time: {
-        //       [Op.between]: [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`]
-        //     }
-        //   },
-        //   required: false
-        // }
-      ],
-      order: [['first_name', 'ASC']],
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'status']
-    });
+    } catch (syncErr) {
+        console.error("Attendance Auto-Sync Error:", syncErr);
+    }
 
-    // Fetch leave requests for target date
-    const leaves = await commonQuery.findAllRecords(LeaveRequest, {
-      start_date: { [Op.lte]: targetDate },
-      end_date: { [Op.gte]: targetDate },
-      approval_status: 'APPROVED',
-      status: 0
-    });
+    const fieldConfig = [
+      ["first_name", true, true],
+      ["employee_code", true, true],
+    ];
 
-    const leaveEmployeeIds = new Set(leaves.map(l => l.employee_id));
+    // 2. FETCH PAGINATED LIST (Lightweight: only 20 records with full associations)
+    const employeesResult = await commonQuery.fetchPaginatedData(
+      Employee, 
+      { ...req.body, status: 0, filter: consolidatedFilter }, 
+      fieldConfig, 
+      {
+        include: [
+          {
+            model: AttendanceDay,
+            as: "attendanceDays",
+            where: { attendance_date: targetDate, status: {[Op.ne]: 2} },
+            required: false,
+            include: [
+              {
+                model: AttendancePunch,
+                as: "attendancePunches",
+                required: false
+              },
+              {
+                model: ShiftTemplate,
+                as: "shiftTemplate",
+                attributes: ["id", "shift_name", "start_time", "end_time"],
+                include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
+              }
+            ]
+          },
+          {
+            model: ShiftTemplate,
+            as: "shiftTemplate",
+            attributes: ["id", "shift_name", "start_time", "end_time"],
+            include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
+          }
+        ],
+        order: [['first_name', 'ASC']],
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status']
+      }
+    );
 
-    let summary = {
-      totalStaff: employees.length,
-      present: 0,
-      absent: 0,
-      halfDay: 0,
-      weeklyOff: 0,
-      holiday: 0,
-      leave: leaveEmployeeIds.size,
-      shortPresence: 0,
-      currentlyWorking: 0,
-      overtimeHours: 0,
-      fineHours: 0,
-      punchedIn: 0,
-      punchedOut: 0
-    };
-
-    let totalOvertimeMins = 0;
-    let totalFineMins = 0;
-
-    employees.forEach(emp => {
-      const day = emp.attendance_days?.[0];
-      const punches = emp.attendance_days?.[0]?.AttendancePunches || [];
-
+    // Process paginated items for display (formatting times etc)
+    employeesResult.items.forEach(emp => {
+      const day = emp.attendanceDays?.[0];
+      const punches = emp.attendanceDays?.[0]?.attendancePunches || [];
       if (day) {
-        if (day.status === 0) summary.present++;
-        else if (day.status === 1) summary.halfDay++;
-        else if (day.status === 3) summary.weeklyOff++;
-        else if (day.status === 4) summary.holiday++;
-        else if (day.status === 6) summary.leave++;
-        else if (day.status === 5) {
-          if (day.first_in) summary.shortPresence++;
-          else summary.absent++;
-        }
-        
-        totalFineMins += (day.late_minutes || 0) + (day.early_out_minutes || 0);
-        totalOvertimeMins += (day.overtime_minutes || 0);
-
-        if (day.overtime_minutes === 0 && day.worked_minutes > 480) {
-          totalOvertimeMins += (day.worked_minutes - 480);
-        }
-
-        // Add full datetime for first_in/last_out
         if (day.first_in) {
           const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
           day.first_in_full = firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate();
         }
         if (day.last_out) {
-          const lastOutPunch = punches.reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
+          const lastOutPunch = [...punches].reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
           day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
         }
-        // Restore punches order
         punches.sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time));
-      } else {
-        // No attendance day record yet for today
-        if (!leaveEmployeeIds.has(emp.id)) {
-          if (punches.length > 0) summary.shortPresence++;
-          else summary.absent++;
-        }
-      }
-
-      if (punches.some(p => p.punch_type === 'IN')) summary.punchedIn++;
-      if (punches.some(p => p.punch_type === 'OUT')) summary.punchedOut++;
-
-      // Logic for 'currentlyWorking' (Last punch must be 'IN')
-      if (punches.length > 0) {
-        const sortedPunches = [...punches].sort((a,b) => new Date(b.punch_time) - new Date(a.punch_time));
-        const lastPunch = sortedPunches[0];
-        if (lastPunch.punch_type === 'IN') {
-           summary.currentlyWorking++;
-        }
       }
     });
 
+    // 3. CALCULATE SUMMARY (Efficient aggregate query on AttendanceDay)
+    
+    // Total matching employees for the summary context
+    const totalStaff = employeesResult.total;
+
+    // Aggregate counts from AttendanceDay table for this date
+    // This is much faster than fetching objects.
+    const dayStats = await commonQuery.findAllRecords(
+      AttendanceDay, 
+      { 
+        attendance_date: targetDate, 
+        status: { [Op.ne]: 2 },
+        company_id: req.user.company_id
+      },
+      {
+        include: [{
+          model: Employee,
+          as: 'employee',
+          where: employeeWhere,
+          required: true,
+          attributes: []
+        }],
+        attributes: [
+          'status',
+          [sequelize.fn('COUNT', sequelize.col('AttendanceDay.id')), 'count'],
+          [sequelize.fn('SUM', sequelize.col('late_minutes')), 'total_late'],
+          [sequelize.fn('SUM', sequelize.col('early_out_minutes')), 'total_early_out'],
+          [sequelize.fn('SUM', sequelize.col('overtime_minutes')), 'total_ot'],
+          // Custom logic for short presence (status 5 and first_in exists)
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day']
+        ],
+        group: ['AttendanceDay.status'],
+        raw: true
+      }
+    );
+
+    let summary = {
+      totalStaff,
+      present: 0,
+      absent: 0,
+      halfDay: 0,
+      weeklyOff: 0,
+      holiday: 0,
+      leave: 0,
+      shortPresence: 0,
+      currentlyWorking: 0,
+      pendingPunch: 0,
+      overtimeHours: "0h 0m",
+      fineHours: "0h 0m",
+      punchedIn: 0,
+      punchedOut: 0
+    };
+
+    let totalFineMins = 0;
+    let totalOvertimeMins = 0;
+    let totalAccounted = 0;
+
+    dayStats.forEach(stat => {
+      const count = parseInt(stat.count);
+      const status = parseInt(stat.status);
+      
+      if (status === 0) summary.present += count;
+      else if (status === 1) summary.halfDay += count;
+      else if (status === 3) summary.weeklyOff += count;
+      else if (status === 4) summary.holiday += count;
+      else if (status === 6) summary.leave += count;
+      else if (status === 5) summary.absent += count;
+      
+      totalAccounted += count;
+      totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
+      totalOvertimeMins += (parseInt(stat.total_ot) || 0);
+      summary.shortPresence += parseInt(stat.short_presence_count || 0);
+    });
+
+    // Handle employees without day records (considered Absent/Pending)
+    const unaccounted = Math.max(0, totalStaff - totalAccounted);
+    // summary.absent += unaccounted;
+    summary.pendingPunch = unaccounted;
+
+    // Quick counts for Punches (In/Out/Currently Working)
+    const punchStats = await commonQuery.findAllRecords(
+        AttendancePunch,
+        {
+            company_id: req.user.company_id,
+            punch_time: {
+                [Op.between]: [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`]
+            },
+            status: 0
+        },
+        {
+          include: [{
+            model: Employee,
+            as: 'employee',
+            where: employeeWhere,
+            required: true,
+            attributes: []
+          }],
+          attributes: [
+              [sequelize.literal(`COUNT(DISTINCT CASE WHEN "AttendancePunch".punch_type = 'IN' THEN "AttendancePunch".employee_id END)`), 'punched_in'],
+              [sequelize.literal(`COUNT(DISTINCT CASE WHEN "AttendancePunch".punch_type = 'OUT' THEN "AttendancePunch".employee_id END)`), 'punched_out']
+          ],
+          raw: true
+        }
+      );
+
+    if (punchStats.length > 0) {
+        summary.punchedIn = parseInt(punchStats[0].punched_in || 0);
+        summary.punchedOut = parseInt(punchStats[0].punched_out || 0);
+    }
+
+    summary.currentlyWorking = Math.max(0, summary.punchedIn - summary.punchedOut);
     summary.overtimeHours = `${Math.floor(totalOvertimeMins / 60)}h ${totalOvertimeMins % 60}m`;
     summary.fineHours = `${Math.floor(totalFineMins / 60)}h ${totalFineMins % 60}m`;
 
-    return res.ok({ summary, items: employees });
+    return res.ok({ 
+      summary, 
+      items: employeesResult.items,
+      total: employeesResult.total,
+      currentPage: employeesResult.currentPage,
+      pageSize: employeesResult.pageSize,
+      totalPages: employeesResult.totalPages
+    });
+
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -256,7 +355,8 @@ exports.updateAttendanceDay = async (req, res) => {
       overtime_data,
       fine_data,
       is_locked,
-      note
+      note,
+      shift_id
     } = req.body;
 
     const day = await getOrCreateAttendanceDay(
@@ -310,59 +410,51 @@ exports.updateAttendanceDay = async (req, res) => {
         }
     }
 
-    // 🔄 Auto-calculate Times if Overtime is Changed (ONLY if Time is NOT explicitly updated)
+    // 🔄 Auto-calculate Times if Overtime/Fine is Adjusted (and Times are NOT explicitly provided)
     if (!isNonWorkingStatus && !isTimeUpdate && day.shift_id && (overtime_minutes !== undefined || early_overtime_minutes !== undefined || early_out_minutes !== undefined || late_minutes !== undefined)) {
         const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
         if (shift) {
             needsPunchUpdate = true;
 
-            // Early Overtime -> Adjust First In
+            const firstInPunch = await commonQuery.findOneRecord(AttendancePunch, {
+                day_id: day.id,
+                punch_type: 'IN',
+                status: 0
+            }, { order: [['punch_time', 'ASC']] }, t);
+
+            const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
+                day_id: day.id,
+                punch_type: 'OUT',
+                status: 0
+            }, { order: [['punch_time', 'DESC']] }, t);
+
+            // 1. EARLY OVERTIME or LATE ENTRY (Affects First In)
             if (early_overtime_minutes !== undefined) {
-                // Construct Full Date Time for Shift Start
-                let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
-                // Handle case where shift start might technically be on prev day if late shift? (Less likely for start, but possible)
-                effectiveFirstIn = shiftStart.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
+                effectiveFirstIn = baseIn.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
             }
-            // Late Entry -> Adjust First In (if not overridden by Early OT)
             else if (late_minutes !== undefined) {
-                 let shiftStart = dayjs(`${attendance_date} ${shift.start_time}`);
-                 effectiveFirstIn = shiftStart.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
+                effectiveFirstIn = baseIn.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
             }
 
-            // Late Overtime -> Adjust Last Out
-            if (overtime_minutes !== undefined) {
-                let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
-                // Handle Night Shift Crossing Midnight
-                if (shift.is_night_shift || shift.end_time < shift.start_time) {
-                    shiftEnd = shiftEnd.add(1, 'day');
-                }
-
-                const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
-                    day_id: day.id,
-                    punch_type: 'OUT'
-                }, { order: [['punch_time', 'DESC']] }, t);
-
-                let baseTime = shiftEnd;
-
-                // 🌟 HYBRID LOGIC: If employee left EARLY (before shift end), 
-                // add OT to their actual leave time to "fill the gap" or extend.
-                // Otherwise (if they completed shift), add OT to Shift End.
-                if (lastOutPunch && dayjs(lastOutPunch.punch_time).isBefore(shiftEnd)) {
-                    baseTime = dayjs(lastOutPunch.punch_time);
-                }
-
-                const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
-                const lateOvertime = parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0);
-                
-                effectiveLastOut = baseTime.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
-            }
-            // Early Exit -> Adjust Last Out (if not overridden by OT)
-             else if (early_out_minutes !== undefined) {
+            // 2. LATE OVERTIME or EARLY EXIT (Affects Last Out)
+            if (overtime_minutes !== undefined || early_out_minutes !== undefined) {
                 let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
                 if (shift.is_night_shift || shift.end_time < shift.start_time) {
                     shiftEnd = shiftEnd.add(1, 'day');
                 }
-                effectiveLastOut = shiftEnd.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+
+                let baseOut = lastOutPunch ? dayjs(lastOutPunch.punch_time) : shiftEnd;
+
+                if (overtime_minutes !== undefined) {
+                    const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
+                    const lateOvertime = Math.max(0, parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0));
+                    effectiveLastOut = baseOut.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                }
+                else if (early_out_minutes !== undefined) {
+                    effectiveLastOut = baseOut.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                }
             }
         }
     }
@@ -372,10 +464,28 @@ exports.updateAttendanceDay = async (req, res) => {
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id
+        branch_id: req.user.branch_id,
+        shift_id: shift_id,
+        bypassShiftRestrictions: true
       }, t);
     }
  
+     // Handle manualPunch with status 1,2,3,5 - delete punches for today
+    if ([1, 3, 4, 6].includes(req.body.status)) {
+      const today = dayjs().format('YYYY-MM-DD');
+      console.log("update manualPunch for status 1,2,3,5 - deleting punches for today");
+      const deletedPunches = await commonQuery.updateRecordById(
+        AttendancePunch, 
+        {
+          employee_id: employee_id,
+          punch_time: {
+            [Op.between]: [`${today} 00:00:00`, `${today} 23:59:59`]
+          },
+          device_id: "MANUAL",
+          status: 0
+        }, 
+        { status: 2 }, t);
+    }
      const payload = {
       employee_id,
       attendance_date,
@@ -384,6 +494,8 @@ exports.updateAttendanceDay = async (req, res) => {
       company_id: req.user.company_id,
       branch_id: req.user.branch_id
     };
+    
+    if (shift_id) payload.shift_id = shift_id;
 
     // Clear data for non-working statuses
     if ([3, 4, 5, 6].includes(status)) {
@@ -537,7 +649,6 @@ exports.deleteAttendanceDay = async (req, res) => {
       }, t);
     } else {
        // Fallback: Delete punches and also clear any leave record for this date
-       const LeaveBalanceService = require("../../services/leaveBalanceService");
        await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
 
        await commonQuery.softDeleteById(AttendancePunch, {
@@ -676,23 +787,23 @@ exports.getAttendanceDayDetails = async (req, res) => {
       include: [
         {
           model: ShiftTemplate,
-          as: "ShiftTemplate",
+          as: "shiftTemplate",
           attributes: ["id", "shift_name", "start_time", "end_time"]
         },
         {
           model: Employee,
-          as: "Employee",
+          as: "employee",
           attributes: ["id", "first_name", "employee_code"]
         },
         {
           model: LeaveTemplateCategory,
-          as: "LeaveCategory", 
+          as: "leaveCategory", 
           attributes: ["id", "leave_category_name"],
           required: false
         },
         {
           model: AttendancePunch,
-          as: "AttendancePunches",
+          as: "attendancePunches",
           required: false,
           order: [["punch_time", "ASC"]]
         }
@@ -717,8 +828,8 @@ exports.getAttendanceDayDetails = async (req, res) => {
     if (attendanceDay) {
       attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
 
-      if (attendanceDayJson.AttendancePunches) {
-        punchesWithImages = attendanceDayJson.AttendancePunches.map(punch => {
+      if (attendanceDayJson.attendancePunches) {
+        punchesWithImages = attendanceDayJson.attendancePunches.map(punch => {
           // Add full image URL if image_name exists
           if (punch.image_name) {
             punch.image_url = `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${punch.image_name}`;
@@ -729,7 +840,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
         });
         
         // Re-assign processed punches to the day object
-        attendanceDayJson.AttendancePunches = punchesWithImages;
+        attendanceDayJson.attendancePunches = punchesWithImages;
       }
     }
 
@@ -796,12 +907,12 @@ exports.getMonthlyAttendance = async (req, res) => {
       include: [
         {
           model: ShiftTemplate,
-          as: "ShiftTemplate",
+          as: "shiftTemplate",
           attributes: ["id", "shift_name", "start_time", "end_time"]
         },
         {
           model: LeaveTemplateCategory,
-          as: "LeaveCategory",
+          as: "leaveCategory",
           attributes: ["id", "leave_category_name"]
         }
       ],
@@ -883,12 +994,12 @@ exports.getMonthlyAttendance = async (req, res) => {
         totalFineMins += (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
         totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
 
-        const shiftName = attendanceDay.ShiftTemplate?.shift_name || "N/A";
+        const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";
         const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
-          statusText = attendanceDay.LeaveCategory?.leave_category_name || "Leave";
+          statusText = attendanceDay.leaveCategory?.leave_category_name || "Leave";
         } else if (attendanceDay.status === 4) {
           const h = employeeHolidays.find(h => h.date === curDate);
           statusText = h ? h.name : "Holiday";
@@ -1048,13 +1159,32 @@ exports.getLeaveSummary = async (req, res) => {
       const end = dayjs(leave.end_date);
       const dateRange = `${start.format("D MMM, ddd")} - ${end.format("D MMM, ddd")}`;
 
+      const statusMap = {
+        [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
+        [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+        [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "APPROVED",
+        [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "REJECTED",
+        [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+        [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
+      };
+
+      const colorMap = {
+        [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "#10B981",
+        [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "#EF4444",
+        [constants.LEAVE_APPROVAL_STATUS.PENDING]: "#F59E0B",
+        [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+        [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "#6B7280",
+        [constants.LEAVE_APPROVAL_STATUS.DELETED]: "#9CA3AF",
+      };
+
       group.leaves.push({
         id: leave.id,
         date_range: dateRange,
         duration_display: `${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}`,
         reason: leave.reason || "",
-        status: leave.approval_status,
-        status_color: leave.approval_status === 'APPROVED' ? '#10B981' : (leave.approval_status === 'REJECTED' ? '#EF4444' : '#F59E0B')
+        status_id: leave.approval_status,
+        status: statusMap[leave.approval_status] || "PENDING",
+        status_color: colorMap[leave.approval_status] || "#F59E0B"
       });
     });
 

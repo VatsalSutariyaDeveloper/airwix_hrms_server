@@ -1,5 +1,6 @@
 const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, LeaveRequest, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
+const { constants } = require("../helpers/constants");
 const dayjs = require("dayjs");
 
 /**
@@ -418,7 +419,7 @@ class LeaveBalanceService {
                 employee_id: employeeId,
                 start_date: { [Op.lte]: date },
                 end_date: { [Op.gte]: date },
-                approval_status: 'APPROVED',
+                approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                 status: 0,
                 reason: { [Op.ne]: AUTO_REASON }
             }, {}, t);
@@ -437,7 +438,7 @@ class LeaveBalanceService {
                 // If we have an auto-generated one, cancel it (manual wins)
                 if (existingAuto) {
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
-                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: 'CANCELLED', status: 2 }, t);
+                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 }
                 // We don't create/update any auto-record because manual is already there.
                 if (!transaction) await t.commit();
@@ -450,12 +451,12 @@ class LeaveBalanceService {
             if (amount === 0) {
                 if (existingAuto) {
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
-                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: 'CANCELLED', status: 2 }, t);
+                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 } else if (manualRequest) {
                     // If it's a single day manual request, cancel it
                     if (manualRequest.start_date === date && manualRequest.end_date === date) {
                         await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t);
-                        await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: 'CANCELLED', status: 2 }, t);
+                        await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                     }
                 }
             }
@@ -470,7 +471,7 @@ class LeaveBalanceService {
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, {
                         leave_category_id: categoryId,
                         total_days: amount,
-                        approval_status: 'APPROVED'
+                        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED
                     }, t);
                 }
             } 
@@ -492,7 +493,7 @@ class LeaveBalanceService {
                     end_date: date,
                     total_days: amount,
                     reason: AUTO_REASON,
-                    approval_status: 'APPROVED',
+                    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                     approved_by: 0, // System/Auto
                     company_id: employee?.company_id || 0,
                     branch_id: employee?.branch_id || 0,

@@ -2,11 +2,6 @@ module.exports = (sequelize, DataTypes) => {
   const SalaryTemplateTransaction = sequelize.define("SalaryTemplateTransaction", {
     salary_template_id: { type: DataTypes.INTEGER, allowNull: false },
     component_id: { type: DataTypes.INTEGER, allowNull: true },
-    component_name: { type: DataTypes.STRING(150), allowNull: true },
-    component_type: {
-      type: DataTypes.ENUM("EARNING", "DEDUCTION", "STATUTORY_CONTRIBUTION"),
-      allowNull: false
-    },
     component_category: {
       type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY"),
       allowNull: true
@@ -26,11 +21,13 @@ module.exports = (sequelize, DataTypes) => {
 
   SalaryTemplateTransaction.associate = models => {
     SalaryTemplateTransaction.belongsTo(models.SalaryTemplate, {
-      foreignKey: "salary_template_id"
+      foreignKey: "salary_template_id",
+      as: "salaryTemplate"
     });
 
     SalaryTemplateTransaction.belongsTo(models.SalaryComponent, {
-      foreignKey: "component_id"
+      foreignKey: "component_id",
+      as: "component"
     });
   };
 

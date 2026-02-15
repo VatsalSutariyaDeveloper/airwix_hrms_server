@@ -8,7 +8,6 @@ exports.create = async (req, res) => {
     try {
         const requiredFields = {
             name: "Name",
-            description: "Description",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
@@ -25,7 +24,7 @@ exports.create = async (req, res) => {
 
         await commonQuery.createRecord(IncentiveType, req.body, transaction);
         await transaction.commit();
-        return res.success(constants.INCENTIVE_TYPE_CREATED);
+        return res.success(constants.CREATED);
 
     } catch (err) {
         await transaction.rollback();
@@ -97,7 +96,7 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.INCENTIVE_TYPE_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -133,7 +132,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.INCENTIVE_TYPE_DELETED);
+        return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -179,7 +178,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.INCENTIVE_TYPE_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -195,7 +194,7 @@ exports.dropdownList = async (req, res) => {
 
         const result = await commonQuery.fetchPaginatedData(
             IncentiveType,
-           { ...req.body, status: 0 },
+            { ...req.body, status: 0 },
             fieldConfig,
             {
                 attributes: ['id', 'name']

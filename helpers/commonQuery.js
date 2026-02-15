@@ -3,6 +3,7 @@ const { sequelize } = require("../models");
 const { getCompanySetting } = require("./cache");
 const { logQuery } = require("./functions/logFunctions");
 const { getContext } = require("../utils/requestContext.js");
+const dayjs = require("dayjs");
 
 const DEBUG_SQL = process.env.DEBUG_SQL === "true";
 
@@ -14,32 +15,53 @@ const DEBUG_SQL = process.env.DEBUG_SQL === "true";
 
 // Format SQL for console logging
 function formatSQL(sql, bind) {
-  if (!bind || !bind.length) return sql;
-  let i = 0;
-  return sql.replace(/\?/g, () => {
-    let val = bind[i++];
-    if (val === null) return "NULL";
+  if (!bind) return sql;
+
+  const formatVal = (val) => {
+    if (val === null || val === undefined) return "NULL";
     if (typeof val === "string") return `'${val.replace(/'/g, "''")}'`;
     if (val instanceof Date)
-      return `'${val.toISOString().slice(0, 19).replace("T", " ")}'`;
+      return `'${dayjs(val).format("YYYY-MM-DD HH:mm:ss")}'`;
+    if (typeof val === "object") {
+      try {
+        return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+      } catch (e) {
+        return `'[Object]'`;
+      }
+    }
     return val;
-  });
+  };
+
+  if (Array.isArray(bind)) {
+    let result = sql;
+    // Handle $1, $2...
+    result = result.replace(/\$([0-9]+)/g, (match, p1) => {
+      const index = parseInt(p1) - 1;
+      return formatVal(bind[index]);
+    });
+    // Handle ?
+    let i = 0;
+    result = result.replace(/\?/g, () => formatVal(bind[i++]));
+    return result;
+  } else if (typeof bind === "object") {
+    // Handle :key
+    return sql.replace(/:(\w+)/g, (match, p1) => formatVal(bind[p1]));
+  }
+  return sql;
 }
 
 // Wrapper to inject transaction and logging
 function withDebug(options = {}, transaction = null) {
   const opts = { ...options };
   if (transaction) opts.transaction = transaction;
-  
-  opts.logging = DEBUG_SQL
-    ? (sql, queryObject) => {
-        if (queryObject && queryObject.bind) {
-          console.log("\x1b[36m[SQL]\x1b[0m", formatSQL(sql, queryObject.bind));
-        } else {
-          console.log("\x1b[36m[SQL]\x1b[0m", sql);
-        }
-      }
-    : false;
+
+  opts.logging = (sql, queryObject) => {
+    if (DEBUG_SQL) {
+      const bind = queryObject.bind || queryObject.parameters || [];
+      const formatted = formatSQL(sql, bind);
+      console.log("\x1b[36m[SQL]\x1b[0m", formatted);
+    }
+  };
   return opts;
 }
 
@@ -90,6 +112,7 @@ async function buildWhere(whereInput, applyDefaults = true) {
       console.warn("⚠️ Failed to fetch company settings:", err.message);
     }
 
+    settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
     const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
     // C. Branch Logic
@@ -526,7 +549,10 @@ module.exports = {
             const likeVal = `%${reqBody?.search}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
-                return { [finalKey]: { [Op.iLike]: likeVal } };
+                return sequelize.where(
+                    sequelize.cast(sequelize.col(finalKey.replace(/\$/g, '')), 'TEXT'),
+                    { [Op.iLike]: likeVal }
+                );
             } else {
                 return sequelize.where(dbCol, { [Op.iLike]: likeVal });
             }
@@ -537,10 +563,12 @@ module.exports = {
 
       // Sorting
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
+      console.log("Sortable Fields:", sortableFields);
       let order = [['createdAt', 'DESC']];
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
-        order = [[reqBody?.sortBy, reqBody?.sortDirection === "descending" ? "DESC" : "ASC"]];
+        order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
       }
+      
 
       // Execution
       let data = await module.exports.findAllRecords(

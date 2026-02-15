@@ -3,12 +3,6 @@ module.exports = (sequelize, DataTypes) => {
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
         employee_salary_template_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'employee_salary_templates', key: 'id' } },
         component_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'salary_components', key: 'id' } },
-        component_name: { type: DataTypes.STRING(150), allowNull: true },
-        component_type: {
-            type: DataTypes.ENUM("EARNING", "DEDUCTION", "STATUTORY_CONTRIBUTION"),
-            allowNull: false,
-            defaultValue: "EARNING"
-        },
         component_category: {
             type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY"),
             allowNull: true

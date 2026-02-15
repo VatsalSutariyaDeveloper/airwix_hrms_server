@@ -4,6 +4,7 @@ const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySetti
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
+const { fail } = require("../Err");
 
 exports.parseDate = (dateInput) => {
   if (!dateInput) {
@@ -486,10 +487,14 @@ exports.updateDocumentUsedLimit = async (companyId, field, by=1, transaction) =>
           companyId,
           { attributes: ['id', 'company_id'] }
       );
-      
+
       if (!record) {
-          return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
+        fail("NOT_FOUND", { message : "Invalid or missing company record."});
       }
+      
+      // if (!record) {
+      //     return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
+      // }
   
       let company_id = record.company_id || record.id;
       console.log(`Updating used limit for company ${company_id}, field: used_${field}, by: ${by}`);

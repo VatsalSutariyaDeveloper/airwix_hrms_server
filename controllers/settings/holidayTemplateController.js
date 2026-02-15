@@ -1,6 +1,7 @@
 const { sequelize, handleError, validateRequest, commonQuery } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { HolidayTemplate, HolidayTransaction, Employee } = require("../../models");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 
 exports.create = async (req, res) => {
@@ -69,6 +70,12 @@ exports.update = async (req, res) => {
 
     if (POST.holiday_transactions) {
       await syncHolidayTransactions(id, POST.holiday_transactions, existingHolidayTemplate.holidayTransactions || [], transaction);
+    }
+
+    // Trigger sync for all employees using this template
+    const employeesToSync = await commonQuery.findAllRecords(Employee, { holiday_template: id, status: 0 }, { attributes: ['id'] }, transaction);
+    for (const emp of employeesToSync) {
+        await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'holiday_template', id, null, transaction);
     }
 
     await transaction.commit();

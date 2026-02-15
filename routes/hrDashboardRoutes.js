@@ -1,0 +1,11 @@
+const express = require("express");
+const router = express.Router();
+const controller = require("../controllers/employee/hrDashboardController");
+
+router.post("/counts", controller.getCounts);
+router.post("/holidays", controller.getUpcomingHolidays);
+router.post("/department_stats", controller.getDepartmentStats);
+router.post("/recent_leaves", controller.getRecentLeaves);
+router.post("/payroll_overview", controller.getPayrollOverview);
+
+module.exports = router;

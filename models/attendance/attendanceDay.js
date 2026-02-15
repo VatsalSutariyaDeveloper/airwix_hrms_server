@@ -38,10 +38,10 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   AttendanceDay.associate = (models) => {
-    AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "ShiftTemplate" });
-    AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "Employee" });
-    AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "LeaveCategory" });
-    AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "AttendancePunches" });
+    AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "shiftTemplate" });
+    AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+    AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "leaveCategory" });
+    AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "attendancePunches" });
   };
 
   return AttendanceDay;

@@ -23,7 +23,7 @@ exports.create = async (req, res) => {
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
                 model: DeviceMaster,
-                fields: ["device_name"],
+                fields: ["device_name", "mobile_no"],
                 excludeId: req.params.id,
             }
         }, transaction);
@@ -34,27 +34,8 @@ exports.create = async (req, res) => {
         }
 
         const device_master = await commonQuery.createRecord(DeviceMaster, req.body, transaction);
-        const workflow = await ApprovalEngine.checkApprovalRequired(
-            MODULES.SETTINGS.DEVICE_MASTER.ID,
-            device_master.toJSON()
-        );
-
-        let approvalMsg = constants.DEVICE_MASTER_CREATED;
-
-        if (workflow) {
-            await ApprovalEngine.initiateApproval(
-                MODULES.SETTINGS.DEVICE_MASTER.ID,
-                device_master.id,
-                workflow.id,
-                transaction
-            );
-
-            // We assume 'approval_status' exists on Employee or is handled via mixin
-            await commonQuery.updateRecordById(DeviceMaster, device_master.id, { approval_status: STATUS.PENDING_APPROVAL }, transaction, true)
-            approvalMsg = "constants.DEVICE_MASTER_CREATED_SEND_FOR_APPROVAL";
-        }
         await transaction.commit();
-        return res.success(approvalMsg, device_master);
+        return res.success(constants.CREATED, device_master);
 
     } catch (err) {
         await transaction.rollback();
@@ -96,7 +77,6 @@ exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         // Only validate fields sent in request
-
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No"
@@ -108,7 +88,7 @@ exports.update = async (req, res) => {
             {
                 uniqueCheck: {
                     model: DeviceMaster,
-                    fields: ["device_name"],
+                    fields: ["device_name", "mobile_no"],
                     excludeId: req.params.id,
                 }
             },
@@ -125,7 +105,7 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_UPDATED, updated);
+        return res.success(constants.UPDATED, updated);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -161,7 +141,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_DELETED);
+        return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -172,7 +152,7 @@ exports.delete = async (req, res) => {
 exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-    
+
         const { status, ids } = req.body; // expecting status in request body
         const requiredFields = {
             ids: "Select Any One Data",
@@ -205,7 +185,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.DEVICE_MASTER_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);

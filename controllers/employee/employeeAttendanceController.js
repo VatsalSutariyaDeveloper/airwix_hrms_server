@@ -1,6 +1,6 @@
 
 const { 
-    EmployeeShiftSetting, 
+    EmployeeShift, 
     EmployeeWeeklyOff,
     Employee,
     ShiftTemplate,
@@ -17,7 +17,7 @@ const employeeAttendanceController = {
     getShiftSetting: async (req, res) => {
         try {
             const { employeeId } = req.params;
-            const settings = await commonQuery.findAllRecords(EmployeeShiftSetting, { 
+            const settings = await commonQuery.findAllRecords(EmployeeShift, { 
                 employee_id: employeeId 
             });
 
@@ -41,7 +41,7 @@ const employeeAttendanceController = {
             }
 
             // Remove existing day-wise shift settings
-            await commonQuery.hardDeleteRecords(EmployeeShiftSetting, { 
+            await commonQuery.hardDeleteRecords(EmployeeShift, { 
                 employee_id: employeeId 
             }, transaction);
 
@@ -55,7 +55,7 @@ const employeeAttendanceController = {
                    };
                 });
 
-                await commonQuery.bulkCreate(EmployeeShiftSetting, payloads, {}, transaction);
+                await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
             }
 
             await transaction.commit();

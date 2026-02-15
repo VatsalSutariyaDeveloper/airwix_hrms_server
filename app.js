@@ -80,6 +80,7 @@ app.use(checkPermission);
 
 // Load master routes
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/hr-dashboard", require("./routes/hrDashboardRoutes"));
 app.use("/api/settings", settingsRoutes);
 app.use("/api/administration", administrationRoutes);
 app.use("/api/subscription", subscriptionRoutes);
@@ -125,7 +126,7 @@ if (DB_SYNC_ENABLED) {
     .catch((err) => {
       console.error("❌ Database sync failed:", err.message);
       // We still try to start the server even if sync fails (optional, depends on requirement)
-      process.exit(1); 
+      process.exit(1);
     });
 } else {
   console.log("ℹ️  DB_SYNC is DISABLED. Skipping table checks.");

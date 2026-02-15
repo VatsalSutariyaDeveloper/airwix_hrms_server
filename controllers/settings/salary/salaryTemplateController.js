@@ -1,4 +1,5 @@
-const { sequelize, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent } = require("../../../models");
+const { sequelize, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Employee } = require("../../../models");
+const EmployeeTemplateService = require("../../../services/employeeTemplateService");
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
@@ -27,7 +28,7 @@ const salaryTemplateRequiredFields = {
 
 const validateSalaryTemplateEnums = (data) => {
   const errors = {};
-  
+
   if (data.staff_type && !Object.values(STAFF_TYPE).includes(data.staff_type)) {
     errors.staff_type = `Must be one of: ${Object.values(STAFF_TYPE).join(', ')}`;
   }
@@ -71,12 +72,12 @@ exports.create = async (req, res) => {
         // In major platforms, CTC = Gross + Employer Contributions (like PF, ESI)
         // If included_in_ctc is true, we add it to the template level CTC field
         if (comp.included_in_ctc !== false) {
-           return sum + parseFloat(comp.monthly_amount || 0);
+          return sum + parseFloat(comp.monthly_amount || 0);
         }
         return sum;
       }, 0);
     } else {
-        calcMonthlyCTC = parseFloat(POST.ctc_monthly || 0);
+      calcMonthlyCTC = parseFloat(POST.ctc_monthly || 0);
     }
 
     const templateData = {
@@ -91,11 +92,16 @@ exports.create = async (req, res) => {
     // 3. Handle Template Transactions (Components)
     if (POST.components && Array.isArray(POST.components)) {
       const componentData = POST.components.map(comp => ({
-        ...comp,
         salary_template_id: template.id,
-        yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12
+        component_id: comp.component_id,
+        component_category: comp.component_category,
+        monthly_amount: comp.monthly_amount,
+        yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
+        included_in_ctc: comp.included_in_ctc,
+        is_employer_contribution: comp.is_employer_contribution,
+        status: 0
       }));
-      
+
       // Bulk create uses commonQuery to ensure tenant IDs are injected
       await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
     }
@@ -109,8 +115,8 @@ exports.create = async (req, res) => {
 };
 
 exports.getAll = async (req, res) => {
+
   try {
-    const POST = req.body;
     const fieldConfig = [
       ["template_name", true, true],
       ["template_code", true, true],
@@ -118,16 +124,25 @@ exports.getAll = async (req, res) => {
       ["salary_type", true, false],
       ["ctc_monthly", true, false],
       ["lwp_calculation_basis", true, false],
-      ["status", true, false],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryTemplate,
-      { ...POST, status: 0 },
+      { ...req.body, status: 0 },
       fieldConfig,
-      null,
-      false
     );
+
+    if (data.items && Array.isArray(data.items)) {
+      for (const record of data.items) {
+        const employeeCount = await commonQuery.countRecords(
+          Employee,
+          { salary_template_id: record.id, status: 0 },
+          {},
+          false
+        );
+        record.dataValues.employee_count = employeeCount;
+      }
+    }
 
     return res.ok(data);
   } catch (err) {
@@ -154,9 +169,11 @@ exports.getById = async (req, res) => {
       include: [
         {
           model: SalaryTemplateTransaction,
+          as: "salaryTemplateTransactions",
           include: [
             {
               model: SalaryComponent,
+              as: "component",
               attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
             }
           ]
@@ -212,12 +229,12 @@ exports.update = async (req, res) => {
     if (POST.components && Array.isArray(POST.components)) {
       calcMonthlyCTC = POST.components.reduce((sum, comp) => {
         if (comp.included_in_ctc !== false) {
-           return sum + parseFloat(comp.monthly_amount || 0);
+          return sum + parseFloat(comp.monthly_amount || 0);
         }
         return sum;
       }, 0);
     } else {
-        calcMonthlyCTC = parseFloat(POST.ctc_monthly || salaryTemplate.ctc_monthly || 0);
+      calcMonthlyCTC = parseFloat(POST.ctc_monthly || salaryTemplate.ctc_monthly || 0);
     }
 
     const templateData = {
@@ -239,13 +256,23 @@ exports.update = async (req, res) => {
 
       // Insert new transactions
       const componentData = POST.components.map(comp => ({
-        ...comp,
         salary_template_id: id,
+        component_id: comp.component_id,
+        component_category: comp.component_category,
+        monthly_amount: comp.monthly_amount,
         yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
-        status: 0 // Ensure new ones are active
+        included_in_ctc: comp.included_in_ctc,
+        is_employer_contribution: comp.is_employer_contribution,
+        status: 0
       }));
-      
+
       await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+    }
+
+    // Trigger sync for all employees using this template
+    const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
+    for (const emp of employeesToSync) {
+        await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'salary_template_id', id, null, transaction);
     }
 
     await transaction.commit();
@@ -274,25 +301,25 @@ exports.delete = async (req, res) => {
 };
 
 exports.updateStatus = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { ids, status } = req.body;
-        if (!Array.isArray(ids) || ids.length === 0) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_ID, );
-        }
-
-        const count = await commonQuery.updateRecordById(SalaryTemplate, ids, { status }, transaction);
-
-        if (count === null) {
-            await transaction.rollback();
-            return res.error(constants.NO_RECORDS_FOUND);
-        }
-
-        await transaction.commit();
-        return res.success(constants.SALARY_TEMPLATE_UPDATED);
-    } catch (err) {
-        if (!transaction.finished) await transaction.rollback();
-        return handleError(err, res, req);
+  const transaction = await sequelize.transaction();
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.INVALID_ID,);
     }
+
+    const count = await commonQuery.updateRecordById(SalaryTemplate, ids, { status }, transaction);
+
+    if (count === null) {
+      await transaction.rollback();
+      return res.error(constants.NO_RECORDS_FOUND);
+    }
+
+    await transaction.commit();
+    return res.success(constants.SALARY_TEMPLATE_UPDATED);
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
 };

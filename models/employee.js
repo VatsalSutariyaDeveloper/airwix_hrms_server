@@ -1,7 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
-        employee_type: {type: DataTypes.SMALLINT,defaultValue: 1, comment:"1:staff, 2:worker"},
+        employee_type: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1:staff, 2:worker" },
         department_id: { type: DataTypes.INTEGER },
         designation_id: { type: DataTypes.INTEGER },
 
@@ -11,21 +11,21 @@ module.exports = (sequelize, DataTypes) => {
         first_name: { type: DataTypes.STRING },
         mobile_no: { type: DataTypes.STRING },
         // designation:{ type: DataTypes.STRING },
-        attendance_supervisor:{ type: DataTypes.INTEGER },
-        is_attendance_supervisor:{ type: DataTypes.BOOLEAN, defaultValue: false },
-        reporting_manager:{ type: DataTypes.INTEGER },
-        is_reporting_manager:{ type: DataTypes.BOOLEAN, defaultValue: false },
+        attendance_supervisor: { type: DataTypes.INTEGER },
+        is_attendance_supervisor: { type: DataTypes.BOOLEAN, defaultValue: false },
+        reporting_manager: { type: DataTypes.INTEGER },
+        is_reporting_manager: { type: DataTypes.BOOLEAN, defaultValue: false },
 
         // GENERAL INFORMATION
         salary_cycle: { type: DataTypes.INTEGER, defaultValue: 0 },
-        weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        holiday_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        leave_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        shift_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        salary_template_id: { type: DataTypes.INTEGER,defaultValue: 0 },
-        attendance_weekly_off_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        geofence_template: { type: DataTypes.INTEGER,defaultValue: 0 },
-        attendance_setting_template: { type: DataTypes.INTEGER,defaultValue: 0 },
+        weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        holiday_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        leave_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        shift_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        salary_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+        attendance_weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        geofence_template: { type: DataTypes.INTEGER, defaultValue: 0 },
+        attendance_setting_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         salary_access: { type: DataTypes.INTEGER, defaultValue: 0 },
 
         // PERSONAL INFORMATION ===
@@ -85,8 +85,8 @@ module.exports = (sequelize, DataTypes) => {
         bank_account_number: { type: DataTypes.STRING(100) },
         bank_ifsc_code: { type: DataTypes.STRING(11) },
         bank_account_holder_name: { type: DataTypes.STRING },
-        upi_id:{ type: DataTypes.STRING },
- 
+        upi_id: { type: DataTypes.STRING },
+
         // DOCUMENT UPLOAD
         aadhaar_doc: { type: DataTypes.STRING },
         pan_doc: { type: DataTypes.STRING },
@@ -108,7 +108,7 @@ module.exports = (sequelize, DataTypes) => {
         religion: { type: DataTypes.STRING },
         caste: { type: DataTypes.STRING },
         hobby: { type: DataTypes.STRING },
-        
+
         emergency_contact_name: { type: DataTypes.STRING },
         emergency_contact_relation: { type: DataTypes.SMALLINT, comment: "1: Brother, 2: Sister, 3: Father, 4: Mother, 5: Spouse, 6: Son, 7: Daughter, 8: Other" },
 
@@ -127,12 +127,12 @@ module.exports = (sequelize, DataTypes) => {
             defaultValue: []
         },
         face_descriptor: {
-            type: DataTypes.JSONB, 
+            type: DataTypes.JSONB,
             defaultValue: null,
             comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
         },
 
-        status: {type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted"},  
+        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
         user_id: { type: DataTypes.INTEGER, allowNull: true },
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
         company_id: { type: DataTypes.INTEGER, allowNull: true },
@@ -145,8 +145,8 @@ module.exports = (sequelize, DataTypes) => {
     Employee.associate = function (models) {
         Employee.belongsTo(models.User, { foreignKey: "user_id", as: "created_by" });
         Employee.hasOne(models.User, { foreignKey: "employee_id", as: "linked_user" });
-        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendance_punches" });
-        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendance_days" });
+        Employee.hasMany(models.AttendancePunch, { foreignKey: "employee_id", as: "attendancePunches" });
+        Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendanceDays" });
 
         // Reporting Hierarchy
         Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
@@ -162,13 +162,14 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
 
         // User-Wise Template Data
-        Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "userAttendanceTemplate" });
-        Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "userHolidays" });
-        Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "userWeeklyOffs" });
-        Employee.hasMany(models.EmployeeLeaveBalance, { foreignKey: "employee_id", as: "userLeaveBalances" });
-        Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "userSalaryComponents" });
-        Employee.hasOne(models.EmployeeShiftSetting, { foreignKey: "employee_id", as: "userShiftSetting" });
-        Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "userPrintTemplates" });
+        Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "employeeAttendanceTemplate" });
+        Employee.hasMany(models.EmployeeHoliday, { foreignKey: "employee_id", as: "employeeHolidays" });
+        Employee.hasMany(models.EmployeeWeeklyOff, { foreignKey: "employee_id", as: "employeeWeeklyOffs" });
+        Employee.hasMany(models.EmployeeLeaveBalance, { foreignKey: "employee_id", as: "employeeLeaveBalances" });
+        Employee.hasOne(models.EmployeeSalaryTemplate, { foreignKey: "employee_id", as: "employeeSalaryTemplate" });
+        Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "employeeSalaryComponents" });
+        Employee.hasMany(models.EmployeeShift, { foreignKey: "employee_id", as: "employeeShifts" });
+        Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "employeePrintTemplates" });
     };
 
     return Employee;
