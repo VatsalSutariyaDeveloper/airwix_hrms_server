@@ -79,12 +79,12 @@ class LeaveBalanceService {
     static async initializeBalance(employeeId, templateId, transaction = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
             if (!employee) throw new Error("Employee not found");
 
             const template = await commonQuery.findOneRecord(LeaveTemplate, templateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t);
+            }, t, true);
 
             if (!template) throw new Error("Leave template not found or inactive");
 
