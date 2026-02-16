@@ -501,6 +501,7 @@ exports.getAll = async (req, res) => {
                     "first_name",
                     "employee_code",
                     "mobile_no",
+                    "joining_date",
                     "created_at",
                 ]
             },
