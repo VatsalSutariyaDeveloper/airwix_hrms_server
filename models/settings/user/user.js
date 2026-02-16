@@ -20,6 +20,7 @@ module.exports = (sequelize, DataTypes) => {
     status: { type: DataTypes.INTEGER, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
     is_activated: { type: DataTypes.BOOLEAN, defaultValue: false },
     activation_code: { type: DataTypes.STRING(255), allowNull: true },
+    organization_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
