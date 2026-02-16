@@ -1,5 +1,5 @@
 const { RolePermission, ModulePermissionTypeMaster, ModuleMaster, ModuleEntityMaster, User, UserCompanyRoles} = require("../../../models");
-const { sequelize, validateRequest, handleError, commonQuery, constants } = require("../../../helpers");
+const { sequelize, validateRequest, handleError, commonQuery, constants, Op } = require("../../../helpers");
 
 // Create Role Access Permission
 exports.create = async (req, res) => {
@@ -40,6 +40,18 @@ exports.getAll = async (req, res) => {
     ["role_name", true, true],
   ];
 
+  const company_id = req.user.company_id;
+  
+  const extraFilters = {
+    [Op.or]: [
+      { company_id: company_id },
+      sequelize.where(
+        sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+        true
+      )
+    ]
+  };
+  
   // Call reusable function
   const data = await commonQuery.fetchPaginatedData(
     RolePermission,
@@ -75,7 +87,10 @@ exports.getAll = async (req, res) => {
         'rolePermission.created_at',
         'rolePermission.updated_at'
       ],
-    }
+    },
+    false,
+    'createdAt',
+    extraFilters
   );
   return res.ok(data);
 };

@@ -10,6 +10,7 @@ module.exports = (sequelize, DataTypes) => {
     authorized_signature: { type: DataTypes.STRING(255), allowNull: true },
     report_to: { type: DataTypes.STRING(255), allowNull: true },
     company_access: { type: DataTypes.STRING(255) },
+    branch_access: { type: DataTypes.STRING(255) },
     device_id: { type: DataTypes.STRING(100), allowNull: true },
     ip_address: { type: DataTypes.STRING(50), allowNull: true },
     is_login: { type: DataTypes.INTEGER, defaultValue: 0, comment: "0 = No, 1 = Yes" },

@@ -111,6 +111,7 @@ exports.getById = async (req, res) => {
 // Get all with Pagination and Search
 exports.getAll = async (req, res) => {
   try {
+
      const fieldConfig = [
       ["branch_name", true, true],
       ["city", true, true],
@@ -118,9 +119,10 @@ exports.getAll = async (req, res) => {
       ["state_name", true, true],
       // ["zone_name", true, true],
     ];
+
     const data = await commonQuery.fetchPaginatedData(
       BranchMaster,
-      req.body,
+      { ...req.body, company_id: req.user.company_id },
       fieldConfig,
       {
         include: [
@@ -137,7 +139,7 @@ exports.getAll = async (req, res) => {
           // [sequelize.col("country.country_name"), "country_name"],
           // [sequelize.col("state.state_name"), "state_name"],
         ]
-      }
+      }, false
     );
 
     return res.success("FETCH", data);

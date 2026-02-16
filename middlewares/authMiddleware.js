@@ -5,7 +5,7 @@ const { requestContext } = require("../utils/requestContext.js");
 const tokenBlacklist = new Set();
 
 const SKIP_ROUTES = [
-  "/administration/permission/constants"
+  "/api/administration/permission/constants"
 ];
 
 const addToBlacklist = (token) => {

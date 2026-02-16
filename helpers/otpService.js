@@ -3,7 +3,7 @@ const commonQuery = require("../helpers/commonQuery");
 const otpRateLimit = require("./otpRateLimit");
 
 // Configuration
-const OTP_EXPIRY_MINUTES = 1;
+const OTP_EXPIRY_MINUTES = 10;
 const IS_DEV_MODE = true; 
 
 const generateNumericOTP = (length = 6) => {

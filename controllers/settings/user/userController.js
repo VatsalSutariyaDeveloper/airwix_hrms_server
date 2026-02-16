@@ -643,7 +643,7 @@ exports.getAll = async (req, res) => {
 
     const data = await commonQuery.fetchPaginatedData(
       User,
-      req.body,
+      { ...req.body, filter: { role_id: 5 } },
       fieldConfig,
       {
         include: [
@@ -666,7 +666,7 @@ exports.getAll = async (req, res) => {
           ["RolePermission.role_name", "role_name"],
         ],
       },
-      true,
+      false,
       "createdAt",
       extraFilters
     );
