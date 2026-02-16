@@ -82,14 +82,11 @@ exports.create = async (req, res) => {
     //   return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile Number is required" });
     // }
 
-    const parentCompany = await commonQuery.findOneRecord(
-      CompanyMaster,
-      company_id,
-      { attributes: ['id', 'company_id'] },
-      null,
-      false,
-      false
-    );
+    const parentCompany = await CompanyMaster.findOne({
+      where: { id: company_id },
+      attributes: ['id', 'company_id'],
+      transaction
+    });
 
     if (!parentCompany) {
       await transaction.rollback();
@@ -135,7 +132,11 @@ exports.create = async (req, res) => {
     }
     
     // Find the last company to determine the next sequential code.
-    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, { status: { [Op.or]: [0,1,2]} }, { order: [["company_code", "DESC"]] }, transaction, false, false);
+    const lastCompany = await CompanyMaster.findOne({
+      where: { status: { [Op.or]: [0,1,2]} },
+      order: [["company_code", "DESC"]],
+      transaction
+    });
 
     let nextNumber = 1;
     if (lastCompany && lastCompany.company_code) {
@@ -163,14 +164,11 @@ exports.create = async (req, res) => {
 
     let record = null;
     if (company_id){
-      record = await commonQuery.findOneRecord(
-          CompanyMaster, 
-          { id : company_id, status: 0 },
-          { attributes: ['id', 'company_id'] },
-          transaction,
-          false,
-          false
-      );
+      record = await CompanyMaster.findOne({
+        where: { id: company_id, status: 0 },
+        attributes: ['id', 'company_id'],
+        transaction
+      });
       if (!record) {
           return res.error(404, "Invalid or missing company record.");
       }
@@ -210,6 +208,15 @@ exports.create = async (req, res) => {
         branchPayload,
         transaction,
         false
+    );
+
+    await commonQuery.updateRecordById(
+      CompanyMaster,
+      newCompany.id,
+      { branch_id: newBranch.id },
+      transaction,
+      false,
+      false
     );
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
