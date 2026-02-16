@@ -85,19 +85,20 @@ exports.getUpcomingHolidays = async (req, res) => {
 exports.getDepartmentStats = async (req, res) => {
     try {
         const stats = await commonQuery.findAllRecords(Employee,
-            { status: 1 },
+            {},
             {
                 attributes: [
                     'department_id',
                     [sequelize.fn('COUNT', sequelize.col('Employee.id')), 'count']
                 ],
-                include: [{ model: Department, as: "department", attributes: ["name"] }],
-                group: ['department_id', 'department.id', 'department.name']
+                include: [{ model: Department, as: "department", attributes: ["name"], where: { status: {[Op.in]: [0,1,2]} } }],
+                group: ['department_id', 'department.id', 'department.name'],
+                order: [['department_id', 'ASC']]
             }
         );
 
         const format = stats.map(s => ({
-            name: s.department ? s.department.name : "Unknown",
+            name: s.department ? s.department.name : "Not Assign Department",
             count: parseInt(s.getDataValue('count'))
         }));
 

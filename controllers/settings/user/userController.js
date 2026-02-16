@@ -1,4 +1,4 @@
-const { User, RolePermission, CompanyMaster, UserCompanyRoles } = require("../../../models");
+const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee } = require("../../../models");
 const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription, } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 const bcrypt = require("bcrypt");
@@ -210,7 +210,10 @@ exports.create = async (req, res) => {
     const permission = await commonQuery.findOneRecord(
       RolePermission,
       req.body.role_id,
-      transaction
+      {},
+      transaction,
+      false,
+      false
     );
     req.body.permission = permission.permissions;
 
@@ -229,13 +232,13 @@ exports.create = async (req, res) => {
     await commonQuery.createRecord(UserCompanyRoles, {
       user_id: newUser.id,
       role_id: req.body.role_id,
-      branch_id: req.body.branch_id,
-      company_id: req.body.company_id,
+      branch_id: req.user.branch_id,
+      company_id: req.user.company_id,
       permissions: req.body.permission,
       status: 0
     }, transaction);
 
-    await updateDocumentUsedLimit(req.body.company_id, 'users', 1, transaction);
+    await updateDocumentUsedLimit(req.user.company_id, 'users', 1, transaction);
 
     await transaction.commit();
 
@@ -620,18 +623,10 @@ exports.update = async (req, res) => {
  */
 exports.getAll = async (req, res) => {
   try {
-    // key, isSearchable, isSortable
-    const fieldConfig = [
-      ["user_name", true, true],
-      ["email", true, true],
-      ["mobile_no", true, true],
-      // ["address", true, false],
-      ["role_name", true, false],
-    ];
-
     const company_id = req.user.company_id;
+    const organization_id = req.user.organization_id;
 
-    const extraFilters = {
+    let extraFilters = {
       [Op.or]: [
         { company_id: company_id },
         sequelize.where(
@@ -641,36 +636,96 @@ exports.getAll = async (req, res) => {
       ]
     };
 
-    const data = await commonQuery.fetchPaginatedData(
-      User,
-      { ...req.body, filter: { role_id: 5 } },
-      fieldConfig,
-      {
-        include: [
-          {
-            model: RolePermission,
-            as: "RolePermission",
-            attributes: [],
-            required: false,
-          },
-        ],
-        attributes: [
-          "id",
-          "role_id",
-          "user_name",
-          "email",
-          "mobile_no",
-          "status",
-          "profile_image",
-          "authorized_signature",
-          ["RolePermission.role_name", "role_name"],
-        ],
-      },
-      false,
-      "createdAt",
-      extraFilters
-    );
-    return res.ok(data);
+    if (req.body.filter?.role === "business-admin") {
+      if (organization_id) {
+        const orgCompanies = await CompanyMaster.findAll({
+          where: { organization_id, status: 0 },
+          attributes: ["id"]
+        });
+        const organizationCompanyIds = orgCompanies.map(c => c.id);
+
+        extraFilters = {
+          [Op.or]: [
+            { role_id: 1, company_id: { [Op.in]: organizationCompanyIds } },
+            { role_id: 2, company_id: company_id }
+          ]
+        };
+        delete req.body.filter.role;
+      }
+    }
+
+    const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
+    const limit = parseInt(pageSize, 10);
+    const offset = (parseInt(page, 10) - 1) * limit;
+
+    const where = { ...extraFilters };
+
+    // --- Search Logic ---
+    if (search) {
+      const searchCondition = { [Op.iLike]: `%${search}%` };
+      where[Op.and] = where[Op.and] || [];
+      where[Op.and].push({
+        [Op.or]: [
+          { user_name: searchCondition },
+          { email: searchCondition },
+          { mobile_no: searchCondition },
+          sequelize.where(sequelize.col("RolePermission.role_name"), searchCondition)
+        ]
+      });
+    }
+
+    // --- Filter Logic ---
+    if (filter) {
+      Object.keys(filter).forEach((key) => {
+        if (filter[key] !== undefined && filter[key] !== null && filter[key] !== "") {
+          where[key] = filter[key];
+        }
+      });
+    }
+
+    const { count, rows } = await User.findAndCountAll({
+      where,
+      include: [
+        {
+          model: RolePermission,
+          as: "RolePermission",
+          attributes: [],
+          required: false,
+        },
+        {
+          model: Employee,
+          as: "Employee",
+          attributes: [],
+          required: false,
+        },
+      ],
+      attributes: [
+        "id",
+        "role_id",
+        "user_name",
+        "email",
+        "mobile_no",
+        "status",
+        "profile_image",
+        "authorized_signature",
+        "createdAt",
+        [sequelize.col("RolePermission.role_name"), "role_name"],
+        [sequelize.col("Employee.first_name"), "first_name"],
+        [sequelize.col("Employee.employee_code"), "employee_code"],
+      ],
+      order: [[orderBy, orderDir]],
+      limit,
+      offset,
+      distinct: true,
+      subQuery: false,
+    });
+
+    return res.ok({
+      items: rows,
+      count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page, 10),
+    });
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -713,7 +768,7 @@ exports.getById = async (req, res) => {
     const record = await commonQuery.findOneRecord(User, req.params.id, {
       include: [
         {
-          model: require("../../../models").Employee,
+          model: Employee,
           as: "Employee",
           required: false
         }

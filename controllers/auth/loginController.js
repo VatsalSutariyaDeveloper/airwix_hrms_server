@@ -22,6 +22,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       role_id: user.role_id,
       branch_id: user.branch_id,
       company_id: companyId,
+      organization_id: user.organization_id || null,
       access_by: access_by,
       is_attendance_supervisor: user.is_attendance_supervisor,
       is_reporting_manager: user.is_reporting_manager
@@ -109,7 +110,7 @@ exports.login = async (req, res) => {
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
         'id', 'user_name', 'email', 'mobile_no', 'password', 
-        'role_id', 'company_id', 'branch_id', 'employee_id', 
+        'role_id', 'company_id', 'organization_id', 'branch_id', 'employee_id', 
         'user_id', 
     ];
 
@@ -333,6 +334,7 @@ exports.login = async (req, res) => {
       user_id: user.user_id,
       branch_id: user.branch_id,
       company_id: defaultCompanyId,
+      organization_id: user.organization_id,
     };
 
     clearUserCache(user.user_id);

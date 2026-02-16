@@ -66,15 +66,24 @@ const reloadCompanySubscriptionCache = async (company_id) => {
     try {
         const company = await CompanyMaster.findOne({
             where: { id: companyId },
-            attributes: ["id", "company_id"],
+            attributes: ["id", "company_id", "organization_id"],
             raw: true
         });
 
         if (!company) return null;
-        companyId = company.company_id || company.id;
+        
+        let orgId = company.organization_id;
+        let whereClause = {};
+
+        if (orgId) {
+            whereClause = { organization_id: orgId, status: 0 };
+        } else {
+            companyId = company.company_id || company.id;
+            whereClause = { company_id: companyId, status: 0 };
+        }
 
         const subs = await CompanySubscription.findAll({
-            where: { company_id: companyId, status: 0 },
+            where: whereClause,
             include: [{ model: SubscriptionPlan, attributes: ["subscription_type"] }],
             raw: true,
             nest: true

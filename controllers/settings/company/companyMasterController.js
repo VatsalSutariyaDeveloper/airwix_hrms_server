@@ -166,7 +166,7 @@ exports.create = async (req, res) => {
     if (company_id){
       record = await CompanyMaster.findOne({
         where: { id: company_id, status: 0 },
-        attributes: ['id', 'company_id'],
+        attributes: ['id', 'company_id', 'organization_id', 'business_type_id'],
         transaction
       });
       if (!record) {
@@ -175,6 +175,7 @@ exports.create = async (req, res) => {
     }
 
     req.body.business_type_id = record?.business_type_id;
+    req.body.organization_id = record?.organization_id;
 
     // 1. Create the Company Master record
     const newCompany = await commonQuery.createRecord(

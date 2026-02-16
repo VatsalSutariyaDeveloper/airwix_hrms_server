@@ -1321,23 +1321,42 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
 
   if (missingEmpIds.length === 0) return;
 
-  // 2. Fetch employees for mapping (mostly for company/branch context)
-  const employees = await commonQuery.findAllRecords(
-    Employee,
-    {
-      id: { [Op.in]: missingEmpIds }
-    },
-    {
-      attributes: ['id', 'company_id', 'branch_id'],
-      include: [{ 
-        model: EmployeeAttendanceTemplate, 
-        as: "employeeAttendanceTemplate",
-        where: { status: 0 },
-        required: false 
-      }],
-      transaction
-    }
-  );
+  // 2. Fetch employees for mapping (mostly for company/branch context and default shift)
+  const [employees, employeeShifts] = await Promise.all([
+    commonQuery.findAllRecords(
+      Employee,
+      { id: { [Op.in]: missingEmpIds } },
+      {
+        attributes: ['id', 'company_id', 'branch_id', 'shift_template'],
+        include: [
+          { 
+            model: EmployeeAttendanceTemplate, 
+            as: "employeeAttendanceTemplate",
+            where: { status: 0 },
+            required: false 
+          },
+          {
+            model: ShiftTemplate,
+            as: "shiftTemplate",
+            attributes: ['id', 'start_time', 'end_time', 'is_night_shift'],
+            required: false
+          }
+        ],
+        transaction
+      }
+    ),
+    commonQuery.findAllRecords(
+      EmployeeShift,
+      {
+        employee_id: { [Op.in]: missingEmpIds },
+        day_of_week: dayjs(date).day(),
+        status: 0
+      },
+      { transaction }
+    )
+  ]);
+
+  const empShiftMap = new Map(employeeShifts.map(s => [s.employee_id, s]));
 
   // 3. Fetch all potential non-working day triggers in bulk
   const [holidays, weeklyOffs, leaveRequests] = await Promise.all([
@@ -1396,15 +1415,31 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       status = 3; // WEEKLY_OFF
       note = "System: Weekly Off auto-detected";
     } else if (emp.employeeAttendanceTemplate?.auto_mark_absent) {
-      // Rule: Only mark absent if the target date is in the past (beyond buffer days)
+      // Preference: EmployeeShift > Default ShiftTemplate
+      const eShift = empShiftMap.get(emp.id);
+      const shift = eShift || emp.shiftTemplate;
+
       const buffer = parseInt(emp.employeeAttendanceTemplate.auto_absent_buffer_days || 0);
       const markDate = dayjs(date).startOf('day');
       const today = dayjs().startOf('day');
+      const now = dayjs();
       
-      // If the date is strictly before (today - buffer), mark him absent
+      // Case 1: Past date (beyond buffer days)
       if (markDate.isBefore(today.subtract(buffer, 'day'))) {
           status = 5; // ABSENT
           note = "System: Auto Absent (Policy)";
+      } 
+      // Case 2: Shift ended (even for today or recent past)
+      else if (shift && shift.end_time) {
+          let shiftEnd = dayjs(`${date} ${shift.end_time}`);
+          if (shift.is_night_shift || shift.end_time < shift.start_time) {
+              shiftEnd = shiftEnd.add(1, 'day');
+          }
+          
+          if (now.isAfter(shiftEnd)) {
+              status = 5; // ABSENT
+              note = "System: Auto Absent (Shift Ended)";
+          }
       }
     }
 

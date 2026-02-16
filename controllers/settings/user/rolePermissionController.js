@@ -42,15 +42,15 @@ exports.getAll = async (req, res) => {
 
   const company_id = req.user.company_id;
   
-  const extraFilters = {
-    [Op.or]: [
-      { company_id: company_id },
-      sequelize.where(
-        sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
-        true
-      )
-    ]
-  };
+  // const extraFilters = {
+  //   [Op.or]: [
+  //     { company_id: company_id },
+  //     sequelize.where(
+  //       sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+  //       true
+  //     )
+  //   ]
+  // };
   
   // Call reusable function
   const data = await commonQuery.fetchPaginatedData(
@@ -90,7 +90,7 @@ exports.getAll = async (req, res) => {
     },
     false,
     'createdAt',
-    extraFilters
+    // extraFilters
   );
   return res.ok(data);
 };

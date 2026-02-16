@@ -28,6 +28,7 @@ module.exports = (sequelize, DataTypes) => {
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
+    organization_id: { type: DataTypes.INTEGER, allowNull: true },
   }, {
     tableName: "company_master",
     timestamps: true,
@@ -35,6 +36,11 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   CompanyMaster.associate = (models) => {
+    // Association to Organization
+    CompanyMaster.belongsTo(models.Organization, {
+      as: "organization",
+      foreignKey: "organization_id",
+    });
     // Association to CountryMaster (needed for country_name)
     CompanyMaster.belongsTo(models.CountryMaster, {
       as: "country",

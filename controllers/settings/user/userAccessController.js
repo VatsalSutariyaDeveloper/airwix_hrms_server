@@ -19,7 +19,7 @@ exports.sessionData = async (req, res) => {
     // 1. Validate Company (Standard Sequelize)
     const record = await CompanyMaster.findOne({
         where: { id: company_id },
-        attributes: ['id', 'company_id'],
+        attributes: ['id', 'company_id', 'organization_id'],
         transaction
     });
 
@@ -28,7 +28,7 @@ exports.sessionData = async (req, res) => {
       return res.error(constants.NOT_FOUND, { message: "Invalid or missing company record." });
     }
 
-    let companyId = record.company_id || record.id;
+    let orgId = record.organization_id;
 
     // 2. Fetch User & Access Logic (Standard Sequelize)
     const userData = await User.findOne({
@@ -63,7 +63,7 @@ exports.sessionData = async (req, res) => {
     let where = {};
     if (userData.role_id == 1) {
       where = {
-        [Op.or]: [{ id: companyId }, { company_id: companyId }],
+        organization_id: orgId,
         status: { [Op.ne]: 2 }
       };
     } else {
@@ -79,6 +79,7 @@ exports.sessionData = async (req, res) => {
           { model: CountryMaster, as: 'country', attributes: ['country_name'], required: false },
           { model: StateMaster, as: 'state', attributes: ['state_name'], required: false },
         ],
+        order: [['id', 'ASC']],
         nest: true,
         // raw: false // Sequelize defaults to instances, which calls toJSON() later
         transaction
@@ -210,7 +211,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // --- SUBSCRIPTION & ACCESS FILTERING ---
-    const finalSubscriptionData = await getCompanySubscription(companyId);
+    const finalSubscriptionData = await getCompanySubscription(company_id);
     let companyAllowedEntityIds = [];
     if (finalSubscriptionData && finalSubscriptionData.allowed_module_ids) {
         companyAllowedEntityIds = normalizeCompanyAccess(finalSubscriptionData.allowed_module_ids);
@@ -317,6 +318,7 @@ exports.switchCompany = async (req, res) => {
         id: company_id, 
         status: { [Op.ne]: 2 } 
       },
+      attributes: ['id', 'organization_id'],
       transaction
     });
 
@@ -343,7 +345,8 @@ exports.switchCompany = async (req, res) => {
         id: user.id,
         role_id: user.role_id,
         branch_id: newBranchId,
-        company_id: parseInt(company_id, 10)
+        company_id: parseInt(company_id, 10),
+        organization_id: company.organization_id || null
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }
@@ -372,7 +375,7 @@ exports.switchCompany = async (req, res) => {
 exports.switchBranch = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { user_id, company_id } = getContext();
+    const { user_id, company_id, organization_id } = getContext();
     const branch_id = req.query.branch_id;
 
     if (!branch_id) {
@@ -412,7 +415,8 @@ exports.switchBranch = async (req, res) => {
         id: user.id,
         role_id: user.role_id,
         branch_id: branch.id,
-        company_id: parseInt(company_id, 10)
+        company_id: parseInt(company_id, 10),
+        organization_id: organization_id || null
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }
