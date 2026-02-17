@@ -59,7 +59,7 @@ exports.getAll = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
                 ]
-            }
+            }, false
         );
 
         return res.ok(data);
@@ -92,7 +92,7 @@ exports.dropdownList = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
                 ]
-            }
+            }, false
         );
 
         return res.ok(result);
