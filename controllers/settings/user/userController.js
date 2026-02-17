@@ -330,6 +330,57 @@ exports.verifySetupToken = async (req, res) => {
   }
 };
 
+
+exports.assignRole = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { user_id, role_id } = req.body;
+
+    const requiredFields = {
+      user_id: "User ID",
+      role_id: "Role ID",
+    };
+
+    const errors = await validateRequest(req.body, requiredFields, {}, null);
+
+    if (errors) {
+      await transaction.rollback();
+      return res.error("VALIDATION_ERROR", errors);
+    }
+
+    const user = await commonQuery.findOneRecord(User, { id: user_id }, {}, null, false, false);
+    if (!user) {
+      await transaction.rollback();
+      return res.error("USER_NOT_FOUND");
+    }
+
+    const role = await commonQuery.findOneRecord(RolePermission, { id: role_id }, {}, null, false, false);
+    if (!role) {
+      await transaction.rollback();
+      return res.error("ROLE_NOT_FOUND");
+    }
+ 
+    const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, {user_id: user_id}, { role_id, permissions: role.permissions }, transaction, {}, false);
+    if (!userCompanyRole) {
+      await transaction.rollback();
+      return res.error("USER_COMPANY_ROLE_NOT_UPDATED");
+    }
+
+    const userData = await commonQuery.updateRecordById(User, { id: user_id }, { role_id: role_id }, transaction);
+    if (!userData) {
+      await transaction.rollback();
+      return res.error("USER_NOT_UPDATED");
+    }
+
+    await transaction.commit();
+    return res.success(constants.UPDATED);
+
+  } catch (err) {
+    await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
 /**
  * Set password (POST)
  */

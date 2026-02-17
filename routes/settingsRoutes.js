@@ -92,6 +92,7 @@ router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), u
 router.get("/user/:id", userController.getById);
 router.delete("/user/", userController.delete);
 router.patch("/user/status", userController.updateStatus);
+router.post("/user/role-assign", userController.assignRole);
 // Password management (Moved to public auth routes)
 
 
