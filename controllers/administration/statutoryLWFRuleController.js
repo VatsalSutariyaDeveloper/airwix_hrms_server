@@ -251,7 +251,7 @@ exports.getStatesWithRules = async (req, res) => {
                     attributes: ['id', 'state_name'] 
                 }],
                 group: ['StatutoryLWFRule.state_id', 'state.id', 'state.state_name'],
-            }
+            },null, false
         );
         
         const states = rules.map(r => r.state).filter(Boolean);

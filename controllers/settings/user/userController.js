@@ -359,8 +359,8 @@ exports.assignRole = async (req, res) => {
       await transaction.rollback();
       return res.error("ROLE_NOT_FOUND");
     }
- 
-    const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, {user_id: user_id}, { role_id, permissions: role.permissions }, transaction, {}, false);
+
+    const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, { user_id: user_id }, { role_id, permissions: role.permissions }, transaction, {}, false);
     if (!userCompanyRole) {
       const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
         user_id: user_id,
@@ -808,7 +808,7 @@ exports.dropdownList = async (req, res) => {
       User,
       extraFilters,
       {
-        attributes: ["id", "user_name", "email"],
+        attributes: ["id", "user_name", "email", "mobile_no"],
         order: [["user_name", "ASC"]],
       }
     );
