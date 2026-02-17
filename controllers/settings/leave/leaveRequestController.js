@@ -31,7 +31,8 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const { employee_id, leave_category_id, total_days, start_date, end_date } = req.body;
+        let { employee_id, leave_category_id, total_days, start_date, end_date } = req.body;
+        total_days = Math.round(parseFloat(total_days) * 2) / 2;
         const currentYear = new Date(start_date).getFullYear();
 
         // 1. Fetch employee to get cycle information or custom template data
@@ -81,12 +82,13 @@ exports.create = async (req, res) => {
         }
 
         const isPaid = balance.is_paid;
+        const isCompOff = balance.is_compoff;
 
-        if (isPaid) {
-            // -- PAID LEAVE LOGIC --
+        if (isPaid || isCompOff) {
+            // -- PAID LEAVE or COMP-OFF LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
                 await transaction.rollback();
-                return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}` });
+                return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}. ${isCompOff ? 'Compensatory Off requires earned credit.' : ''}` });
             }
 
             // Deduct from pending

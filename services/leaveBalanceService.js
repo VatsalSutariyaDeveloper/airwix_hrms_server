@@ -125,6 +125,7 @@ class LeaveBalanceService {
                     unused_leave_rule: category.unused_leave_rule,
                     carry_forward_limit: parseFloat(category.carry_forward_limit || 0),
                     is_paid: category.is_paid,
+                    is_compoff: category.is_compoff,
                     automation_rules: category.automation_rules,
                 };
 
@@ -357,6 +358,11 @@ class LeaveBalanceService {
      */
     static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null) {
         if (!employeeId || !categoryId || amount === 0) return;
+        
+        // Round amount to nearest 0.5
+        const roundedAmount = Math.round(amount * 2) / 2;
+        if (roundedAmount === 0) return;
+
         const t = transaction || (await sequelize.transaction());
         try {
             const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
@@ -379,11 +385,16 @@ class LeaveBalanceService {
                 return;
             }
 
-            const used = parseFloat(balance.used_leaves || 0) + amount;
-            let pending = parseFloat(balance.pending_leaves || 0) - amount;
+            const used = Math.round((parseFloat(balance.used_leaves || 0) + roundedAmount) * 2) / 2;
+            let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 2) / 2;
 
-            // Don't show negative pending leaves for unpaid/zero-allocation
-            if (pending < 0 && (!balance.is_paid || balance.total_allocated === 0)) {
+            // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
+            if (pending < 0 && (balance.is_paid || balance.is_compoff)) {
+                throw new Error(`Insufficient leave balance in ${balance.leave_category_name}. Available: ${balance.pending_leaves}. Required: ${roundedAmount}.`);
+            }
+
+            // For Unpaid (LOP), we can allow "negative" logically but usually we keep pending at 0
+            if (pending < 0 && (!balance.is_paid && !balance.is_compoff)) {
                 pending = 0;
             }
 
@@ -406,9 +417,10 @@ class LeaveBalanceService {
      * @param {number} categoryId
      * @param {number} amount - 0.5, 1.0, or 0 (to cancel)
      * @param {Object} transaction
+     * @returns {string|null} Error message if adjustment failed
      */
     static async syncLeaveRecord(employeeId, date, categoryId, amount, transaction = null) {
-        if (!employeeId || !date) return;
+        if (!employeeId || !date) return null;
         const t = transaction || (await sequelize.transaction());
         try {
             const AUTO_REASON = "Auto-generated from Attendance";
@@ -442,13 +454,16 @@ class LeaveBalanceService {
                 }
                 // We don't create/update any auto-record because manual is already there.
                 if (!transaction) await t.commit();
-                return;
+                return null;
             }
 
             // --- Manage Auto-Generated Record ---
 
+            // Round amount
+            const roundedAmount = Math.round(amount * 2) / 2;
+
             // CASE A: Amount is 0 (Status changed away from Leave/HalfDay)
-            if (amount === 0) {
+            if (roundedAmount === 0) {
                 if (existingAuto) {
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
@@ -462,15 +477,15 @@ class LeaveBalanceService {
             }
             // CASE B: Category or Amount Changed for existing auto-request
             else if (existingAuto) {
-                if (existingAuto.leave_category_id !== categoryId || parseFloat(existingAuto.total_days || 0) !== amount) {
+                if (existingAuto.leave_category_id !== categoryId || parseFloat(existingAuto.total_days || 0) !== roundedAmount) {
                     // Refund OLD
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
                     // Deduct NEW
-                    await this.adjustLeaveBalance(employeeId, categoryId, amount, t);
+                    await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t);
                     // Update Request
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, {
                         leave_category_id: categoryId,
-                        total_days: amount,
+                        total_days: roundedAmount,
                         approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED
                     }, t);
                 }
@@ -478,7 +493,7 @@ class LeaveBalanceService {
             // CASE C: No existing auto-request, create one
             else {
                 // Deduct Balance
-                await this.adjustLeaveBalance(employeeId, categoryId, amount, t);
+                await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t);
                 
                 // Fetch basic employee/company info for the record
                 const employee = await commonQuery.findOneRecord(Employee, employeeId, {
@@ -491,7 +506,7 @@ class LeaveBalanceService {
                     leave_category_id: categoryId,
                     start_date: date,
                     end_date: date,
-                    total_days: amount,
+                    total_days: roundedAmount,
                     reason: AUTO_REASON,
                     approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                     approved_by: 0, // System/Auto
@@ -503,9 +518,10 @@ class LeaveBalanceService {
             }
 
             if (!transaction) await t.commit();
+            return null;
         } catch (error) {
             if (!transaction && !t.finished) await t.rollback();
-            throw error;
+            return error.message; // Return error message instead of throwing to allow better caller handling
         }
     }
 }

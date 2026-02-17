@@ -38,6 +38,8 @@ exports.getByEmployeeId = async (req, res) => {
             employee_id: employeeId,
             status: 0, // Fetch active balances
             ...(activeYear ? { year: activeYear } : {})
+        }, {
+            order: [['id', 'ASC']]
         });
 
         if (!leaveBalances || leaveBalances.length === 0) {

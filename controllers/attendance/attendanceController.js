@@ -552,7 +552,11 @@ exports.updateAttendanceDay = async (req, res) => {
     if (note !== undefined) payload.note = note;
 
     // Synchronize leave balance based on status changes (Half Day/Leave)
-    await syncAttendanceToLeaveBalance(employee_id, day, payload, t);
+    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
+    if (balanceError) {
+      await t.rollback();
+      return res.error(constants.LEAVE_BALANCE_ERROR,balanceError);
+    }
 
     const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t);
 
@@ -622,7 +626,11 @@ exports.deleteAttendanceDay = async (req, res) => {
 
     if (day) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
-      await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      if (balanceError) {
+        await t.rollback();
+        return res.error(balanceError);
+      }
 
       // 2. Delete punches by day_id
       await commonQuery.softDeleteById(AttendancePunch, {
@@ -728,7 +736,11 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       }, {}, t);
 
       // Synchronize leave balance based on status changes (Half Day/Leave)
-      await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t);
+      if (balanceError) {
+        await t.rollback();
+        return res.error(balanceError);
+      }
 
       if (existingRecord) {
         await commonQuery.updateRecordById(AttendanceDay, { 
