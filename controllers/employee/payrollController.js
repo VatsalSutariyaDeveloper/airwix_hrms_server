@@ -492,11 +492,13 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
 
             let ctc = "0.00";
             let net_payable = "0.00";
+            let payslip_id = null;
 
             if (existing) {
                 // Use values from existing payslip (Draft/Finalized/Paid)
                 ctc = existing.ctc_monthly;
                 net_payable = existing.net_payable;
+                payslip_id = existing.id;
             } else {
                 try {
                     // Dynamically calculate for months without a payslip record
@@ -518,6 +520,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 is_calculated: !!existing,
                 ctc,
                 net_payable,
+                payslip_id,
                 status: existing ? (existing.status === 0 ? "Draft" : (existing.status === 1 ? "Finalized" : "Paid")) : "No Calculation"
             });
         }
