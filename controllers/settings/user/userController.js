@@ -362,8 +362,15 @@ exports.assignRole = async (req, res) => {
  
     const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, {user_id: user_id}, { role_id, permissions: role.permissions }, transaction, {}, false);
     if (!userCompanyRole) {
-      await transaction.rollback();
-      return res.error("USER_COMPANY_ROLE_NOT_UPDATED");
+      const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
+        user_id: user_id,
+        role_id: role_id,
+        permissions: role.permissions,
+      }, transaction);
+      if (!newUserCompanyRole) {
+        await transaction.rollback();
+        return res.error("USER_COMPANY_ROLE_NOT_CREATED");
+      }
     }
 
     const userData = await commonQuery.updateRecordById(User, { id: user_id }, { role_id: role_id }, transaction);
