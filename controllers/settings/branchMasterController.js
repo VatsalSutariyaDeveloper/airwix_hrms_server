@@ -1,5 +1,5 @@
 const { BranchMaster, CountryMaster, StateMaster, ZoneMaster, sequelize } = require("../../models");
-const { validateRequest, commonQuery, handleError } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 const { ENTITIES } = require("../../helpers/constants");
 
 const ENTITY = ENTITIES.BRANCH_MASTER.NAME;
@@ -33,7 +33,7 @@ exports.create = async (req, res) => {
 
     const result = await commonQuery.createRecord(BranchMaster, req.body, transaction);
     await transaction.commit();
-    return res.success("CREATE", ENTITY, result);
+    return res.success(constants.CREATED, ENTITY, result);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);

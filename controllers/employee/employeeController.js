@@ -121,9 +121,12 @@ const parseJsonFields = (body) => {
 // Helper: Set template fields to 0 if they are null
 const sanitizeTemplateFields = (body) => {
     ALLOWED_TEMPLATE_FIELDS.forEach((field) => {
-        if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined" || body[field] === "") {
+        if (body[field] === "") {
             body[field] = 0;
-        }
+        } 
+        // else if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined") {
+        
+        // }
     });
 };
 

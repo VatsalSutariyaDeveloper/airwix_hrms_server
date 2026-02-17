@@ -60,7 +60,7 @@ exports.create = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.SHIFT_CREATED, shifts);
+        return res.success(constants.CREATED, shifts);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
