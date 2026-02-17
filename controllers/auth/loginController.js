@@ -110,7 +110,7 @@ exports.login = async (req, res) => {
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
         'id', 'user_name', 'email', 'mobile_no', 'password', 
-        'role_id', 'company_id', 'organization_id', 'branch_id', 'employee_id', 
+        'role_id', 'company_id', 'branch_id', 'employee_id', 
         'user_id', 
     ];
 
@@ -222,7 +222,7 @@ exports.login = async (req, res) => {
     // Using Sequelize findOne instead of commonQuery
     const company = await CompanyMaster.findOne({
       where: { id: user.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default'],
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
       transaction
     });
 
@@ -230,6 +230,9 @@ exports.login = async (req, res) => {
       await transaction.rollback();
       return res.error(401, "Your assigned company account is suspended.");
     }
+
+    // Use organization_id from company instead of user
+    user.organization_id = company.organization_id;
 
     // 2. Validate Branch
     if (!user.branch_id) {
