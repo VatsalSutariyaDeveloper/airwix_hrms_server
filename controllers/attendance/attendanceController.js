@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -154,7 +154,9 @@ exports.getAttendanceSummary = async (req, res) => {
             as: "shiftTemplate",
             attributes: ["id", "shift_name", "start_time", "end_time"],
             include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
-          }
+          },
+          { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+          { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status']
@@ -208,7 +210,9 @@ exports.getAttendanceSummary = async (req, res) => {
           [sequelize.fn('SUM', sequelize.col('overtime_minutes')), 'total_ot'],
           // Custom logic for short presence (status 5 and first_in exists)
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day']
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day'],
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'punched_in_count'],
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count']
         ],
         group: ['AttendanceDay.status'],
         raw: true
@@ -229,7 +233,8 @@ exports.getAttendanceSummary = async (req, res) => {
       overtimeHours: "0h 0m",
       fineHours: "0h 0m",
       punchedIn: 0,
-      punchedOut: 0
+      punchedOut: 0,
+      incomplete: 0
     };
 
     let totalFineMins = 0;
@@ -246,48 +251,20 @@ exports.getAttendanceSummary = async (req, res) => {
       else if (status === 4) summary.holiday += count;
       else if (status === 6) summary.leave += count;
       else if (status === 5) summary.absent += count;
+      else if (status === 9) summary.incomplete += count;
       
       totalAccounted += count;
       totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
       summary.shortPresence += parseInt(stat.short_presence_count || 0);
+      summary.punchedIn += parseInt(stat.punched_in_count || 0);
+      summary.punchedOut += parseInt(stat.punched_out_count || 0);
     });
 
     // Handle employees without day records (considered Absent/Pending)
     const unaccounted = Math.max(0, totalStaff - totalAccounted);
     // summary.absent += unaccounted;
     summary.pendingPunch = unaccounted;
-
-    // Quick counts for Punches (In/Out/Currently Working)
-    const punchStats = await commonQuery.findAllRecords(
-        AttendancePunch,
-        {
-            company_id: req.user.company_id,
-            punch_time: {
-                [Op.between]: [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`]
-            },
-            status: 0
-        },
-        {
-          include: [{
-            model: Employee,
-            as: 'employee',
-            where: employeeWhere,
-            required: true,
-            attributes: []
-          }],
-          attributes: [
-              [sequelize.literal(`COUNT(DISTINCT CASE WHEN "AttendancePunch".punch_type = 'IN' THEN "AttendancePunch".employee_id END)`), 'punched_in'],
-              [sequelize.literal(`COUNT(DISTINCT CASE WHEN "AttendancePunch".punch_type = 'OUT' THEN "AttendancePunch".employee_id END)`), 'punched_out']
-          ],
-          raw: true
-        }
-      );
-
-    if (punchStats.length > 0) {
-        summary.punchedIn = parseInt(punchStats[0].punched_in || 0);
-        summary.punchedOut = parseInt(punchStats[0].punched_out || 0);
-    }
 
     summary.currentlyWorking = Math.max(0, summary.punchedIn - summary.punchedOut);
     summary.overtimeHours = `${Math.floor(totalOvertimeMins / 60)}h ${totalOvertimeMins % 60}m`;
@@ -318,13 +295,22 @@ exports.updateAttendanceDay = async (req, res) => {
       attendance_date: "Date",
     };
 
+    const emp = await commonQuery.findOneRecord(Employee, { id: req.body.employee_id }, {
+      include: [
+        { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+      ]
+    });
+    const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
+    const isTrackInOutOn = template ? template.track_in_out : true;
+
     // Add conditional required fields based on status
     if (req.body.status === 0) {
-      if(!req.body.note){
+      if(!req.body.note && isTrackInOutOn){
         requiredFields.first_in = "In Time";
       }
     } else if (req.body.status === 1) {
-      if(!req.body.note){
+      if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
         // requiredFields.last_out = "Out Time";
       }
@@ -384,7 +370,7 @@ exports.updateAttendanceDay = async (req, res) => {
     const isIncomingWorking = [0, 1].includes(status);
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
-    if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate) {
+    if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate && isTrackInOutOn) {
         effectiveStatus = day.status;
         status = day.status; // Update local variable for payload
     }
@@ -890,7 +876,11 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type']
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type'],
+      include: [
+        { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+      ]
     });
 
     if (!employee) {
@@ -978,8 +968,8 @@ exports.getMonthlyAttendance = async (req, res) => {
         attendance_date: curDate,
         shift_name: "N/A",
         time_range: "0:00 Hrs",
-        day_status: 5, // Default Absent
-        status: "Absent",
+        day_status: 10, // Default Not Marked
+        status: "Not Marked",
         note: null,
         punches: []
       };
@@ -1057,7 +1047,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           }
         }
         
-        // Count as Absent if not Today/Future and not WO/Holiday
+        // Count as Absent if explicitly marked as Absent (day_status 5) and not Today/Future
         if (dayData.day_status === 5 && dayObj.isBefore(dayjs(), 'day')) {
             summary.absent++;
         }
@@ -1197,6 +1187,34 @@ exports.getLeaveSummary = async (req, res) => {
       leave_history: groupedHistory
     });
 
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Update Attendance Note Only
+ */
+exports.updateAttendanceNote = async (req, res) => {
+  try {
+    const { employee_id, attendance_date, note } = req.body;
+
+    if (!employee_id || !attendance_date) {
+      return res.error(constants.VALIDATION_ERROR, "Employee ID and Date are required");
+    }
+
+    const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
+      employee_id,
+      attendance_date
+    });
+
+    if (!attendanceDay) {
+      return res.error(constants.NOT_FOUND, "Attendance record not found for this date");
+    }
+
+    await commonQuery.updateRecordById(AttendanceDay, attendanceDay.id, { note });
+
+    return res.ok({ message: "Note updated successfully" });
   } catch (err) {
     return handleError(err, res, req);
   }
