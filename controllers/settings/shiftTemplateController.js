@@ -76,7 +76,7 @@ exports.getAll = async (req, res) => {
 
     const records = await commonQuery.fetchPaginatedData(
       ShiftTemplate,
-      req.body,
+      { ...req.body, status: 0 },
       fieldConfig,
       {
         include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
@@ -89,8 +89,6 @@ exports.getAll = async (req, res) => {
                     const employeeCount = await commonQuery.countRecords(
                         Employee,
                         { shift_template: record.id, status: 0 },
-                        {},
-                        false
                     );
                     
                     return {

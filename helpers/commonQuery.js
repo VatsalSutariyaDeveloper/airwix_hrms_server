@@ -656,7 +656,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         totalPages: isFetchAll ? 1 : Math.ceil(totalCount / (limit || 1)),
         hasNextPage: isFetchAll ? false : (page * limit) < totalCount,
         hasPreviousPage: isFetchAll ? false : page > 1,
-        appliedFilters: { ...reqBody, searchFields, filters: Object.keys(filters).length },
+        appliedFilters: { ...reqBody, searchFields, sortableFields, filters: Object.keys(filters).length },
       };
 
     } catch (err) {
