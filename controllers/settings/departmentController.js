@@ -97,7 +97,7 @@ exports.getById = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(Department, { status: 0 });
+    const result = await commonQuery.findAllRecords(Department, { status: 0 }, { attributes: ['id', 'name'], order: [['id', 'DESC']] });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
