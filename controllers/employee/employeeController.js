@@ -739,7 +739,44 @@ exports.assignRole = async (req, res) => {
 exports.assignTemplate = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { field_name, employees } = req.body;
+        let { field_name, employees, is_select_all, filter_params, target_value } = req.body;
+
+        if (is_select_all) {
+            const where = {};
+            
+            // Example: Apply Search
+            if (filter_params?.search) {
+                where[Op.or] = [
+                    { first_name: { [Op.like]: `%${filter_params.search}%` } },
+                    { last_name: { [Op.like]: `%${filter_params.search}%` } },
+                    { employee_code: { [Op.like]: `%${filter_params.search}%` } } // Added common search field
+                ];
+            }
+
+            // Example: Apply Tab Context (Assigned vs Unassigned)
+            // If tab is 'unselected' (is_access: false), we find employees WITHOUT this template
+            if (filter_params?.is_access === false) {
+                 where[field_name] = { [Op.or]: [null, 0] };
+            }
+
+            else if (filter_params?.is_access === true && filter_params?.value) {
+                 where[field_name] = filter_params.value;
+            }
+
+            // 2. Fetch ALL matching IDs from the database
+            const allMatchingEmployees = await commonQuery.findAllRecords(
+                Employee, 
+                where, 
+                ['id'], // Only select ID
+                null, 
+                false
+            );
+
+            employees = allMatchingEmployees.map(emp => ({
+                id: emp.id,
+                value: target_value // The value to set (e.g., templateId or 0)
+            }));
+        }
 
         // 1. Allowed Fields Whitelist
         if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {

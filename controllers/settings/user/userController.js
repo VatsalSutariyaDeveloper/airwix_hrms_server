@@ -639,13 +639,15 @@ exports.update = async (req, res) => {
         transaction
       );
 
+      const permissions = req.body.permission.join(",");
+      
       if (userCompanyRole) {
         await commonQuery.updateRecordById(
           UserCompanyRoles,
           userCompanyRole.id,
           {
             role_id: roleId,
-            permissions: req.body.permission,
+            permissions: permissions,
           },
           transaction
         );
@@ -657,7 +659,7 @@ exports.update = async (req, res) => {
             role_id: roleId,
             branch_id: branchId,
             company_id: companyId,
-            permissions: req.body.permission,
+            permissions: permissions,
             status: 0,
           },
           transaction
@@ -708,9 +710,10 @@ exports.getAll = async (req, res) => {
             { role_id: 2, company_id: company_id }
           ]
         };
-        delete req.body.filter.role;
       }
     }
+
+    delete req.body.filter.role;
 
     const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
     const limit = parseInt(pageSize, 10);
