@@ -109,6 +109,8 @@ exports.getAll = async (req, res) => {
       SalaryComponent,
       { ...POST },
       fieldConfig,
+      {},
+      false
     );
 
     return res.ok(data);
@@ -138,6 +140,7 @@ exports.dropdownList = async (req, res) => {
       { ...POST, status: 0 },
       fieldConfig,
       { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted"] },
+      false
     );
     return res.ok(data);
   } catch (err) {
