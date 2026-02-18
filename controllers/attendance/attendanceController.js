@@ -159,26 +159,56 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status']
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template']
       }
     );
 
-    // Process paginated items for display (formatting times etc)
-    employeesResult.items.forEach(emp => {
-      const day = emp.attendanceDays?.[0];
-      const punches = emp.attendanceDays?.[0]?.attendancePunches || [];
-      if (day) {
-        if (day.first_in) {
-          const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
-          day.first_in_full = firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate();
+    // 2.5 Identify WO/Holiday for the paginated items
+    const itemIds = employeesResult.items.map(e => e.id);
+    if (itemIds.length > 0) {
+      const dayOfWeek = dayjs(targetDate).day();
+      const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
+
+      const [itemHolidays, itemWeeklyOffs] = await Promise.all([
+        commonQuery.findAllRecords(EmployeeHoliday, { 
+          employee_id: { [Op.in]: itemIds }, 
+          date: targetDate, 
+          status: 0 
+        }),
+        commonQuery.findAllRecords(EmployeeWeeklyOff, { 
+          employee_id: { [Op.in]: itemIds }, 
+          day_of_week: dayOfWeek, 
+          status: 0, 
+          is_off: true,
+          [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
+        })
+      ]);
+
+      const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
+      const itemWeeklyOffMap = new Set(itemWeeklyOffs.map(w => w.employee_id));
+
+      employeesResult.items.forEach(emp => {
+        const day = emp.attendanceDays?.[0];
+        if (day) {
+          day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
+          day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
+          
+          if (day.first_in) {
+            const punches = day.attendancePunches || [];
+            const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
+            day.first_in_full = firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate();
+          }
+          if (day.last_out) {
+            const punches = day.attendancePunches || [];
+            const lastOutPunch = [...punches].reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
+            day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
+          }
+          if (day.attendancePunches) {
+            day.attendancePunches.sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time));
+          }
         }
-        if (day.last_out) {
-          const lastOutPunch = [...punches].reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
-          day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
-        }
-        punches.sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time));
-      }
-    });
+      });
+    }
 
     // 3. CALCULATE SUMMARY (Efficient aggregate query on AttendanceDay)
     
@@ -825,6 +855,28 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
     if (attendanceDay) {
       attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
+
+      // Enrich with schedule flags
+      const dayOfWeek = dayjs(attendance_date).day();
+      const weekNo = Math.ceil(dayjs(attendance_date).date() / 7);
+
+      const [isHoliday, isWeeklyOff] = await Promise.all([
+        commonQuery.findOneRecord(EmployeeHoliday, { 
+          employee_id, 
+          date: attendance_date, 
+          status: 0 
+        }),
+        commonQuery.findOneRecord(EmployeeWeeklyOff, { 
+          employee_id, 
+          day_of_week: dayOfWeek, 
+          status: 0, 
+          is_off: true,
+          [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
+        })
+      ]);
+
+      attendanceDayJson.is_scheduled_holiday = !!isHoliday;
+      attendanceDayJson.is_scheduled_weekly_off = !!isWeeklyOff;
 
       if (attendanceDayJson.attendancePunches) {
         punchesWithImages = attendanceDayJson.attendancePunches.map(punch => {
