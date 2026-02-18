@@ -22,6 +22,11 @@ const LeaveTemplateCategory = sequelize.define("LeaveTemplateCategory",{
         defaultValue: true, 
         comment: "false means this is LOP (Loss of Pay)" 
     },
+    is_compoff: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false,
+        comment: "true means this category is used for compensatory off credits"
+    },
     automation_rules: { type: DataTypes.TEXT, allowNull: true },
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, allowNull: true },

@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -81,16 +81,45 @@ async function punch(employeeId, meta, transaction = null) {
 
   if (!employee) throw new Error("Employee not found");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
-  // 1️⃣ Check Holiday Policy
-  if (template && employee.holiday_template) {
-    const isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
-      template_id: employee.holiday_template,
-      date: today,
-      status: 0,
-    }, {}, transaction);
+  // 1️⃣ Check Holiday & Weekly Off Policy
+  if (template) {
+    let isNonWorking = false;
+    let nonWorkingType = "";
 
-    if (isHoliday && template.holiday_policy === "BLOCK_ATTENDANCE") {
-      throw new Error("Attendance is blocked on holidays");
+    // Check Holiday
+    if (employee.holiday_template) {
+      const isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
+        template_id: employee.holiday_template,
+        date: today,
+        status: 0,
+      }, {}, transaction);
+      if (isHoliday) {
+        isNonWorking = true;
+        nonWorkingType = "holiday";
+      }
+    }
+
+    // Check Weekly Off
+    if (!isNonWorking && employee.weekly_off_template) {
+       const dayOfWeek = dayjs(now).day();
+       const dayOfMonth = dayjs(now).date();
+       const weekNo = Math.ceil(dayOfMonth / 7);
+
+       const weeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
+         template_id: employee.weekly_off_template,
+         day_of_week: dayOfWeek,
+         [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+         is_off: true,
+         status: 0,
+       }, {}, transaction);
+       if (weeklyOff) {
+         isNonWorking = true;
+         nonWorkingType = "weekly off";
+       }
+    }
+
+    if (isNonWorking && template.holiday_policy === "BLOCK_ATTENDANCE") {
+      throw new Error(`Attendance is blocked on ${nonWorkingType}s`);
     }
   }
 
@@ -1222,10 +1251,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   if (existingDay2) {
-    await syncAttendanceToLeaveBalance(employeeId, existingDay2, attendancePayload, transaction);
+    const error = await syncAttendanceToLeaveBalance(employeeId, existingDay2, attendancePayload, transaction, employee);
+    if (error) throw new Err(error);
     await commonQuery.updateRecordById(AttendanceDay, existingDay2.id, attendancePayload, transaction);
   } else {
-    await syncAttendanceToLeaveBalance(employeeId, null, attendancePayload, transaction);
+    const error = await syncAttendanceToLeaveBalance(employeeId, null, attendancePayload, transaction, employee);
+    if (error) throw new Err(error);
     await commonQuery.createRecord(AttendanceDay, attendancePayload, transaction);
   }
 }
@@ -1263,6 +1294,27 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
       order: [["punch_time", orderDir]] // ASC for First IN, DESC for Last OUT
     }, transaction);
   };
+
+  // 1. Policy Validation: Block Attendance on Holidays/Weekly Off if Strict
+  const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+    include: [
+      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+    ],
+  }, transaction);
+
+  if (employee) {
+    const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+    if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
+      const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
+      if (isHoliday || isWeeklyOff) {
+        throw {
+          handled: true,
+          message: { message: `Attendance is blocked on ${isHoliday ? 'Holidays' : 'Weekly Offs'} (Strict Policy)` }
+        };
+      }
+    }
+  }
 
   if (inTime && outTime) {
     const inDateObj = parseDateTime(inTime, date);
@@ -1336,10 +1388,120 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 }
 
 /**
+ * Detects if a specific date is a Holiday or Weekly Off for an employee.
+ */
+async function getDayOffInfo(employee, date, transaction) {
+  const res = { isHoliday: false, isWeeklyOff: false, holidayDetails: null };
+  if (!employee) return res;
+
+  // Holiday Check
+  if (employee.holiday_template) {
+    const holiday = await commonQuery.findOneRecord(HolidayTransaction, {
+      template_id: employee.holiday_template,
+      date: date,
+      status: 0,
+    }, {}, transaction);
+    if (holiday) {
+      res.isHoliday = true;
+      res.holidayDetails = holiday;
+    }
+  }
+
+  // Weekly Off Check
+  if (employee.weekly_off_template) {
+    const d = dayjs(date);
+    const dayOfWeek = d.day(); 
+    const dayOfMonth = d.date();
+    const weekNo = Math.ceil(dayOfMonth / 7);
+
+    const weeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
+      template_id: employee.weekly_off_template,
+      day_of_week: dayOfWeek,
+      [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+      is_off: true,
+      status: 0
+    }, {}, transaction);
+    if (weeklyOff) res.isWeeklyOff = true;
+  }
+
+  return res;
+}
+
+/**
+ * Syncs Compensatory Off credits based on working on holidays/weekly offs.
+ */
+async function syncCompOffCredit(employee, date, status, transaction) {
+  if (!employee) return;
+  const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+  if (!template || template.holiday_policy !== "COMP_OFF") return;
+
+  const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
+  if (!isHoliday && !isWeeklyOff) return;
+
+  const compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+    is_compoff: true,
+    leave_template_id: employee.leave_template,
+    status: 0
+  }, {}, transaction);
+
+  if (!compOffCategory) return;
+
+  const isWorkingStatus = [0, 1].includes(Number(status));
+  const employeeId = employee.id;
+
+  // Find existing credit record for this date
+  const existingCompOff = await commonQuery.findOneRecord(LeaveRequest, {
+    employee_id: employeeId,
+    start_date: date,
+    leave_category_id: compOffCategory.id,
+    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+    status: 0
+  }, {}, transaction);
+
+  if (isWorkingStatus) {
+    const creditAmount = Number(status) === 0 ? 1.0 : 0.5;
+    
+    if (existingCompOff) {
+      // Handle Correction (e.g. Full Day vs Half Day change)
+      if (parseFloat(existingCompOff.total_days) !== creditAmount) {
+        const diff = creditAmount - parseFloat(existingCompOff.total_days);
+        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction);
+        if (error) return error;
+        await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount }, transaction);
+      }
+    } else {
+      // New Credit
+      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction);
+      if (error) return error;
+      
+      await commonQuery.createRecord(LeaveRequest, {
+        employee_id: employeeId,
+        leave_category_id: compOffCategory.id,
+        start_date: date,
+        end_date: date,
+        total_days: creditAmount,
+        reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
+        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+        approved_by: 0,
+        company_id: employee.company_id,
+        branch_id: employee.branch_id,
+        user_id: 0,
+        status: 0
+      }, transaction);
+    }
+  } else if (existingCompOff) {
+    // Remove Credit if status changed to non-working (e.g. Absent)
+    const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction);
+    if (error) return error;
+    await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction);
+  }
+}
+
+/**
  * Syncs attendance status shifts to employee leave balance and history (LeaveRequest).
  * Comparison between OLD state and NEW state of the day.
  */
-async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction) {
+async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction, employee = null) {
   const getDeduction = (status) => {
     if (Number(status) === 6) return 1.0; // LEAVE
     if (Number(status) === 1) return 0.5; // HALF_DAY
@@ -1357,14 +1519,29 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   const newCategoryId = newDay ? newDay.leave_category_id : null;
   const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
 
+  // --- COMP-OFF CREDIT LOGIC ---
+  if (!employee) {
+    employee = await commonQuery.findOneRecord(Employee, employeeId, {
+      include: [
+        { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+      ],
+    }, transaction);
+  }
+
+  if (employee) {
+    const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction);
+    if (error) return error;
+  }
+
   // CASE 1: Status changed AWAY from Leave/HalfDay (Refund)
   if (oldDeduction > 0 && newDeduction === 0) {
-    await LeaveBalanceService.syncLeaveRecord(employeeId, date, oldCategoryId, 0, transaction);
+    return await LeaveBalanceService.syncLeaveRecord(employeeId, date, oldCategoryId, 0, transaction);
   }
   // CASE 2: Status is NOW Leave/HalfDay (Deduct/Create)
   else if (newDeduction > 0) {
     // Even if oldDeduction was > 0, syncLeaveRecord handles updates (Category/Amount change)
-    await LeaveBalanceService.syncLeaveRecord(employeeId, date, newCategoryId, newDeduction, transaction);
+    return await LeaveBalanceService.syncLeaveRecord(employeeId, date, newCategoryId, newDeduction, transaction);
   }
 }
 
@@ -1550,6 +1727,7 @@ module.exports = {
   manualPunch,
   getOrCreateAttendanceDay,
   syncAttendanceToLeaveBalance,
-  bulkSyncAttendanceDays
+  bulkSyncAttendanceDays,
+  getDayOffInfo
 };
 

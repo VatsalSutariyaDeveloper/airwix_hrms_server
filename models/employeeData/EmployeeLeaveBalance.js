@@ -30,6 +30,7 @@ module.exports = (sequelize, DataTypes) => {
             },
             carry_forward_limit: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             is_paid: { type: DataTypes.BOOLEAN, defaultValue: true },
+            is_compoff: { type: DataTypes.BOOLEAN, defaultValue: false },
             automation_rules: { type: DataTypes.TEXT, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
