@@ -102,7 +102,7 @@ const uploadFile = async (
   }
 
   const savedFilenames = {};
-  const baseDir = "uploads";
+  const baseDir = path.join(process.cwd(), "uploads");
   const targetFolder = path.join(baseDir, cleanSubfolder(subfolder));
   ensureDir(targetFolder);
 
