@@ -92,6 +92,7 @@ router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), u
 router.get("/user/:id", userController.getById);
 router.delete("/user/", userController.delete);
 router.patch("/user/status", userController.updateStatus);
+router.post("/user/role-assign", userController.assignRole);
 // Password management (Moved to public auth routes)
 
 
@@ -193,6 +194,7 @@ router.post("/leave-request/pending-approvals", leaveRequestController.getPendin
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
+router.post("/leave-request/calculate-days", leaveRequestController.calculateLeaveDays);
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================

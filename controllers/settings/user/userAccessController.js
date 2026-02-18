@@ -15,38 +15,33 @@ exports.sessionData = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { user_id, company_id, branch_id } = getContext();
-console.log("Session Data Request - User ID:", user_id, "Company ID:", company_id, "Branch ID:", branch_id);
-    // 1. Validate Company
-    const record = await commonQuery.findOneRecord(
-      CompanyMaster,
-      company_id,
-      { attributes: ['id', 'company_id'] },
-      transaction,
-      false,
-      false
-    );
+
+    // 1. Validate Company (Standard Sequelize)
+    const record = await CompanyMaster.findOne({
+        where: { id: company_id },
+        attributes: ['id', 'company_id', 'organization_id'],
+        transaction
+    });
 
     if (!record) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Invalid or missing company record." });
     }
 
-    let companyId = record.company_id || record.id;
+    let orgId = record.organization_id;
 
-    // 2. Fetch User & Access Logic
-    const userData = await commonQuery.findOneRecord(
-      User,
-      user_id,
-      {
-        attributes: ['id', 'user_name', 'email', 'role_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
-        include: [{ 
-            model: UserCompanyRoles, 
-            as: "ComapanyRole", 
-            attributes: ["permissions"],
-            required: false 
-        }]
-      },transaction, false, false
-    );
+    // 2. Fetch User & Access Logic (Standard Sequelize)
+    const userData = await User.findOne({
+      where: { id: user_id },
+      attributes: ['id', 'user_name', 'email', 'role_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
+      include: [{ 
+          model: UserCompanyRoles, 
+          as: "ComapanyRole", 
+          attributes: ["permissions"],
+          required: false 
+      }],
+      transaction
+    });
     
     if (!userData) {
         await transaction.rollback();
@@ -59,7 +54,7 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
       return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
     }
     
-    // Check if user has a role assigned for this specific company/branch (unless bypassed or Super Admin)
+    // Check if user has a role assigned for this specific company/branch
     if (!userData.ComapanyRole?.[0]?.permissions && userData.role_id != 1) {
       await transaction.rollback();
       return res.error("FORBIDDEN", { message: "User does not have a role assigned in this company." });
@@ -68,26 +63,31 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
     let where = {};
     if (userData.role_id == 1) {
       where = {
-        [Op.or]: [{ id: companyId }, { company_id: companyId }],
+        organization_id: orgId,
         status: { [Op.ne]: 2 }
       };
     } else {
       where = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
     }
 
-    // 3. Fetch Core Data (Parallel)
+    // 3. Fetch Core Data (Parallel - Standard Sequelize)
     const [companyList, sidebarModuleList, companySettings, allPermissions, branchList] = await Promise.all([
       // A. Company List
-      commonQuery.findAllRecords(CompanyMaster, where, {
+      CompanyMaster.findAll({
+        where: where,
         include: [
           { model: CountryMaster, as: 'country', attributes: ['country_name'], required: false },
           { model: StateMaster, as: 'state', attributes: ['state_name'], required: false },
         ],
-        raw: false, nest: true
-      }, null, false),
+        order: [['id', 'ASC']],
+        nest: true,
+        // raw: false // Sequelize defaults to instances, which calls toJSON() later
+        transaction
+      }),
 
       // B. Sidebar Modules (Hierarchical)
-      commonQuery.findAllRecords(ModuleMaster, { status: 0 }, {
+      ModuleMaster.findAll({
+        where: { status: 0 },
         attributes: ["id", "module_name", "cust_module_name", "module_icon_name", "module_url", "priority"],
         include: [{ 
             model: ModuleEntityMaster, 
@@ -96,27 +96,38 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
             where: { status: 0, entity_visiblity: 1 }, 
             attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"] 
         }],
-        order: [["priority", "ASC"], 
-        [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']],
-      }, null, false),
+        order: [
+            ["priority", "ASC"], 
+            [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']
+        ],
+        transaction
+      }),
 
       // C. Configuration
-      commonQuery.findAllRecords(CompanyConfigration, { company_id, status: 0 }, {}, null, false),
+      CompanyConfigration.findAll({
+          where: { company_id, status: 0 },
+          transaction
+      }),
       
-      // D. Permissions (For generating constants)
-      commonQuery.findAllRecords(Permission, {}, {
+      // D. Permissions
+      Permission.findAll({
         attributes: ['id', 'action', 'module_id', 'entity_id'],
         include: [
           { model: ModuleMaster, as: 'module', attributes: ['module_name'] },
           { model: ModuleEntityMaster, as: 'entity', attributes: ['entity_name', 'cust_entity_name'] }
-        ]
-      }, null, false),
-      commonQuery.findAllRecords(BranchMaster, { 
-          company_id: record.id, 
-          status: 0 
-      }, {
-        attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id']
-      }, null, false)
+        ],
+        transaction
+      }),
+
+      // E. Branch List
+      BranchMaster.findAll({ 
+          where: { 
+              company_id: record.id, 
+              status: 0 
+          },
+          attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id'],
+          transaction
+      })
     ]);
 
     // Validate Data
@@ -133,7 +144,7 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
 
     // Enrich Company List
     const enrichedCompanyList = companyList.map(company => {
-      const companyData = company.toJSON();
+      const companyData = company.toJSON(); // Standard Sequelize method
       const countryName = companyData.country ? companyData.country.country_name : null;
       const stateName = companyData.state ? companyData.state.state_name : null;
       delete companyData.country; delete companyData.state;
@@ -156,13 +167,19 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
     delete enrichedUserData.ComapanyRole;
     
     // Find Current Company
+    // Force Number conversion to fix string vs int issues
     const companyIndex = companyList.findIndex(c => Number(c.id) === Number(company_id));
     const currentCompany = companyIndex !== -1 ? enrichedCompanyList[companyIndex] : enrichedCompanyList[0];
 
     // Currency
     let currencyDetails = null;
     if (currentCompany.currency_id) {
-      const currencyData = await commonQuery.findOneRecord(CurrencyMaster, { id: settingsObject.default_currency || 67 }, {}, transaction, false, false); // Default to INR if missing
+      // Standard Sequelize findOne
+      const currencyData = await CurrencyMaster.findOne({ 
+          where: { id: settingsObject.default_currency || 67 },
+          transaction
+      });
+      
       if (currencyData) {
         currencyDetails = { 
             currency_id: currencyData.id, 
@@ -180,13 +197,10 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
 
     if (allPermissions && allPermissions.length > 0) {
       allPermissions.forEach(p => {
-        // We look for 'VIEW' or 'READ' to link the Sidebar Item to a Permission
         if (p.action && (p.action.toLowerCase() === 'view' || p.action.toLowerCase() === 'read')) {
             const modKey = formatKey(p.module ? p.module.module_name : '');
             const entKey = formatKey(p.entity ? (p.entity.cust_entity_name || p.entity.entity_name) : '');
             const actKey = formatKey(p.action);
-            
-            // Format: MODULE.ENTITY.ACTION
             const permString = `${modKey}.${entKey}.${actKey}`;
             
             if(p.entity_id) {
@@ -197,38 +211,24 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
     }
 
     // --- SUBSCRIPTION & ACCESS FILTERING ---
-    
-    // 1. Get Consolidated Subscription (Plan + Addons)
-    const finalSubscriptionData = await getCompanySubscription(companyId);
-    console.log("Final Subscription Data:", finalSubscriptionData);
-    // 2. Parse Allowed Module IDs (Company License)
+    const finalSubscriptionData = await getCompanySubscription(company_id);
     let companyAllowedEntityIds = [];
     if (finalSubscriptionData && finalSubscriptionData.allowed_module_ids) {
         companyAllowedEntityIds = normalizeCompanyAccess(finalSubscriptionData.allowed_module_ids);
     }
 
-    // 3. Define System Removal Flags (Feature Toggles)
     const removalEntity = [];
     const toBool = val => val === true || val === 'true';
-    if (!toBool(settingsObject.enable_multi_branch)) removalEntity.push(constants.BRANCH_ENTITY_ID); // e.g. 5
+    if (!toBool(settingsObject.enable_multi_branch)) removalEntity.push(constants.BRANCH_ENTITY_ID);
     if (!toBool(settingsObject.enable_multi_godown)) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
 
-    // 4. Filter Sidebar (Hierarchy)
     const plainSidebarModuleList = sidebarModuleList.map(item => item.get({ plain: true }));
     
     const filteredSidebarModuleList = plainSidebarModuleList.map(module => {
-        // Filter Entities within the Module
         const filteredEntities = (module.entities || []).filter(entity => {
-            // A. Check System Feature Flags
             if (removalEntity.includes(entity.id)) return false;
-            
-            // B. Check Company License (Subscription)
-            // if (companyAllowedEntityIds && !companyAllowedEntityIds.includes(String(entity.id))) {
-            //     return false;
-            // }
             return true;
         }).map(entity => {
-            // Inject Permission String
             return {
                 ...entity,
                 permission: entityPermissionMap[entity.id] || null
@@ -236,9 +236,8 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
         });
 
         return { ...module, entities: filteredEntities };
-    }).filter(module => module.entities.length > 0); // Remove empty modules
+    }).filter(module => module.entities.length > 0);
 
-    // --- PLAN STATUS CALCULATION ---
     let planStatus = "active";
     if (finalSubscriptionData) {
         if (currentCompany.status === 3) {
@@ -246,18 +245,15 @@ console.log("Session Data Request - User ID:", user_id, "Company ID:", company_i
         } else if (finalSubscriptionData.status === 0) {
             planStatus = "active";
         } else if (finalSubscriptionData.status === 1) {
-             // Check if within grace period (logic can be expanded based on your needs)
              planStatus = "expired";
         }
     }
 
     let currentBranch = null;
     if (branchList && branchList.length > 0) {
-        // 1. Try to match the branch_id from the token/context
         if (branch_id) {
             currentBranch = branchList.find(b => b.id === branch_id);
         }
-        // 2. Fallback: Default to the first branch if not found
         if (!currentBranch) {
             currentBranch = branchList[0];
         }
@@ -298,8 +294,12 @@ exports.switchCompany = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Company ID is required." });
     }
 
-    // 1. Fetch User
-    const user = await commonQuery.findOneRecord(User, { id: user_id, status: 0 }, {}, transaction, false, false);
+    // 1. Fetch User (Standard Sequelize)
+    const user = await User.findOne({
+      where: { id: user_id, status: 0 },
+      transaction
+    });
+
     if (!user) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "User not found." });
@@ -312,44 +312,46 @@ exports.switchCompany = async (req, res) => {
       return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
     }
 
-    // 3. Validate Company
-    const company = await commonQuery.findOneRecord(CompanyMaster, { id: company_id, status: { [Op.ne]: 2 } }, {}, transaction, false, false);
+    // 3. Validate Company (Standard Sequelize)
+    const company = await CompanyMaster.findOne({
+      where: { 
+        id: company_id, 
+        status: { [Op.ne]: 2 } 
+      },
+      attributes: ['id', 'organization_id'],
+      transaction
+    });
+
     if (!company) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Selected company is inactive or not found." });
     }
 
-    // --- FIX START: Find a Valid Branch for the NEW Company ---
-    // We cannot use the old 'branch_id' from the context because it belongs to the old company.
-    const defaultBranch = await commonQuery.findOneRecord(
-        BranchMaster,
-        { 
-            company_id: company_id, // Look for branches in the NEW company
-            status: { [Op.ne]: 2 } 
-        },
-        { attributes: ['id'] },
-        transaction,
-        false,
-        false
-    );
+    // --- Find a Valid Branch for the NEW Company (Standard Sequelize) ---
+    const defaultBranch = await BranchMaster.findOne({
+      where: { 
+        company_id: company_id,
+        status: { [Op.ne]: 2 } 
+      },
+      attributes: ['id'],
+      transaction
+    });
 
-    // If a branch exists, use it. Otherwise, 0 (though normally every company should have a branch).
     const newBranchId = defaultBranch ? defaultBranch.id : 0;
-    // --- FIX END ---
 
     // 4. Generate New Token
     const newToken = jwt.sign(
       {
         id: user.id,
         role_id: user.role_id,
-        branch_id: newBranchId, // <--- Use the NEW branch ID
-        company_id: company_id
+        branch_id: newBranchId,
+        company_id: parseInt(company_id, 10),
+        organization_id: company.organization_id || null
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }
     );
 
-    // Clear cache
     clearUserCache(user.user_id || user.id);
 
     await transaction.commit();
@@ -358,7 +360,7 @@ exports.switchCompany = async (req, res) => {
       token: newToken, 
       message: "Switched company successfully",
       current_company_id: company_id,
-      current_branch_id: newBranchId // Optional: send back for debugging
+      current_branch_id: newBranchId 
     });
 
   } catch (err) {
@@ -373,9 +375,7 @@ exports.switchCompany = async (req, res) => {
 exports.switchBranch = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { user_id, company_id } = getContext();
-    
-    // Support getting ID from body (standard) or query (like your switchCompany)
+    const { user_id, company_id, organization_id } = getContext();
     const branch_id = req.query.branch_id;
 
     if (!branch_id) {
@@ -383,50 +383,45 @@ exports.switchBranch = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Branch ID is required." });
     }
 
-    // 1. Fetch User
-    const user = await commonQuery.findOneRecord(User, { id: user_id, status: 0 }, {}, transaction, false, false);
+    // 1. Fetch User (Standard Sequelize)
+    const user = await User.findOne({
+        where: { id: user_id, status: 0 },
+        transaction
+    });
+
     if (!user) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "User not found." });
     }
 
-    // 2. Validate Branch exists, is Active, and BELONGS to the current Company
-    const branch = await commonQuery.findOneRecord(
-        BranchMaster, 
-        { 
+    // 2. Validate Branch (Standard Sequelize)
+    const branch = await BranchMaster.findOne({
+        where: { 
             id: branch_id, 
-            company_id: company_id, // Security: Must belong to current company
-            status: { [Op.ne]: 2 }  // Not deleted
-        }, 
-        {}, 
-        transaction, 
-        false, 
-        false
-    );
+            company_id: company_id, // Security check
+            status: { [Op.ne]: 2 } 
+        },
+        transaction
+    });
 
     if (!branch) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Branch not found or does not belong to this company." });
     }
 
-    if (Number(branch.company_id) !== Number(company_id)) {
-      await transaction.rollback();
-      return res.error(constants.NOT_FOUND, { message: "This branch belongs to a different company." });
-    }
-
-    // 3. Generate New Token with UPDATED branch_id and SAME company_id
+    // 3. Generate New Token
     const newToken = jwt.sign(
       {
         id: user.id,
         role_id: user.role_id,
-        branch_id: branch.id,   // <--- The change
-        company_id: company_id  // Keep current company
+        branch_id: branch.id,
+        company_id: parseInt(company_id, 10),
+        organization_id: organization_id || null
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }
     );
 
-    // Clear cache to ensure permissions/session refresh
     clearUserCache(user.user_id || user.id);
 
     await transaction.commit();

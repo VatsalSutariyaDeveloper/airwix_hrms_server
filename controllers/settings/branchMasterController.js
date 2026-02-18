@@ -1,5 +1,5 @@
 const { BranchMaster, CountryMaster, StateMaster, ZoneMaster, sequelize } = require("../../models");
-const { validateRequest, commonQuery, handleError } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 const { ENTITIES } = require("../../helpers/constants");
 
 const ENTITY = ENTITIES.BRANCH_MASTER.NAME;
@@ -33,7 +33,7 @@ exports.create = async (req, res) => {
 
     const result = await commonQuery.createRecord(BranchMaster, req.body, transaction);
     await transaction.commit();
-    return res.success("CREATE", ENTITY, result);
+    return res.success(constants.CREATED, ENTITY, result);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -111,6 +111,7 @@ exports.getById = async (req, res) => {
 // Get all with Pagination and Search
 exports.getAll = async (req, res) => {
   try {
+
      const fieldConfig = [
       ["branch_name", true, true],
       ["city", true, true],
@@ -118,9 +119,10 @@ exports.getAll = async (req, res) => {
       ["state_name", true, true],
       // ["zone_name", true, true],
     ];
+
     const data = await commonQuery.fetchPaginatedData(
       BranchMaster,
-      req.body,
+      { ...req.body, company_id: req.user.company_id },
       fieldConfig,
       {
         include: [
@@ -137,7 +139,7 @@ exports.getAll = async (req, res) => {
           // [sequelize.col("country.country_name"), "country_name"],
           // [sequelize.col("state.state_name"), "state_name"],
         ]
-      }
+      }, false
     );
 
     return res.success("FETCH", data);

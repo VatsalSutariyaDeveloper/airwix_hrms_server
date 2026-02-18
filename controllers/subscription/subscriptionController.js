@@ -84,7 +84,7 @@ exports.assignSubscription = async (req, res) => {
     const record = await commonQuery.findOneRecord(
         CompanyMaster, 
         req.body.company_id,
-        { attributes: ['id', 'company_id'] }
+        { attributes: ['id', 'company_id', 'organization_id'] }
     );
     
     if (!record) {
@@ -92,6 +92,7 @@ exports.assignSubscription = async (req, res) => {
     }
 
     const company_id = record.company_id || record.id;
+    const organization_id = record.organization_id;
 
     const plan = await commonQuery.findOneRecord(
       SubscriptionPlan,
@@ -106,16 +107,17 @@ exports.assignSubscription = async (req, res) => {
     }
 
     if (plan.is_trial) {
+        const trialWhere = organization_id ? { organization_id } : { company_id };
         const pastHistory = await commonQuery.findOneRecord(
             CompanySubscription,
-            { company_id: company_id },
+            trialWhere,
             { attributes: ['id'] },
             transaction
         );
 
         if (pastHistory) {
             await transaction.rollback();
-            return res.error("TRIAL_NOT_ALLOWED", "Your are not able to Purchase Free trial plan.");
+            return res.error("TRIAL_NOT_ALLOWED", "You have already used a trial for this organization.");
         }
     }
 
@@ -124,25 +126,28 @@ exports.assignSubscription = async (req, res) => {
         return res.error("INSUFFICIENT_AMOUNT", "Amount paid is less than plan price");
     }
     
+    const baseWhere = organization_id ? { organization_id, status: 0 } : { company_id, status: 0 };
     const existingBase = await commonQuery.findOneRecord(
         CompanySubscription, 
-        { company_id, status: 0 }, 
+        baseWhere, 
         { include: [{ model: SubscriptionPlan, where: { subscription_type: 'plan' } }] },
         transaction
     );
 
     if (existingBase) {
         await transaction.rollback();
-        return res.error("EXISTING_PLAN", "Company already has an active base plan. Use 'Renew' or 'Upgrade'.");
+        return res.error("EXISTING_PLAN", "Active base plan already exists for this organization.");
     }
     
-    await commonQuery.updateRecordById(CompanySubscription, { company_id: company_id }, { status: 1 }, transaction);
+    const updateWhere = organization_id ? { organization_id } : { company_id };
+    await commonQuery.updateRecordById(CompanySubscription, updateWhere, { status: 1 }, transaction);
 
     const start = moment().format("YYYY-MM-DD");
     const end = moment().add(plan.duration_days, "days").format("YYYY-MM-DD");
 
     const data = {
       company_id,
+      organization_id,
       user_id,
       branch_id,
       subscription_plan_id,
@@ -186,7 +191,7 @@ exports.renewSubscription = async (req, res) => {
         const record = await commonQuery.findOneRecord(
             CompanyMaster, 
             req.body.company_id,
-            { attributes: ['id', 'company_id'] }
+            { attributes: ['id', 'company_id', 'organization_id'] }
         );
         
         if (!record) {
@@ -194,15 +199,17 @@ exports.renewSubscription = async (req, res) => {
         }
 
         const company_id = record.company_id || record.id;
+        const organization_id = record.organization_id;
         
         const plan = await commonQuery.findOneRecord(
             SubscriptionPlan,
             { id: subscription_plan_id }
         );
 
+        const subWhere = organization_id ? { organization_id, status: 0 } : { company_id, status: 0 };
         const existing = await commonQuery.findOneRecord(
             CompanySubscription,
-            { company_id, status: 0 }
+            subWhere
         );
 
         let start_date = moment().format("YYYY-MM-DD");
@@ -216,6 +223,7 @@ exports.renewSubscription = async (req, res) => {
 
         const renewData = {
             company_id,
+            organization_id,
             payment_id,
             subscription_plan_id,
             amount_paid,
@@ -302,7 +310,7 @@ exports.purchaseAddon = async (req, res) => {
     const record = await commonQuery.findOneRecord(
         CompanyMaster, 
         req.body.company_id,
-        { attributes: ['id', 'company_id'] },
+        { attributes: ['id', 'company_id', 'organization_id'] },
         transaction
     );
     
@@ -312,13 +320,11 @@ exports.purchaseAddon = async (req, res) => {
     }
 
     const company_id = record.company_id || record.id;
+    const organization_id = record.organization_id;
 
-    // 1. Check if Company has a Base Plan (REQUIRED)
-    const activeBase = await commonQuery.findOneRecord(CompanySubscription, {
-      company_id, 
-      subscription_type: 'plan', 
-      status: 0 
-    }, {}, transaction);
+    // 1. Check if Company/Organization has a Base Plan (REQUIRED)
+    const baseWhere = organization_id ? { organization_id, subscription_type: 'plan', status: 0 } : { company_id, subscription_type: 'plan', status: 0 };
+    const activeBase = await commonQuery.findOneRecord(CompanySubscription, baseWhere, {}, transaction);
 
     if (!activeBase) {
       await transaction.rollback();
@@ -362,6 +368,7 @@ exports.purchaseAddon = async (req, res) => {
     // 6. Prepare Data
     const subscriptionData = {
       company_id,
+      organization_id,
       branch_id,
       user_id,
       subscription_plan_id: addonPlan.id,
@@ -420,14 +427,25 @@ exports.purchaseAddon = async (req, res) => {
 exports.getCompanySubscription = async (req, res) => {
   try {
     const { company_id } = req.body;
+    
+    const record = await commonQuery.findOneRecord(
+        CompanyMaster, 
+        company_id,
+        { attributes: ['id', 'company_id', 'organization_id'] }
+    );
+    
+    if (!record) {
+        return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
+    }
+
+    const organization_id = record.organization_id;
+    const final_company_id = record.company_id || record.id;
 
     // 1. Fetch ALL active subscriptions (Base + Addons)
+    const subWhere = organization_id ? { organization_id, status: 0 } : { company_id: final_company_id, status: 0 };
     const allSubscriptions = await commonQuery.findAllRecords(
       CompanySubscription,
-      {
-        company_id,
-        status: 0
-      }
+      subWhere
     );
 
     if (!allSubscriptions || allSubscriptions.length === 0) {
@@ -492,9 +510,20 @@ exports.cancelSubscription = async (req, res) => {
   try {
     const { company_id, subscription_id } = req.body;
 
+    const record = await commonQuery.findOneRecord(
+        CompanyMaster, 
+        company_id,
+        { attributes: ['id', 'company_id', 'organization_id'] }
+    );
+    
+    if (!record) {
+        return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
+    }
+
+    const organization_id = record.organization_id;
+
     const subToCancel = await commonQuery.findOneRecord(CompanySubscription, {
       id: subscription_id,
-      company_id: company_id,
       status: 0 
     });
 
@@ -520,24 +549,30 @@ exports.cancelSubscription = async (req, res) => {
     );
 
     if (planDetails.subscription_type === 'plan') {
+      const cancelWhere = organization_id ? { organization_id, status: 0 } : { company_id: record.company_id || record.id, status: 0 };
       await commonQuery.updateRecordById(
         CompanySubscription,
-        { 
-          company_id: company_id, 
-          status: 0 
-        },
+        cancelWhere,
         { status: 1 },
         transaction 
       );
-      console.log(`Main plan cancelled for Company ${company_id}. Cascading cancel triggered for addons.`);
+      console.log(`Main plan cancelled for Organization ${organization_id}. Cascading cancel triggered for addons.`);
     } 
     
     else {
-      console.log(`Addon cancelled for Company ${company_id}. Main plan remains active.`);
+      console.log(`Addon cancelled for Organization ${organization_id}. Main plan remains active.`);
     }
 
     await transaction.commit();
-    clearCompanySubscriptionCache(company_id);
+
+    if (organization_id) {
+        const relatedCompanies = await commonQuery.findAllRecords(CompanyMaster, { organization_id }, { attributes: ['id'] });
+        for (const c of relatedCompanies) {
+            clearCompanySubscriptionCache(c.id);
+        }
+    } else {
+        clearCompanySubscriptionCache(company_id);
+    }
 
     return res.success("CANCELLED");
 

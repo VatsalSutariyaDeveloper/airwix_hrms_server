@@ -2,7 +2,7 @@ const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
-const { rebuildAttendanceDay } = require("../../../helpers/attendanceHelper");
+const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 
 /**
@@ -31,15 +31,23 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const { employee_id, leave_category_id, total_days, start_date, end_date } = req.body;
+        let { employee_id, leave_category_id, start_date, end_date } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
-        // 1. Fetch employee to get cycle information or custom template data
-        const employee = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
-        if (!employee) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
-        }
+        const LeaveBalanceService = require("../../../services/leaveBalanceService");
+        
+        // --- Calculate total_days based on Sandwich Policy via Service ---
+        const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
+
+        // Map requested total_days to preserved half-days/custom entries
+        const requestedTotal = parseFloat(req.body.total_days || 0);
+        const start = dayjs(start_date);
+        const end = dayjs(end_date);
+        const calendarDays = end.diff(start, 'day') + 1;
+        
+        const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
+        let total_days = Math.max(0, workingDays - reduction);
+        total_days = Math.round(total_days * 2) / 2;
 
         // Check for Overlapping Leaves
         const overlap = await commonQuery.findOneRecord(LeaveRequest, {
@@ -81,12 +89,13 @@ exports.create = async (req, res) => {
         }
 
         const isPaid = balance.is_paid;
+        const isCompOff = balance.is_compoff;
 
-        if (isPaid) {
-            // -- PAID LEAVE LOGIC --
+        if (isPaid || isCompOff) {
+            // -- PAID LEAVE or COMP-OFF LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
                 await transaction.rollback();
-                return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}` });
+                return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}. ${isCompOff ? 'Compensatory Off requires earned credit.' : ''}` });
             }
 
             // Deduct from pending
@@ -103,7 +112,7 @@ exports.create = async (req, res) => {
         }
 
         // Create Leave Request
-        const POST = { ...req.body };
+        const POST = { ...req.body, total_days };
 
         // Handle File Upload
         if (req.files && Object.keys(req.files).length > 0) {
@@ -536,6 +545,23 @@ exports.cancelLeave = async (req, res) => {
         return res.success("LEAVE_CANCELLED");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+// 8. Calculate Leave Days (Frontend Helper)
+exports.calculateLeaveDays = async (req, res) => {
+    try {
+        const { employee_id, start_date, end_date } = req.body;
+        if (!employee_id || !start_date || !end_date) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
+        }
+
+        const LeaveBalanceService = require("../../../services/leaveBalanceService");
+        const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date);
+        
+        return res.success("Working days calculated", { total_days: workingDays });
+    } catch (err) {
         return handleError(err, res, req);
     }
 };

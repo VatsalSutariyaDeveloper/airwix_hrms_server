@@ -20,6 +20,7 @@ const Permission = require("./settings/user/permission")(sequelize, DataTypes);
 const RoutePermission = require("./settings/user/routePermission")(sequelize, DataTypes);
 const UserCompanyRoles = require("./settings/user/userCompanyRoles")(sequelize, DataTypes);
 const CompanyMaster = require("./settings/company/companyMaster")(sequelize, DataTypes);
+const Organization = require("./settings/company/organization")(sequelize, DataTypes);
 const CompanyConfigration = require("./settings/company/companyConfigration")(sequelize, DataTypes);
 const CompanyAddress = require("./settings/company/companyAddress")(sequelize, DataTypes);
 const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
@@ -122,6 +123,7 @@ const db = {
   RoutePermission,
   UserCompanyRoles,
   CompanyMaster,
+  Organization,
   CompanyConfigration,
   CompanyAddress,
   DeviceMaster,

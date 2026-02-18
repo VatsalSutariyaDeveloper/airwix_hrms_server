@@ -5,7 +5,7 @@ const { requestContext } = require("../utils/requestContext.js");
 const tokenBlacklist = new Set();
 
 const SKIP_ROUTES = [
-  "/administration/permission/constants"
+  "/api/administration/permission/constants"
 ];
 
 const addToBlacklist = (token) => {
@@ -44,6 +44,7 @@ function authMiddleware(req, res, next) {
       id: decoded.id,
       employee_id: decoded.employee_id,
       company_id: decoded.company_id,
+      organization_id: decoded.organization_id || null, // Decrypt organization_id
       branch_id: decoded.branch_id,
       role_id: decoded.role_id,
       permissions: decoded.permissions || [],
@@ -59,6 +60,7 @@ function authMiddleware(req, res, next) {
         userId: decoded.id,
         employeeId: decoded.employee_id,
         companyId: decoded.company_id,
+        organizationId: decoded.organization_id || null, // Link organizationId to context
         branchId: decoded.branch_id,
         roleId: decoded.role_id,
         is_attendance_supervisor: decoded.is_attendance_supervisor,

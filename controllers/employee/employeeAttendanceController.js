@@ -1,4 +1,3 @@
-
 const { 
     EmployeeShift, 
     EmployeeWeeklyOff,
@@ -9,6 +8,22 @@ const {
     sequelize 
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
+const attendanceHelper = require("../../helpers/attendanceHelper");
+const dayjs = require("dayjs");
+
+/**
+ * Rebuilds attendance for an employee for the last 30 days.
+ * This ensures that changes to templates or settings are reflected in punch records.
+ */
+const rebuildRecentAttendance = async (employeeId, transaction) => {
+    const today = dayjs();
+    const startDate = today.subtract(30, 'day');
+    
+    for (let i = 0; i <= 30; i++) {
+        const date = startDate.add(i, 'day').format('YYYY-MM-DD');
+        await attendanceHelper.rebuildAttendanceDay(employeeId, date, {}, transaction);
+    }
+};
 
 const employeeAttendanceController = {
     /**
@@ -58,6 +73,7 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
             }
 
+            await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee shift settings updated successfully");
         } catch (error) {
@@ -113,6 +129,7 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction);
             }
 
+            await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee weekly offs updated successfully");
         } catch (error) {
@@ -164,6 +181,7 @@ const employeeAttendanceController = {
                 await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
             }
 
+            await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee attendance template updated successfully");
         } catch (error) {

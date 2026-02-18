@@ -22,6 +22,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       role_id: user.role_id,
       branch_id: user.branch_id,
       company_id: companyId,
+      organization_id: user.organization_id || null,
       access_by: access_by,
       is_attendance_supervisor: user.is_attendance_supervisor,
       is_reporting_manager: user.is_reporting_manager
@@ -95,13 +96,23 @@ exports.sendLoginOtp = async (req, res) => {
 /**
  * 2. Login (Handles Email/Pass OR Mobile/OTP)
  */
+/**
+ * 2. Login (Handles Email/Pass OR Mobile/OTP)
+ */
 exports.login = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { email, password, mobile_no, otp } = req.body;
 
     let user = null;
-    let loginMethod = ""; // "PASSWORD" or "OTP"
+    let loginMethod = ""; 
+
+    // Define strict attributes to fetch (Security & Performance)
+    const userAttributes = [
+        'id', 'user_name', 'email', 'mobile_no', 'password', 
+        'role_id', 'company_id', 'branch_id', 'employee_id', 
+        'user_id', 
+    ];
 
     // --- A. DETERMINE LOGIN METHOD ---
     
@@ -109,6 +120,7 @@ exports.login = async (req, res) => {
         // CASE 1: Email & Password
         loginMethod = "PASSWORD";
         user = await User.findOne({ 
+          attributes: userAttributes, 
           where: { 
             email, 
             status: { [Op.in]: [0, 1] } 
@@ -131,32 +143,32 @@ exports.login = async (req, res) => {
         // CASE 2: Mobile & OTP
         loginMethod = "OTP";
         
-        // 1. Find User (Active or Inactive)
         user = await User.findOne({ 
+          attributes: userAttributes,
           where: { 
             mobile_no, 
             status: { [Op.in]: [0, 1] } 
           }, 
           transaction 
         });
+
         if (!user) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
         }
 
-        // 2. Verify OTP using Service
+        // Verify OTP
         try {
             await otpService.verifyOtp(mobile_no, otp);
         } catch (e) {
             await transaction.rollback();
-            // Pass the custom status/message from otpService directly
             if (e.status && e.message) {
                 return res.error(e.status, { message: e.message });
             }
-            throw e; // Unexpected errors go to main catch
+            throw e; 
         }
 
-        // 3. Cleanup OTP (Security)
+        // Cleanup OTP
         await otpService.cleanupOtp(mobile_no, transaction);
 
     } else {
@@ -164,41 +176,41 @@ exports.login = async (req, res) => {
         return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Password OR Mobile/OTP." });
     }
 
-    // --- B. COMMON LOGIN CHECKS (Activation, Company, Branch, etc.) ---
-
-    const verify_code = req.body.verify_code; // User refers to it as verify-code/verify_code
+    const verify_code = req.body.verify_code; 
 
     // 0. Activation Logic
-    if (verify_code) {
-        // If code is provided, verify it
-        if (user.activation_code === verify_code) {
-            // Activate User
-            await commonQuery.updateRecordById(User, user.id, {
-                is_activated: true,
-                activation_code: null,
-                status: 0 // Mark as Active
-            }, transaction, false, false);
-            user.is_activated = true;
-            user.status = 0;
-        } else if (!user.is_activated) {
-            // Code provided but incorrect for an unactivated user
-            await transaction.rollback();
-            return res.error(400, { message: "Invalid activation code." });
-        }
-        // If user is already active and code matches or is ignored, we just proceed.
-    } else {
-        // No code provided, enforce activation
-        if (!user.is_activated) {
-            await transaction.rollback();
-            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
-        }
+    if(req.body.access_by === "application"){
+      if (verify_code) {
+          if (user.activation_code === verify_code) {
+              // Activate User using Sequelize directly
+              await User.update({
+                  is_activated: true,
+                  activation_code: null,
+                  status: 0 
+              }, {
+                  where: { id: user.id },
+                  transaction
+              });
+
+              user.is_activated = true;
+              user.status = 0;
+          } else if (!user.is_activated) {
+              await transaction.rollback();
+              return res.error(400, { message: "Invalid activation code." });
+          }
+      } else {
+          if (!user.is_activated) {
+              await transaction.rollback();
+              return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+          }
+      }
     }
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
     if (user.role_id === 5 && access_by !== "application") {
         await transaction.rollback();
-        return res.error(403, { message: "Employee accounts can only be accessed via the mobile application." });
+        return res.error(403, { message: "Use the mobile application to access this account." });
     }
     
     // 2. Validate Company
@@ -207,16 +219,20 @@ exports.login = async (req, res) => {
         return res.error(401, "No company linked to your account.");
     }
 
-    const company = await commonQuery.findOneRecord(
-      CompanyMaster,
-      { id: user.company_id },
-      {},
-      transaction, false, false
-    );
+    // Using Sequelize findOne instead of commonQuery
+    const company = await CompanyMaster.findOne({
+      where: { id: user.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      transaction
+    });
+
     if (!company) {
       await transaction.rollback();
       return res.error(401, "Your assigned company account is suspended.");
     }
+
+    // Use organization_id from company instead of user
+    user.organization_id = company.organization_id;
 
     // 2. Validate Branch
     if (!user.branch_id) {
@@ -224,60 +240,48 @@ exports.login = async (req, res) => {
       return res.error(401, "No branch assigned to your profile.");
     }
 
-    // const branch = await commonQuery.findOneRecord(
-    //   BranchMaster,
-    //   { id: user.branch_id },
-    //   {},
-    //   transaction, false, false
-    // );
-    // if (!branch) {
-    //   await transaction.rollback();
-    //   return res.error(401, "Your assigned branch is inactive.");
-    // }
-
     // --- C. GENERATE TOKEN & HISTORY ---
 
-    const record = await commonQuery.findOneRecord(
-        CompanyMaster, 
-        user.company_id,
-        { attributes: ['id', 'company_id'] },
-        transaction, false, false
-    );
-    
-    if (!record) {
-        return res.error(constants.NOT_FOUND, { message : "Invalid or missing company record."});
-    }
-
-    let companyId = record.company_id || record.id;
+    let companyId = company.company_id || company.id;
 
     const companyAccessList = normalizeCompanyAccess(user.company_access || "");
     if (user.role_id != 1 && companyAccessList.length === 0) {
+      await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
-    let where = {};
+    let whereCompany = {};
     if (user.role_id == 1){
-      where = {
+      whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
       };
     } else {
-      where = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
+      whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
     }
 
-    const companyList = await commonQuery.findAllRecords(CompanyMaster, where, {raw: true}, null, false);
+    // Use Sequelize findAll directly
+    const companyList = await CompanyMaster.findAll({
+        where: whereCompany,
+        attributes: ['id', 'is_default'],
+        raw: true,
+        transaction
+    });
+    
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
     if(user.role_id != 1){
-      const employee = await commonQuery.findOneRecord(
-          Employee, 
-          user.employee_id,
-          { attributes: ['is_attendance_supervisor', 'is_reporting_manager'] },
-          transaction, false, false
-      );
+      // Use Sequelize findOne for Employee
+      const employee = await Employee.findOne({
+          where: { id: user.employee_id },
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+          transaction
+      });
 
-      user.is_attendance_supervisor = employee.is_attendance_supervisor;
-      user.is_reporting_manager = employee.is_reporting_manager;
+      if (employee) {
+          user.is_attendance_supervisor = employee.is_attendance_supervisor;
+          user.is_reporting_manager = employee.is_reporting_manager;
+      }
     }
 
     const token = generateToken(user, defaultCompanyId, access_by);
@@ -289,33 +293,30 @@ exports.login = async (req, res) => {
       req.headers["x-forwarded-for"]?.split(",")[0] ||
       req.connection.remoteAddress ||
       "127.0.0.1";
-    const geo = geoip.lookup(ip_address) || {};
+    // const geo = geoip.lookup(ip_address) || {};
 
-    const loginHistoryData = {
-      user_id: user.id,
-      in_time: new Date(),
-      ip_address,
-      browser: uaResult.browser.name || "Unknown",
-      browser_version: uaResult.browser.version || "Unknown",
-      os: uaResult.os.name || "Unknown",
-      city: geo.city || null,
-      state: geo.region || null,
-      country: geo.country || null,
-      latitude: geo.ll?.[0]?.toString() || null,
-      longitude: geo.ll?.[1]?.toString() || null,
-      branch_id: user.branch_id || 0,
-      company_id: defaultCompanyId || 0,
-    };
-    
-    await commonQuery.createRecord(LoginHistory, loginHistoryData, transaction, false);
+    // Update login status using Sequelize directly
+    await User.update(
+        { is_login: 1 }, 
+        { where: { id: user.id }, transaction }
+    );
 
-    await commonQuery.updateRecordById(User, user.id, { is_login: 1 }, transaction, false, false);
+    // Fetch User Permissions using Sequelize findOne
+    const userPermission = await UserCompanyRoles.findOne({ 
+      where: {
+          user_id: user.id, 
+          role_id: user.role_id, 
+          company_id: user.company_id, 
+          branch_id: user.branch_id
+      },
+      include: [ 
+          { model: RolePermission, as: "role", attributes: ["role_name", "permissions"] } 
+      ], 
+      attributes: ['permissions'], 
+      transaction 
+    });
 
-    const userPermission = await commonQuery.findOneRecord(UserCompanyRoles, { 
-      user_id: user.id, role_id: user.role_id, company_id: user.company_id, branch_id: user.branch_id 
-    }, { include: [ { model: RolePermission, as: "role", attributes: ["role_name", "permissions"] } ], attributes: ['permissions'] }, transaction, false, false);
-
-    // Prepare User Data
+    // Prepare User Data Response
     const userData = {
       id: user.id,
       role_id: user.role_id,
@@ -336,6 +337,7 @@ exports.login = async (req, res) => {
       user_id: user.user_id,
       branch_id: user.branch_id,
       company_id: defaultCompanyId,
+      organization_id: user.organization_id,
     };
 
     clearUserCache(user.user_id);

@@ -10,6 +10,7 @@ function getContext() {
   return {
     user_id: store.userId,
     company_id: store.companyId,
+    organization_id: store.organizationId,
     branch_id: store.branchId,
     role_id: store.roleId,
     ip: store.ip

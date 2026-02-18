@@ -93,38 +93,50 @@ async function buildWhere(whereInput, applyDefaults = true) {
     where.status = { [Op.ne]: 2 };
   }
 
-  // --- 3. Apply Tenant Defaults ---
-  if (applyDefaults) {
-    const ctx = getContext();
+  const ctx = getContext();
 
-    // A. Company is MANDATORY if context exists
+  // 1. Always Fetch Settings First (You need them for both IF and ELSE)
+  let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
+  try {
     if (ctx.company_id) {
-      where.company_id = ctx.company_id;
+      settings = await getCompanySetting(ctx.company_id);
     }
+  } catch (err) {
+    console.warn("⚠️ Failed to fetch company settings:", err.message);
+  }
 
-    // B. Fetch Settings for User/Branch logic
-    let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
-    try {
-      if (ctx.company_id) {
-        settings = await getCompanySetting(ctx.company_id);
-      }
-    } catch (err) {
-      console.warn("⚠️ Failed to fetch company settings:", err.message);
-    }
+  // (Your temporary override if needed)
+  settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
+  const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
-    settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
-    const { enable_user_wise_data, enable_branch_wise_data } = settings;
+  if (applyDefaults) {
+    // --- STANDARD STRICT BEHAVIOR ---
+    if (ctx.company_id) where.company_id = ctx.company_id;
 
-    // C. Branch Logic
-    // If setting is enabled, restrict to current branch
-    if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
-      if (ctx.branch_id) where.branch_id = ctx.branch_id;
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) {
+      where.branch_id = ctx.branch_id;
     } 
 
-    // D. User Logic
-    // If setting is enabled, restrict to current user
-    if (enable_user_wise_data === "true" || enable_user_wise_data === true) {
-      if (ctx.user_id) where.user_id = ctx.user_id;
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) {
+      where.user_id = ctx.user_id;
+    }
+
+  } else {
+    // --- LOOSE BEHAVIOR (-1 OR ContextID) ---
+    
+    // 1. Company Logic (Always check context)
+    if (ctx.company_id) {
+      where.company_id = { [Op.or]: [-1, ctx.company_id] };
+    }
+
+    // 2. Branch Logic (ONLY if enabled in settings)
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) {
+       where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+    }
+
+    // 3. User Logic (ONLY if enabled in settings)
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) {
+       where.user_id = { [Op.or]: [-1, ctx.user_id] };
     }
   }
   return where;
@@ -471,8 +483,8 @@ module.exports = {
     return model.max(field, { where, transaction });
   },
 
-  // 10. ADVANCED PAGINATION
-  async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt") {
+    // 10. ADVANCED PAGINATION
+async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
     try {
       const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
         key,
@@ -499,8 +511,8 @@ module.exports = {
         }
       } 
       else if (reqBody?.status === "All") {
+        // Optional: explicitly allow all statuses if needed, usually we just don't filter
         delete filters.status;
-        // filters.status = { [Op.or]: [0, 1, 2] }; 
       }
 
       // B. Filter Object
@@ -527,7 +539,7 @@ module.exports = {
         if (Object.keys(dateFilter).length > 0) filters[dateField] = dateFilter;
       }
 
-      // E. Search
+      // E. Search Logic
       const allowedSearchable = standardizedConfig.filter(f => f.searchable);
       let searchFields = reqBody?.searchFields || allowedSearchable.map(f => f.key);
       searchFields = searchFields.filter(key => allowedSearchable.some(f => f.key === key));
@@ -561,25 +573,48 @@ module.exports = {
         if (orConditions.length > 0) filters[Op.or] = orConditions;
       }
 
+      // 👇 CHANGE 2: Merge customWhere (User Access Logic)
+      if (customWhere && (Object.keys(customWhere).length > 0 || Object.getOwnPropertySymbols(customWhere).length > 0)) {
+        // If both Search and Custom Filter use [Op.or], we must use [Op.and] to combine them
+        if (filters[Op.or] && customWhere[Op.or]) {
+            filters = {
+                [Op.and]: [
+                    { [Op.or]: filters[Op.or] },      // The Search conditions
+                    { [Op.or]: customWhere[Op.or] }   // The Custom conditions
+                ],
+                ...filters,
+                ...customWhere
+            };
+            delete filters[Op.or]; // Remove top-level collision
+            delete customWhere[Op.or]; // Ensure we don't overwrite
+        } else {
+            // Safe merge including Symbols
+            filters = { ...filters, ...customWhere };
+            // Manually copy Symbols (like Op.or) just in case
+            const symbols = Object.getOwnPropertySymbols(customWhere);
+            for (const sym of symbols) {
+                filters[sym] = customWhere[sym];
+            }
+        }
+      }
+
       // Sorting
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
-      console.log("Sortable Fields:", sortableFields);
       let order = [['createdAt', 'DESC']];
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
         order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
       }
-      
 
       // Execution
       let data = await module.exports.findAllRecords(
         model,
-        filters, // Passed to buildWhere internally
+        filters, 
         { ...options, skip, limit, order, subQuery: false },
         null,
         requireTenantFields
       );
 
-      // Sticky Includes
+      // Sticky Includes (Logic preserved)
       if (reqBody?.include && typeof reqBody?.include === "object") {
         const includeConditions = [];
         for (const [key, value] of Object.entries(reqBody?.include)) {
@@ -628,5 +663,5 @@ module.exports = {
       console.error("FetchPaginatedData Error:", err);
       throw err;
     }
-  },
-};
+  }
+  }

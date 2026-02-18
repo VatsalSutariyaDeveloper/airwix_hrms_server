@@ -155,6 +155,7 @@ module.exports = (sequelize, DataTypes) => {
       user_id: { type: DataTypes.INTEGER, allowNull: false },
       branch_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
       company_id: { type: DataTypes.INTEGER, allowNull: false },
+      organization_id: { type: DataTypes.INTEGER, allowNull: true },
     },
     {
       tableName: "company_subscriptions",

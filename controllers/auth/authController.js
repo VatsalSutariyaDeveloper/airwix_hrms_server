@@ -1,5 +1,5 @@
-const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError, otpService, uploadFile, constants, initializeCompanySettings } = require("../../helpers");
+const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization } = require("../../models");
+const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings } = require("../../helpers");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
@@ -160,7 +160,10 @@ exports.register = async (req, res) => {
     }
 
     // 1. Create Company
-    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, {}, { order: [["company_code", "DESC"]] }, transaction);
+    const lastCompany = await CompanyMaster.findOne({
+      order: [["company_code", "DESC"]],
+      transaction
+    });
 
     let nextNumber = 1;
     
@@ -168,9 +171,28 @@ exports.register = async (req, res) => {
       nextNumber = parseInt(lastCompany.company_code.match(/\d+$/)[0], 10) + 1;
     }
     const company_code = `CM${String(nextNumber).padStart(3, "0")}`;
+    
+    // 🏆 Generate Unique Organization Code
+    const lastOrg = await Organization.findOne({
+      order: [["code", "DESC"]],
+      transaction
+    });
 
-    const newCompany = await commonQuery.createRecord(CompanyMaster, {
+    let nextOrgNumber = 1;
+    if (lastOrg?.code?.match(/\d+$/)) {
+      nextOrgNumber = parseInt(lastOrg.code.match(/\d+$/)[0], 10) + 1;
+    }
+    const organization_code = `ORG-${String(nextOrgNumber).padStart(3, "0")}`;
+
+    // Create Organization for the first time
+    const newOrg = await Organization.create({
+      name: company_name,
+      code: organization_code,
+    }, { transaction });
+
+    const newCompany = await CompanyMaster.create({
         company_name, company_code,
+        organization_id: newOrg.id,
         legal_name:legal_name || null,
         address:address || null,
         mobile_no:mobile_no || null,
@@ -188,10 +210,13 @@ exports.register = async (req, res) => {
         company_id: 0,
         status: 0,
         default_company: 1
-    }, transaction);
+    }, { transaction });
 
     // 2. Create User (Step 1)
-    const defaultPermission = await commonQuery.findOneRecord(RolePermission, { company_id: -1, status: 0 }, {}, transaction);
+    const defaultPermission = await RolePermission.findOne({
+      where: { company_id: -1, status: 0 },
+      transaction
+    });
     
     let hashedPassword = null;
     if (password) {
@@ -199,7 +224,7 @@ exports.register = async (req, res) => {
         hashedPassword = await bcrypt.hash(password, salt);
     }
 
-    const newUser = await commonQuery.createRecord(User, {
+    const newUser = await User.create({
         user_name,
         email,
         mobile_no: verifiedMobile,
@@ -214,57 +239,42 @@ exports.register = async (req, res) => {
         company_id: newCompany.id,
         company_access: JSON.stringify([newCompany.id]),
         status: 0
-    }, transaction);
+    }, { transaction });
 
     // 3. Create Branch
-    const newBranch = await commonQuery.createRecord(BranchMaster, {
+    const newBranch = await BranchMaster.create({
         branch_name: "Main Branch", country_id: country_id || null, state_id: state_id || null,
         city: city || null, pincode: pincode || null, is_main_branch: 1,
         company_id: newCompany.id, user_id: newUser.id 
-    }, transaction);
+    }, { transaction });
 
     // 4. Update User with Branch ID
-    await commonQuery.updateRecordById(User, newUser.id, { branch_id: newBranch.id }, transaction);
+    await User.update(
+      { branch_id: newBranch.id },
+      { where: { id: newUser.id }, transaction }
+    );
 
     // 5. Create Godown
-    await commonQuery.createRecord(GodownMaster, {
+    await GodownMaster.create({
         name: "Main Warehouse", address: city || "Main Location", branch_id: newBranch.id,
         company_id: newCompany.id, user_id: newUser.id
-    }, transaction);
+    }, { transaction });
 
-    // 6. Configs
-    // const defaultSettings = await commonQuery.findAllRecords(
-    //   CompanyConfigration, { company_id: -2, status: 0 }, {}, transaction, false
-    // );
-    // if (defaultSettings.length > 0) {
-    //   const settingsPayload = defaultSettings.map(s => ({
-    //     setting_key: s.setting_key, setting_value: s.setting_value, description: s.description,
-    //     status: 0, company_id: newCompany.id, branch_id: newBranch.id, user_id: newUser.id
-    //   }));
-    //   await commonQuery.bulkCreate(CompanyConfigration, settingsPayload, { company_id: newCompany.id }, transaction);
-    // }
     await initializeCompanySettings(newCompany.id, newBranch.id, newUser.id, transaction);
 
     // ---------------------------------------------------------
     // 🆕 NEW LOGIC: START 2-DAY FREE TRIAL
     // ---------------------------------------------------------
-    
-    // A. Find a "Template" Plan to copy features from.
-    // Ideally, fetch a plan named 'Trial' or the 'Premium' plan so they see all features.
-    // If no plan exists, we can't create a subscription (Database constraint).
-    const trialBasePlan = await commonQuery.findOneRecord(
-        SubscriptionPlan, 
-        { status: 0 }, // Get any active plan
-        { order: [['price', 'DESC']] }, // Tip: Give them the BEST plan for the trial (Highest Price)
+    const trialBasePlan = await SubscriptionPlan.findOne({
+        where: { status: 0 },
+        order: [['price', 'DESC']],
         transaction
-    );
+    });
 
     if (trialBasePlan) {
         const startDate = moment().format("YYYY-MM-DD");
-        const endDate = moment().add(2, "days").format("YYYY-MM-DD"); // 2 Days Validity
+        const endDate = moment().add(2, "days").format("YYYY-MM-DD");
 
-        // B. Prepare the Trial Data
-        // We copy all "enable_xxx" features from the plan so the trial works exactly like the real thing
         const trialSubscriptionData = {
             company_id: newCompany.id,
             subscription_plan_id: trialBasePlan.id,
@@ -273,27 +283,24 @@ exports.register = async (req, res) => {
             start_date: startDate,
             end_date: endDate,
             duration_days: 2,
-            is_trial: true, // <--- Flag this as a Trial
-            status: 0,      // Active
+            is_trial: true,
+            status: 0,
             branch_id: newBranch.id, 
             user_id: newUser.id,
+            organization_id: newOrg.id,
             
-            // Copy Limits from the plan
             user_limit: trialBasePlan.user_limit,
             companies_limit: trialBasePlan.companies_limit,
-            // ... (You can spread the rest of the plan details if your DB structure matches)
-            ...trialBasePlan.toJSON(), // safely copies enable_invoicing, enable_gst, etc.
+            ...trialBasePlan.toJSON(),
         };
 
-        // Clean up fields that shouldn't be copied from the plan to the sub
         delete trialSubscriptionData.id;
         delete trialSubscriptionData.createdAt;
         delete trialSubscriptionData.updatedAt;
         delete trialSubscriptionData.price;
-        delete trialSubscriptionData.name; // Keep the plan name separate if needed, or don't copy it
+        delete trialSubscriptionData.name;
 
-        // C. Create the Subscription Record
-        await commonQuery.createRecord(CompanySubscription, trialSubscriptionData, transaction);
+        await CompanySubscription.create(trialSubscriptionData, { transaction });
         
         console.log(`Trial started for Company ${newCompany.id} until ${endDate}`);
     } else {
@@ -311,7 +318,8 @@ exports.register = async (req, res) => {
     const token = jwt.sign(
       {
         id: newUser.id,
-        company_id: newUser.company_id
+        company_id: newUser.company_id,
+        organization_id: newOrg.id
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }
@@ -338,12 +346,10 @@ exports.requestActivation = async (req, res) => {
       return res.error(constants.REQUIRED_FIELD_MISSING, { message: "Company ID is required." });
     }
 
-    const company = await commonQuery.findOneRecord(
-      CompanyMaster, 
-      company_id, 
-      {}, 
+    const company = await CompanyMaster.findOne({
+      where: { id: company_id },
       transaction
-    );
+    });
 
     if (!company) {
       await transaction.rollback();
@@ -355,28 +361,22 @@ exports.requestActivation = async (req, res) => {
       return res.error(constants.ACCOUNT_ALREADY_ACTIVE);
     }
 
-    const user = await commonQuery.findOneRecord(
-      User,
-      { id: user_id },
-      {},
+    const user = await User.findOne({
+      where: { id: user_id },
       transaction
-    );
+    });
 
     if (!user) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);
     }
 
-    await commonQuery.createRecord(
-      ActivationRequest,
-      {
+    await ActivationRequest.create({
         company_id,
         user_id,
         request_message: message || "Please reactive my account.",
         status: 'pending'
-      },
-      transaction
-    );
+    }, { transaction });
 
     const adminEmail = process.env.ADMIN_EMAIL || "info@airwix.in"; 
     const companyEmail = company.email || user.email;

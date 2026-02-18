@@ -482,32 +482,34 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
 
 exports.updateDocumentUsedLimit = async (companyId, field, by=1, transaction) => {
     try {
-      const record = await commonQuery.findOneRecord(
-          CompanyMaster, 
-          companyId,
-          { attributes: ['id', 'company_id'] }
-      );
+      console.log("-----------------------------------------companyId",companyId)
+      const record = await CompanyMaster.findOne({
+          where: { id: companyId },
+          attributes: ['id', 'company_id', 'organization_id'],
+          transaction
+      });
 
       if (!record) {
         fail("NOT_FOUND", { message : "Invalid or missing company record."});
       }
       
-      // if (!record) {
-      //     return res.error("NOT_FOUND", { message : "Invalid or missing company record."});
-      // }
-  
+      let orgId = record.organization_id;
+      let subscriptionWhere = {};
       let company_id = record.company_id || record.id;
-      console.log(`Updating used limit for company ${company_id}, field: used_${field}, by: ${by}`);
+      if (orgId) {
+          subscriptionWhere = { organization_id: orgId, status: 0 };
+      } else {
+          subscriptionWhere = { company_id: company_id, status: 0 };
+      }
+
+      console.log(`Updating used limit for ${orgId ? 'organization ' + orgId : 'company ' + record.id}, field: used_${field}, by: ${by}`);
       
-      // First find the specific subscription record for this company
-      const subscriptionRecord = await commonQuery.findOneRecord(
-        CompanySubscription,
-        {
-          company_id: company_id,
-          status: 0
-        },
-        { attributes: ['id'] }
-      );
+      // First find the specific subscription record for this company or organization
+      const subscriptionRecord = await CompanySubscription.findOne({
+        where: subscriptionWhere,
+        attributes: ['id'],
+        transaction
+      });
       
       if (!subscriptionRecord) {
           console.warn(`No active subscription found for company ${company_id}`);

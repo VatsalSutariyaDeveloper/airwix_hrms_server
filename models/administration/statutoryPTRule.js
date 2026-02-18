@@ -31,7 +31,8 @@ module.exports = (sequelize, DataTypes) => {
     company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, },
   }, {
     tableName: "statutory_pt_rules",
-    timestamps: true // These are static rules, rarely change
+    timestamps: true,
+    underscored: true,
   });
 
   StatutoryPTRule.associate = (models) => {

@@ -29,7 +29,8 @@ module.exports = (sequelize, DataTypes) => {
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
   }, {
     tableName: "employee_salary_templates",
-    timestamps: true
+    timestamps: true,
+    underscored: true
   });
 
   EmployeeSalaryTemplate.associate = models => {

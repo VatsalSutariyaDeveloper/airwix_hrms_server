@@ -11,6 +11,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       role_id: user.role_id,
       branch_id: user.branch_id,
       company_id: companyId,
+      organization_id: user.organization_id || null,
       access_by: access_by,
       is_attendance_supervisor: user.is_attendance_supervisor,
       is_reporting_manager: user.is_reporting_manager

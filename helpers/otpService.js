@@ -1,9 +1,8 @@
 const { OtpVerification } = require("../models");
-const commonQuery = require("../helpers/commonQuery");
 const otpRateLimit = require("./otpRateLimit");
 
 // Configuration
-const OTP_EXPIRY_MINUTES = 1;
+const OTP_EXPIRY_MINUTES = 10;
 const IS_DEV_MODE = true; 
 
 const generateNumericOTP = (length = 6) => {
@@ -19,17 +18,26 @@ const delivery_challanSms = async (mobile_no, otp) => {
 
 module.exports = {
   sendOtp: async (mobile_no, transaction) => {
-    // TODO: Remove this when going live
+    // TODO: Remove this hardcoded OTP when going live
     // const otp = generateNumericOTP(6);
     const otp = "123456";
     const expires_at = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
-    const existing = await commonQuery.findOneRecord(OtpVerification, { mobile_no }, {}, transaction, false, false);
+    const existing = await OtpVerification.findOne({
+      where: { mobile_no },
+      transaction
+    });
 
     if (existing) {
-      await commonQuery.updateRecordById(OtpVerification, { id: existing.id }, { otp, expires_at, is_verified: 0, status: 0 }, transaction, false, false);
+      await OtpVerification.update(
+        { otp, expires_at, is_verified: 0, status: 0 },
+        { where: { id: existing.id }, transaction }
+      );
     } else {
-      await commonQuery.createRecord(OtpVerification, { mobile_no, otp, expires_at, is_verified: 0, status: 0 }, transaction, false);
+      await OtpVerification.create(
+        { mobile_no, otp, expires_at, is_verified: 0, status: 0 },
+        { transaction }
+      );
     }
 
     await delivery_challanSms(mobile_no, otp);
@@ -37,7 +45,9 @@ module.exports = {
   },
 
   verifyOtp: async (mobile_no, otp) => {
-    const record = await commonQuery.findOneRecord(OtpVerification, { mobile_no }, {}, null, false, false);
+    const record = await OtpVerification.findOne({
+      where: { mobile_no }
+    });
 
     // ✅ THROW OBJECTS WITH STATUS AND MESSAGE
     if (!record) {
@@ -53,7 +63,10 @@ module.exports = {
     }
 
     // Mark as verified
-    await commonQuery.updateRecordById(OtpVerification, { id: record.id }, { is_verified: 1, status: 1 }, null, false, false);
+    await OtpVerification.update(
+      { is_verified: 1, status: 1 },
+      { where: { id: record.id } }
+    );
 
     // 🎉 Successful OTP → Reset Limit
     await otpRateLimit.resetAttempts(mobile_no);
@@ -62,9 +75,9 @@ module.exports = {
   },
 
   cleanupOtp: async (mobile_no, transaction) => {
-     const record = await commonQuery.findOneRecord(OtpVerification, { mobile_no }, {}, transaction, false, false);
-     if (record) {
-       await commonQuery.hardDeleteRecords(OtpVerification, { mobile_no }, transaction, false);
-     }
+     await OtpVerification.destroy({
+       where: { mobile_no },
+       transaction
+     });
   }
 };

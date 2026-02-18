@@ -59,7 +59,7 @@ exports.getAll = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
                 ]
-            }
+            }, false
         );
 
         return res.ok(data);
@@ -92,7 +92,7 @@ exports.dropdownList = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
                 ]
-            }
+            }, false
         );
 
         return res.ok(result);
@@ -255,7 +255,7 @@ exports.getStatesWithRules = async (req, res) => {
                     attributes: ['id', 'state_name'] 
                 }],
                 group: ['StatutoryPTRule.state_id', 'state.id', 'state.state_name'],
-            }
+            }, null, false
         );
         
         const states = rules.map(r => r.state).filter(Boolean);

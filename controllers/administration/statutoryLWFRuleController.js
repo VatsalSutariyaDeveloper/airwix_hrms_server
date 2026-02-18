@@ -56,7 +56,8 @@ exports.getAll = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
                 ]
-            }
+            },
+            false
         );
 
         return res.ok(data);
@@ -88,7 +89,8 @@ exports.dropdownList = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
                 ]
-            }
+            },
+            false
         );
 
         return res.ok(result);
@@ -249,7 +251,7 @@ exports.getStatesWithRules = async (req, res) => {
                     attributes: ['id', 'state_name'] 
                 }],
                 group: ['StatutoryLWFRule.state_id', 'state.id', 'state.state_name'],
-            }
+            },null, false
         );
         
         const states = rules.map(r => r.state).filter(Boolean);

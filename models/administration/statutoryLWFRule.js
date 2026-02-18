@@ -18,7 +18,8 @@ module.exports = (sequelize, DataTypes) => {
     company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, },
   }, { 
     tableName: "statutory_lwf_rules",
-    timestamps: true 
+    timestamps: true,
+    underscored: true, 
   });
  
   StatutoryLWFRule.associate = (models) => {
