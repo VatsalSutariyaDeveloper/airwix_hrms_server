@@ -93,16 +93,19 @@ exports.updateByEmployeeId = async (req, res) => {
             const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, searchCriteria, {}, transaction);
 
             if (existingBalance) {
-                const newTotal = parseFloat(bal.leave_count !== undefined ? bal.leave_count : bal.total_allocated || 0);
+                let newTotal = parseFloat(bal.leave_count !== undefined ? bal.leave_count : bal.total_allocated || 0);
+                newTotal = Math.round(newTotal * 2) / 2;
+                
                 const used = parseFloat(existingBalance.used_leaves || 0);
-                const carryForward = parseFloat(existingBalance.carry_forward_leaves || 0);
+                const carryForward = Math.round(parseFloat(existingBalance.carry_forward_leaves || 0) * 2) / 2;
                 const isPaid = bal.is_paid !== undefined ? bal.is_paid : existingBalance.is_paid;
+                const isCompOff = bal.is_compoff !== undefined ? bal.is_compoff : existingBalance.is_compoff;
 
-                let pending = (newTotal + carryForward) - used;
+                let pending = Math.round(((newTotal + carryForward) - used) * 2) / 2;
                 
                 // If it's unpaid leave OR if the allocation is 0, keep pending at 0 to avoid negative values
-                if (!isPaid || newTotal === 0) {
-                    pending = 0;
+                if ((!isPaid && !isCompOff) || pending < 0) {
+                    pending = Math.max(0, pending);
                 }
 
                 const updateData = {
@@ -110,15 +113,17 @@ exports.updateByEmployeeId = async (req, res) => {
                     pending_leaves: pending,
                     leave_category_name: bal.leave_category_name || existingBalance.leave_category_name,
                     unused_leave_rule: bal.unused_leave_rule || existingBalance.unused_leave_rule,
-                    carry_forward_limit: bal.carry_forward_limit !== undefined ? bal.carry_forward_limit : existingBalance.carry_forward_limit,
-                    is_paid: bal.is_paid !== undefined ? bal.is_paid : existingBalance.is_paid,
+                    carry_forward_limit: bal.carry_forward_limit !== undefined ? (Math.round(bal.carry_forward_limit * 2) / 2) : existingBalance.carry_forward_limit,
+                    is_paid: isPaid,
+                    is_compoff: isCompOff,
                     automation_rules: bal.automation_rules !== undefined ? bal.automation_rules : existingBalance.automation_rules,
                 };
 
                 await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, updateData, transaction);
             } else if (bal.leave_category_id && employee.leave_template) {
                 // Create if it doesn't exist (e.g. manually adding a category that was missed)
-                const newTotal = parseFloat(bal.leave_count || bal.total_allocated || 0);
+                let newTotal = parseFloat(bal.leave_count || bal.total_allocated || 0);
+                newTotal = Math.round(newTotal * 2) / 2;
                 
                 // Get cycle year
                 const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
@@ -133,8 +138,9 @@ exports.updateByEmployeeId = async (req, res) => {
                     total_allocated: newTotal,
                     pending_leaves: newTotal,
                     unused_leave_rule: bal.unused_leave_rule || 'LAPSE',
-                    carry_forward_limit: bal.carry_forward_limit || 0,
+                    carry_forward_limit: bal.carry_forward_limit !== undefined ? (Math.round(bal.carry_forward_limit * 2) / 2) : 0,
                     is_paid: bal.is_paid !== undefined ? bal.is_paid : true,
+                    is_compoff: bal.is_compoff !== undefined ? bal.is_compoff : false,
                     automation_rules: bal.automation_rules || null,
                     company_id: employee.company_id,
                     status: 0

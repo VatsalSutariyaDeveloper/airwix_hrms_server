@@ -194,6 +194,7 @@ router.post("/leave-request/pending-approvals", leaveRequestController.getPendin
 router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
+router.post("/leave-request/calculate-days", leaveRequestController.calculateLeaveDays);
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================

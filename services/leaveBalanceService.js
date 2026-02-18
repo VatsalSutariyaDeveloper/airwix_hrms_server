@@ -119,6 +119,9 @@ class LeaveBalanceService {
                     }
                 }
 
+                // Apply Rounding to Allocation
+                allocated = Math.round(allocated * 2) / 2;
+
                 // Metadata to store from template category
                 const metaFields = {
                     leave_category_name: category.leave_category_name,
@@ -140,11 +143,11 @@ class LeaveBalanceService {
                 // Calculate pending leaves (considering existing usage if applicable)
                 const carryForward = existingBalance ? parseFloat(existingBalance.carry_forward_leaves || 0) : 0;
                 const used = existingBalance ? parseFloat(existingBalance.used_leaves || 0) : 0;
-                let pending = allocated + carryForward - used;
+                let pending = Math.round((allocated + carryForward - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
-                if (!category.is_paid || allocated === 0) {
-                    pending = 0;
+                if ((!category.is_paid && !category.is_compoff) || pending < 0) {
+                    pending = Math.max(0, pending);
                 }
 
                 if (existingBalance) {
@@ -523,6 +526,38 @@ class LeaveBalanceService {
             if (!transaction && !t.finished) await t.rollback();
             return error.message; // Return error message instead of throwing to allow better caller handling
         }
+    }
+    /**
+     * Calculates total leave days for a range, respecting sandwich policy.
+     */
+    static async calculateWorkingDays(employeeId, startDate, endDate, transaction = null) {
+        const { getDayOffInfo } = require("../helpers/attendanceHelper");
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+        
+        if (!employee) return 0;
+        
+        const template = employee.leaveTemplate;
+        const countSandwich = template ? template.count_sandwich_leaves : false;
+
+        const start = dayjs(startDate);
+        const end = dayjs(endDate);
+        const calendarDays = end.diff(start, 'day') + 1;
+        
+        let workingDays = 0;
+        for (let i = 0; i < calendarDays; i++) {
+            const cur = start.add(i, 'day').format('YYYY-MM-DD');
+            if (countSandwich) {
+                workingDays += 1;
+            } else {
+                const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, cur, transaction);
+                if (!isHoliday && !isWeeklyOff) {
+                    workingDays += 1;
+                }
+            }
+        }
+        return workingDays;
     }
 }
 
