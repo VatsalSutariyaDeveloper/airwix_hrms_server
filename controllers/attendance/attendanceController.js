@@ -482,22 +482,21 @@ exports.updateAttendanceDay = async (req, res) => {
         company_id: req.user.company_id,
         branch_id: req.user.branch_id,
         shift_id: shift_id,
-        bypassShiftRestrictions: true
+        bypassShiftRestrictions: true,
+        employee: emp, // Pass pre-fetched employee
+        existingDay: day // Pass pre-fetched day
       }, t);
     }
  
      // Handle manualPunch with status 1,2,3,5 - delete punches for today
-    if ([1, 3, 4, 6].includes(req.body.status)) {
-      const today = dayjs().format('YYYY-MM-DD');
-      console.log("update manualPunch for status 1,2,3,5 - deleting punches for today");
-      const deletedPunches = await commonQuery.updateRecordById(
+    // Clear punches for non-working status
+    if ([1, 3, 4, 5, 6].includes(req.body.status)) {
+      console.log(`Clearing punches for status ${req.body.status} on ${attendance_date}`);
+      await commonQuery.updateRecordById(
         AttendancePunch, 
         {
           employee_id: employee_id,
-          punch_time: {
-            [Op.between]: [`${today} 00:00:00`, `${today} 23:59:59`]
-          },
-          device_id: "MANUAL",
+          day_id: day.id,
           status: 0
         }, 
         { status: 2 }, t);
@@ -717,13 +716,31 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Employee IDs array and Date are required");
     }
 
+    // Pre-fetch all employees to avoid redundant queries in the loop
+    const employees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employee_ids } }, {
+      include: [
+        { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+      ]
+    }, t);
+    const empMap = new Map(employees.map(e => [e.id, e]));
+
     for (const employee_id of employee_ids) {
+      const emp = empMap.get(employee_id);
+      
+      const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
+        employee_id, 
+        attendance_date,
+      }, {}, t);
+
       // Reuse manualPunch if times are provided
       if (first_in || last_out) {
         await manualPunch(employee_id, attendance_date, first_in, last_out, {
           user_id: req.user.id,
           company_id: req.user.company_id,
-          branch_id: req.user.branch_id
+          branch_id: req.user.branch_id,
+          employee: emp, // Pass pre-fetched employee
+          existingDay: existingRecord // Pass pre-fetched day
         }, t);
       }
 
@@ -750,6 +767,13 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
             payload.worked_minutes = 0;
             payload.overtime_minutes = 0;
         }
+        
+        // Also clear punches
+        await commonQuery.updateRecordById(AttendancePunch, {
+          employee_id,
+          day_id: existingRecord?.id,
+          status: 0
+        }, { status: 2 }, t);
       }
 
       if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
@@ -760,13 +784,8 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
-      const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-        employee_id, 
-        attendance_date,
-      }, {}, t);
-
       // Synchronize leave balance based on status changes (Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t, emp);
       if (balanceError) {
         await t.rollback();
         return res.error(balanceError);
@@ -860,7 +879,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
       const dayOfWeek = dayjs(attendance_date).day();
       const weekNo = Math.ceil(dayjs(attendance_date).date() / 7);
 
-      const [isHoliday, isWeeklyOff] = await Promise.all([
+      let [isHoliday, isWeeklyOff] = await Promise.all([
         commonQuery.findOneRecord(EmployeeHoliday, { 
           employee_id, 
           date: attendance_date, 
@@ -874,6 +893,24 @@ exports.getAttendanceDayDetails = async (req, res) => {
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
         })
       ]);
+
+      // Fallback to Master Templates
+      if (!isHoliday && attendanceDay?.employee?.holiday_template) {
+          isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
+              template_id: attendanceDay.employee.holiday_template,
+              date: attendance_date,
+              status: 0
+          });
+      }
+      if (!isWeeklyOff && attendanceDay?.employee?.weekly_off_template) {
+          isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
+              template_id: attendanceDay.employee.weekly_off_template,
+              day_of_week: dayOfWeek,
+              [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+              is_off: true,
+              status: 0
+          });
+      }
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
       attendanceDayJson.is_scheduled_weekly_off = !!isWeeklyOff;
@@ -974,15 +1011,30 @@ exports.getMonthlyAttendance = async (req, res) => {
     });
 
     // 2.1 Fetch Holidays for the month
-    const employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
+    let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
       date: { [Op.between]: [startDate, endDate] }
     });
+    // Fallback to Master Template
+    if (employeeHolidays.length === 0 && employee.holiday_template) {
+        employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
+            template_id: employee.holiday_template,
+            date: { [Op.between]: [startDate, endDate] },
+            status: 0
+        });
+    }
 
     // 2.2 Fetch Weekly Offs for the employee
-    const employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+    let employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
       employee_id,
     });
+    // Fallback to Master Template
+    if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
+        employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
+            template_id: employee.weekly_off_template,
+            status: 0
+        });
+    }
 
     // 3. Fetch all raw punches for the month with User info
     const punches = await commonQuery.findAllRecords(AttendancePunch, {

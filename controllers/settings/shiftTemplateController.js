@@ -183,8 +183,9 @@ exports.update = async (req, res) => {
 
         // Trigger sync for all employees using this template
         const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
-        for (const emp of employeesToSync) {
-            await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'shift_template', req.params.id, null, transaction);
+        if (employeesToSync.length > 0) {
+            const employeeIds = employeesToSync.map(emp => emp.id);
+            await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'shift_template', req.params.id, transaction);
         }
 
         await transaction.commit();

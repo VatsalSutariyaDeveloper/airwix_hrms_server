@@ -9,7 +9,14 @@ const {
     EmployeeSalaryTemplate,
     WeeklyOffTemplate,
     WeeklyOffTemplateDay,
-    EmployeeSettings
+    EmployeeSettings,
+    AttendanceTemplate,
+    HolidayTransaction,
+    LeaveTemplate,
+    LeaveTemplateCategory,
+    SalaryTemplate,
+    SalaryTemplateTransaction,
+    ShiftTemplate
 } = require("../../models");
 
 const {
@@ -726,7 +733,7 @@ exports.assignRole = async (req, res) => {
 exports.assignTemplate = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        let { field_name, employees, is_select_all, filter_params, target_value } = req.body;
+        let { field_name, employees, is_select_all, filter_params, target_value, excluded_ids } = req.body;
 
         if (is_select_all) {
             const where = {};
@@ -738,6 +745,11 @@ exports.assignTemplate = async (req, res) => {
                     { last_name: { [Op.like]: `%${filter_params.search}%` } },
                     { employee_code: { [Op.like]: `%${filter_params.search}%` } } // Added common search field
                 ];
+            }
+
+            // Exclude specifically deselected IDs
+            if (Array.isArray(excluded_ids) && excluded_ids.length > 0) {
+                where.id = { [Op.notIn]: excluded_ids };
             }
 
             // Example: Apply Tab Context (Assigned vs Unassigned)
@@ -777,25 +789,87 @@ exports.assignTemplate = async (req, res) => {
             return res.error(constants.EMPLOYEE_DATA_IS_REQUIRED_AND_MUST_BE_AN_ARRAY);
         }
 
-        // 3. Process Updates in Chunks for Concurrency
-        const CHUNK_SIZE = 10;
+        // 3. Pre-fetch Master Data and Employees for optimization
+        const firstEmployee = employees[0];
+        const commonValue = employees.every(e => e.value === firstEmployee.value) ? firstEmployee.value : null;
+        
+        let masterData = null;
+        if (commonValue) {
+            switch (field_name) {
+                case 'attendance_setting_template':
+                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction);
+                    break;
+                case 'holiday_template':
+                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction);
+                    break;
+                case 'weekly_off_template':
+                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction);
+                    break;
+                case 'leave_template':
+                    masterData = await commonQuery.findOneRecord(LeaveTemplate, commonValue, {
+                        include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
+                    }, transaction);
+                    break;
+                case 'salary_template_id':
+                    masterData = await commonQuery.findOneRecord(SalaryTemplate, commonValue, {
+                        include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
+                    }, transaction);
+                    break;
+                case 'shift_template':
+                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction);
+                    break;
+            }
+        }
+
+        // Pre-fetch all involved employees (needed for leave sync and attendance logic)
+        const employeeIds = employees.map(e => e.id);
+        const preFetchedEmployees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employeeIds } }, {}, transaction);
+        const empMap = new Map(preFetchedEmployees.map(e => [e.id, e]));
+
+        // 4. Group employees by target value for bulk processing
+        const groups = {};
+        employees.forEach(emp => {
+            if (emp.id && emp.value !== undefined) {
+                if (!groups[emp.value]) groups[emp.value] = [];
+                groups[emp.value].push(emp.id);
+            }
+        });
+
         const employeeIdsToRebuild = [];
 
-        for (let i = 0; i < employees.length; i += CHUNK_SIZE) {
-            const chunk = employees.slice(i, i + CHUNK_SIZE);
+        for (const [val, ids] of Object.entries(groups)) {
+            const targetValue = val === 'null' ? null : parseInt(val);
+            
+            // 1. Bulk Update Employee table
+            await commonQuery.updateRecordById(Employee, { id: { [Op.in]: ids } }, { [field_name]: targetValue }, transaction);
 
-            await Promise.all(chunk.map(async (emp) => {
-                if (emp.id && emp.value !== undefined) {
-                    // Update each employee record
-                    await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
+            // 2. Bulk Sync Templates (skip rebuild for now)
+            const syncMeta = {
+                preFetchedMaster: (targetValue === commonValue) ? masterData : null,
+                skipRebuild: true
+            };
 
-                    // Sync the specific template that was assigned
-                    // We pass skipRebuild = true to avoid heavy calculations inside the transaction loop
-                    await EmployeeTemplateService.syncSpecificTemplate(emp.id, field_name, emp.value, null, transaction, true);
+            await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, field_name, targetValue, transaction, syncMeta);
+            
+            // 3. Collect IDs for background rebuild
+            employeeIdsToRebuild.push(...ids);
+            
+            // Special case: If weekly_off_template is updated, we MUST also re-sync shift_templates 
+            // because shift day-wise settings (EmployeeShift) depend on weekly off days.
+            if (field_name === 'weekly_off_template') {
+                const employeesWithShifts = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: ids }, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction);
+                const shiftGroups = {};
+                employeesWithShifts.forEach(e => {
+                    if (e.shift_template) {
+                        if (!shiftGroups[e.shift_template]) shiftGroups[e.shift_template] = [];
+                        shiftGroups[e.shift_template].push(e.id);
+                    }
+                });
 
-                    employeeIdsToRebuild.push(emp.id);
+                for (const [sId, sIds] of Object.entries(shiftGroups)) {
+                    await EmployeeTemplateService.bulkSyncSpecificTemplate(sIds, 'shift_template', parseInt(sId), transaction, { skipRebuild: true });
                 }
-            }));
+            }
         }
 
         await transaction.commit();
@@ -809,15 +883,8 @@ exports.assignTemplate = async (req, res) => {
             (async () => {
                 try {
                     console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
-                    // We process rebuilds sequentially or with limited concurrency to avoid overwhelming the DB
-                    // Since this is background, we don't use the main transaction.
-                    for (const empId of employeeIdsToRebuild) {
-                        try {
-                            await EmployeeTemplateService.rebuildCurrentMonthAttendance(empId, null);
-                        } catch (rebuildErr) {
-                            console.error(`[Background] Error rebuilding attendance for employee ${empId}:`, rebuildErr);
-                        }
-                    }
+                    // We process rebuilds in bulk using the optimized method
+                    await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIdsToRebuild, null);
                     console.log(`[Background] Completed attendance rebuild.`);
                 } catch (err) {
                     console.error("[Background] Global error in attendance rebuild task:", err);
