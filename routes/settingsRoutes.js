@@ -26,6 +26,7 @@ const employeeLeaveBalanceController = require("../controllers/employee/employee
 const designationMasterController = require("../controllers/settings/designationMasterController");
 const incentiveTypeController = require("../controllers/settings/incentiveTypeController");
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
+const customFieldController = require("../controllers/settings/customFieldController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -252,7 +253,7 @@ router.get("/employee/download-errors", importEmployeeController.downloadErrorFi
 router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 // ==========================
-// INCENTIVE_TYPE
+// 36. INCENTIVE_TYPE
 // ==========================
 // Base Path: /incentive-type
 router.post("/incentive-type", incentiveTypeController.create);
@@ -263,7 +264,24 @@ router.put("/incentive-type/:id", incentiveTypeController.update);
 router.delete("/incentive-type", incentiveTypeController.delete);
 router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
 
+// ==========================
+// 37. CUSTOM FIELD ROUTES
+// ==========================
+// Base Path: /custom-field
+router.post("/custom-fields/", bufferImage(), customFieldController.create);
+router.post("/custom-fields/get-transactions", customFieldController.getAll);
+router.post("/custom-fields/dropdown-list", customFieldController.dropdownList);
+router.get("/custom-fields/:id", customFieldController.getById);
+router.put("/custom-fields/:id", bufferImage(), customFieldController.update);
+router.patch("/custom-fields/update-priorities", customFieldController.updatePriorities);
+router.delete("/custom-fields/", customFieldController.delete);
+router.patch("/custom-fields/status", customFieldController.updateStatus);
 
+
+// ==========================
+// 38. EMPLOYEE SETTINGS ROUTES
+// ==========================
+// Base Path: /employee-settings
 router.post("/employee-settings/", employeeSettingsController.create);
 router.post("/employee-settings/get-transactions", employeeSettingsController.getAll);
 router.put("/employee-settings/", employeeSettingsController.update);

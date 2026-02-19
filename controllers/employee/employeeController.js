@@ -91,7 +91,7 @@ const FILE_COLUMNS = [
 
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
-    const fieldsToParse = ["education_details"];
+    const fieldsToParse = ["education_details", "custom_fields"];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
