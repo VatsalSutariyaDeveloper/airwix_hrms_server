@@ -111,7 +111,7 @@ exports.login = async (req, res) => {
     const userAttributes = [
         'id', 'user_name', 'email', 'mobile_no', 'password', 
         'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 
+        'user_id', 'company_access',
     ];
 
     // --- A. DETERMINE LOGIN METHOD ---
@@ -212,7 +212,6 @@ exports.login = async (req, res) => {
         await transaction.rollback();
         return res.error(403, { message: "Use the mobile application to access this account." });
     }
-    
     // 2. Validate Company
     if (!user.company_id) {
         await transaction.rollback();
@@ -244,7 +243,7 @@ exports.login = async (req, res) => {
 
     let companyId = company.company_id || company.id;
 
-    const companyAccessList = normalizeCompanyAccess(user.company_access || "");
+    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
     if (user.role_id != 1 && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
@@ -259,7 +258,7 @@ exports.login = async (req, res) => {
     } else {
       whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
     }
-
+  
     // Use Sequelize findAll directly
     const companyList = await CompanyMaster.findAll({
         where: whereCompany,
@@ -268,7 +267,19 @@ exports.login = async (req, res) => {
         transaction
     });
     
+    
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
+
+    
+    // Validate if user.company_id exists in user's company_access
+    let finalCompanyId = defaultCompanyId;
+    if (companyAccessList.length > 0) {
+      if (companyAccessList.includes(String(user.company_id))) {
+        finalCompanyId = user.company_id;
+      } else {
+        finalCompanyId = defaultCompanyId;
+      }
+    }
 
     if(user.role_id != 1){
       // Use Sequelize findOne for Employee
@@ -284,7 +295,7 @@ exports.login = async (req, res) => {
       }
     }
 
-    const token = generateToken(user, defaultCompanyId, access_by);
+    const token = generateToken(user, finalCompanyId, access_by);
 
     // Parse User Agent
     const parser = new UAParser(req.headers["user-agent"]);
@@ -336,7 +347,7 @@ exports.login = async (req, res) => {
       is_login: 1,
       user_id: user.user_id,
       branch_id: user.branch_id,
-      company_id: defaultCompanyId,
+      company_id: finalCompanyId,
       organization_id: user.organization_id,
     };
 

@@ -269,7 +269,9 @@ const streamExport = async (config, res) => {
       currentOptions,
     );
 
+    console.log('Fetched Records Count:', records?.length || 0);
     if (records && records.length > 0) {
+      console.log('Sample Record:', records[0]);
       for (const record of records) {
         const rowData = {};
         mappers.forEach(mapper => {

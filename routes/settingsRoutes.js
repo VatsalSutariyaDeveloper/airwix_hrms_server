@@ -184,6 +184,7 @@ router.delete("/leave-template", leaveTemplateController.delete);
 router.patch("/leave-template/status", leaveTemplateController.updateStatus);
 router.post("/leave-template/dropdown-list", leaveTemplateController.dropdownList);
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
+router.post("/leave/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 // ==========================
 // 30. LEAVE REQUEST & BALANCE ROUTES
@@ -248,7 +249,7 @@ router.patch("/designation/status", designationMasterController.updateStatus);
 // Base Path: /employee
 router.get("/employee/download-errors", importEmployeeController.downloadErrorFile);
 // router.get("/download-errors", importEmployeeController.downloadErrorFile);
-// router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+router.post("/employee/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 // ==========================
 // INCENTIVE_TYPE

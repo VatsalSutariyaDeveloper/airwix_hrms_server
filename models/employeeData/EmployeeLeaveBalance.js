@@ -9,12 +9,12 @@ module.exports = (sequelize, DataTypes) => {
             },
             leave_template_id: {
                 type: DataTypes.INTEGER,
-                allowNull: false,
+                allowNull: true,
                 references: { model: "leave_templates", key: "id" },
             },
             leave_category_id: {
                 type: DataTypes.INTEGER,
-                allowNull: false,
+                allowNull: true,
                 references: { model: "leave_template_categories", key: "id" },
             },
             year: { type: DataTypes.INTEGER, allowNull: false },

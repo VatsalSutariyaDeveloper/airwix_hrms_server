@@ -19,6 +19,10 @@ exports.importData = async (req, res) => {
   let isAborted = false;
   let cancelTimeout = null;
   let keepErrorLog = false; // Flag to preserve file temporarily
+  
+  // Increase timeout for long-running imports (10 minutes)
+  req.setTimeout(10 * 60 * 1000);
+  res.setTimeout(10 * 60 * 1000);
   try {
     // 1. Validate Basic Request
     const indentErrors = await validateRequest(req.body, {
@@ -37,6 +41,8 @@ exports.importData = async (req, res) => {
        workerScriptPath = "./employeeImport.js";
       } else if (req.body.entity_name === "Item Import") {
         workerScriptPath = "./itemImport.js";
+      } else if (req.body.entity_name === "Leave Import") {
+        workerScriptPath = "./leaveImport.js";
       } else {
         if (req.file && req.file.path) fs.unlinkSync(req.file.path);
         return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid Entity Name"] });

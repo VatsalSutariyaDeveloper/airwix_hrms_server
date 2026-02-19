@@ -25,6 +25,7 @@ router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aa
 router.delete("/", employeeController.delete);
 router.post("/invite-user", employeeController.inviteUser);
 router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+router.post('/export-data', employeeController.exportData)
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);

@@ -37,6 +37,8 @@ exports.getAll = async (req, res) => {
         const fieldConfig = [
             ["payroll_month", true, true],
             ["incentive_date", true, true],
+            ["employee_name", true, true],
+            ["incentive_type_name", true, true],
         ];
 
         const data = await commonQuery.fetchPaginatedData(
@@ -49,39 +51,33 @@ exports.getAll = async (req, res) => {
                         model: Employee,
                         as: "employee",
                         required: false,
-                        attributes: [["first_name", "employee_name"]],
+                        attributes: [],
                         where: { status: { [Op.ne]: 2 } },
                     },
                     {
                         model: IncentiveType,
                         as: "incentiveType",
                         required: false,
-                        attributes: [["name", "incentive_type_name"]],
+                        attributes: [],
                         where: { status: { [Op.ne]: 2 } },
                     },
                 ],
-                raw: true,
-                nest: false,   // IMPORTANT
-                subQuery: false,
+                attributes:[
+                    "id",
+                    "employee_id",
+                    "incentive_type_id",
+                    "payroll_month",
+                    "amount",
+                    "incentive_date",
+                    "notes",
+                    "adjusted_in_payroll",
+                    "status",
+                    ["employee.first_name", "employee_name"],
+                    ["incentiveType.name", "incentive_type_name"]
+
+                ]
             }
         );
-        data.items = data.items.map(item => {
-            const employeeName = item["employee.employee_name"] || "";
-            const incentiveTypeName = item["incentiveType.incentive_type_name"] || "";
-
-            // remove unwanted keys
-            delete item["employee.employee_name"];
-            delete item["incentiveType.incentive_type_name"];
-            // ❌ remove ids from response
-            delete item.employee_id;
-            delete item.incentive_type_id;
-
-            return {
-                ...item,
-                employee_name: employeeName,
-                incentive_type_name: incentiveTypeName,
-            };
-        });
 
         return res.ok(data);
     } catch (err) {
