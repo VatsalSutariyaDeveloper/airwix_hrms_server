@@ -142,6 +142,12 @@ exports.getAttendanceSummary = async (req, res) => {
                 required: false
               },
               {
+                model: LeaveTemplateCategory,
+                as: "leaveCategory",
+                attributes: ["id", "leave_category_name"],
+                required: false
+              },
+              {
                 model: ShiftTemplate,
                 as: "shiftTemplate",
                 attributes: ["id", "shift_name", "start_time", "end_time"],
@@ -575,6 +581,12 @@ exports.updateAttendanceDay = async (req, res) => {
         if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
         if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
         if (leave_session !== undefined) payload.leave_session = leave_session;
+    }
+
+    // If status is not Half Day(1) or Leave(6), explicitly clear leave category/session
+    if (status !== undefined && ![1, 6].includes(status)) {
+      payload.leave_category_id = null;
+      payload.leave_session = null;
     }
 
     if (is_locked !== undefined) payload.is_locked = is_locked;

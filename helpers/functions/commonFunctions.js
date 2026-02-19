@@ -77,8 +77,9 @@ function fixNumber(value, decimals) {
   return Number(num.toFixed(decimals));
 }
 
-exports.fixDecimals = async function (company_id) {
-  const { decimal_points } = await getCompanySetting(company_id);
+exports.fixDecimals = async function (company_id = null) {
+  const { company_id: companyId } = getContext();
+  const { decimal_points } = await getCompanySetting(companyId);
 
   const qtyDigits =
     decimal_points !== null && decimal_points !== undefined

@@ -1271,6 +1271,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     attendancePayload.leave_category_id = meta.leave_category_id || existingDay2?.leave_category_id;
     attendancePayload.leave_session = meta.leave_session || existingDay2?.leave_session;
   }
+  else {
+    // Explicitly clear leave category/session when day is set to Present/Absent/Other
+    attendancePayload.leave_category_id = null;
+    attendancePayload.leave_session = null;
+  }
 
   if (existingDay2) {
     const error = await syncAttendanceToLeaveBalance(employeeId, existingDay2, attendancePayload, transaction, employee);
