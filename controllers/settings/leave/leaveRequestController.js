@@ -4,6 +4,7 @@ const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
+const LeaveBalanceService = require("../../../services/leaveBalanceService");
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -76,36 +77,45 @@ exports.create = async (req, res) => {
         }
 
         // 2. Fetch specific employee balance record
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        if (!employee || !employee.leaveTemplate) {
+            await transaction.rollback();
+            return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
+        }
+
+        const template = employee.leaveTemplate;
+        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(start_date));
+        
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id,
             leave_category_id,
-            year: currentYear,
+            year: cycleDates.end.year(),
+            month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 
         if (!balance) {
             await transaction.rollback();
-            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/year" });
+            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/cycle" });
         }
 
         const isPaid = balance.is_paid;
         const isCompOff = balance.is_compoff;
 
         if (isPaid || isCompOff) {
-            // -- PAID LEAVE or COMP-OFF LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
                 await transaction.rollback();
                 return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}. ${isCompOff ? 'Compensatory Off requires earned credit.' : ''}` });
             }
 
-            // Deduct from pending
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 pending_leaves: parseFloat(balance.pending_leaves) - parseFloat(total_days),
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
         } else {
-            // -- UNPAID LEAVE (LOP) LOGIC --
-            // Simply increment used_leaves (pending stays 0 or unchanged)
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
@@ -340,10 +350,14 @@ exports.updateStatus = async (req, res) => {
             approval_status === "REJECTED" || 
             approval_status === "CANCELLED"
         ) {
+            const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(leaveRequest.start_date));
+
             const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: leaveRequest.employee_id,
                 leave_category_id: leaveRequest.leave_category_id,
-                year: new Date(leaveRequest.start_date).getFullYear()
+                year: cycleDates.end.year(),
+                month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+                status: 0
             }, {}, transaction);
 
             if (balance) {
@@ -499,10 +513,19 @@ exports.cancelLeave = async (req, res) => {
         const oldStatus = leaveRequest.approval_status;
 
         // 4. Restore Balance
+        const employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        const template = employee?.leaveTemplate;
+        const LeaveBalanceService = require("../../../services/leaveBalanceService");
+        const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, template?.leave_policy_cycle || 'CALENDAR_YEAR', dayjs(leaveRequest.start_date));
+
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id: leaveRequest.employee_id,
             leave_category_id: leaveRequest.leave_category_id,
-            year: new Date(leaveRequest.start_date).getFullYear(),
+            year: cycleDates.end.year(),
+            month: template?.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 

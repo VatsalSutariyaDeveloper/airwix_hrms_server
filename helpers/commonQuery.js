@@ -311,10 +311,7 @@ module.exports = {
       };
     }
 
-    let oldRecord = null;
-    try {
-      oldRecord = await model.findOne({ where: condition, transaction, raw: true });
-    } catch (e) {}
+    const oldRecord = await model.findOne({ where: condition, transaction, raw: true });
     if (!oldRecord) return null;
     const [count] = await model.update(
       safeData,
@@ -323,7 +320,11 @@ module.exports = {
 
     if (count === 0) return null;
 
-    const newRecord = await model.findOne({ where: condition, transaction });
+    const idField = model.primaryKeyAttribute || 'id';
+    const newRecord = await model.findOne({ 
+      where: { [idField]: oldRecord[idField] }, 
+      transaction 
+    });
     if (newRecord && forceReload) await newRecord.reload({ transaction });
 
     try {
@@ -338,7 +339,7 @@ module.exports = {
         ip_address: ctx.ip,
       }, transaction);
     } catch (logErr) {
-      console.error("Audit log failed:", logErr.message);
+      console.error(`[commonQuery] Log failed for ${model.name} (Non-fatal):`, logErr.message);
     }
 
     return newRecord;

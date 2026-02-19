@@ -4,10 +4,10 @@ module.exports = (sequelize, DataTypes) => {
         {
             template_name: { type: DataTypes.STRING(100), allowNull: false },
             leave_policy_cycle: { 
-                type: DataTypes.ENUM('CALENDAR_YEAR', 'FINANCIAL_YEAR', 'SERVICE_YEAR'), 
+                type: DataTypes.ENUM('CALENDAR_YEAR', 'FINANCIAL_YEAR', 'SERVICE_YEAR', 'MONTHLY'), 
                 allowNull: false, 
                 defaultValue: 'CALENDAR_YEAR',
-                comment: "CALENDAR_YEAR: Jan-Dec, FINANCIAL_YEAR: Apr-Mar, SERVICE_YEAR: Join Date anniversary" 
+                comment: "CALENDAR_YEAR: Jan-Dec, FINANCIAL_YEAR: Apr-Mar, SERVICE_YEAR: Join Date anniversary, MONTHLY: Every Month" 
             },
             leave_period_start: { type: DataTypes.DATEONLY, allowNull: true },
             leave_period_end: { type: DataTypes.DATEONLY, allowNull: true },

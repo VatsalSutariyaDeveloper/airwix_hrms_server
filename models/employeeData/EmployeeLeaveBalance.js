@@ -18,6 +18,7 @@ module.exports = (sequelize, DataTypes) => {
                 references: { model: "leave_template_categories", key: "id" },
             },
             year: { type: DataTypes.INTEGER, allowNull: false },
+            month: { type: DataTypes.INTEGER, allowNull: true },
             leave_category_name: { type: DataTypes.STRING(100), allowNull: false },
             total_allocated: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             used_leaves: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },

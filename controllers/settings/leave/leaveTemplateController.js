@@ -146,7 +146,13 @@ exports.update = async (req, res) => {
             const inputIds = finalCategories.filter(c => c.id).map(c => c.id);
 
             // Delete categories not in input (Careful: don't delete system categories if hidden)
-            const idsToDelete = existingIds.filter(eid => !inputIds.includes(eid));
+            const idsToDelete = existingIds.filter(eid => {
+                if (inputIds.includes(eid)) return false;
+                const ec = existingCategories.find(c => c.id === eid);
+                if (ec && (ec.is_compoff || !ec.is_paid)) return false; // KEEP special categories
+                return true;
+            });
+            
             if (idsToDelete.length > 0) {
                 await commonQuery.softDeleteById(LeaveTemplateCategory, { id: { [Op.in]: idsToDelete } }, transaction);
             }

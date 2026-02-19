@@ -1151,10 +1151,23 @@ exports.getLeaveSummary = async (req, res) => {
     }
 
     // 1. Fetch Leave Balances
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
-      employee_id,
-      status: 0
+    const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+      include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
     });
+
+    let balanceCriteria = { employee_id, status: 0 };
+    if (employee && employee.leaveTemplate) {
+      const LeaveBalanceService = require("../../services/leaveBalanceService");
+      const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
+      balanceCriteria.year = end.year();
+      if (employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') {
+        balanceCriteria.month = end.month() + 1;
+      } else {
+        balanceCriteria.month = null;
+      }
+    }
+
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {
