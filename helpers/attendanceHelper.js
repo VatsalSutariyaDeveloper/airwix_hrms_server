@@ -314,13 +314,14 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     employee_id: employeeId,
     // [MOD] Search by day_id if available, otherwise by time range
     [Op.or]: [
-      { day_id: existingDay?.id },
+      existingDay ? { day_id: existingDay.id } : null,
       { 
+        day_id: null, // Only pick up 'unassigned' punches from the calendar date range
         punch_time: {
           [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
         }
       }
-    ],
+    ].filter(Boolean),
     status: 0,
   }, {
     order: [["punch_time", "ASC"]],
@@ -470,16 +471,22 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     );
     if (lastOut) punches.push(lastOut);
   } else {
-    // Process pairs of IN-OUT from the pre-fetched list
+    // Process pairs of IN-OUT from the pre-fetched list (Robust Pairing)
+    let inP = null;
     for (let i = 0; i < allDayPunches.length; i++) {
-        if (allDayPunches[i].punch_type === "IN") {
-            punches.push(allDayPunches[i]);
-            // Find the NEXT punch if it's an OUT
-            if (allDayPunches[i+1] && allDayPunches[i+1].punch_type === "OUT") {
-                punches.push(allDayPunches[i+1]);
-                i++; // Skip the next punch as we already processed it
-            }
+        const p = allDayPunches[i];
+        if (p.punch_type === "IN") {
+            inP = p; // Start/Restart a block with the latest IN
+        } else if (p.punch_type === "OUT" && inP) {
+            punches.push(inP);
+            punches.push(p);
+            inP = null; // Block completed
         }
+    }
+    // If an IN is left without an OUT, it might be an open shift.
+    // We add it anyway so 'Incomplete' or 'Currently Working' logic works later.
+    if (inP) {
+        punches.push(inP);
     }
   }
 
@@ -531,7 +538,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       // If no status determined and no punches, this day is "Not Marked".
       // If a record exists, we remove it to keep it "unmarked".
       if (existingDay) {
-        await commonQuery.hardDeleteRecordById(AttendanceDay, existingDay.id, transaction);
+        await commonQuery.hardDeleteRecords(AttendanceDay, existingDay.id, transaction);
       }
       return;
     }
@@ -1296,8 +1303,6 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     device_id: "MANUAL",
   };
 
-  let effectiveInPunch = null;
-
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
@@ -1343,70 +1348,88 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     }
   }
 
-  if (inTime && outTime) {
-    const inDateObj = parseDateTime(inTime, date);
-    const outDateObj = parseDateTime(outTime, date);
-    const gap = dayjs(outDateObj).diff(dayjs(inDateObj), "minute", true);
-
-    if (Math.abs(gap) < 2) {
-      throw {
-        handled: true,
-        message: { message: "Please wait at least 2 minutes between IN and OUT time" }
-      };
-    }
-    if (gap < 0) {
-      throw {
-        handled: true,
-        message: { message: "OUT time must be after IN time" }
-      };
-    }
-  }
-
-  // 2. Handle IN punch
-  if (inTime) {
-    const inDateObj = parseDateTime(inTime, date);
-
-    const existingIn = await findPunchByDayId("IN", "ASC");
-
-    if (existingIn) {
-      // Update existing IN punch
-      effectiveInPunch = await commonQuery.updateRecordById(AttendancePunch, { id: existingIn.id }, {
-        punch_time: inDateObj,
-        ...commonMeta
-      }, transaction);
-    } else {
-      // Create new IN punch with gap validation
-      effectiveInPunch = await commonQuery.createRecord(AttendancePunch, {
-        employee_id: employeeId,
-        day_id: dayId,
-        punch_type: "IN",
-        punch_time: inDateObj,
-        ...commonMeta,
-      }, transaction);
-    }
-  }
-
-  // 3. Handle OUT punch
-  if (outTime) {
-    const outDateObj = parseDateTime(outTime, date);
-    // Find LAST OUT punch
-    const existingOut = await findPunchByDayId("OUT", "DESC");
-
-    if (existingOut) {
-      // Update existing OUT punch
-      await commonQuery.updateRecordById(AttendancePunch, existingOut.id, {
-        punch_time: outDateObj,
-        ...commonMeta
-      }, transaction);
-    } else {
-      // Create new OUT punch with validations
+  // Support for Multiple Punches
+  if (meta.punches && Array.isArray(meta.punches)) {
+    // Clear existing punches for this day_id
+    await commonQuery.updateRecordById(AttendancePunch, { day_id: dayId, status: 0 }, { status: 2 }, transaction);
+    
+    // Create new punches from the array
+    for (const p of meta.punches) {
+      if (!p.punch_time) continue;
       await commonQuery.createRecord(AttendancePunch, {
         employee_id: employeeId,
         day_id: dayId,
-        punch_type: "OUT",
-        punch_time: outDateObj,
-        ...commonMeta,
+        punch_type: p.punch_type,
+        punch_time: parseDateTime(p.punch_time, date),
+        ...commonMeta
       }, transaction);
+    }
+  } else {
+    if (inTime && outTime) {
+      const inDateObj = parseDateTime(inTime, date);
+      const outDateObj = parseDateTime(outTime, date);
+      const gap = dayjs(outDateObj).diff(dayjs(inDateObj), "minute", true);
+
+      if (Math.abs(gap) < 2) {
+        throw {
+          handled: true,
+          message: { message: "Please wait at least 2 minutes between IN and OUT time" }
+        };
+      }
+      if (gap < 0) {
+        throw {
+          handled: true,
+          message: { message: "OUT time must be after IN time" }
+        };
+      }
+    }
+
+    // 2. Handle IN punch
+    if (inTime) {
+      const inDateObj = parseDateTime(inTime, date);
+
+      const existingIn = await findPunchByDayId("IN", "ASC");
+
+      if (existingIn) {
+        // Update existing IN punch
+        await commonQuery.updateRecordById(AttendancePunch, { id: existingIn.id }, {
+          punch_time: inDateObj,
+          ...commonMeta
+        }, transaction);
+      } else {
+        // Create new IN punch with gap validation
+        await commonQuery.createRecord(AttendancePunch, {
+          employee_id: employeeId,
+          day_id: dayId,
+          punch_type: "IN",
+          punch_time: inDateObj,
+          ...commonMeta,
+        }, transaction);
+      }
+    }
+
+    // 3. Handle OUT punch
+    if (outTime) {
+      const outDateObj = parseDateTime(outTime, date);
+      // Find LAST OUT punch
+      const existingOut = await findPunchByDayId("OUT", "DESC");
+
+      if (existingOut) {
+        // Update existing OUT punch
+        await commonQuery.updateRecordById(AttendancePunch, existingOut.id, {
+          punch_time: outDateObj,
+          ...commonMeta
+        }, transaction);
+      } else {
+        // Create new OUT punch with validations
+        await commonQuery.createRecord(AttendancePunch, {
+          employee_id: employeeId,
+          day_id: dayId,
+          punch_type: "OUT",
+          punch_time: outDateObj,
+          ...commonMeta,
+        }, transaction);
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -343,7 +343,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // Add conditional required fields based on status
     if (req.body.status === 0) {
       if(!req.body.note && isTrackInOutOn){
-        requiredFields.first_in = "In Time";
+        // requiredFields.first_in = "In Time";
       }
     } else if (req.body.status === 1) {
       if(!req.body.note && isTrackInOutOn){
@@ -482,7 +482,7 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     // Only trigger punch update if strictly needed
-    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut)) {
+    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
@@ -490,7 +490,8 @@ exports.updateAttendanceDay = async (req, res) => {
         shift_id: shift_id,
         bypassShiftRestrictions: true,
         employee: emp, // Pass pre-fetched employee
-        existingDay: day // Pass pre-fetched day
+        existingDay: day, // Pass pre-fetched day
+        punches: req.body.punches // Pass punches array if provided
       }, t);
     }
  
@@ -1025,7 +1026,8 @@ exports.getMonthlyAttendance = async (req, res) => {
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
-      date: { [Op.between]: [startDate, endDate] }
+      date: { [Op.between]: [startDate, endDate] },
+      status: 0
     });
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
@@ -1039,11 +1041,14 @@ exports.getMonthlyAttendance = async (req, res) => {
     // 2.2 Fetch Weekly Offs for the employee
     let employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
       employee_id,
+      status: 0,
+      is_off: true
     });
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
         employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
             template_id: employee.weekly_off_template,
+            is_off: true,
             status: 0
         });
     }
@@ -1167,7 +1172,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           const dayOfWeek = dayObj.day(); // 0 is Sunday
           const weekOfMonth = Math.ceil(dayObj.date() / 7);
           const isWO = employeeWeeklyOffs.find(wo => 
-            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth)
+            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
           );
           if (isWO) {
             dayData.status = "Weekly Off";
@@ -1221,7 +1226,6 @@ exports.getLeaveSummary = async (req, res) => {
 
     let balanceCriteria = { employee_id, status: 0 };
     if (employee && employee.leaveTemplate) {
-      const LeaveBalanceService = require("../../services/leaveBalanceService");
       const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
       balanceCriteria.year = end.year();
       if (employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') {
