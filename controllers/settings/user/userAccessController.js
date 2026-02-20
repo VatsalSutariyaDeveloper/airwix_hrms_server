@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster} = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -71,7 +71,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // 3. Fetch Core Data (Parallel - Standard Sequelize)
-    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList] = await Promise.all([
+    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList, employeeSettings] = await Promise.all([
       // A. Company List
       CompanyMaster.findAll({
         where: where,
@@ -126,6 +126,16 @@ exports.sessionData = async (req, res) => {
               status: 0 
           },
           attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id'],
+          transaction
+      }),
+
+      // F. Employee Settings
+      EmployeeSettings.findAll({
+          where: { 
+              company_id: company_id, 
+              status: 0 
+          },
+          attributes: ['id', 'settings_name', 'settings_value'],
           transaction
       })
     ]);
@@ -269,7 +279,8 @@ exports.sessionData = async (req, res) => {
       companySubscription: finalSubscriptionData,
       planStatus: planStatus,
       branch_list: branchList, 
-      branch: currentBranch 
+      branch: currentBranch,
+      employeeSettings: employeeSettings || []
     };
 
     await transaction.commit();

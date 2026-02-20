@@ -141,7 +141,7 @@ const runWorker = async () => {
     let updatedCount = 0;
     let errorCount = 0;
     const errorSample = [];
-    const MAX_SAMPLE = 100;
+    const MAX_SAMPLE = 10;
 
     for (let i = 0; i < rows.length; i++) {
       if (i % 500 === 0 && i > 0) await new Promise(resolve => setImmediate(resolve));
@@ -164,6 +164,10 @@ const runWorker = async () => {
         if (!employeeId) {
           fail(`Employee not found: ${employeeCode}`);
         }
+
+        // Log the entire record for debugging
+        // console.log(`Row ${rowIndex} - Full Record Data-----------------------\n:`, JSON.stringify(record, null, 2));
+        
         // Extract leave categories and counts from numbered columns
         const leaveData = [];
         let categoryIndex = 1;
@@ -175,25 +179,57 @@ const runWorker = async () => {
           const altCountKey = `leave count${categoryIndex}`;
 
           const category = String(record[categoryKey] || record[altCategoryKey] || '').trim();
-          const count = record[countKey] || record[altCountKey];
+          const count = record[countKey] !== undefined ? record[countKey] : record[altCountKey];
 
-          if (!category) break; // Stop when no more categories found
+          // Check if columns exist in the record
+          const hasCategoryColumn = record.hasOwnProperty(categoryKey) || record.hasOwnProperty(altCategoryKey);
+          const hasCountColumn = record.hasOwnProperty(countKey) || record.hasOwnProperty(altCountKey);
+          
+          // Stop when neither column exists AND we've checked enough columns
+          if (!hasCategoryColumn && !hasCountColumn && categoryIndex > 5) break;
 
-          if (!category) {
-            fail(`Leave Category ${categoryIndex} cannot be empty`);
+          // If category exists but count is missing, that's an error
+          if (hasCategoryColumn && !hasCountColumn && category) {
+            fail(`Leave Count ${categoryIndex} is missing for category '${category}'`);
           }
 
-          if (count === null || count === undefined || count === '') {
-            fail(`Leave Count ${categoryIndex} cannot be empty for category '${category}'`);
+          // If count exists but category is missing, that's an error
+          if (hasCountColumn && !hasCategoryColumn && count !== undefined) {
+            fail(`Leave Category ${categoryIndex} is missing but count is provided`);
           }
 
-          const leaveCount = parseFloat(count);
-          if (isNaN(leaveCount) || leaveCount < 0) {
-            fail(`Invalid Leave Count ${categoryIndex}: '${count}' for category '${category}'`);
+          // Validate category if column exists
+          if (hasCategoryColumn) {
+            if (!category) {
+              fail(`Leave Category ${categoryIndex} cannot be empty`);
+            }
           }
 
-          leaveData.push({ category: category, count: leaveCount });
+          // Validate count if column exists  
+          if (hasCountColumn) {
+            if (count === null || count === undefined || count === '') {
+              fail(`Leave Count ${categoryIndex} cannot be empty for category '${category}'`);
+            }
+          }
+
+          // If we have valid category, validate count
+          if (category) {
+            if (count === null || count === undefined || count === '') {
+              fail(`Leave Count ${categoryIndex} cannot be empty when category '${category}' is provided`);
+            }
+
+            const leaveCount = parseFloat(count);
+            if (isNaN(leaveCount) || leaveCount < 0) {
+              fail(`Invalid Leave Count ${categoryIndex}: '${count}' for category '${category}'`);
+            }
+
+            leaveData.push({ category: category, count: leaveCount });
+          }
+
           categoryIndex++;
+          
+          // Safety break to prevent infinite loop
+          if (categoryIndex > 50) break;
         }
 
         if (leaveData.length === 0) {
@@ -273,10 +309,14 @@ const runWorker = async () => {
 
     await transaction.commit();
 
+    const successMessage = errorCount > 0 
+      ? `Leave template import completed with ${errorCount} errors` 
+      : `Leave template import completed successfully`;
+
     parentPort.postMessage({
       status: "SUCCESS",
       result: {
-        message: `Leave template import completed successfully`,
+        message: successMessage,
         count: createdCount,
         updated: updatedCount,
         skipped: errorCount,
@@ -284,7 +324,8 @@ const runWorker = async () => {
           created: createdCount,
           updated: updatedCount,
           errors: errorCount
-        }
+        },
+        errors: errorSample // Include error messages
       }
     });
 
@@ -301,10 +342,3 @@ const runWorker = async () => {
 runWorker().catch(error => {
   parentPort.postMessage({ status: "ERROR", error: error.message });
 });
-
-
-
-
-
-
-

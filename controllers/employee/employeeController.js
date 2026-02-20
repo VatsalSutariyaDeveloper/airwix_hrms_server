@@ -1303,7 +1303,7 @@ exports.facePunch = async (req, res) => {
 
 exports.getWages = async (req, res) => {
     try {
-        const { employee_id: employeeId } = req.body;
+        const { employee_id: employeeId, attendance_date: attendanceDate } = req.body;
 
         if (!employeeId) {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
@@ -1317,7 +1317,7 @@ exports.getWages = async (req, res) => {
             AttendanceDay,
             {
                 employee_id: employeeId,
-                attendance_date: currentDate
+                attendance_date: attendanceDate
             },
             {
                 attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']

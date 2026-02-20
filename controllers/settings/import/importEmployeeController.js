@@ -20,9 +20,6 @@ exports.importData = async (req, res) => {
   let cancelTimeout = null;
   let keepErrorLog = false; // Flag to preserve file temporarily
   
-  // Increase timeout for long-running imports (10 minutes)
-  req.setTimeout(10 * 60 * 1000);
-  res.setTimeout(10 * 60 * 1000);
   try {
     // 1. Validate Basic Request
     const indentErrors = await validateRequest(req.body, {
@@ -117,7 +114,8 @@ exports.importData = async (req, res) => {
             message: result.message,
             count: result.count,
             skipped: result.skipped,
-            summary: result.summary
+            summary: result.summary,
+            errors: result.errors // Include error messages
           });
         }
         else if (msg.status === "ERROR") {

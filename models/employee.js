@@ -1,7 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
-        employee_type: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1:staff, 2:worker" },
+        employee_type: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1:staff, 2:worker, 3:contractor" },
         department_id: { type: DataTypes.INTEGER },
         designation_id: { type: DataTypes.INTEGER },
 
