@@ -117,9 +117,9 @@ const sanitizeTemplateFields = (body) => {
     ALLOWED_TEMPLATE_FIELDS.forEach((field) => {
         if (body[field] === "") {
             body[field] = 0;
-        } 
+        }
         // else if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined") {
-        
+
         // }
     });
 };
@@ -599,18 +599,31 @@ exports.getPunch = async (req, res) => {
 exports.dropdownList = async (req, res) => {
     try {
         const POST = req.body;
-        const fieldConfig = [
-            ["first_name", true, true],
-        ];
+        const { employee_id } = POST;
 
-        const data = await commonQuery.fetchPaginatedData(
-            Employee,
-            { ...POST, status: 0 },
-            fieldConfig,
-            {},
-            false,
-        );
-        return res.ok(data);
+        if (employee_id) {
+            const data = await commonQuery.fetchPaginatedData(
+                Employee,
+                { ...POST, id: employee_id, status: { [Op.in]: [0, 1, 2] } },
+                {},
+                {},
+                false,
+            );
+            return res.ok(data);
+        } else {
+            const fieldConfig = [
+                ["first_name", true, true],
+            ];
+
+            const data = await commonQuery.fetchPaginatedData(
+                Employee,
+                { ...POST, status: 0 },
+                fieldConfig,
+                {},
+                false,
+            );
+            return res.ok(data);
+        }
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -737,7 +750,7 @@ exports.assignTemplate = async (req, res) => {
 
         if (is_select_all) {
             const where = {};
-            
+
             // Example: Apply Search
             if (filter_params?.search) {
                 where[Op.or] = [
@@ -755,19 +768,19 @@ exports.assignTemplate = async (req, res) => {
             // Example: Apply Tab Context (Assigned vs Unassigned)
             // If tab is 'unselected' (is_access: false), we find employees WITHOUT this template
             if (filter_params?.is_access === false) {
-                 where[field_name] = { [Op.or]: [null, 0] };
+                where[field_name] = { [Op.or]: [null, 0] };
             }
 
             else if (filter_params?.is_access === true && filter_params?.value) {
-                 where[field_name] = filter_params.value;
+                where[field_name] = filter_params.value;
             }
 
             // 2. Fetch ALL matching IDs from the database
             const allMatchingEmployees = await commonQuery.findAllRecords(
-                Employee, 
-                where, 
+                Employee,
+                where,
                 ['id'], // Only select ID
-                null, 
+                null,
                 false
             );
 
@@ -792,7 +805,7 @@ exports.assignTemplate = async (req, res) => {
         // 3. Pre-fetch Master Data and Employees for optimization
         const firstEmployee = employees[0];
         const commonValue = employees.every(e => e.value === firstEmployee.value) ? firstEmployee.value : null;
-        
+
         let masterData = null;
         if (commonValue) {
             switch (field_name) {
@@ -839,7 +852,7 @@ exports.assignTemplate = async (req, res) => {
 
         for (const [val, ids] of Object.entries(groups)) {
             const targetValue = val === 'null' ? null : parseInt(val);
-            
+
             // 1. Bulk Update Employee table
             await commonQuery.updateRecordById(Employee, { id: { [Op.in]: ids } }, { [field_name]: targetValue }, transaction);
 
@@ -850,10 +863,10 @@ exports.assignTemplate = async (req, res) => {
             };
 
             await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, field_name, targetValue, transaction, syncMeta);
-            
+
             // 3. Collect IDs for background rebuild
             employeeIdsToRebuild.push(...ids);
-            
+
             // Special case: If weekly_off_template is updated, we MUST also re-sync shift_templates 
             // because shift day-wise settings (EmployeeShift) depend on weekly off days.
             if (field_name === 'weekly_off_template') {
@@ -1503,339 +1516,339 @@ exports.inviteUser = async (req, res) => {
 
 // Employee Export Field Definitions
 const ALL_POSSIBLE_FIELDS = {
-  // Basic Information
-  employee_code: { 
-    key: 'employee_code', 
-    header: 'Employee Code',
-    formatter: (value) => value || 'N/A'
-  },
-  first_name: { key: 'first_name', header: 'First Name' },
-  mobile_no: { key: 'mobile_no', header: 'Mobile Number' },
-  email: { key: 'email', header: 'Email' },
-  
-  // Employment Details
-  employee_type: { 
-    key: 'employee_type', 
-    header: 'Employee Type',
-    formatter: (value) => value === 1 ? 'Staff' : value === 2 ? 'Worker' : value
-  },
-  department_id: { 
-    key: 'department.name', 
-    header: 'Department',
-    include: 'department'
-  },
-  designation_id: { key: 'designation_id', header: 'Designation ID' },
-  joining_date: { 
-    key: 'joining_date', 
-    header: 'Joining Date',
-    formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
-  },
-  confirmation_date: { 
-    key: 'confirmation_date', 
-    header: 'Confirmation Date',
-    formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
-  },
-  
-  // Personal Information
-  gender: { 
-    key: 'gender', 
-    header: 'Gender',
-    formatter: (value) => value === 1 ? 'Male' : value === 2 ? 'Female' : value === 3 ? 'Others' : value
-  },
-  dob: { 
-    key: 'dob', 
-    header: 'Date of Birth',
-    formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
-  },
-  marital_status: { 
-    key: 'marital_status', 
-    header: 'Marital Status',
-    formatter: (value) => value === 1 ? 'Married' : value === 2 ? 'Unmarried' : value
-  },
-  blood_group: { 
-    key: 'blood_group', 
-    header: 'Blood Group',
-    formatter: (value) => {
-      const groups = { 1: 'A+', 2: 'A-', 3: 'B+', 4: 'B-', 5: 'O+', 6: 'O-', 7: 'AB+', 8: 'AB-' };
-      return groups[value] || value;
+    // Basic Information
+    employee_code: {
+        key: 'employee_code',
+        header: 'Employee Code',
+        formatter: (value) => value || 'N/A'
+    },
+    first_name: { key: 'first_name', header: 'First Name' },
+    mobile_no: { key: 'mobile_no', header: 'Mobile Number' },
+    email: { key: 'email', header: 'Email' },
+
+    // Employment Details
+    employee_type: {
+        key: 'employee_type',
+        header: 'Employee Type',
+        formatter: (value) => value === 1 ? 'Staff' : value === 2 ? 'Worker' : value
+    },
+    department_id: {
+        key: 'department.name',
+        header: 'Department',
+        include: 'department'
+    },
+    designation_id: { key: 'designation_id', header: 'Designation ID' },
+    joining_date: {
+        key: 'joining_date',
+        header: 'Joining Date',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+    confirmation_date: {
+        key: 'confirmation_date',
+        header: 'Confirmation Date',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+
+    // Personal Information
+    gender: {
+        key: 'gender',
+        header: 'Gender',
+        formatter: (value) => value === 1 ? 'Male' : value === 2 ? 'Female' : value === 3 ? 'Others' : value
+    },
+    dob: {
+        key: 'dob',
+        header: 'Date of Birth',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+    marital_status: {
+        key: 'marital_status',
+        header: 'Marital Status',
+        formatter: (value) => value === 1 ? 'Married' : value === 2 ? 'Unmarried' : value
+    },
+    blood_group: {
+        key: 'blood_group',
+        header: 'Blood Group',
+        formatter: (value) => {
+            const groups = { 1: 'A+', 2: 'A-', 3: 'B+', 4: 'B-', 5: 'O+', 6: 'O-', 7: 'AB+', 8: 'AB-' };
+            return groups[value] || value;
+        }
+    },
+    physically_challenged: {
+        key: 'physically_challenged',
+        header: 'Physically Challenged',
+        formatter: (value) => value ? 'Yes' : 'No'
+    },
+
+    // Contact Information
+    emergency_contact_name: { key: 'emergency_contact_name', header: 'Emergency Contact Name' },
+    emergency_contact_mobile: { key: 'emergency_contact_mobile', header: 'Emergency Contact Mobile' },
+    emergency_contact_relation: {
+        key: 'emergency_contact_relation',
+        header: 'Emergency Contact Relation',
+        formatter: (value) => {
+            const relations = { 1: 'Brother', 2: 'Sister', 3: 'Father', 4: 'Mother', 5: 'Spouse', 6: 'Son', 7: 'Daughter', 8: 'Other' };
+            return relations[value] || value;
+        }
+    },
+
+    // Family Information
+    father_name: { key: 'father_name', header: 'Father Name' },
+    mother_name: { key: 'mother_name', header: 'Mother Name' },
+    spouse_name: { key: 'spouse_name', header: 'Spouse Name' },
+
+    // Address Information
+    present_address1: { key: 'present_address1', header: 'Present Address 1' },
+    present_address2: { key: 'present_address2', header: 'Present Address 2' },
+    present_city: { key: 'present_city', header: 'Present City' },
+    present_pincode: { key: 'present_pincode', header: 'Present Pincode' },
+    permanent_address1: { key: 'permanent_address1', header: 'Permanent Address 1' },
+    permanent_address2: { key: 'permanent_address2', header: 'Permanent Address 2' },
+    permanent_city: { key: 'permanent_city', header: 'Permanent City' },
+    permanent_pincode: { key: 'permanent_pincode', header: 'Permanent Pincode' },
+
+    // Bank Information
+    name_as_per_bank: { key: 'name_as_per_bank', header: 'Name as per Bank' },
+    bank_name: { key: 'bank_name', header: 'Bank Name' },
+    bank_account_number: { key: 'bank_account_number', header: 'Bank Account Number' },
+    bank_ifsc_code: { key: 'bank_ifsc_code', header: 'Bank IFSC Code' },
+    upi_id: { key: 'upi_id', header: 'UPI ID' },
+
+    // Government IDs
+    aadhaar_number: { key: 'aadhaar_number', header: 'Aadhaar Number' },
+    pan_number: { key: 'pan_number', header: 'PAN Number' },
+    uan_number: { key: 'uan_number', header: 'UAN Number' },
+    pf_number: { key: 'pf_number', header: 'PF Number' },
+    esi_number: { key: 'esi_number', header: 'ESI Number' },
+
+    // Status
+    status: {
+        key: 'status',
+        header: 'Status',
+        formatter: (value) => value === 0 ? 'Active' : value === 1 ? 'Inactive' : value === 2 ? 'Deleted' : value
+    },
+
+    // Leave Information (added dynamically when leave: true)
+    leave_category1: {
+        key: 'leave_category1',
+        header: 'Leave Category1',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count1: {
+        key: 'leave_count1',
+        header: 'Leave Count1',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category2: {
+        key: 'leave_category2',
+        header: 'Leave Category2',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count2: {
+        key: 'leave_count2',
+        header: 'Leave Count2',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category3: {
+        key: 'leave_category3',
+        header: 'Leave Category3',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count3: {
+        key: 'leave_count3',
+        header: 'Leave Count3',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category4: {
+        key: 'leave_category4',
+        header: 'Leave Category4',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count4: {
+        key: 'leave_count4',
+        header: 'Leave Count4',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category5: {
+        key: 'leave_category5',
+        header: 'Leave Category5',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count5: {
+        key: 'leave_count5',
+        header: 'Leave Count5',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
     }
-  },
-  physically_challenged: { 
-    key: 'physically_challenged', 
-    header: 'Physically Challenged',
-    formatter: (value) => value ? 'Yes' : 'No'
-  },
-  
-  // Contact Information
-  emergency_contact_name: { key: 'emergency_contact_name', header: 'Emergency Contact Name' },
-  emergency_contact_mobile: { key: 'emergency_contact_mobile', header: 'Emergency Contact Mobile' },
-  emergency_contact_relation: { 
-    key: 'emergency_contact_relation', 
-    header: 'Emergency Contact Relation',
-    formatter: (value) => {
-      const relations = { 1: 'Brother', 2: 'Sister', 3: 'Father', 4: 'Mother', 5: 'Spouse', 6: 'Son', 7: 'Daughter', 8: 'Other' };
-      return relations[value] || value;
-    }
-  },
-  
-  // Family Information
-  father_name: { key: 'father_name', header: 'Father Name' },
-  mother_name: { key: 'mother_name', header: 'Mother Name' },
-  spouse_name: { key: 'spouse_name', header: 'Spouse Name' },
-  
-  // Address Information
-  present_address1: { key: 'present_address1', header: 'Present Address 1' },
-  present_address2: { key: 'present_address2', header: 'Present Address 2' },
-  present_city: { key: 'present_city', header: 'Present City' },
-  present_pincode: { key: 'present_pincode', header: 'Present Pincode' },
-  permanent_address1: { key: 'permanent_address1', header: 'Permanent Address 1' },
-  permanent_address2: { key: 'permanent_address2', header: 'Permanent Address 2' },
-  permanent_city: { key: 'permanent_city', header: 'Permanent City' },
-  permanent_pincode: { key: 'permanent_pincode', header: 'Permanent Pincode' },
-  
-  // Bank Information
-  name_as_per_bank: { key: 'name_as_per_bank', header: 'Name as per Bank' },
-  bank_name: { key: 'bank_name', header: 'Bank Name' },
-  bank_account_number: { key: 'bank_account_number', header: 'Bank Account Number' },
-  bank_ifsc_code: { key: 'bank_ifsc_code', header: 'Bank IFSC Code' },
-  upi_id: { key: 'upi_id', header: 'UPI ID' },
-  
-  // Government IDs
-  aadhaar_number: { key: 'aadhaar_number', header: 'Aadhaar Number' },
-  pan_number: { key: 'pan_number', header: 'PAN Number' },
-  uan_number: { key: 'uan_number', header: 'UAN Number' },
-  pf_number: { key: 'pf_number', header: 'PF Number' },
-  esi_number: { key: 'esi_number', header: 'ESI Number' },
-  
-  // Status
-  status: { 
-    key: 'status', 
-    header: 'Status',
-    formatter: (value) => value === 0 ? 'Active' : value === 1 ? 'Inactive' : value === 2 ? 'Deleted' : value
-  },
-  
-  // Leave Information (added dynamically when leave: true)
-  leave_category1: { 
-    key: 'leave_category1', 
-    header: 'Leave Category1',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_count1: { 
-    key: 'leave_count1', 
-    header: 'Leave Count1',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_category2: { 
-    key: 'leave_category2', 
-    header: 'Leave Category2',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_count2: { 
-    key: 'leave_count2', 
-    header: 'Leave Count2',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_category3: { 
-    key: 'leave_category3', 
-    header: 'Leave Category3',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_count3: { 
-    key: 'leave_count3', 
-    header: 'Leave Count3',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_category4: { 
-    key: 'leave_category4', 
-    header: 'Leave Category4',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_count4: { 
-    key: 'leave_count4', 
-    header: 'Leave Count4',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_category5: { 
-    key: 'leave_category5', 
-    header: 'Leave Category5',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  },
-  leave_count5: { 
-    key: 'leave_count5', 
-    header: 'Leave Count5',
-    formatter: (value, record) => {
-      // Empty column - no data fetching
-      return '';
-    }
-  }
 };
 
 // Sequelize Include Definitions
 const ALL_SEQUELIZE_INCLUDES = {
-  department: {
-    model: require("../../models").Department,
-    as: 'department',
-    attributes: ['id', 'name'],
-    required: false
-  }
+    department: {
+        model: require("../../models").Department,
+        as: 'department',
+        attributes: ['id', 'name'],
+        required: false
+    }
 };
 
 exports.exportData = async (req, res) => {
-  try {
-    const { limit, fields, leave } = req.body;
-    
-    // Validate req.user exists
-    if (!req.user || !req.user.company_id) {
-      return res.status(401).json({
-        success: false,
-        error: "UNAUTHORIZED",
-        message: "User authentication required"
-      });
-    }
-    
-    const { company_id, id: user_id, branch_id } = req.user;
+    try {
+        const { limit, fields, leave } = req.body;
 
-    const commonData = { company_id, user_id, branch_id };
-
-    // 1. Parse Fields
-    let requestedFields = typeof fields === 'string' ? JSON.parse(fields) : fields;
-    if (!requestedFields || Object.keys(requestedFields).length === 0) {
-      return res.error("VALIDATION_ERROR", { errors: ["The 'fields' parameter is required."] });
-    }
-
-    // 2. Add leave fields if leave: true
-    if (leave === true) {
-      // Add 5 pairs of leave columns to existing fields
-      requestedFields = {
-        ...requestedFields,
-        leave_category1: 'leave_category1',
-        leave_count1: 'leave_count1',
-        leave_category2: 'leave_category2',
-        leave_count2: 'leave_count2',
-        leave_category3: 'leave_category3',
-        leave_count3: 'leave_count3',
-        leave_category4: 'leave_category4',
-        leave_count4: 'leave_count4',
-        leave_category5: 'leave_category5',
-        leave_count5: 'leave_count5'
-      };
-    }
-
-    const dynamicMappers = [];
-    const neededIncludes = new Set();
-    const fieldNamesInOrder = Object.values(requestedFields);
-
-    for (const fieldName of fieldNamesInOrder) {
-      const masterField = ALL_POSSIBLE_FIELDS[fieldName];
-      if (masterField) {
-        dynamicMappers.push(masterField);
-        if (masterField.include) neededIncludes.add(masterField.include);
-      }
-    }
-
-    if (dynamicMappers.length === 0) {
-      return res.error("VALIDATION_ERROR", { errors: ["None of the requested fields are valid for export."] });
-    }
-
-    const sequelizeIncludes = Array.from(neededIncludes).map(key => ALL_SEQUELIZE_INCLUDES[key]).filter(Boolean);
-
-    // 3. Select Attributes
-    const userRequestedMainAttributes = dynamicMappers
-      .filter(m => !m.key.includes('.') && !m.include && !['leave_category1', 'leave_count1', 'leave_category2', 'leave_count2', 'leave_category3', 'leave_count3', 'leave_category4', 'leave_count4', 'leave_category5', 'leave_count5'].includes(m.key)) // Direct fields only, exclude virtual fields
-      .map(m => m.key);
-
-    const requiredForeignKeys = sequelizeIncludes.flatMap(inc => {
-      const association = Employee.associations[inc.as];
-      return association ? [association.foreignKey] : [];
-    });
-    const selectAttributes = [...new Set([...userRequestedMainAttributes, ...requiredForeignKeys, 'id'])];
-
-    const baseQueryOptions = {
-      where: { ...commonData, status: 0 },
-      include: sequelizeIncludes,
-      attributes: selectAttributes,
-    };
-
-    // 4. Handle Export
-    if (limit) {
-      const recordLimit = parseInt(limit, 10);
-      const exportConfig = {
-        model: Employee,
-        mappers: dynamicMappers,
-        queryOptions: {
-          ...baseQueryOptions,
-          limit: recordLimit,
-          order: [['id', 'DESC']],
-        },
-        ...commonData
-      };
-
-      const { jsonData } = await handleExport(exportConfig);
-      return res.success(constants.EMPLOYEE_EXPORTED, {
-        message: `Successfully fetched ${jsonData.length} employees for export.`,
-        count: jsonData.length,
-        data: jsonData,
-      });
-
-    } else {
-      // Full Export Mode (Stream Excel)
-      const exportConfig = {
-        model: Employee,
-        sheetName: 'Employees',
-        mappers: dynamicMappers,
-        queryOptions: baseQueryOptions,
-        ...commonData
-      };
-
-      try {
-        await streamExport(exportConfig, res);
-      } catch (streamErr) {
-        console.error("Stream export failed:", streamErr);
-        // Don't send response if headers already sent
-        if (!res.headersSent) {
-          if (streamErr.message === "No records found to export.") {
-            return res.error("NOT_FOUND", { errors: [streamErr.message] });
-          }
-          return handleError(streamErr, res, req);
+        // Validate req.user exists
+        if (!req.user || !req.user.company_id) {
+            return res.status(401).json({
+                success: false,
+                error: "UNAUTHORIZED",
+                message: "User authentication required"
+            });
         }
-      }
-      return; // Exit early for stream export
-    }
 
-  } catch (err) {
-    console.error("Export failed:", err);
-    if (!res.headersSent) {
-      if (err.message === "No records found to export.") {
-        return res.error("NOT_FOUND", { errors: [err.message] });
-      }
-      return handleError(err, res, req);
+        const { company_id, id: user_id, branch_id } = req.user;
+
+        const commonData = { company_id, user_id, branch_id };
+
+        // 1. Parse Fields
+        let requestedFields = typeof fields === 'string' ? JSON.parse(fields) : fields;
+        if (!requestedFields || Object.keys(requestedFields).length === 0) {
+            return res.error("VALIDATION_ERROR", { errors: ["The 'fields' parameter is required."] });
+        }
+
+        // 2. Add leave fields if leave: true
+        if (leave === true) {
+            // Add 5 pairs of leave columns to existing fields
+            requestedFields = {
+                ...requestedFields,
+                leave_category1: 'leave_category1',
+                leave_count1: 'leave_count1',
+                leave_category2: 'leave_category2',
+                leave_count2: 'leave_count2',
+                leave_category3: 'leave_category3',
+                leave_count3: 'leave_count3',
+                leave_category4: 'leave_category4',
+                leave_count4: 'leave_count4',
+                leave_category5: 'leave_category5',
+                leave_count5: 'leave_count5'
+            };
+        }
+
+        const dynamicMappers = [];
+        const neededIncludes = new Set();
+        const fieldNamesInOrder = Object.values(requestedFields);
+
+        for (const fieldName of fieldNamesInOrder) {
+            const masterField = ALL_POSSIBLE_FIELDS[fieldName];
+            if (masterField) {
+                dynamicMappers.push(masterField);
+                if (masterField.include) neededIncludes.add(masterField.include);
+            }
+        }
+
+        if (dynamicMappers.length === 0) {
+            return res.error("VALIDATION_ERROR", { errors: ["None of the requested fields are valid for export."] });
+        }
+
+        const sequelizeIncludes = Array.from(neededIncludes).map(key => ALL_SEQUELIZE_INCLUDES[key]).filter(Boolean);
+
+        // 3. Select Attributes
+        const userRequestedMainAttributes = dynamicMappers
+            .filter(m => !m.key.includes('.') && !m.include && !['leave_category1', 'leave_count1', 'leave_category2', 'leave_count2', 'leave_category3', 'leave_count3', 'leave_category4', 'leave_count4', 'leave_category5', 'leave_count5'].includes(m.key)) // Direct fields only, exclude virtual fields
+            .map(m => m.key);
+
+        const requiredForeignKeys = sequelizeIncludes.flatMap(inc => {
+            const association = Employee.associations[inc.as];
+            return association ? [association.foreignKey] : [];
+        });
+        const selectAttributes = [...new Set([...userRequestedMainAttributes, ...requiredForeignKeys, 'id'])];
+
+        const baseQueryOptions = {
+            where: { ...commonData, status: 0 },
+            include: sequelizeIncludes,
+            attributes: selectAttributes,
+        };
+
+        // 4. Handle Export
+        if (limit) {
+            const recordLimit = parseInt(limit, 10);
+            const exportConfig = {
+                model: Employee,
+                mappers: dynamicMappers,
+                queryOptions: {
+                    ...baseQueryOptions,
+                    limit: recordLimit,
+                    order: [['id', 'DESC']],
+                },
+                ...commonData
+            };
+
+            const { jsonData } = await handleExport(exportConfig);
+            return res.success(constants.EMPLOYEE_EXPORTED, {
+                message: `Successfully fetched ${jsonData.length} employees for export.`,
+                count: jsonData.length,
+                data: jsonData,
+            });
+
+        } else {
+            // Full Export Mode (Stream Excel)
+            const exportConfig = {
+                model: Employee,
+                sheetName: 'Employees',
+                mappers: dynamicMappers,
+                queryOptions: baseQueryOptions,
+                ...commonData
+            };
+
+            try {
+                await streamExport(exportConfig, res);
+            } catch (streamErr) {
+                console.error("Stream export failed:", streamErr);
+                // Don't send response if headers already sent
+                if (!res.headersSent) {
+                    if (streamErr.message === "No records found to export.") {
+                        return res.error("NOT_FOUND", { errors: [streamErr.message] });
+                    }
+                    return handleError(streamErr, res, req);
+                }
+            }
+            return; // Exit early for stream export
+        }
+
+    } catch (err) {
+        console.error("Export failed:", err);
+        if (!res.headersSent) {
+            if (err.message === "No records found to export.") {
+                return res.error("NOT_FOUND", { errors: [err.message] });
+            }
+            return handleError(err, res, req);
+        }
     }
-  }
 };

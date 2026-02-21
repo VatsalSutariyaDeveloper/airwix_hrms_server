@@ -269,6 +269,37 @@ async function punch(employeeId, meta, transaction = null) {
 }
 
 async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = null) {
+  // --- Fetch Wages for Rate Calculation (At function start for global scope) ---
+  let hourlyWage = 0;
+  let dailyWage = 0;
+  let ctcMonthly = 0;
+  let monthDays = 30;
+
+  const employeeSalaryTemplate = await commonQuery.findOneRecord(
+    EmployeeSalaryTemplate,
+    {
+      employee_id: employeeId,
+      status: 0,
+    },
+    { attributes: ['ctc_monthly', 'lwp_calculation_basis'] },
+    transaction,
+    false
+  );
+
+  if (employeeSalaryTemplate) {
+    ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
+    if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
+      const d = dayjs(date);
+      monthDays = d.daysInMonth();
+    } else if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+      monthDays = 26;
+    }
+    if (monthDays > 0) {
+      dailyWage = ctcMonthly / monthDays;
+      hourlyWage = dailyWage / 8; 
+    }
+  }
+
   // Helper to map multiplier to ID
   const getRateIdAndAmount = (minutes, wage, multiplier) => {
     let rateId = 5; // Default 1x Salary
@@ -628,32 +659,45 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       const pE = dayjs(punches[i + 1].punch_time);
 
       if (shift) {
-        // Shift Part
-        const sOverlapStart = dayjs(Math.max(pS.valueOf(), shiftStart.valueOf()));
-        const sOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftEnd.valueOf()));
-        if (sOverlapEnd.isAfter(sOverlapStart)) {
-          shiftWorkedMins += sOverlapEnd.diff(sOverlapStart, "minute");
-        }
-
-        // Early OT Part (Before Shift Start)
-        if (pS.isBefore(shiftStart)) {
-          const eOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftStart.valueOf()));
-          if (eOverlapEnd.isAfter(pS)) {
-            earlyOTMins += eOverlapEnd.diff(pS, "minute");
+        if (meta.isHoliday) {
+          // When it's a holiday, all work time should be treated as overtime
+          const sessionMinutes = pE.diff(pS, "minute");
+          lateOTMins += sessionMinutes;
+        } else {
+          // Normal shift logic
+          // Shift Part
+          const sOverlapStart = dayjs(Math.max(pS.valueOf(), shiftStart.valueOf()));
+          const sOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftEnd.valueOf()));
+          if (sOverlapEnd.isAfter(sOverlapStart)) {
+            shiftWorkedMins += sOverlapEnd.diff(sOverlapStart, "minute");
           }
-        }
 
-        // Late OT Part (After Shift End)
-        if (pE.isAfter(shiftEnd)) {
-          const lOverlapStart = dayjs(Math.max(pS.valueOf(), shiftEnd.valueOf()));
-          if (pE.isAfter(lOverlapStart)) {
-            lateOTMins += pE.diff(lOverlapStart, "minute");
+          // Early OT Part (Before Shift Start)
+          if (pS.isBefore(shiftStart)) {
+            const eOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftStart.valueOf()));
+            if (eOverlapEnd.isAfter(pS)) {
+              earlyOTMins += eOverlapEnd.diff(pS, "minute");
+            }
+          }
+
+          // Late OT Part (After Shift End)
+          if (pE.isAfter(shiftEnd)) {
+            const lOverlapStart = dayjs(Math.max(pS.valueOf(), shiftEnd.valueOf()));
+            if (pE.isAfter(lOverlapStart)) {
+              lateOTMins += pE.diff(lOverlapStart, "minute");
+            }
           }
         }
       } else {
-        // No Shift - All is regular work time? Or all is OT? 
-        // Typically, without a shift, we just count it as worked time.
-        shiftWorkedMins += pE.diff(pS, "minute");
+        // No Shift or Holiday - All work time should be stored as overtime
+        const sessionMinutes = pE.diff(pS, "minute");
+        if (meta.isHoliday) {
+          // When it's a holiday, all work time goes to overtime
+          lateOTMins += sessionMinutes;
+        } else {
+          // No shift assigned on regular day - treat as overtime
+          lateOTMins += sessionMinutes;
+        }
       }
     }
   }
@@ -726,6 +770,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes);
+  
+  // When no shift is assigned OR it's a holiday, set worked minutes to 0 so all time goes to overtime
+  if (!shift || meta.isHoliday) {
+    finalWorkedMinutes = 0;
+  }
+  
   // [MOD] We keep breakToDeduct for OT/Fine calculations but we don't deduct it from finalWorkedMinutes 
   // because the user wants 'working time show total work time'.
 
@@ -733,8 +783,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let rawEarlyOT = earlyOTMins;
   let rawLateOT = lateOTMins;
 
-  if (template) {
-    // 1. Honor individual OT toggles
+  if (template && shift && !meta.isHoliday) {
+    // 1. Honor individual OT toggles (only when shift exists and not holiday)
     if (!template.early_overtime_allowed) rawEarlyOT = 0;
     if (!template.overtime_allowed) rawLateOT = 0;
 
@@ -847,44 +897,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // 💸 FINE & BENEFIT CALCULATION
     const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
 
-    // --- Fetch Wages for Rate Calculation (Moved outside if(template)) ---
-    let hourlyWage = 0;
-    let dailyWage = 0;
-    let ctcMonthly = 0;
-    let monthDays = 30;
-
-    const employeeSalaryTemplate = await commonQuery.findOneRecord(
-      EmployeeSalaryTemplate,
-      {
-        employee_id: employeeId,
-        status: 0,
-      },
-      { attributes: ['ctc_monthly', 'lwp_calculation_basis'] },
-      transaction,
-      false
-    );
-
-    if (employeeSalaryTemplate) {
-      ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
-      if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
-        const d = dayjs(date);
-        monthDays = d.daysInMonth();
-      } else if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
-        monthDays = 26;
-      }
-      if (monthDays > 0) {
-        dailyWage = ctcMonthly / monthDays;
-        hourlyWage = dailyWage / 8; // Assuming 8 hour work day standard
-      }
-    }
-
     const getMatchingRule = (mins, rules) => {
       if (!rules || !Array.isArray(rules)) return null;
       return rules.find(r => mins >= r.from_mins && mins <= r.to_mins);
     };
-    if (template) {
-      // Late Entry Fine
-      if (template.late_entry_rules.length > 0) {
+  if (template) {
+    // Late Entry Fine
+    if (template.late_entry_rules.length > 0) {
         const rule = getMatchingRule(lateMinutes, template.late_entry_rules);
         if (rule) {
           if (rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
@@ -1163,6 +1182,17 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
 
+  // Generate default overtime data when no shift is assigned but overtime exists
+  if (!shift && overtimeMinutes > 0) {
+    const calculatedHourlyWage = dailyWage / 8; // Ensure hourly wage is calculated as daily/8
+    const result = getRateIdAndAmount(overtimeMinutes, calculatedHourlyWage, 1);
+    lateOtData = {
+      rate: result.rateId,
+      amount: result.amount,
+      minutes: overtimeMinutes
+    };
+  }
+
   let status = 5; // Default ABSENT
   let autoAbsentReason = null;
 
@@ -1206,7 +1236,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const minHalfDay = shift ? shift.min_half_day_minutes : 240;
     const minFullDay = shift ? shift.min_full_day_minutes : 480;
 
-    if (finalWorkedMinutes >= minFullDay) {
+    // Special handling for holidays - if holiday and worked, set HOLIDAY status
+    if (meta.isHoliday && overtimeMinutes > 0) {
+      status = 4; // HOLIDAY
+      autoAbsentReason = `Worked on Holiday: ${overtimeMinutes}m overtime`;
+    } else if (finalWorkedMinutes >= minFullDay) {
       status = 0; // PRESENT
     } else if (finalWorkedMinutes >= minHalfDay) {
       status = 1; // HALF_DAY
@@ -1353,7 +1387,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     // Clear existing punches for this day_id
     await commonQuery.updateRecordById(AttendancePunch, { day_id: dayId, status: 0 }, { status: 2 }, transaction);
     
-    // Create new punches from the array
+    // Create new punches from array
     for (const p of meta.punches) {
       if (!p.punch_time) continue;
       await commonQuery.createRecord(AttendancePunch, {
@@ -1416,7 +1450,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
       if (existingOut) {
         // Update existing OUT punch
-        await commonQuery.updateRecordById(AttendancePunch, existingOut.id, {
+        await commonQuery.updateRecordById(AttendancePunch, { id: existingOut.id }, {
           punch_time: outDateObj,
           ...commonMeta
         }, transaction);
@@ -1433,12 +1467,11 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     }
   }
 
-  // 4. Rebuild the day
+  // 4. Rebuild day
   if (!meta.skipRebuild) {
-    await rebuildAttendanceDay(employeeId, date, { ...meta, preserveStatus: true }, transaction);
+    await rebuildAttendanceDay(employeeId, date, { ...meta, preserveStatus: true, isHoliday: meta.isHoliday }, transaction);
   }
 }
-
 /**
  * Detects if a specific date is a Holiday or Weekly Off for an employee.
  */

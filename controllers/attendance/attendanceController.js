@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -483,6 +483,23 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // Only trigger punch update if strictly needed
     if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
+      
+      // Check if today is a holiday - if so, store working hours as overtime
+      let isTodayHoliday = false;
+      if (emp.holiday_template) {
+        const holidayRecord = await commonQuery.findOneRecord(
+          HolidayTransaction,
+          {
+            template_id: emp.holiday_template,
+            date: attendance_date,
+            status: 0
+          },
+          {},
+          t
+        );
+        isTodayHoliday = !!holidayRecord;
+      }
+      
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
@@ -491,7 +508,8 @@ exports.updateAttendanceDay = async (req, res) => {
         bypassShiftRestrictions: true,
         employee: emp, // Pass pre-fetched employee
         existingDay: day, // Pass pre-fetched day
-        punches: req.body.punches // Pass punches array if provided
+        punches: req.body.punches, // Pass punches array if provided
+        isHoliday: isTodayHoliday // Pass holiday flag to helper
       }, t);
     }
  
@@ -990,10 +1008,11 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
     });
 
@@ -1011,17 +1030,19 @@ exports.getMonthlyAttendance = async (req, res) => {
       include: [
         {
           model: ShiftTemplate,
-          as: "shiftTemplate",
-          attributes: ["id", "shift_name", "start_time", "end_time"]
+          as: "shiftTemplate"
         },
         {
           model: LeaveTemplateCategory,
-          as: "leaveCategory",
-          attributes: ["id", "leave_category_name"]
+          as: "leaveCategory"
         }
       ],
       order: [["attendance_date", "ASC"]]
     });
+
+
+    console.log("----------------- attendanceDays -----------------------------\n",attendanceDays);
+    
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
@@ -1137,11 +1158,17 @@ exports.getMonthlyAttendance = async (req, res) => {
 
         let varianceStr = "";
         const dayFine = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
-        if (dayFine > 0) {
+        const totalOvertime = (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
+        
+        if (dayFine > 0 && totalOvertime > 0) {
+          // Show both fine and overtime
+          varianceStr = ` [+ ${Math.floor(totalOvertime / 60)}:${(totalOvertime % 60).toString().padStart(2, '0')} Hrs] [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
+        } else if (dayFine > 0) {
+          // Show only fine
           varianceStr = ` [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
-        } else if ((attendanceDay.overtime_minutes || 0) > 0) {
-          const ot = parseInt(attendanceDay.overtime_minutes);
-          varianceStr = ` [+ ${Math.floor(ot / 60)}:${(ot % 60).toString().padStart(2, '0')} Hrs]`;
+        } else if (totalOvertime > 0) {
+          // Show only overtime
+          varianceStr = ` [+ ${Math.floor(totalOvertime / 60)}:${(totalOvertime % 60).toString().padStart(2, '0')} Hrs]`;
         }
 
         dayData = {
@@ -1151,6 +1178,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           day_status: attendanceDay.status,
           status: statusText,
           note: attendanceDay.note,
+          leave_category_id: attendanceDay.leave_category_id,
           punches: dayPunches.map(p => ({
             id: p.id,
             time: dayjs(p.punch_time).format("hh:mm a"),
