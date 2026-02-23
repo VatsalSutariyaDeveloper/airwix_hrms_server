@@ -211,8 +211,10 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
+    let ctx = null;
+
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       enrichedData.company_id= ctx.company_id;
       enrichedData.user_id= ctx.user_id;
       enrichedData.branch_id= ctx.branch_id;
@@ -232,7 +234,7 @@ module.exports = {
         record_id: result.id,
         new_data: result.toJSON ? result.toJSON() : result,
         ...commonData,
-        ip_address: ctx.ip,
+        ip_address: ctx ? ctx.ip : null,
       }, transaction);
     } catch (logErr) {
       console.error("Audit log failed:", logErr.message);
@@ -250,9 +252,10 @@ module.exports = {
       company_id: extraFields.company_id,
       branch_id: extraFields.branch_id,
     };
+    let ctx = null;
 
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       enriched = dataArray.map((item) => ({
         ...item,
         company_id: ctx.company_id,
@@ -277,7 +280,7 @@ module.exports = {
             entity_name: Model.name,
             record_id: record.id,
             ...commonData,
-            ip_address: ctx.ip,
+            ip_address: ctx ? ctx.ip : null,
           }, transaction);
         }
       } catch (logErr) {
@@ -299,8 +302,10 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
+    let ctx = null;
+
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       safeData.company_id= ctx.company_id;
       safeData.user_id= ctx.user_id;
       safeData.branch_id= ctx.branch_id;
@@ -336,7 +341,7 @@ module.exports = {
         old_data: oldRecord,
         new_data: newRecord.toJSON(),
         ...commonData,
-        ip_address: ctx.ip,
+        ip_address: ctx ? ctx.ip : null,
       }, transaction);
     } catch (logErr) {
       console.error(`[commonQuery] Log failed for ${model.name} (Non-fatal):`, logErr.message);

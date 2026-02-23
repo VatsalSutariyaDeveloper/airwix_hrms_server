@@ -199,6 +199,17 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
           
+          // Enhanced Status Text logic (Same as monthly summary)
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
+          let statusText = statusMap[day.status] || "Pending";
+          if (day.status === 4) {
+             const h = itemHolidays.find(h => h.employee_id === emp.id);
+             statusText = h ? h.name : "Holiday";
+          } else if (day.status === 6) {
+             statusText = day.leaveCategory?.leave_category_name || "Leave";
+          }
+          day.setDataValue('status_text', statusText);
+          
           if (day.first_in) {
             const punches = day.attendancePunches || [];
             const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
@@ -248,10 +259,11 @@ exports.getAttendanceSummary = async (req, res) => {
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'punched_in_count'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count']
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count'],
+          [sequelize.fn('SUM', sequelize.col('fine_amount')), 'total_fine_amount']
         ],
         group: ['AttendanceDay.status'],
-        raw: true
+    raw: true
       }
     );
 
@@ -268,6 +280,7 @@ exports.getAttendanceSummary = async (req, res) => {
       pendingPunch: 0,
       overtimeHours: "0h 0m",
       fineHours: "0h 0m",
+      fineAmount: 0,
       punchedIn: 0,
       punchedOut: 0,
       incomplete: 0
@@ -292,6 +305,7 @@ exports.getAttendanceSummary = async (req, res) => {
       totalAccounted += count;
       totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
+      summary.fineAmount += parseFloat(stat.total_fine_amount || 0);
       summary.shortPresence += parseInt(stat.short_presence_count || 0);
       summary.punchedIn += parseInt(stat.punched_in_count || 0);
       summary.punchedOut += parseInt(stat.punched_out_count || 0);
@@ -1096,6 +1110,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       absent: 0,
       leave: 0,
       fine: 0,
+      fineAmount: 0,
       overtime: 0
     };
 
@@ -1136,6 +1151,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         else if (attendanceDay.status === 6) summary.leave++;
 
         totalFineMins += (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        summary.fineAmount += parseFloat(attendanceDay.fine_amount) || 0;
         totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
 
         const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";

@@ -40,6 +40,8 @@ exports.importData = async (req, res) => {
         workerScriptPath = "./itemImport.js";
       } else if (req.body.entity_name === "Leave Import") {
         workerScriptPath = "./leaveImport.js";
+      } else if (req.body.entity_name === "Attendance Import") {
+        workerScriptPath = "./attendanceImport.js";
       } else {
         if (req.file && req.file.path) fs.unlinkSync(req.file.path);
         return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid Entity Name"] });
@@ -84,6 +86,8 @@ exports.importData = async (req, res) => {
 
       // 4. Handle Worker Events
       worker.on("message", (msg) => {
+        if (res.headersSent) return;
+        
         if (msg.status === "SUCCESS") {
           const result = msg.result;
 
@@ -130,7 +134,9 @@ exports.importData = async (req, res) => {
 
       worker.on("error", (err) => {
         console.error("Worker Thread Error:", err);
-        return res.error(constants.SERVER_ERROR, { message: "Import worker failed unexpectedly." });
+        if (!res.headersSent) {
+          return res.error(constants.SERVER_ERROR, { message: "Import worker failed unexpectedly." });
+        }
       });
 
       worker.on("exit", (code) => {

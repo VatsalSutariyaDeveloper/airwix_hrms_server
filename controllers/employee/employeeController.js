@@ -755,7 +755,7 @@ exports.assignTemplate = async (req, res) => {
             if (filter_params?.search) {
                 where[Op.or] = [
                     { first_name: { [Op.like]: `%${filter_params.search}%` } },
-                    { last_name: { [Op.like]: `%${filter_params.search}%` } },
+                    // { last_name: { [Op.like]: `%${filter_params.search}%` } },
                     { employee_code: { [Op.like]: `%${filter_params.search}%` } } // Added common search field
                 ];
             }
