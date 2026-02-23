@@ -811,7 +811,7 @@ exports.dropdownList = async (req, res) => {
       User,
       extraFilters,
       {
-        attributes: ["id", "user_name", "email", "mobile_no"],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
         order: [["user_name", "ASC"]],
       }
     );

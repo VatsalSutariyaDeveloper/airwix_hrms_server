@@ -5,6 +5,7 @@ const {
     Holiday,
     Department,
     EmployeeLeaveBalance,
+    ShiftTemplate,
     sequelize,
     Payslip
 } = require("../../models");
@@ -51,12 +52,43 @@ exports.getCounts = async (req, res) => {
             }
         );
 
+        // Late Entry Count (employees who arrived after shift start time + grace period)
+        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
+            {
+                attendance_date: today
+            },
+            {
+                include: [{
+                    model: ShiftTemplate,
+                    as: 'shiftTemplate',
+                    required: false,
+                    attributes: ['start_time', 'grace_minutes']
+                }]
+            }
+        );
+       
+        // Count late entries by comparing first_in time with shift start time + grace minutes
+        const lateEntryRecords = lateEntry.filter(record => {
+            // Skip records without first_in time or shift template
+            if (!record.first_in || !record.shiftTemplate) return false;
+            
+            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+            
+            return firstInTime.isAfter(allowedTime);
+        });
+
+        const lateEntryCount = lateEntryRecords.length;
+
         return res.ok({
             totalEmployees,
             presentToday,
             absentToday,
             onLeaveToday,
-            pendingLeaves
+            pendingLeaves,
+            lateEntry: lateEntryCount
         });
     } catch (err) {
         return handleError(err, res, req);

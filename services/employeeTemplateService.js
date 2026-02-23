@@ -20,12 +20,101 @@ const {
     EmployeeSalaryTemplateTransaction,
     sequelize,
     ShiftBreak,
-    LeaveRequest
+    LeaveRequest,
+    LeaveTemplate
 } = require("../models");
 const { commonQuery, constants } = require("../helpers");
 const LeaveBalanceService = require("./leaveBalanceService");
 const { rebuildAttendanceDay } = require("../helpers/attendanceHelper");
 const dayjs = require("dayjs");
+
+
+const rejectPendingLeaveRequestsOnTemplateChange = async (employeeId, req, transaction) => {
+    try {
+        // Fetch pending leave requests for this employee
+        const pendingRequests = await commonQuery.findAllRecords(
+            LeaveRequest,
+            {
+                employee_id: employeeId,
+                approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            },
+            {},
+            transaction
+        );
+
+        if (pendingRequests.length === 0) {
+            return; // No pending requests to process
+        }
+
+        // Get employee details for leave balance restoration
+        const employeeForBalance = await commonQuery.findOneRecord(
+            Employee,
+            employeeId,
+            {
+                include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+            },
+            transaction
+        );
+
+        if (!employeeForBalance || !employeeForBalance.leaveTemplate) {
+            return; // No template found, skip processing
+        }
+
+        const template = employeeForBalance.leaveTemplate;
+
+        // Reject each pending request and restore balance (same logic as leaveRequestController)
+        for (const request of pendingRequests) {
+            // Restore leave balance using same logic as leaveRequestController
+            const cycleDates = LeaveBalanceService.getCycleDates(
+                employeeForBalance.joining_date,
+                template.leave_policy_cycle,
+                dayjs(request.start_date)
+            );
+
+            const balance = await commonQuery.findOneRecord(
+                EmployeeLeaveBalance,
+                {
+                    employee_id: request.employee_id,
+                    leave_category_id: request.leave_category_id,
+                    year: cycleDates.end.year(),
+                    month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+                    status: 0
+                },
+                {},
+                transaction
+            );
+
+            if (balance) {
+                const balanceUpdate = {
+                    used_leaves: parseFloat(balance.used_leaves) - parseFloat(request.total_days)
+                };
+                if (balance.is_paid) {
+                    balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(request.total_days);
+                }
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
+            }
+
+            // Update leave request status to rejected
+            const history = request.approval_history || [];
+            history.push({
+                level: request.current_level,
+                action: "REJECTED",
+                by: req.user?.id || null,
+                at: new Date(),
+                note: "Auto-rejected due to leave template change"
+            });
+
+            await commonQuery.updateRecordById(LeaveRequest, request.id, {
+                approval_status: constants.LEAVE_APPROVAL_STATUS.REJECTED,
+                approval_history: history
+            }, transaction);
+        }
+    } catch (error) {
+        console.error('Error rejecting pending leave requests:', error);
+        throw error;
+    }
+};
 
 class EmployeeTemplateService {
     /**
@@ -97,6 +186,15 @@ class EmployeeTemplateService {
             case 'weekly_off_template':
                 return this.bulkSyncWeeklyOffTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
             case 'leave_template':
+                // Handle pending request rejection for each employee before bulk sync
+                if (meta.req && meta.employees) {
+                    for (const employeeId of employeeIds) {
+                        const existingEmployee = meta.employees.get(employeeId);
+                        if (existingEmployee && existingEmployee.leave_template !== templateId) {
+                            await rejectPendingLeaveRequestsOnTemplateChange(employeeId, meta.req, transaction);
+                        }
+                    }
+                }
                 return LeaveBalanceService.bulkSyncEmployeeBalances(employeeIds, templateId, transaction, meta);
             case 'salary_template_id':
                 return this.bulkSyncSalaryTemplate(employeeIds, templateId, transaction, meta);
@@ -256,6 +354,11 @@ class EmployeeTemplateService {
     }
 
     static async syncLeaveTemplate(employeeId, templateId, manualData, transaction, meta = {}) {
+        // Before syncing the new template, reject any pending leave requests
+        if (meta.req && meta.existingEmployee && meta.existingEmployee.leave_template !== templateId) {
+            await rejectPendingLeaveRequestsOnTemplateChange(employeeId, meta.req, transaction);
+        }
+        
         // We now use LeaveBalanceService to handle this as it manages EmployeeLeaveBalance records
         await LeaveBalanceService.syncEmployeeBalances(employeeId, templateId, transaction, meta.employee, meta.preFetchedMaster);
         

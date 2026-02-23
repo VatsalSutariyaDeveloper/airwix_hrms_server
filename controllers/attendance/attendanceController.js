@@ -348,11 +348,15 @@ exports.updateAttendanceDay = async (req, res) => {
     const emp = await commonQuery.findOneRecord(Employee, { id: req.body.employee_id }, {
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
     });
     const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
+    
+    // Get shift_id from employee if available
+    const shift_id = emp && emp.shift_template ? emp.shift_template : null;
 
     // Add conditional required fields based on status
     if (req.body.status === 0) {
@@ -392,9 +396,8 @@ exports.updateAttendanceDay = async (req, res) => {
       fine_data,
       is_locked,
       note,
-      shift_id
     } = req.body;
-
+    
     const day = await getOrCreateAttendanceDay(
       employee_id,
       attendance_date,
@@ -765,13 +768,17 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
     const employees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employee_ids } }, {
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
     }, t);
     const empMap = new Map(employees.map(e => [e.id, e]));
 
     for (const employee_id of employee_ids) {
       const emp = empMap.get(employee_id);
+      
+      // Get shift_id from employee if available
+      const employee_shift_id = emp && emp.shift_template ? emp.shift_template : null;
       
       const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
@@ -784,6 +791,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
           user_id: req.user.id,
           company_id: req.user.company_id,
           branch_id: req.user.branch_id,
+          shift_id: employee_shift_id,
           employee: emp, // Pass pre-fetched employee
           existingDay: existingRecord // Pass pre-fetched day
         }, t);
@@ -801,6 +809,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (status !== undefined) payload.status = status;
       if (first_in !== undefined) payload.first_in = first_in;
       if (last_out !== undefined) payload.last_out = last_out;
+      if (employee_shift_id) payload.shift_id = employee_shift_id;
 
       // Clear non-working data for status 3,4,5,6 if no times provided
       if ([3, 4, 5, 6].includes(status)) {
@@ -1053,10 +1062,6 @@ exports.getMonthlyAttendance = async (req, res) => {
       ],
       order: [["attendance_date", "ASC"]]
     });
-
-
-    console.log("----------------- attendanceDays -----------------------------\n",attendanceDays);
-    
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {

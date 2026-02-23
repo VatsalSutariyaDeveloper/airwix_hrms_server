@@ -416,13 +416,11 @@ exports.getPendingApprovals = async (req, res) => {
             ],
         });
 
-        // 2. Fetch templates for these requests to check approval config
-        // (Optimization: In a high-traffic app, use a join or map-reduce)
         const pendingForUser = [];
 
         for (const request of requests) {
             const employee = request.employee;
-            const employeeId = employee?.id;
+
             // The initial query already includes employee.leaveTemplate
             if (!employee || !employee.leaveTemplate) continue;
 
@@ -430,40 +428,36 @@ exports.getPendingApprovals = async (req, res) => {
             const currentLevel = request.current_level;
             const config = template.approval_config || [];
 
-            // Find config for the current stage
             const currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) continue;
+            
             let isAuthorized = false;
             if (req.user.is_super_admin) {
                 isAuthorized = true;
             } else {
-                // Check authorization based on stage type
+            
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID) isAuthorized = true;
+                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID) isAuthorized = true;
+                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
                         if (req.user.is_admin) isAuthorized = true;
                         break;
                     case 'EMPLOYER':
-                        // For now, assume if they are hit this endpoint and aren't a manager, 
-                        // we check if they have admin access (isApp access in your system)
-                        // You might want to check req.user.role specifically here
                         isAuthorized = true;
                         break;
                     case 'ANYONE':
                         // Anyone of Reporting Manager, Supervisor, Admin, etc.
-                        if (employee.reporting_manager === employeeId ||
-                            employee.attendance_supervisor === employeeId) {
+                        if (employee.reporting_manager === req.user.id ||
+                            employee.attendance_supervisor === req.user.id) {
                             isAuthorized = true;
                         }
                         break;
                 }
             }
-            console.log("isAuthorized", isAuthorized)
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
                 if (raw.document) {

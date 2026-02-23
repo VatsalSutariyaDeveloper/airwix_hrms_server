@@ -124,6 +124,7 @@ const sanitizeTemplateFields = (body) => {
     });
 };
 
+
 /**
  * Creates a new Employee and their Family Members.
  */
@@ -313,7 +314,24 @@ exports.update = async (req, res) => {
             if (shouldSyncLeave || shouldSyncOthers || (field === 'leave_template' && hasManualData)) {
                 const manualDataKey = `manual_${field}_data`;
                 const manualData = POST[manualDataKey] || null;
-                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field] !== undefined ? POST[field] : existingEmployee[field], manualData, transaction);
+                
+                // Prepare meta data for syncLeaveTemplate to handle pending request rejection
+                const meta = {
+                    employee: existingEmployee,
+                    preFetchedMaster: null,
+                    req: req,
+                    existingEmployee: existingEmployee
+                };
+                
+                await EmployeeTemplateService.syncSpecificTemplate(
+                    id, 
+                    field, 
+                    POST[field] !== undefined ? POST[field] : existingEmployee[field], 
+                    manualData, 
+                    transaction,
+                    false,
+                    meta
+                );
             }
         }
 
@@ -862,6 +880,11 @@ exports.assignTemplate = async (req, res) => {
                 skipRebuild: true
             };
 
+            if (field_name === 'leave_template') {
+                syncMeta.req = req;
+                syncMeta.employees = empMap;
+            }
+
             await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, field_name, targetValue, transaction, syncMeta);
 
             // 3. Collect IDs for background rebuild
@@ -1365,8 +1388,14 @@ exports.getWages = async (req, res) => {
             }
         );
 
+        // Only calculate wages if employeeSalaryTemplate exists
         if (!employeeSalaryTemplate) {
-            return res.error(constants.NOT_FOUND, { message: "Salary template not found for this employee" });
+            const responseData = {
+                last_out: attendanceDay.last_out || null,
+                overtime_data: attendanceDay?.overtime_data || null,
+                fine_data: attendanceDay?.fine_data || null,
+            };
+            return res.success(constants.SUCCESS, responseData);
         }
 
         let dailyWage = null;
