@@ -102,12 +102,28 @@ const parseTime = (timeVal, dateStr) => {
     return null;
 };
 
-const getEmployeeType = (branchStr) => {
+const getEmployeeTypeDetails = (branchStr, codeStr) => {
     const s = String(branchStr || '').toLowerCase();
-    if (s.includes('aero staff')) return 1;
-    if (s.includes('aero worker') || s.includes('aero werker')) return 2;
-    if (s.includes('at worker')) return 3;
-    return 1; // Default to Staff
+    const c = String(codeStr || '').toLowerCase();
+    
+    let employee_type = 1; // Default to Staff
+    let worker_type = null;
+
+    if (s.includes('aero staff')) {
+        employee_type = 1;
+    } else if (s.includes('aero worker') || s.includes('aero werker') || s.includes('worker') || c.includes('worker')) {
+        employee_type = 2;
+        // Check for on-role/off-role
+        if (s.includes('on-role') || s.includes('on role') || c.includes('on-role') || c.includes('on role')) {
+            worker_type = 1; 
+        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-role') || c.includes('off role')) {
+            worker_type = 2; 
+        }
+    } else if (s.includes('at worker')) {
+        employee_type = 3; // Contractor
+    }
+    
+    return { employee_type, worker_type };
 };
 
 const runWorker = async () => {
@@ -360,14 +376,15 @@ const runWorker = async () => {
             if (!employeeId) {
                 if (isCancelled) fail("IMPORT_CANCELLED");
                 try {
-                    const empType = getEmployeeType(branchVal);
+                    const { employee_type, worker_type } = getEmployeeTypeDetails(branchVal, staffIdVal);
                     let targetBranchId = branchNameMap.get(normalize(branchVal)) || mockStore.branchId;
 
                     const newEmp = await requestContext.run(mockStore, async () => {
                         return await commonQuery.createRecord(Employee, {
                             first_name: staffNameVal || staffIdVal,
                             employee_code: staffIdVal,
-                            employee_type: empType,
+                            employee_type: employee_type,
+                            worker_type: worker_type,
                             branch_id: targetBranchId,
                             company_id: mockStore.companyId,
                             user_id: mockStore.userId,

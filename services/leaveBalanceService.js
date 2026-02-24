@@ -44,6 +44,10 @@ class LeaveBalanceService {
         } else if (cycleType === 'MONTHLY') {
             start = today.startOf('month');
             end = today.endOf('month');
+        } else if (cycleType === 'QUARTERLY') {
+            const startMonth = Math.floor(today.month() / 3) * 3;
+            start = today.month(startMonth).startOf('month');
+            end = start.add(2, 'month').endOf('month');
         } else if (cycleType === 'CUSTOM_RANGE') {
             // Usually combined with leave_period_start from template
             // For initialization, we use the start date from template if available
@@ -107,12 +111,24 @@ class LeaveBalanceService {
                 if (template.accrual_type === 'UPFRONT') {
                     const joinDate = dayjs(employee.joining_date);
                     if (joinDate.isAfter(start)) {
-                        allocated = this.calculateProRata(employee.joining_date, template.leave_policy_cycle === 'MONTHLY' ? category.leave_count * 12 : category.leave_count, end, template.join_month_rule);
+                        let annualTotal = category.leave_count;
+                        if (template.leave_policy_cycle === 'MONTHLY') {
+                            annualTotal = category.leave_count * 12;
+                        } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                            annualTotal = category.leave_count * 4;
+                        }
+                        allocated = this.calculateProRata(employee.joining_date, annualTotal, end, template.join_month_rule);
                     } else {
                         allocated = category.leave_count;
                     }
                 } else if (template.accrual_type === 'MONTHLY') {
-                    const monthlyRate = template.leave_policy_cycle === 'MONTHLY' ? category.leave_count : category.leave_count / 12;
+                    let monthlyRate = category.leave_count / 12; 
+                    if (template.leave_policy_cycle === 'MONTHLY') {
+                        monthlyRate = category.leave_count;
+                    } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                        monthlyRate = '';
+                    }
+
                     const day = dayjs().date();
                     
                     if (template.join_month_rule === 'THRESHOLD_BASED') {
@@ -146,8 +162,7 @@ class LeaveBalanceService {
                 const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     leave_category_id: category.id,
-                    year: end.year(),
-                    month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null
+                    status: 0
                 }, {}, t);
 
                 let balance;
@@ -312,13 +327,18 @@ class LeaveBalanceService {
                     const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
                     
                     for (const category of template.categories) {
-                        const monthlyRate = template.leave_policy_cycle === 'MONTHLY' ? category.leave_count : category.leave_count / 12;
+                        let monthlyRate = category.leave_count / 12; // Default for annual cycles
+                        if (template.leave_policy_cycle === 'MONTHLY') {
+                            monthlyRate = category.leave_count;
+                        } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                            monthlyRate = category.leave_count / 3;
+                        }
 
                         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                             employee_id: employee.id,
                             leave_category_id: category.id,
                             year: end.year(),
-                            month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
+                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
                             status: 0
                         }, {}, transaction);
 
@@ -376,7 +396,7 @@ class LeaveBalanceService {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: lastYear,
-                        month: template.leave_policy_cycle === 'MONTHLY' ? lastCycleEnd.month() + 1 : null,
+                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
                         status: 0
                     }, {}, transaction);
 
@@ -410,7 +430,7 @@ class LeaveBalanceService {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: newYear,
-                        month: template.leave_policy_cycle === 'MONTHLY' ? newCycleEnd.month() + 1 : null,
+                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
                         status: 0
                     }, {}, transaction);
 
@@ -460,7 +480,7 @@ class LeaveBalanceService {
                 employee_id: employeeId,
                 leave_category_id: categoryId,
                 year: year,
-                month: (template && template.leave_policy_cycle === 'MONTHLY') ? end.month() + 1 : null,
+                month: (template && (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY')) ? end.month() + 1 : null,
                 status: 0
             }, {}, t);
 

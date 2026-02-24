@@ -55,7 +55,7 @@ exports.addStock = async ({
 
   if (stock_flag === 1) {
     if (batch_id) {
-      const batch = await commonQuery.findOneRecord(BatchData, batch_id, transaction);
+      const batch = await commonQuery.findOneRecord(BatchData, batch_id, {}, transaction);
       
       if (batch) {
         infoGen.mfg_date = batch.mfg_date;
@@ -113,6 +113,7 @@ exports.addStock = async ({
       {
         id: reserve_id,
       },
+      {},
       transaction
     );
 
@@ -282,6 +283,7 @@ exports.deleteItemStockEffect = async (
         const stockTrn = await commonQuery.findOneRecord(
           StockTransaction,
           {id: stock.stock_id},
+          {},
           transaction
         );
 
@@ -565,7 +567,7 @@ exports.addReserveStock = async (stock_id, itemData, item_qty, ref_entity_id, re
       );
     }
   } else {
-    const stockTrn = await commonQuery.findOneRecord(StockTransaction, { id: stock_id }, transaction);
+    const stockTrn = await commonQuery.findOneRecord(StockTransaction, { id: stock_id }, {}, transaction);
     if (stockTrn.id) {
       await exports.itemReserveStockEntry(
         transaction,

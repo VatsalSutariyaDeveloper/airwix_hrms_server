@@ -149,12 +149,9 @@ exports.create = async (req, res) => {
         }, transaction);
 
         if (req.body.employee_code) {
-            const employeeCodeExists = await Employee.findOne({
-                where: {
-                    employee_code: req.body.employee_code,
-                },
-                transaction,
-            });
+            const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
+                employee_code: req.body.employee_code,
+            }, {}, transaction);
 
             if (employeeCodeExists) {
                 await transaction.rollback();
@@ -305,6 +302,12 @@ exports.update = async (req, res) => {
         for (const field of templateFields) {
             const hasManualData = POST[`manual_${field}_data`] !== undefined;
             const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
+
+            // Special handling for leave_template - reject pending requests BEFORE updating
+            if (field === 'leave_template' && fieldValueChanged) {
+                console.log(`🔄 [EMP_UPDATE] Rejecting pending requests before template change for employee ${id}`);
+                await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(id, req, null, existingEmployee.leave_template);
+            }
 
             // For leave template, we also sync if joining date changed
             const shouldSyncLeave = field === 'leave_template' && (fieldValueChanged || joiningDateChanged);
@@ -534,14 +537,11 @@ exports.checkEmployeeCode = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { employee_code } = req.body;
-        const emp = await commonQuery.findOneRecord(
-            Employee,
-            { employee_code },
-            {},
-            transaction
-        );
+        const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
+            employee_code: employee_code,
+        }, {}, transaction);
         await transaction.commit();
-        return res.ok({ exists: !!emp });
+        return res.ok({ exists: !!employeeCodeExists });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -870,6 +870,16 @@ exports.assignTemplate = async (req, res) => {
 
         for (const [val, ids] of Object.entries(groups)) {
             const targetValue = val === 'null' ? null : parseInt(val);
+
+            // Special handling for leave_template - reject pending requests BEFORE updating
+            if (field_name === 'leave_template') {
+                for (const employeeId of ids) {
+                    const existingEmployee = empMap.get(employeeId);
+                    if (existingEmployee && existingEmployee.leave_template !== targetValue) {
+                        await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(employeeId, req, null, existingEmployee.leave_template);
+                    }
+                }
+            }
 
             // 1. Bulk Update Employee table
             await commonQuery.updateRecordById(Employee, { id: { [Op.in]: ids } }, { [field_name]: targetValue }, transaction);
