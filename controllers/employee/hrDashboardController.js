@@ -7,7 +7,8 @@ const {
     EmployeeLeaveBalance,
     ShiftTemplate,
     sequelize,
-    Payslip
+    Payslip,
+    CanteenAttendance
 } = require("../../models");
 const { commonQuery, handleError, constants } = require("../../helpers");
 const { Op } = require("sequelize");
@@ -82,13 +83,20 @@ exports.getCounts = async (req, res) => {
 
         const lateEntryCount = lateEntryRecords.length;
 
+        // Canteen Attendance Count for Today (Status 0=Present)
+        const canteenPresentToday = await commonQuery.countRecords(CanteenAttendance, {
+            date: today,
+            status: 0
+        });
+
         return res.ok({
             totalEmployees,
             presentToday,
             absentToday,
             onLeaveToday,
             pendingLeaves,
-            lateEntry: lateEntryCount
+            lateEntry: lateEntryCount,
+            canteenPresentToday
         });
     } catch (err) {
         return handleError(err, res, req);

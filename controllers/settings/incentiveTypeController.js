@@ -1,5 +1,5 @@
 const { IncentiveType } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
 // Create a new bank master record
@@ -185,23 +185,31 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
-// Get dropdown list of active designation masters
+// Get dropdown list of active incentive types
 exports.dropdownList = async (req, res) => {
     try {
-        const fieldConfig = [
-            ["name", true, true],
-        ];
+        const POST = req.body;
+        const { incentive_type_id } = POST;
 
-        const result = await commonQuery.fetchPaginatedData(
-            IncentiveType,
-            { ...req.body, status: 0 },
-            fieldConfig,
-            {
-                attributes: ['id', 'name']
-            }
-        );
-
-        return res.ok(result);
+        if (incentive_type_id) {
+            const data = await commonQuery.fetchPaginatedData(
+                IncentiveType,
+                { ...POST, id: incentive_type_id, status: { [Op.in]: [0, 1, 2] } },
+                [],
+                {},
+                false,
+            );
+            return res.ok(data);
+        } else {
+            const data = await commonQuery.fetchPaginatedData(
+                IncentiveType,
+                { ...POST, status: 0 },
+                [],
+                {},
+                false,
+            );
+            return res.ok(data);
+        }
     } catch (err) {
         return handleError(err, res, req);
     }

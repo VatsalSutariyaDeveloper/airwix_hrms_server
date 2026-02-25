@@ -655,14 +655,8 @@ exports.updateAttendanceDay = async (req, res) => {
             const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
             const currentLastOut = currentDay.last_out;
             
-            // To provide better logs, try to get shift start/end time
-            const shiftDetails = currentDay.shift_id ? await commonQuery.findOneRecord(require("../../models").ShiftTemplate, { id: currentDay.shift_id }, { attributes: ['start_time', 'end_time'] }, t) : null;
-            const shiftStart = shiftDetails?.start_time || "N/A";
-            const shiftEnd = shiftDetails?.end_time || "N/A";
-
             const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
             const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
-            console.log(`[ShortLeaveLog] emp_id: ${employee_id}, date: ${attendance_date}, shift: ${shiftStart}-${shiftEnd}, first_in: ${currentDay.first_in}, last_out: ${currentDay.last_out}, late: ${currentLateMinutes}, early_out: ${currentEarlyOutMinutes}, total_missed: ${totalMissedMinutes}, is_short_leave: ${isLateForShortLeave}`);
 
             const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id: employee_id,
@@ -681,10 +675,8 @@ exports.updateAttendanceDay = async (req, res) => {
                         status: 0
                     }, {}, t);
 
-                    console.log(`[ShortLeaveLog] No existing deduction. Pending balance: ${balance?.pending_leaves || 0}`);
 
                     if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
-                        console.log(`[ShortLeaveLog] Deducting 1.0 Short Leave...`);
                         const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
                         if (leaveError) {
                             console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
@@ -700,14 +692,9 @@ exports.updateAttendanceDay = async (req, res) => {
                             },
                             transaction: t 
                         });
-                    } else {
-                        console.log(`[ShortLeaveLog] Skipping deduction: Insufficient balance.`);
-                    }
-                } else {
-                    console.log(`[ShortLeaveLog] Skipping deduction: Already exists for this day.`);
+                    } 
                 }
             } else if (existingShortLeave) {
-                console.log(`[ShortLeaveLog] Lateness reduced. Reversing Short Leave deduction...`);
                 // Reverse deduction if conditions are no longer met
                 const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
                 if (leaveError) {

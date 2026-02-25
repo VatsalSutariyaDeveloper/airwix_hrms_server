@@ -106,6 +106,8 @@ const EmployeeIncentive = require("./payroll/employeeIncentive")(sequelize, Data
 const EmployeeAdvance = require("./payroll/employeeAdvance")(sequelize, DataTypes);
 const PaymentHistory = require("./payroll/paymentHistory")(sequelize, DataTypes);
 
+const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(sequelize, DataTypes);
+
 // Collect all models in one db object
 const db = {
   // Administration
@@ -213,6 +215,9 @@ const db = {
   EmployeeIncentive,
   EmployeeAdvance,
   PaymentHistory,
+
+  // Canteen Attendance
+  CanteenAttendance,
 };
 
 Object.keys(db).forEach(modelName => {
