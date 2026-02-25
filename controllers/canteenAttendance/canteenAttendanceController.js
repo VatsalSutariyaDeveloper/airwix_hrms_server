@@ -116,7 +116,7 @@ exports.getSummary = async (req, res) => {
 
     const allEmployees = await commonQuery.fetchPaginatedData(
             Employee,
-            { status: 0, limit: "All", ...req.body },
+            { status: 0, ...req.body },
             [],
             {
                 include:[

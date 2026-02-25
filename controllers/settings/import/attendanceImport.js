@@ -51,6 +51,7 @@ const LEAVE_MAPPING = {
     'SOL': { name: 'Short Leave', isPaid: true, isCompoff: false, markPresent: true },
     'LV': { name: 'Leave', isPaid: true, isCompoff: false },
     'L': { name: 'Leave', isPaid: true, isCompoff: false },
+    'UL': { name: 'Unpaid Leave', isPaid: false, isCompoff: false },
 };
 
 const parseWH = (val) => {
@@ -72,31 +73,41 @@ const parseWH = (val) => {
 const parseTime = (timeVal, dateStr) => {
     if (!timeVal || timeVal === 0 || timeVal === '0' || String(timeVal).trim() === 'OD') return null;
     
-    let timeStr = String(timeVal).trim();
-    if (!timeStr || timeStr === '0') return null;
-
-    if (typeof timeVal === 'number' && timeVal < 1) {
-        const totalSeconds = Math.round(timeVal * 24 * 3600);
+    let timeStr = "";
+    if (typeof timeVal === 'number') {
+        const timeFraction = timeVal % 1;
+        const totalSeconds = Math.round(timeFraction * 86400);
         const hours = Math.floor(totalSeconds / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
         const seconds = totalSeconds % 60;
         timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    } else {
+        timeStr = String(timeVal).trim();
     }
+
+    if (!timeStr || timeStr === '0' || timeStr === '') return null;
 
     // Normalize spacing for AM/PM (e.g., "9:57AM" -> "9:57 AM")
     timeStr = timeStr.replace(/([0-9])([AP]M)/i, '$1 $2');
 
-    if (timeStr.includes(':')) {
-        const formats = [
-            "YYYY-MM-DD HH:mm:ss", 
-            "YYYY-MM-DD HH:mm", 
-            "YYYY-MM-DD h:mm A", 
-            "YYYY-MM-DD hh:mm A",
-            "YYYY-MM-DD h:mm:ss A",
-            "YYYY-MM-DD hh:mm:ss A"
-        ];
-        const parsed = dayjs(`${dateStr} ${timeStr}`, formats);
-        if (parsed.isValid()) return parsed.toDate();
+    const formats = [
+        "YYYY-MM-DD HH:mm:ss", 
+        "YYYY-MM-DD HH:mm", 
+        "YYYY-MM-DD h:mm A", 
+        "YYYY-MM-DD hh:mm A",
+        "YYYY-MM-DD h:mm:ss A",
+        "YYYY-MM-DD hh:mm:ss A"
+    ];
+
+    // Try parsing with the attached date
+    const parsed = dayjs(`${dateStr} ${timeStr}`, formats);
+    if (parsed.isValid()) return parsed.toDate();
+
+    // Fallback for time formats without leading date if needed
+    const timeOnlyFormats = ["HH:mm:ss", "HH:mm", "h:mm A", "hh:mm A"];
+    const parsedTime = dayjs(timeStr, timeOnlyFormats);
+    if (parsedTime.isValid()) {
+        return dayjs(dateStr).hour(parsedTime.hour()).minute(parsedTime.minute()).second(parsedTime.second()).toDate();
     }
     
     return null;
@@ -109,17 +120,17 @@ const getEmployeeTypeDetails = (branchStr, codeStr) => {
     let employee_type = 1; // Default to Staff
     let worker_type = null;
 
-    if (s.includes('aero staff')) {
+    if (s.includes('staff') || s.includes('Staff')) {
         employee_type = 1;
-    } else if (s.includes('aero worker') || s.includes('aero werker') || s.includes('worker') || c.includes('worker')) {
+    } else if (s.includes('worker') || c.includes('Worker')) {
         employee_type = 2;
         // Check for on-role/off-role
-        if (s.includes('on-role') || s.includes('on role') || c.includes('on-role') || c.includes('on role')) {
+        if (s.includes('on-role') || s.includes('on role') || c.includes('on-Role') || c.includes('on Role')) {
             worker_type = 1; 
-        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-role') || c.includes('off role')) {
+        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-Role') || c.includes('off Role')) {
             worker_type = 2; 
         }
-    } else if (s.includes('at worker')) {
+    } else if (s.includes('contractor') || s.includes('Contractor')) {
         employee_type = 3; // Contractor
     }
     
@@ -258,15 +269,18 @@ const runWorker = async () => {
         company_id: mockStore.companyId,
         status: { [Op.ne]: 2 }
       }, {
-        attributes: ['id', 'employee_code', 'first_name'],
+        attributes: ['id', 'employee_code', 'first_name', 'branch_id'],
         raw: true
       }, transaction);
     });
 
     const employeeCodeMap = new Map();
+    const employeeDataMap = new Map();
     employeesList.forEach(emp => {
       if (emp.employee_code) {
-        employeeCodeMap.set(normalize(emp.employee_code), emp.id);
+        const normCode = normalize(emp.employee_code);
+        employeeCodeMap.set(normCode, emp.id);
+        employeeDataMap.set(emp.id, { branch_id: emp.branch_id });
       }
     });
     
@@ -327,7 +341,9 @@ const runWorker = async () => {
             raw: true
         });
         existingData.forEach(d => {
-            existingDaysMap.set(`${d.employee_id}_${d.attendance_date}`, d);
+            const dateStr = dayjs(d.attendance_date).format("YYYY-MM-DD");
+            const dKey = `${d.employee_id}_${dateStr}`;
+            existingDaysMap.set(dKey, d);
         });
 
         // Pre-fetch balances for the current year to avoid redundant queries in loop
@@ -344,6 +360,21 @@ const runWorker = async () => {
         balances.forEach(b => {
             balanceCache.add(`${b.employee_id}_${b.leave_category_id}_${sheetYear}`);
         });
+    }
+
+    // 4. Pre-process Dates to avoid repeated parsing
+    const parsedDatesMap = new Map();
+    for (const colIdx of dateHeaders) {
+        const dateStr = dateMapping[colIdx];
+        const fullDateStr = `${dateStr}-${sheetYear}`.replace(/\s+/g, '-');
+        const mDate = dayjs(fullDateStr, ["DD-MMM-YYYY", "D-MMM-YYYY", "DD-MMMM-YYYY", "D-MMMM-YYYY"]);
+        if (mDate.isValid()) {
+            parsedDatesMap.set(colIdx, {
+                obj: mDate,
+                formatted: mDate.format("YYYY-MM-DD"),
+                year: mDate.year()
+            });
+        }
     }
     // ----------------------------------------------------------
 
@@ -362,50 +393,169 @@ const runWorker = async () => {
     const leaveRequestPayloads = [];
     // ----------------------------------------------------------------
 
+    // --- First Pass: Pre-Validation for Duplicates & Existence ---
+    const seenCodes = new Map();
+    const validationErrors = [];
+    for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!row) continue;
+        const staffIdVal = String(row[staffIdIdx] || '').trim();
+        if (staffIdVal && staffIdVal.toLowerCase() !== 'total' && staffIdVal.toLowerCase() !== 'employee id' && staffIdVal.toLowerCase() !== 'staff id') {
+            const normCode = normalize(staffIdVal);
+            
+            // Duplicate Check
+            const staffNameVal = staffNameIdx !== -1 ? String(row[staffNameIdx] || '').trim() : "N/A";
+            if (seenCodes.has(normCode)) {
+                validationErrors.push(`Row ${i + 1}: Duplicate employee code '${staffIdVal}' (Name: ${staffNameVal}) - already found at row ${seenCodes.get(normCode)}`);
+            } else {
+                seenCodes.set(normCode, i + 1);
+                
+                // Existence Check
+                if (!employeeCodeMap.has(normCode)) {
+                    validationErrors.push(`Row ${i + 1}: Employee code '${staffIdVal}' (Name: ${staffNameVal}) does not exist in the system.`);
+                }
+            }
+        }
+    }
+
+    if (validationErrors.length > 0) {
+        if (transaction && !transaction.finished) await transaction.rollback();
+        parentPort.postMessage({
+            status: "SUCCESS",
+            result: {
+                importErrors: true,
+                message: "Import failed: Some employees in the Excel file do not exist in the system or are duplicated.",
+                errors: validationErrors.slice(0, MAX_SAMPLE),
+                errorCount: validationErrors.length
+            }
+        });
+        return;
+    }
+
+    /* // Commented out auto-creation of missing employees as per user request
+    const missingEmployees = [];
+    const seenCodesInBatch = new Set();
+    for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!row) continue;
+        const staffIdVal = String(row[staffIdIdx] || '').trim();
+        if (!staffIdVal || staffIdVal.toLowerCase() === 'total') continue;
+        
+        const normCode = normalize(staffIdVal);
+        if (!employeeCodeMap.has(normCode) && !seenCodesInBatch.has(normCode)) {
+            const staffNameVal = String(row[staffNameIdx] || '').trim();
+            const branchVal = branchIdx !== -1 ? String(row[branchIdx] || '').trim() : '';
+            const { employee_type, worker_type } = getEmployeeTypeDetails(branchVal, staffIdVal);
+            let targetBranchId = branchNameMap.get(normalize(branchVal)) || mockStore.branchId;
+
+            missingEmployees.push({
+                first_name: staffNameVal || staffIdVal,
+                employee_code: staffIdVal,
+                employee_type: employee_type,
+                worker_type: worker_type,
+                branch_id: targetBranchId,
+                company_id: mockStore.companyId,
+                user_id: mockStore.userId,
+                status: 0,
+                custom_fields: {}
+            });
+            seenCodesInBatch.add(normCode);
+        }
+    }
+
+    if (missingEmployees.length > 0) {
+        const newEmps = await Employee.bulkCreate(missingEmployees, { transaction, returning: true });
+        newEmps.forEach(emp => {
+            const normCode = normalize(emp.employee_code);
+            employeeCodeMap.set(normCode, emp.id);
+            employeeDataMap.set(emp.id, { branch_id: emp.branch_id });
+            employeeCreatedCount++;
+        });
+    }
+    */
+
+    // --- Optimization Step: Ensure All Leave Templates/Categories/Balances Exist ---
+    // Ensure Default Template
+    let defaultTemplate = await LeaveTemplate.findOne({
+        where: { company_id: mockStore.companyId, status: 0 },
+        transaction,
+        order: [['id', 'ASC']]
+    });
+    if (!defaultTemplate) {
+        defaultTemplate = await LeaveTemplate.create({
+            template_name: 'Default Leave Template',
+            leave_policy_cycle: 'CALENDAR_YEAR',
+            accrual_type: 'UPFRONT',
+            status: 0,
+            company_id: mockStore.companyId,
+            branch_id: mockStore.branchId,
+            user_id: mockStore.userId
+        }, { transaction });
+    }
+
+    // Ensure fixed categories from LEAVE_MAPPING + "Unpaid Leave"
+    const categoriesToEnsure = [...new Set(Object.values(LEAVE_MAPPING).map(m => m.name)), "Unpaid Leave"];
+    for (const catName of categoriesToEnsure) {
+        const normName = catName.toLowerCase();
+        if (!categoryMap.has(normName)) {
+            const mapping = Object.values(LEAVE_MAPPING).find(m => m.name === catName) || { name: 'Unpaid Leave', isPaid: false, isCompoff: false };
+            const newCat = await LeaveTemplateCategory.create({
+                leave_template_id: defaultTemplate.id,
+                leave_category_name: mapping.name,
+                is_paid: mapping.isPaid,
+                is_compoff: mapping.isCompoff,
+                company_id: mockStore.companyId,
+                branch_id: mockStore.branchId,
+                user_id: mockStore.userId
+            }, { transaction });
+            categoryMap.set(normName, newCat.id);
+        }
+    }
+
+    // Ensure Balances for ALL employees processed and ALL mentioned categories
+    const allProcessedEmpIds = Array.from(employeeCodeMap.values());
+    const allCategoryIds = Array.from(categoryMap.values());
+    const balancesToCreate = [];
+    for (const empId of allProcessedEmpIds) {
+        for (const [catName, catId] of categoryMap.entries()) {
+            const balKey = `${empId}_${catId}_${sheetYear}`;
+            if (!balanceCache.has(balKey)) {
+                const mapping = Object.values(LEAVE_MAPPING).find(m => m.name.toLowerCase() === catName) || { name: 'Unpaid Leave', isPaid: false, isCompoff: false };
+                balancesToCreate.push({
+                    employee_id: empId,
+                    leave_category_id: catId,
+                    leave_category_name: mapping.name,
+                    year: sheetYear,
+                    total_allocated: 0,
+                    used_leaves: 0,
+                    pending_leaves: 0,
+                    is_paid: mapping.isPaid,
+                    is_compoff: mapping.isCompoff,
+                    company_id: mockStore.companyId,
+                    branch_id: mockStore.branchId,
+                    user_id: mockStore.userId
+                });
+                balanceCache.add(balKey);
+            }
+        }
+    }
+    if (balancesToCreate.length > 0) {
+        await EmployeeLeaveBalance.bulkCreate(balancesToCreate, { transaction, ignoreDuplicates: true });
+    }
+    // -------------------------------------------------------------------------------
+    // -----------------------------------------------
+
     for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
         const row = rawRows[i];
         if (!row) continue;
 
         const staffIdVal = String(row[staffIdIdx] || '').trim();
         if (staffIdVal && staffIdVal.toLowerCase() !== 'total') {
-            let employeeId = employeeCodeMap.get(normalize(staffIdVal));
+            const normCode = normalize(staffIdVal);
+            // FETCH EMPLOYEE (Guaranteed to exist due to first pass)
+            let employeeId = employeeCodeMap.get(normCode);
+            const employeeCachedData = employeeDataMap.get(employeeId);
             const staffNameVal = String(row[staffNameIdx] || '').trim();
-            const branchVal = branchIdx !== -1 ? String(row[branchIdx] || '').trim() : '';
-
-            // CREATE EMPLOYEE IF NOT EXISTS
-            if (!employeeId) {
-                if (isCancelled) fail("IMPORT_CANCELLED");
-                try {
-                    const { employee_type, worker_type } = getEmployeeTypeDetails(branchVal, staffIdVal);
-                    let targetBranchId = branchNameMap.get(normalize(branchVal)) || mockStore.branchId;
-
-                    const newEmp = await requestContext.run(mockStore, async () => {
-                        return await commonQuery.createRecord(Employee, {
-                            first_name: staffNameVal || staffIdVal,
-                            employee_code: staffIdVal,
-                            employee_type: employee_type,
-                            worker_type: worker_type,
-                            branch_id: targetBranchId,
-                            company_id: mockStore.companyId,
-                            user_id: mockStore.userId,
-                            status: 0, // Active
-                            custom_fields: {}
-                        }, transaction);
-                    });
-                    
-                    employeeId = newEmp.id;
-                    employeeCodeMap.set(normalize(staffIdVal), employeeId);
-                    employeeCreatedCount++;
-                } catch (empCreateError) {
-                    errorCount++;
-                    const errMsg = `Failed to create employee ${staffIdVal}: ${empCreateError.message}`;
-                    if (errorCount <= MAX_SAMPLE) errorSample.push(errMsg);
-                    writeError(errorFileStream, { 'Staff ID': staffIdVal, 'Staff Name': staffNameVal }, errMsg);
-                    // If a DB error occurred, Postgres aborted the transaction. We must fail the whole import
-                    // or handle nested transactions which is complex. For now, we fail.
-                    throw new Error(errMsg);
-                }
-            }
 
             const group = {};
             const firstLabel = normalize(row[daysIdx]);
@@ -417,11 +567,22 @@ const runWorker = async () => {
                 if (!nextRow) break;
                 
                 const nextStaffId = String(nextRow[staffIdIdx] || '').trim();
-                if (nextStaffId && j > i) break; 
+                if (nextStaffId && normalize(nextStaffId) !== normCode) break; 
 
                 const label = normalize(nextRow[daysIdx]);
-                if (['attendance', 'in', 'out', 'wh', 'ot', 'f', 'fine'].includes(label)) {
-                    group[label] = nextRow;
+                const labelMap = {
+                    'attendance': 'attendance', 'attendence': 'attendance', 'p': 'attendance',
+                    'hd': 'attendance', 'a': 'attendance', 'wo': 'attendance', 'hl': 'attendance', 'l': 'attendance',
+                    'in': 'in', 'inpunch': 'in', 'punchin': 'in', 'arrival': 'in', 'timein': 'in',
+                    'out': 'out', 'outpunch': 'out', 'punchout': 'out', 'departure': 'out', 'timeout': 'out',
+                    'wh': 'wh', 'workhours': 'wh', 'workinghours': 'wh', 'duration': 'wh',
+                    'ot': 'ot', 'overtime': 'ot',
+                    'f': 'f', 'fine': 'f'
+                };
+                
+                const mappedLabel = labelMap[label];
+                if (mappedLabel) {
+                    group[mappedLabel] = nextRow;
                     j++;
                 } else {
                     break;
@@ -438,13 +599,11 @@ const runWorker = async () => {
             for (const colIdx of dateHeaders) {
                 if (isCancelled) fail("IMPORT_CANCELLED");
                 try {
-                    const dateStr = dateMapping[colIdx];
-                    const fullDateStr = `${dateStr}-${sheetYear}`.replace(/\s+/g, '-');
-                    const mDate = dayjs(fullDateStr, ["DD-MMM-YYYY", "D-MMM-YYYY", "DD-MMMM-YYYY", "D-MMMM-YYYY"]);
-                    
-                    if (!mDate.isValid()) continue;
-                    const attendanceDate = mDate.format("YYYY-MM-DD");
-                    const year = mDate.year();
+                    const dateInfo = parsedDatesMap.get(colIdx);
+                    if (!dateInfo) continue;
+
+                    const attendanceDate = dateInfo.formatted;
+                    const year = dateInfo.year;
 
                     const statusChar = attendanceRow ? String(attendanceRow[colIdx] || '').trim() : '';
                     const inVal = inRow ? inRow[colIdx] : null;
@@ -454,6 +613,9 @@ const runWorker = async () => {
                     const fineVal = fineRow ? fineRow[colIdx] : null;
 
                     if (!statusChar && !inVal && !outVal && !whVal) continue;
+
+                    const firstIn = parseTime(inVal, attendanceDate);
+                    const lastOut = parseTime(outVal, attendanceDate);
 
                     let status = 5; 
                     const s = statusChar.toUpperCase();
@@ -470,74 +632,44 @@ const runWorker = async () => {
                         } else {
                              status = s.includes('/2') ? 1 : 6;
                         }
-                        if (status === 1 || mapping.markPresent) leaveSession = 1; // Default to First Half
 
-                        // Ensure category
-                        let catId = categoryMap.get(mapping.name.toLowerCase());
-                        if (!catId) {
-                            // Find first active template or create default
-                            let template = await LeaveTemplate.findOne({
-                                where: { company_id: mockStore.companyId, status: 0 },
-                                transaction,
-                                order: [['id', 'ASC']]
-                            });
-                            if (!template) {
-                                template = await LeaveTemplate.create({
-                                    template_name: 'Default Leave Template',
-                                    leave_policy_cycle: 'CALENDAR_YEAR',
-                                    accrual_type: 'UPFRONT',
-                                    status: 0,
-                                    company_id: mockStore.companyId,
-                                    branch_id: mockStore.branchId,
-                                    user_id: mockStore.userId
-                                }, { transaction });
-                            }
-                            
-                            const newCat = await LeaveTemplateCategory.create({
-                                leave_template_id: template.id,
-                                leave_category_name: mapping.name,
-                                is_paid: mapping.isPaid,
-                                is_compoff: mapping.isCompoff,
-                                company_id: mockStore.companyId,
-                                branch_id: mockStore.branchId,
-                                user_id: mockStore.userId
-                            }, { transaction });
-                            catId = newCat.id;
-                            categoryMap.set(mapping.name.toLowerCase(), catId);
-                        }
-                        leaveCategoryId = catId;
-
-                        // Ensure Balance
-                        let balKey = `${employeeId}_${catId}_${year}`;
-                        if (!balanceCache.has(balKey)) {
-                            // Create Balance directly
-                            try {
-                                await EmployeeLeaveBalance.create({
-                                    employee_id: employeeId,
-                                    leave_category_id: catId,
-                                    leave_category_name: mapping.name,
-                                    year: year,
-                                    total_allocated: 0,
-                                    used_leaves: 0,
-                                    pending_leaves: 0,
-                                    is_paid: mapping.isPaid,
-                                    is_compoff: mapping.isCompoff,
-                                    company_id: mockStore.companyId,
-                                    branch_id: mockStore.branchId,
-                                    user_id: mockStore.userId
-                                }, { transaction });
-                                balanceCache.add(balKey);
-                            } catch (balErr) {
-                                // Ignore if already exists (race condition)
-                                if (balErr.name && !balErr.name.includes('Unique')) throw balErr;
-                                balanceCache.add(balKey);
+                        if (status === 1 || mapping.markPresent) {
+                            leaveSession = 1; // Default
+                            if (firstIn && lastOut) {
+                                const inHr = dayjs(firstIn).hour();
+                                const outHr = dayjs(lastOut).hour();
+                                if (inHr >= 12) leaveSession = 1; // Worked afternoon, leave was morning (Session 1)
+                                else if (outHr <= 15) leaveSession = 2; // Worked morning, leave was afternoon (Session 2)
                             }
                         }
+
+                        leaveCategoryId = categoryMap.get(mapping.name.toLowerCase());
                         importedNote = `Imported: ${statusChar}`;
                     } else if (s === 'HD') {
                         status = 1;
-                        leaveSession = 1;
-                    } else if (['P', 'OD'].includes(s)) {
+                        leaveSession = 1; // Default
+                        if (firstIn && lastOut) {
+                            const inHr = dayjs(firstIn).hour();
+                            const outHr = dayjs(lastOut).hour();
+                            if (inHr >= 12) leaveSession = 1;
+                            else if (outHr <= 15) leaveSession = 2;
+                        }
+                    } else if (s === 'OD') {
+                         status = 12; // OD
+                    } else if (s === 'OD/2') {
+                         status = 13; // HALF_OD
+                    } else if (s === 'P/2') {
+                        status = 1; // HALF_DAY
+                        leaveSession = 1; // Default
+                        if (firstIn && lastOut) {
+                            const inHr = dayjs(firstIn).hour();
+                            const outHr = dayjs(lastOut).hour();
+                            if (inHr >= 12) leaveSession = 1;
+                            else if (outHr <= 15) leaveSession = 2;
+                        }
+                        leaveCategoryId = categoryMap.get("unpaid leave");
+                        importedNote = `Imported: ${statusChar}`;
+                    } else if (s === 'P') {
                         status = 0; // PRESENT
                     } else if (s === 'A') {
                         status = 5; // ABSENT
@@ -551,26 +683,23 @@ const runWorker = async () => {
 
                     const workedMinutes = parseWH(whVal);
                     const overtimeMinutes = parseWH(otVal);
-                    const fineAmount = fineVal ? parseFloat(fineVal) || 0 : 0;
+                    const fineMinutes = parseWH(fineVal);
                     
                     let overtimeData = null;
                     if (overtimeMinutes > 0) {
                         overtimeData = {
-                            late_ot: { minutes: overtimeMinutes, rate: 5, amount: 0 }
+                            late_ot: { minutes: overtimeMinutes, rate: 1, amount: 0 }
                         };
                     }
 
                     let fineData = null;
-                    if (fineAmount > 0) {
+                    if (fineMinutes > 0) {
                         fineData = {
-                            late_entry: { minutes: 0, rate: 1, amount: fineAmount }
+                            late_entry: { minutes: fineMinutes, rate: 1, amount: 0 }
                         };
                     }
                     
 
-                    const firstIn = parseTime(inVal, attendanceDate);
-                    const lastOut = parseTime(outVal, attendanceDate);
-                    
                     let dbFirstIn = firstIn;
                     let dbLastOut = lastOut;
                     let effectiveWorkedMinutes = workedMinutes;
@@ -641,7 +770,7 @@ const runWorker = async () => {
                         status: status,
                         worked_minutes: effectiveWorkedMinutes,
                         overtime_minutes: overtimeMinutes,
-                        fine_amount: fineAmount,
+                        fine_amount: 0,
                         overtime_data: overtimeData,
                         fine_data: fineData,
                         first_in: dbFirstIn ? dayjs(dbFirstIn).format("HH:mm:ss") : null,
@@ -652,7 +781,7 @@ const runWorker = async () => {
                         leave_session: leaveSession,
                         user_id: mockStore.userId,
                         company_id: mockStore.companyId,
-                        branch_id: mockStore.branchId || (branchIdx !== -1 ? branchNameMap.get(normalize(row[branchIdx])) : null),
+                        branch_id: employeeCachedData?.branch_id || mockStore.branchId,
                     };
 
                     if (dayId) {
@@ -705,20 +834,27 @@ const runWorker = async () => {
             });
         });
 
-        // 2. Fetch all IDs for newly created days so we can link punches
+        // 2. Fetch all IDs for newly created/updated days so we can link punches
+        // CRITICAL: We must include ALL employees that were processed, especially new ones
+        const processedEmpIds = [...new Set(dayPayloads.map(p => p.employee_id))];
+        
         const allDaysInRange = await AttendanceDay.findAll({
             where: {
-                employee_id: { [Op.in]: empIdList },
+                employee_id: { [Op.in]: processedEmpIds },
                 attendance_date: { [Op.between]: [minDate, maxDate] }
             },
-            attributes: ['id', 'employee_id', 'attendance_date'],
+            attributes: ['id', 'employee_id', 'attendance_date', 'branch_id'],
             transaction,
             raw: true
         });
 
         const finalDayIdMap = new Map();
+        const dayBranchMap = new Map();
         allDaysInRange.forEach(d => {
-            finalDayIdMap.set(`${d.employee_id}_${d.attendance_date}`, d.id);
+            const dateStr = dayjs(d.attendance_date).format("YYYY-MM-DD");
+            const dKey = `${d.employee_id}_${dateStr}`;
+            finalDayIdMap.set(dKey, d.id);
+            dayBranchMap.set(d.id, d.branch_id);
         });
 
         // 3. Bulk Clear Punches for all days we are touching
@@ -734,8 +870,8 @@ const runWorker = async () => {
         const finalPunches = [];
         punchesToCreate.forEach(group => {
             const dId = finalDayIdMap.get(group.empDateKey);
-            const empId = group.empDateKey.split('_')[0];
             if (dId) {
+                const empId = group.empDateKey.split('_')[0];
                 group.punches.forEach(p => {
                     finalPunches.push({
                         employee_id: parseInt(empId),
@@ -744,7 +880,8 @@ const runWorker = async () => {
                         punch_type: p.type,
                         user_id: mockStore.userId,
                         company_id: mockStore.companyId,
-                        branch_id: mockStore.branchId // Simplified branch as it's for logging
+                        branch_id: dayBranchMap.get(dId) || mockStore.branchId,
+                        status: 0
                     });
                 });
             }
@@ -777,9 +914,10 @@ const runWorker = async () => {
     // 6. Bulk Create Leave Requests (Maintain History)
     if (leaveRequestPayloads.length > 0) {
         // Clear existing auto-requests for the touched date range to prevent duplicates
+        const processedEmpIdsForLeave = [...new Set(leaveRequestPayloads.map(p => p.employee_id))];
         await LeaveRequest.destroy({
             where: {
-                employee_id: { [Op.in]: empIdList },
+                employee_id: { [Op.in]: processedEmpIdsForLeave },
                 start_date: { [Op.between]: [minDate, maxDate] },
                 reason: "Auto-generated from Attendance Import"
             },

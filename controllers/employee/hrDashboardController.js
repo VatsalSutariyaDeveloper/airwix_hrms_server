@@ -186,7 +186,7 @@ exports.getPayrollOverview = async (req, res) => {
             },
             {
                 attributes: [
-                    [sequelize.fn('SUM', sequelize.col('net_payable')), 'total_payout'],
+                    [sequelize.fn('SUM', sequelize.col('net_salary')), 'total_payout'],
                     [sequelize.fn('COUNT', sequelize.col('id')), 'processed_count']
                 ],
                 raw: true

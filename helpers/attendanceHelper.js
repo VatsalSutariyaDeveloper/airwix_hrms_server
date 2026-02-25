@@ -581,9 +581,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // [MOD] Calculate worked minutes for Track In/Out OFF case or preserve existing
     let finalNoPunchMinutes = 0;
-    if (template && !template.track_in_out && [0, 1].includes(emptyStatus)) {
-      if (emptyStatus === 0) finalNoPunchMinutes = shift?.min_full_day_minutes || 480;
-      else if (emptyStatus === 1) finalNoPunchMinutes = shift?.min_half_day_minutes || 240;
+    if (template && !template.track_in_out && [0, 1, 12, 13].includes(emptyStatus)) {
+      if (emptyStatus === 0 || emptyStatus === 12) finalNoPunchMinutes = shift?.min_full_day_minutes || 480;
+      else if (emptyStatus === 1 || emptyStatus === 13) finalNoPunchMinutes = shift?.min_half_day_minutes || 240;
     } else if (existingDay && existingDay.status === emptyStatus) {
       finalNoPunchMinutes = existingDay.worked_minutes || 0;
     }
@@ -1265,10 +1265,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status = existingDayForStatus.status;
     }
     // Otherwise apply downgrade prevention logic
-    else if (existingDayForStatus.status === 0 && (status === 1 || status === 5)) {
-      status = 0; // Keep Present
-    } else if (existingDayForStatus.status === 1 && status === 5) {
-      status = 1; // Keep Half Day
+    else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
+      status = existingDayForStatus.status; // Keep Present or On Duty
+    } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
+      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
     }
   }
 
@@ -1531,7 +1531,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
 
   if (!compOffCategory) return;
 
-  const isWorkingStatus = [0, 1].includes(Number(status));
+  const isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
   const employeeId = employee.id;
 
   // Find existing credit record for this date
@@ -1544,7 +1544,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
   }, {}, transaction);
 
   if (isWorkingStatus) {
-    const creditAmount = Number(status) === 0 ? 1.0 : 0.5;
+    const creditAmount = [0, 12].includes(Number(status)) ? 1.0 : 0.5;
     
     if (existingCompOff) {
       // Handle Correction (e.g. Full Day vs Half Day change)

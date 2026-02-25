@@ -187,6 +187,7 @@ router.post("/leave-template/dropdown-list", leaveTemplateController.dropdownLis
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
 router.post("/leave/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 router.post("/attendance/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
+router.post("/payroll/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 
 // ==========================
 // 30. LEAVE REQUEST & BALANCE ROUTES

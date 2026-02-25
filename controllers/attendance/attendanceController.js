@@ -200,13 +200,17 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
           
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
              const h = itemHolidays.find(h => h.employee_id === emp.id);
              statusText = h ? h.name : "Holiday";
           } else if (day.status === 6) {
              statusText = day.leaveCategory?.leave_category_name || "Leave";
+          } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
+             statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
+          } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
+             statusText = day.leaveCategory.leave_category_name;
           }
           day.setDataValue('status_text', statusText);
           
@@ -295,7 +299,9 @@ exports.getAttendanceSummary = async (req, res) => {
       const status = parseInt(stat.status);
       
       if (status === 0) summary.present += count;
+      else if (status === 12) summary.present += count; // On Duty
       else if (status === 1) summary.halfDay += count;
+      else if (status === 13) summary.halfDay += count; // Half On Duty
       else if (status === 3) summary.weeklyOff += count;
       else if (status === 4) summary.holiday += count;
       else if (status === 6) summary.leave += count;
@@ -359,16 +365,18 @@ exports.updateAttendanceDay = async (req, res) => {
     const shift_id = emp && emp.shift_template ? emp.shift_template : null;
 
     // Add conditional required fields based on status
-    if (req.body.status === 0) {
+    if ([0, 12].includes(req.body.status)) {
       if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
       }
-    } else if (req.body.status === 1) {
+    } else if ([1, 13].includes(req.body.status)) {
       if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
         // requiredFields.last_out = "Out Time";
       }
-      requiredFields.leave_category_id = "Leave Category";
+      if (req.body.status === 1) {
+          requiredFields.leave_category_id = "Leave Category";
+      }
     }
 
     const errors = await validateRequest(req.body, requiredFields);
@@ -420,7 +428,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // If employee is Absent/Leave/Holiday (3,4,5,6) and frontend sends Present/HalfDay (0,1)
     // We IGNORE the frontend status and keep the existing one UNLESS times are explicitly being updated.
     const isExistingNonWorking = [3, 4, 5, 6].includes(day.status);
-    const isIncomingWorking = [0, 1].includes(status);
+    const isIncomingWorking = [0, 1, 12, 13].includes(status);
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
     if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate && isTrackInOutOn) {
@@ -532,6 +540,8 @@ exports.updateAttendanceDay = async (req, res) => {
  
      // Handle manualPunch with status 1,2,3,5 - delete punches for today
     // Clear punches for non-working status
+    // [MOD] Removed clearing punches for non-working status to allow punches for Half Day, Overtime on WO/Holiday, etc.
+    /*
     if ([1, 3, 4, 5, 6].includes(req.body.status)) {
       console.log(`Clearing punches for status ${req.body.status} on ${attendance_date}`);
       await commonQuery.updateRecordById(
@@ -543,6 +553,7 @@ exports.updateAttendanceDay = async (req, res) => {
         }, 
         { status: 2 }, t);
     }
+    */
      const payload = {
       employee_id,
       attendance_date,
@@ -619,8 +630,8 @@ exports.updateAttendanceDay = async (req, res) => {
         if (leave_session !== undefined) payload.leave_session = leave_session;
     }
 
-    // If status is not Half Day(1) or Leave(6), explicitly clear leave category/session
-    if (status !== undefined && ![1, 6].includes(status)) {
+    // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
+    if (status !== undefined && ![1, 6, 13].includes(status)) {
       payload.leave_category_id = null;
       payload.leave_session = null;
     }
@@ -1218,17 +1229,30 @@ exports.getMonthlyAttendance = async (req, res) => {
 
       if (attendanceDay) {
         // Summary Counts
-        if (attendanceDay.status === 0) summary.present++;
-        else if (attendanceDay.status === 1) summary.halfDay++;
+        if (attendanceDay.status === 0 || attendanceDay.status === 12) summary.present++;
+        else if (attendanceDay.status === 1 || attendanceDay.status === 13) summary.halfDay++;
         else if (attendanceDay.status === 5) summary.absent++;
         else if (attendanceDay.status === 6) summary.leave++;
 
-        totalFineMins += (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        // Only calculate fine minutes if a fine amount actually exists (as requested)
+        let dayFinePenaltyMins = 0;
+        if (attendanceDay.fine_data) {
+          const fd = attendanceDay.fine_data;
+          if (fd.late_entry?.minutes > 0) dayFinePenaltyMins += parseInt(fd.late_entry.minutes) || 0;
+          if (fd.early_exit?.minutes > 0) dayFinePenaltyMins += parseInt(fd.early_exit.minutes) || 0;
+          if (fd.excess_breaks?.minutes > 0) dayFinePenaltyMins += parseInt(fd.excess_breaks.minutes) || 0;
+        } else if ((parseFloat(attendanceDay.fine_amount) || 0) > 0) {
+          // Fallback if fine_data is missing but fine_amount exists
+          dayFinePenaltyMins = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        }
+
+        totalFineMins += dayFinePenaltyMins;
         summary.fineAmount += parseFloat(attendanceDay.fine_amount) || 0;
-        totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
+        // overtime_minutes is already the total (early + late) from helper, so no need to add early_overtime_minutes again
+        totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0);
 
         const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
@@ -1236,6 +1260,10 @@ exports.getMonthlyAttendance = async (req, res) => {
         } else if (attendanceDay.status === 4) {
           const h = employeeHolidays.find(h => h.date === curDate);
           statusText = h ? h.name : "Holiday";
+        } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
+          statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
+        } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
+          statusText = attendanceDay.leaveCategory.leave_category_name;
         }
 
         let timeRange = "0:00 Hrs";
@@ -1246,8 +1274,8 @@ exports.getMonthlyAttendance = async (req, res) => {
         }
 
         let varianceStr = "";
-        const dayFine = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
-        const totalOvertime = (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
+        const dayFine = dayFinePenaltyMins;
+        const totalOvertime = (parseInt(attendanceDay.overtime_minutes) || 0);
         
         if (dayFine > 0 && totalOvertime > 0) {
           // Show both fine and overtime
@@ -1262,12 +1290,32 @@ exports.getMonthlyAttendance = async (req, res) => {
 
         dayData = {
           ...dayData,
+          id: attendanceDay.id,
+          first_in: attendanceDay.first_in,
+          last_out: attendanceDay.last_out,
+          worked_minutes: attendanceDay.worked_minutes,
+          late_minutes: attendanceDay.late_minutes,
+          early_out_minutes: attendanceDay.early_out_minutes,
+          early_overtime_minutes: attendanceDay.early_overtime_minutes,
+          overtime_minutes: attendanceDay.overtime_minutes,
+          fine_amount: attendanceDay.fine_amount,
+          overtime_data: attendanceDay.overtime_data,
+          fine_data: attendanceDay.fine_data,
+          leave_session: attendanceDay.leave_session,
+          is_locked: attendanceDay.is_locked,
+          shift_id: attendanceDay.shift_id,
           shift_name: shiftName,
           time_range: timeRange + varianceStr,
           day_status: attendanceDay.status,
           status: statusText,
           note: attendanceDay.note,
           leave_category_id: attendanceDay.leave_category_id,
+          is_scheduled_holiday: !!employeeHolidays.find(h => h.date === curDate),
+          is_scheduled_weekly_off: !!employeeWeeklyOffs.find(wo => {
+             const dayOfWeek = dayObj.day();
+             const weekOfMonth = Math.ceil(dayObj.date() / 7);
+             return wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth);
+          }),
           punches: dayPunches.map(p => ({
             id: p.id,
             time: dayjs(p.punch_time).format("hh:mm a"),
@@ -1307,7 +1355,7 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     // Finalize Summary Formatting
-    summary.fine = `- ${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
+    summary.fine = `${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
     summary.overtime = `${Math.floor(totalOvertimeMins / 60)}:${(totalOvertimeMins % 60).toString().padStart(2, '0')}`;
 
     return res.ok({

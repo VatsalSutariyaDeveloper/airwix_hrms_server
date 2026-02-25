@@ -83,6 +83,40 @@ const BLOOD_GROUP_MAP = {
     "ab+": 7, "ab positive": 7, "ab-": 8, "ab negative": 8
 };
 
+const getEmployeeTypeDetails = (typeStr, codeStr) => {
+    const s = String(typeStr || '').toLowerCase();
+    const c = String(codeStr || '').toLowerCase();
+    
+    let employee_type = 1; // Default to Staff
+    let worker_type = null;
+
+    if (s.includes('staff')) {
+        employee_type = 1;
+    } else if (s.includes('worker') || c.includes('worker')) {
+        employee_type = 2;
+        // Check for on-role/off-role
+        if (s.includes('on-role') || s.includes('on role') || c.includes('on-role') || c.includes('on role')) {
+            worker_type = 1; 
+        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-role') || c.includes('off role')) {
+            worker_type = 2; 
+        }
+    } else if (s.includes('contractor')) {
+        employee_type = 3; // Contractor
+    } else if (s === '1' || s === '2' || s === '3') {
+        employee_type = parseInt(s);
+    }
+    
+    return { employee_type, worker_type };
+};
+
+const getWorkerTypeValue = (v) => {
+    const s = String(v || "").trim().toLowerCase();
+    if (!s) return null;
+    if (s.includes('on-role') || s.includes('on role') || s === '1') return 1;
+    if (s.includes('off-role') || s.includes('off role') || s === '2') return 2;
+    return null;
+};
+
 const getBloodGroupValue = (v) => {
     let s = String(v || "").trim().toLowerCase().replace(/'/g, '').replace(/\s+/g, " ");
     if (!s) return null;
@@ -150,6 +184,8 @@ const runWorker = async () => {
     // Auto-match common required fields even if required_fields is not provided
     const COMMON_FIELD_MAPPINGS = [
         { key: "first_name", aliases: ["first name", "name", "full name", "employee", "emp name", "employee name", "emp. name"] },
+        { key: "employee_type", aliases: ["employee type", "emp type", "emp. type", "type", "staff type"] },
+        { key: "worker_type", aliases: ["worker type", "employment type"] },
         { key: "joining_date", aliases: ["date of joing", "date of joining", "doj", "joining date", "doj."] },
         { key: "dob", aliases: ["date of birth", "dob", "birth date", "dob."] },
         { key: "gender", aliases: ["gender", "sex"] },
@@ -500,7 +536,7 @@ const runWorker = async () => {
                 }
 
                 if (!firstName) fail("First Name is required");
-                if (!mobile) fail("Mobile Number is required");
+                // if (!mobile) fail("Mobile Number is required");
                 
                 // Make these optional if missing in Excel to avoid blocking rows, 
                 // but keep database requirements in mind. DB might throw, but let it try.
@@ -517,21 +553,25 @@ const runWorker = async () => {
                 // Check for duplicates (only in Excel file for employee code)
                 if (record.employee_code && employeeData.fileEmpCodeSet.has(record.employee_code)) fail(`Employee Code '${record.employee_code}' already exists`);
                 if (email && employeeData.dbEmailSet.has(email)) fail(`Email '${email}' already exists`);
-                if (employeeData.dbEmpMobileSet.has(mobile)) fail(`Mobile '${mobile}' already exists`);
+                if (mobile && employeeData.dbEmpMobileSet.has(mobile)) fail(`Mobile '${mobile}' already exists`);
                 if (pan && employeeData.dbPanSet.has(pan)) fail(`PAN '${pan}' already exists`);
                 if (uan && employeeData.dbUanSet.has(uan)) fail(`UAN '${uan}' already exists`);
                 if (aadhaar && employeeData.dbAadhaarSet.has(aadhaar)) fail(`Aadhaar '${record.aadhaar_number}' already exists`);
                 if (drivingLicense && employeeData.dbDrivingLicenseSet.has(drivingLicense)) fail(`Driving License '${drivingLicense}' already exists`);
                 if (voterId && employeeData.dbVoterIdSet.has(voterId)) fail(`Voter ID '${voterId}' already exists`);
                 if (bankAccount && employeeData.dbBankAccountSet.has(bankAccount)) fail(`Bank Account '${bankAccount}' already exists`);
-                if (employeeData.fileEmpMobileSet.has(mobile)) fail(`Duplicate Mobile '${mobile}' found in file`);
+                if (mobile && employeeData.fileEmpMobileSet.has(mobile)) fail(`Duplicate Mobile '${mobile}' found in file`);
 
                 
                 // Prepare employee data
+                const typeDetails = getEmployeeTypeDetails(record.employee_type, record.employee_code);
+
                 const prepareData = {
                     employee_code: record.employee_code,
                     first_name: firstName,
                     mobile_no: mobile,
+                    employee_type: typeDetails.employee_type,
+                    worker_type: typeDetails.worker_type || getWorkerTypeValue(record.worker_type),
                     department_id: record.department_id ? departmentMap.get(String(record.department_id).trim().toLowerCase()) : null,
                     designation_id: record.designation_id ? designationMap.get(String(record.designation_id).trim().toLowerCase()) : null,
                     attendance_supervisor: record.attendance_supervisor,
@@ -600,7 +640,7 @@ const runWorker = async () => {
 
                 // Add to valid employees array
                 validEmployees.push(prepareData);
-                employeeData.fileEmpMobileSet.add(mobile);
+                if (mobile) employeeData.fileEmpMobileSet.add(mobile);
                 createdCount++;
 
             } catch (rowError) {
