@@ -83,11 +83,18 @@ exports.getCounts = async (req, res) => {
 
         const lateEntryCount = lateEntryRecords.length;
 
-        // Canteen Attendance Count for Today (Status 0=Present)
-        const canteenPresentToday = await commonQuery.countRecords(CanteenAttendance, {
-            date: today,
-            status: 0
+        // Canteen Attendance for Today - fetch all employees and their canteen status
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 });
+        const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
+            date: today
         });
+      
+        // Get employee IDs who have canteen attendance today
+        const presentEmployeeIds = canteenAttendanceToday.map(att => att.employee_id);
+        
+        // Count present and absent employees
+        const canteenPresentToday = presentEmployeeIds.length;
+        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length;
 
         return res.ok({
             totalEmployees,
@@ -96,7 +103,8 @@ exports.getCounts = async (req, res) => {
             onLeaveToday,
             pendingLeaves,
             lateEntry: lateEntryCount,
-            canteenPresentToday
+            canteenPresentToday,
+            canteenAbsentToday
         });
     } catch (err) {
         return handleError(err, res, req);

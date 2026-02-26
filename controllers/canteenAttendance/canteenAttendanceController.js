@@ -124,7 +124,7 @@ exports.getSummary = async (req, res) => {
                         model: CanteenAttendance,
                         as: "canteenAttendances",
                         where: { date: date },
-                        attributes: ["id", "employee_id", "date", "status"],
+                        attributes: ["id", "employee_id", "date", "status", "created_at"],
                         required: false
                     }
                 ],
