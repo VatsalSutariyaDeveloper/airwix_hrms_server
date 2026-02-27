@@ -36,9 +36,15 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: "role_id",
       as: "RolePermission",
     });
-    User.hasMany(models.UserCompanyRoles, {
+    User.hasOne(models.UserCompanyRoles, {
+      sourceKey: "id",
       foreignKey: "user_id",
+      on: {
+        user_id: sequelize.col("User.id"),
+        role_id: sequelize.col("User.role_id"),
+      },
       as: "ComapanyRole",
+      constraints: false,
     });
     User.belongsTo(models.Employee, {
       foreignKey: "employee_id",

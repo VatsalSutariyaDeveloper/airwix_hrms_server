@@ -167,7 +167,8 @@ exports.getAll = async (req, res) => {
                         attributes: ["first_name", "employee_code"],
                         include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }]
                     },
-                    { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] }
+                    { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
+                    { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
                 ]
             }
         );
@@ -192,6 +193,9 @@ exports.getAll = async (req, res) => {
             } else {
                 raw.document_url = null;
             }
+
+            // Add approver name if available
+            raw.approved_by = raw.approvedBy?.user_name || null;
 
             return raw;
         });

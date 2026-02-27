@@ -1,4 +1,4 @@
-const { sequelize, CompanyMaster, User, BranchMaster, GodownMaster, RolePermission, CompanyAddress, CountryMaster, StateMaster } = require("../../../models");
+const { sequelize, CompanyMaster, User, BranchMaster, GodownMaster, RolePermission, CompanyAddress, CountryMaster, StateMaster, UserCompanyRoles } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, deleteFile, Op, getCompanySubscription, fileExists, initializeCompanySettings, constants } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 
@@ -222,14 +222,28 @@ exports.create = async (req, res) => {
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
 
-    // Update company_access for the creator and Super Admins
+    // Update company_access for the creator
     await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
 
-    // If the creator is not a Super Admin, also update the company_access for all Super Admins
-    if (req.user.role_id != 1) {
-      const superAdmins = await commonQuery.findAllRecords(User, { role_id: 1, status: 0 }, { attributes: ['id'] }, transaction, false);
-      if (superAdmins && superAdmins.length > 0) {
-        for (const admin of superAdmins) {
+    // Create UserCompanyRole entry for all Super Admins (role_id: 1)
+    const superAdmins = await commonQuery.findAllRecords(User, { role_id: 1, status: 0 }, { attributes: ['id'] }, transaction);
+    if (superAdmins && superAdmins.length > 0) {
+      for (const admin of superAdmins) {
+        // Find an existing role entry for this superadmin to copy permissions from
+        // const existingRoleEntry = await commonQuery.findOneRecord(UserCompanyRoles, { user_id: admin.id, role_id: 1 }, {}, transaction, false);
+        // if (existingRoleEntry) {
+        //   const roleData = existingRoleEntry.get({ plain: true });
+        //   delete roleData.id;
+        //   delete roleData.created_at;
+        //   delete roleData.updated_at;
+        //   roleData.company_id = newCompany.id;
+        //   roleData.branch_id = newBranch.id;
+          
+        //   await commonQuery.createRecord(UserCompanyRoles, roleData, transaction, false);
+        // }
+
+        // Ensure company_access is updated for all Super Admins
+        if (admin.id !== req.user.id) {
           await updateUserAccess(admin.id, newCompany.id, 'company_access', transaction);
         }
       }

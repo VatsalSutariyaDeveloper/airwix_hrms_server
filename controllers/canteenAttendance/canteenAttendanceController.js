@@ -114,10 +114,14 @@ exports.getSummary = async (req, res) => {
     try {
     const { date } = req.body;
 
+     const fieldConfig = [
+        ["first_name", true, false]
+    ]
+
     const allEmployees = await commonQuery.fetchPaginatedData(
             Employee,
-            { status: 0, ...req.body },
-            [],
+            { status: 0, ...req.body, limit:"All" },
+            fieldConfig,
             {
                 include:[
                     {

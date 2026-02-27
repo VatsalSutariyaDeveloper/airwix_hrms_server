@@ -48,6 +48,7 @@ module.exports = (sequelize, DataTypes) => {
     LeaveRequest.associate = (models) => {
         LeaveRequest.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
         LeaveRequest.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "category" });
+        LeaveRequest.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
     };
 
     return LeaveRequest;

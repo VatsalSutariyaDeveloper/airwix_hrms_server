@@ -631,13 +631,16 @@ exports.dropdownList = async (req, res) => {
         } else {
             const fieldConfig = [
                 ["first_name", true, true],
+                ["employee_code", true, true],
             ];
 
             const data = await commonQuery.fetchPaginatedData(
                 Employee,
                 { ...POST, status: 0 },
                 fieldConfig,
-                {},
+                {
+                    attributes: ["id", "first_name", "employee_code", "status"],
+                },
                 false,
             );
             return res.ok(data);
@@ -679,7 +682,6 @@ exports.updateStatus = async (req, res) => {
 
 exports.assignRole = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { company_id } = getContext();
     const POST = req.body;
 
     try {
@@ -728,7 +730,7 @@ exports.assignRole = async (req, res) => {
         }
 
         // 4. Get permissions from RolePermission table
-        const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
+        // const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
 
         // 5. Update all users and their roles
         const updatePromises = users.map(async (user) => {
@@ -736,15 +738,15 @@ exports.assignRole = async (req, res) => {
             await commonQuery.updateRecordById(User, user.id, { role_id: newRoleId }, transaction);
 
             // Update UserCompanyRoles with role_id and permissions
-            return commonQuery.updateRecordById(
-                UserCompanyRoles,
-                { user_id: user.id, company_id: company_id },
-                {
-                    role_id: newRoleId,
-                    permissions: rolePermission.permissions
-                },
-                transaction, false, false
-            );
+            // return commonQuery.updateRecordById(
+            //     UserCompanyRoles,
+            //     { user_id: user.id, company_id: company_id },
+            //     {
+            //         role_id: newRoleId,
+            //         permissions: rolePermission.permissions
+            //     },
+            //     transaction, false, false
+            // );
         });
 
         await Promise.all(updatePromises);
@@ -1497,31 +1499,27 @@ exports.inviteUser = async (req, res) => {
 
         if (!user) {
             // This case should theoretically not happen with auto-creation, but handle it for legacy employees
-            const role_id = 5;
-            const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
-
             user = await commonQuery.createRecord(User, {
                 user_name: employee.first_name,
                 email: employee.email,
                 mobile_no: employee.mobile_no,
                 employee_id: employee.id,
-                role_id: role_id,
+                role_id: 5,
                 company_id: employee.company_id,
                 branch_id: employee.branch_id,
                 company_access: employee.company_id,
-                permission: rolePermission ? rolePermission.permissions : null,
                 status: 1,
                 is_activated: false
             }, transaction);
 
-            await commonQuery.createRecord(UserCompanyRoles, {
-                user_id: user.id,
-                role_id: role_id,
-                branch_id: employee.branch_id,
-                company_id: employee.company_id,
-                permissions: user.permission,
-                status: 0
-            }, transaction);
+            // await commonQuery.createRecord(UserCompanyRoles, {
+            //     user_id: user.id,
+            //     role_id: role_id,
+            //     branch_id: employee.branch_id,
+            //     company_id: employee.company_id,
+            //     permissions: user.permission,
+            //     status: 0
+            // }, transaction);
         }
 
         // Generate Activation Code

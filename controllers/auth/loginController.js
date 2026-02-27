@@ -111,7 +111,7 @@ exports.login = async (req, res) => {
     const userAttributes = [
         'id', 'user_name', 'email', 'mobile_no', 'password', 
         'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 'company_access',
+        'user_id', 'company_access', 'is_activated',
     ];
 
     // --- A. DETERMINE LOGIN METHOD ---
@@ -199,6 +199,7 @@ exports.login = async (req, res) => {
               return res.error(400, { message: "Invalid activation code." });
           }
       } else {
+        console.log("user", user);
           if (!user.is_activated) {
               await transaction.rollback();
               return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
@@ -313,17 +314,12 @@ exports.login = async (req, res) => {
     );
 
     // Fetch User Permissions using Sequelize findOne
-    const userPermission = await UserCompanyRoles.findOne({ 
+    const userPermission = await RolePermission.findOne({ 
       where: {
-          user_id: user.id, 
-          role_id: user.role_id, 
-          company_id: user.company_id, 
-          branch_id: user.branch_id
+          id: user.role_id, 
+          company_id: {[Op.in]: [-1, user.company_id]}
       },
-      include: [ 
-          { model: RolePermission, as: "role", attributes: ["role_name", "permissions"] } 
-      ], 
-      attributes: ['permissions'], 
+      attributes: ["role_name", "permissions"],
       transaction 
     });
 
@@ -342,8 +338,8 @@ exports.login = async (req, res) => {
       user_key: user.user_key,
       profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
       authorized_signature: user.authorized_signature,
-      role_name: userPermission?.role?.role_name,
-      permission: userPermission?.permissions ? userPermission?.role?.permissions : user.permissions,
+      role_name: userPermission?.role_name,
+      permission: userPermission?.permissions,
       is_login: 1,
       user_id: user.user_id,
       branch_id: user.branch_id,

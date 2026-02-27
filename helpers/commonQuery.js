@@ -70,8 +70,10 @@ function withDebug(options = {}, transaction = null) {
  * Merges input normalization, status filtering, and tenant logic.
  * * @param {Object|Array|String|Number} whereInput - The filter condition
  * @param {Boolean} applyDefaults - If true, injects Company, Branch, and User IDs based on settings
+ * @param {Boolean} [skipStatus=false] - When true the default status (not equal 2) check is skipped;
+ *                                       useful for include queries where status should not be applied
  */
-async function buildWhere(whereInput, applyDefaults = true) {
+async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) {
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -89,8 +91,11 @@ async function buildWhere(whereInput, applyDefaults = true) {
 
   // --- 2. Apply Status Filter ---
   // If status is not explicitly set, default to excluding deleted (2)
-  if (where.status === undefined) {
-    where.status = { [Op.ne]: 2 };
+  // `skipStatus` allows callers (e.g. include logic) to bypass this check completely
+  if (!skipStatus) {
+    if (where.status === undefined) {
+      where.status = { [Op.ne]: 2 };
+    }
   }
 
   const ctx = getContext();
@@ -505,20 +510,21 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
 
       let filters = {};
 
-      // A. Status
-      if (reqBody?.status !== undefined && reqBody?.status !== "All") {
-        if (Array.isArray(reqBody?.status) && reqBody?.status.length > 0) {
-          filters.status = { [Op.in]: reqBody?.status };
-        } else {
-          const s = reqBody?.status;
-          if (["Active", "0", 0].includes(s)) filters.status = 0;
-          else if (["Deactive", "1", 1].includes(s)) filters.status = 1;
-          else filters.status = s;
+      // A. Status (skip entirely if `include` object is provided)
+      if (!reqBody?.include) {
+        if (reqBody?.status !== undefined && reqBody?.status !== "All") {
+          if (Array.isArray(reqBody?.status) && reqBody?.status.length > 0) {
+            filters.status = { [Op.in]: reqBody?.status };
+          } else {
+            const s = reqBody?.status;
+            if (["Active", "0", 0].includes(s)) filters.status = 0;
+            else if (["Deactive", "1", 1].includes(s)) filters.status = 1;
+            else filters.status = s;
+          }
+        } else if (reqBody?.status === "All") {
+          // Optional: explicitly allow all statuses if needed, usually we just don't filter
+          delete filters.status;
         }
-      } 
-      else if (reqBody?.status === "All") {
-        // Optional: explicitly allow all statuses if needed, usually we just don't filter
-        delete filters.status;
       }
 
       // B. Filter Object
@@ -628,7 +634,8 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
             else if (value) includeConditions.push({ [key]: value });
         }
         if (includeConditions.length > 0) {
-            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields);
+            // we intentionally bypass default status filtering for include logic
+            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields, true);
             const extraRecords = await model.findAll({ where: stickyWhere, ...options });
             const existingIds = new Set(data.map(d => String(d.id)));
             const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));

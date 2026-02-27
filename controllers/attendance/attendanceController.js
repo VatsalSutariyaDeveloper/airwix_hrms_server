@@ -1413,6 +1413,14 @@ exports.getLeaveSummary = async (req, res) => {
           as: "category",
           attributes: ["id", "leave_category_name"]
         }
+        ,
+        // Include approver user so we can show name in history
+        {
+          model: User,
+          as: "approvedBy",
+          attributes: ["id", "user_name"],
+          required: false
+        }
       ],
       order: [["start_date", "DESC"]]
     });
@@ -1484,7 +1492,8 @@ exports.getLeaveSummary = async (req, res) => {
         reason: leave.reason || "",
         status_id: leave.approval_status,
         status: statusMap[leave.approval_status] || "PENDING",
-        status_color: colorMap[leave.approval_status] || "#F59E0B"
+        status_color: colorMap[leave.approval_status] || "#F59E0B",
+        approved_by: leave.approvedBy?.user_name || null
       });
     });
 
