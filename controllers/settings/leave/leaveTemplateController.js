@@ -59,6 +59,15 @@ exports.create = async (req, res) => {
                 is_compoff: false
             });
         }
+        if (!finalCategories.find(c => c.leave_category_name === "Short Leave")) {
+            finalCategories.push({
+                leave_category_name: "Short Leave",
+                leave_count: 0,
+                unused_leave_rule: 'LAPSE',
+                is_paid: true,
+                is_compoff: false
+            });
+        }
 
         if (finalCategories.length > 0) {
             const categoryData = finalCategories.map(cat => ({
@@ -141,12 +150,27 @@ exports.update = async (req, res) => {
                     is_compoff: false
                 });
             }
+            if (!finalCategories.find(c => c.leave_category_name === "Short Leave") && !existingCategories.find(c => c.leave_category_name === "Short Leave")) {
+                finalCategories.push({
+                    leave_category_name: "Short Leave",
+                    leave_count: 0,
+                    unused_leave_rule: 'LAPSE',
+                    is_paid: true,
+                    is_compoff: false
+                });
+            }
 
             const existingIds = existingCategories.map(c => c.id);
             const inputIds = finalCategories.filter(c => c.id).map(c => c.id);
 
             // Delete categories not in input (Careful: don't delete system categories if hidden)
-            const idsToDelete = existingIds.filter(eid => !inputIds.includes(eid));
+            const idsToDelete = existingIds.filter(eid => {
+                if (inputIds.includes(eid)) return false;
+                const ec = existingCategories.find(c => c.id === eid);
+                if (ec && (ec.is_compoff || !ec.is_paid || ec.leave_category_name === "Short Leave")) return false; // KEEP special categories
+                return true;
+            });
+            
             if (idsToDelete.length > 0) {
                 await commonQuery.softDeleteById(LeaveTemplateCategory, { id: { [Op.in]: idsToDelete } }, transaction);
             }
@@ -164,8 +188,9 @@ exports.update = async (req, res) => {
 
         // 3. Sync all employees assigned to this template
         const employeesToSync = await commonQuery.findAllRecords(Employee, { leave_template: id, status: 0 }, { attributes: ['id'] }, transaction);
-        for (const emp of employeesToSync) {
-            await LeaveBalanceService.syncEmployeeBalances(emp.id, id, transaction);
+        if (employeesToSync.length > 0) {
+            const employeeIds = employeesToSync.map(emp => emp.id);
+            await LeaveBalanceService.bulkSyncEmployeeBalances(employeeIds, id, transaction);
         }
 
         await transaction.commit();

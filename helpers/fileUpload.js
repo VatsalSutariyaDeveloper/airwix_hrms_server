@@ -9,7 +9,11 @@ const { requestContext } = require("../utils/requestContext"); // ✅ IMPORT CON
 
 // --- UTILITY FUNCTIONS ---
 const ensureDir = (dirPath) => {
-  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+  if (!fs.existsSync(dirPath)) {
+    // mode: 0o777 gives Read/Write/Execute permission to Everyone (Owner, Group, Others)
+    // This fixes the issue where Docker creates a folder that your FTP user cannot write to.
+    fs.mkdirSync(dirPath, { recursive: true, mode: 0o777 });
+  }
 };
 
 const cleanSubfolder = (subfolder) =>
@@ -98,7 +102,7 @@ const uploadFile = async (
   }
 
   const savedFilenames = {};
-  const baseDir = "uploads";
+  const baseDir = path.join(process.cwd(), "uploads");
   const targetFolder = path.join(baseDir, cleanSubfolder(subfolder));
   ensureDir(targetFolder);
 

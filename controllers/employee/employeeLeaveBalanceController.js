@@ -25,19 +25,26 @@ exports.getByEmployeeId = async (req, res) => {
         const dayjs = require("dayjs");
         let cycle_info = { start: null, end: null, period: "" };
         let activeYear = null;
+        const referenceDate = req.body.date ? dayjs(req.body.date) : dayjs();
         
         if (employee && employee.leaveTemplate) {
-            const { start, end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
+            const { start, end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle, referenceDate);
             cycle_info.start = start.format('YYYY-MM-DD');
             cycle_info.end = end.format('YYYY-MM-DD');
-            cycle_info.period = `${start.format('MMM\'YY')} - ${end.format('MMM\'YY')}`;
-            activeYear = start.year();
+            
+            if (start.isSame(end, 'month')) {
+                cycle_info.period = start.format('MMM\'YY');
+            } else {
+                cycle_info.period = `${start.format('MMM\'YY')} - ${end.format('MMM\'YY')}`;
+            }
+            activeYear = end.year();
         }
 
         const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, { 
             employee_id: employeeId,
             status: 0, // Fetch active balances
-            ...(activeYear ? { year: activeYear } : {})
+            ...(activeYear ? { year: activeYear } : {}),
+            month: (employee && employee.leaveTemplate && employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') ? dayjs(cycle_info.end).month() + 1 : null
         }, {
             order: [['id', 'ASC']]
         });
@@ -127,13 +134,14 @@ exports.updateByEmployeeId = async (req, res) => {
                 
                 // Get cycle year
                 const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
-                const { start } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
 
                 await commonQuery.createRecord(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     leave_template_id: employee.leave_template,
                     leave_category_id: bal.leave_category_id,
-                    year: start.year(),
+                    year: end.year(),
+                    month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
                     leave_category_name: bal.leave_category_name,
                     total_allocated: newTotal,
                     pending_leaves: newTotal,

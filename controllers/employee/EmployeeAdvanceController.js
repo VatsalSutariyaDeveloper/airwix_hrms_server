@@ -46,7 +46,8 @@ exports.getAll = async (req, res) => {
         const fieldConfig = [
             ["payroll_month", true, true],
             ["payment_date", true, true],
-            ["amount", true, true]
+            ["amount", true, true],
+            ["employee_name", true, true]
         ];
 
         const data = await commonQuery.fetchPaginatedData(
@@ -59,7 +60,7 @@ exports.getAll = async (req, res) => {
                         model: Employee,
                         as: "employee",
                         required: false,
-                        attributes: [],
+                        attributes: ["first_name"],
                     }
                 ],
                 attributes: [
@@ -71,7 +72,7 @@ exports.getAll = async (req, res) => {
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
-                    "employee.first_name"
+                   [sequelize.col('employee.first_name'), 'employee_name']
                 ]
             },
         );

@@ -1,10 +1,9 @@
 module.exports = (sequelize, DataTypes) => {
   const CustomField = sequelize.define("CustomField", {
-    module_id: { type: DataTypes.INTEGER, allowNull: false, comment: "Links to ModuleMaster (e.g., Sales, Purchase)" },
-    entity_id: { type: DataTypes.INTEGER, allowNull: false, comment: "Links to ModuleEntityMaster (e.g., Quotation, Invoice)" }, 
+    entity_id: { type: DataTypes.INTEGER, allowNull: false, comment: "Links to ModuleEntityMaster (e.g., Employee)" }, 
     field_label: { type: DataTypes.STRING(100), allowNull: false },
     field_name: { type: DataTypes.STRING(100), allowNull: false, comment: "Unique slug for the field, e.g., 'fabric_quality'" },
-    field_type: { type: DataTypes.ENUM('text', 'number', 'textarea', 'select', 'date', 'checkbox', 'image'), allowNull: false },
+    field_type: { type: DataTypes.ENUM('text', 'number', 'textarea', 'select', 'date', 'checkbox', 'image', 'email'), allowNull: false },
     is_mandatory: { type: DataTypes.BOOLEAN, defaultValue: false, comment: "true: Yes, false: No" },
     is_readonly: { type: DataTypes.BOOLEAN, defaultValue: false, comment: "true: Yes, false: No" },
     default_value: { type: DataTypes.STRING(255), allowNull: true },
@@ -28,7 +27,6 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   CustomField.associate = (models) => {
-    CustomField.belongsTo(models.ModuleMaster, { foreignKey: 'module_id', as: 'module' });
     CustomField.belongsTo(models.ModuleEntityMaster, { foreignKey: 'entity_id', as: 'entity' });
     CustomField.belongsTo(models.CompanyMaster, { foreignKey: 'company_id', as: 'company' });
     CustomField.belongsTo(models.User, { foreignKey: 'user_id', as: 'user' });

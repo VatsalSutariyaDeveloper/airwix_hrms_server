@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -35,6 +35,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     as: "employeeSalaryTemplateTransactions",
                     include: [{ model: SalaryComponent, as: "component" }]
                 }]
+            },
+            {
+                model: DesignationMaster,
+                as: "designation",
+                attributes: ['designation_name']
             }
         ]
     }, transaction);
@@ -70,7 +75,9 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
     attendanceRecords.forEach(day => {
         switch (parseInt(day.status)) {
             case 0: presentDays++; break;
+            case 12: presentDays++; break; // OD is treated as Present
             case 1: halfDays++; break;
+            case 13: halfDays++; break; // HALF_OD is treated as Half Day
             case 3: weeklyOffs++; break;
             case 4: holidays++; break;
             case 5: absentDays++; break;
@@ -122,6 +129,8 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
     // Step F: Prepare Detailed Breakdown
     const earnings = [];
     const deductions = [];
+    const statutory = {};
+    const employer = {};
     let takeHomeEarnings = 0;
     let totalDeductions = 0;
 
@@ -132,6 +141,21 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
         const isEmployer = trans.is_employer_contribution === true || trans.is_employer_contribution === 'true';
 
         if (!comp) return; // Skip if no component info found
+
+        if (isEmployer) {
+            employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
+            return;
+        }
+
+        if (comp.is_statutory) {
+            statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
+            if (comp.component_type === "DEDUCTION") {
+                totalDeductions += amount;
+            } else {
+                takeHomeEarnings += amount;
+            }
+            return;
+        }
 
         if (comp.component_type === "EARNING") {
             const actualAmount = comp.is_lwp_impacted 
@@ -205,7 +229,7 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             name: employee.first_name,
             code: employee.employee_code,
             template: template.template_name,
-            designation: employee.designation,
+            designation: employee.designation?.designation_name,
             joining_date: employee.joining_date
         },
         period: {
@@ -237,10 +261,103 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
         },
-        breakdown: { earnings, deductions },
+        breakdown: { earnings, deductions, statutory, employer },
         meta: {
             branch_id: employee.branch_id,
             company_id: employee.company_id
+        }
+    };
+};
+
+/**
+ * Helper to convert an existing Payslip record into the summary format
+ * used by the Payroll Processor UI.
+ */
+const formatPayslipToSummary = async (payslip) => {
+    // Reconstruct attendance stats
+    const lwpDays = parseFloat(payslip.wp_days || 0);
+    const absentDays = parseFloat(payslip.absent_days || 0);
+    const halfDays = (lwpDays - absentDays) / 0.5;
+    const presentDays = parseFloat(payslip.present_days || 0);
+    const leave_details = payslip.leave_details || {};
+    const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+    const weeklyOffs = parseFloat(payslip.wo_days || 0);
+    const holidays = parseFloat(payslip.ph_days || 0);
+    const payableDays = (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2);
+
+    // Recalculate dynamic totals if needed, but primarily use stored values
+    const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+
+    // Use dynamic JSON fields for earnings and deductions
+    const earningDetails = payslip.earning_details || {};
+    const deductionDetails = payslip.deduction_details || {};
+
+    // For summary view, extract fine/misc from deduction_details
+    let totalFine = Object.entries(deductionDetails)
+        .filter(([name]) => {
+            const n = name.toLowerCase();
+            return n.includes('fine') || n.includes('misc') || n.includes('food') || n.includes('others') || n.includes('adjustment');
+        })
+        .reduce((sum, [, val]) => sum + parseFloat(val || 0), 0);
+
+    // Similar for Incentives from earning_details
+    let totalIncentive = Object.entries(earningDetails)
+        .filter(([name]) => {
+            const n = name.toLowerCase();
+            return n.includes('incentive') || n.includes('bonus');
+        })
+        .reduce((sum, [, val]) => sum + parseFloat(val || 0), 0);
+
+    return {
+        id: payslip.id,
+        is_finalized: true,
+        employee: {
+            id: payslip.employee?.id || payslip.employee_id,
+            name: payslip.employee?.first_name || "Employee",
+            code: payslip.employee?.employee_code || "N/A",
+            designation: payslip.employee?.designation?.designation_name || "N/A"
+        },
+        period: {
+            month: payslip.month,
+            year: payslip.year,
+            daysInMonth: dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth(),
+            monthName
+        },
+        attendance: {
+            presentDays,
+            halfDays: halfDays > 0 ? halfDays : 0,
+            absentDays,
+            leaveDays,
+            weeklyOffs,
+            holidays,
+            totalLWP: lwpDays,
+            payableDays,
+            lunch_count: payslip.lunch_count || 0,
+            leave_details: payslip.leave_details || {}
+        },
+        salary: {
+            ctc_monthly: payslip.fixed_gross || 0,
+            perDaySalary: payslip.per_day_salary || 0,
+            lwpDeduction: payslip.lwp_deduction || 0,
+            totalFine: totalFine.toFixed(2),
+            overtimeAmount: earningDetails['Overtime'] || earningDetails['OT Pay'] || 0,
+            incentiveAmount: totalIncentive.toFixed(2),
+            advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
+            netPayable: payslip.net_salary || 0
+        },
+        breakdown: payslip.break_down || { 
+            earnings: Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val, base_amount: 0 })),
+            deductions: Object.entries(deductionDetails)
+                .filter(([name]) => {
+                    // Filter out statutory items from deductions if they exist in statutory_details
+                    const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                    const normName = normalize(name);
+                    const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                    return !statutoryKeys.includes(normName);
+                })
+                .map(([name, val]) => ({ name, amount: val })),
+            statutory: payslip.statutory_details || {},
+            employer: payslip.employer_details || {}
         }
     };
 };
@@ -251,6 +368,29 @@ exports.calculateMonthlySalary = async (req, res) => {
         if (!employee_id || !month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
+
+        // 1. Check if a finalized/paid payslip already exists.
+        // If it does, we show the stored data instead of recalculating (important for Excel imports)
+        const existingPayslip = await commonQuery.findOneRecord(Payslip, {
+            employee_id,
+            month,
+            year,
+            status: { [Op.in]: [1, 2] } // Finalized or Paid
+        }, {
+            include: [{
+                model: Employee,
+                as: "employee",
+                attributes: ['id', 'first_name', 'employee_code'],
+                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
+            }]
+        });
+
+        if (existingPayslip) {
+            const summary = await formatPayslipToSummary(existingPayslip);
+            return res.ok(summary);
+        }
+
+        // 2. Otherwise perform fresh calculation based on attendance and template
         const summary = await performSalaryCalculation(employee_id, month, year);
         return res.ok(summary);
     } catch (err) {
@@ -284,19 +424,34 @@ exports.finalizeMonthlySalary = async (req, res) => {
             employee_id,
             month,
             year,
-            ctc_monthly: summary.salary.ctc_monthly,
+            // Attendance
             present_days: summary.attendance.presentDays,
             absent_days: summary.attendance.absentDays,
-            leave_days: summary.attendance.leaveDays,
-            weekly_offs: summary.attendance.weeklyOffs,
-            holidays: summary.attendance.holidays,
-            lwp_days: summary.attendance.totalLWP,
-            per_day_salary: summary.salary.perDaySalary,
-            lwp_deduction: summary.salary.lwpDeduction,
-            total_fine: summary.salary.totalFine,
-            ot_amount: summary.salary.overtimeAmount,
-            net_payable: summary.salary.netPayable,
-            break_down_json: summary.breakdown,
+            pd_days: summary.attendance.payableDays,
+            wp_days: summary.attendance.totalLWP, // Using wp_days for LWP
+            wo_days: summary.attendance.weeklyOffs,
+            ph_days: summary.attendance.holidays,
+            leave_details: { "Leave": summary.attendance.leaveDays },
+            
+            // Dynamic JSON Components
+            earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => {
+                acc[e.name] = e.actual_amount;
+                return acc;
+            }, {}),
+            deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => {
+                acc[d.name] = d.amount;
+                return acc;
+            }, {}),
+            statutory_details: summary.breakdown.statutory || {},
+            employer_details: summary.breakdown.employer || {},
+
+            // Summary Totals
+            fixed_gross: summary.salary.ctc_monthly,
+            paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
+            total_deduction: summary.salary.totalDeductions,
+            net_salary: summary.salary.netPayable,
+
+            break_down: summary.breakdown,
             status: 1, // Finalized
             user_id: req.user.id || 0,
             branch_id: summary.meta.branch_id,
@@ -390,8 +545,8 @@ exports.getEmployeePayslipList = async (req, res) => {
                 month: p.month,
                 year: p.year,
                 month_year_string: `${monthName} ${p.year}`,
-                ctc: p.ctc_monthly,
-                net_payable: p.net_payable,
+                ctc: p.paid_gross || p.fixed_gross,
+                net_payable: p.net_salary || p.net_payable,
                 status: p.status,
                 status_text: p.status === 1 ? "Finalized" : "Paid"
             };
@@ -442,8 +597,8 @@ exports.getCalculationHistory = async (req, res) => {
                 month: p.month,
                 year: p.year,
                 month_year_string: `${monthName} ${p.year}`,
-                ctc: p.ctc_monthly,
-                net_payable: p.net_payable,
+                ctc: p.fixed_gross || p.ctc_monthly,
+                net_payable: p.net_salary || p.net_payable,
                 status: p.status,
                 status_text: p.status === 0 ? "Draft" : (p.status === 1 ? "Finalized" : "Paid")
             };
@@ -484,9 +639,19 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             employee_id,
         });
 
-        // 3. Combine and Format
+        // 3. Combine unique months from attendance and existing payslips
+        const allPeriodKeys = new Set();
+        attendanceMonths.forEach(am => allPeriodKeys.add(`${am.month}-${am.year}`));
+        existingPayslips.forEach(ep => allPeriodKeys.add(`${ep.month}-${ep.year}`));
+
+        const sortedPeriods = Array.from(allPeriodKeys).map(key => {
+            const [month, year] = key.split('-').map(Number);
+            return { month, year };
+        }).sort((a, b) => b.year - a.year || b.month - a.month);
+
+        // 4. Format Result
         const result = [];
-        for (const am of attendanceMonths) {
+        for (const am of sortedPeriods) {
             const existing = existingPayslips.find(p => p.month === am.month && p.year === am.year);
             const monthName = dayjs().month(am.month - 1).format('MMM');
 
@@ -496,8 +661,8 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
 
             if (existing) {
                 // Use values from existing payslip (Draft/Finalized/Paid)
-                ctc = existing.ctc_monthly;
-                net_payable = existing.net_payable;
+                ctc = existing.fixed_gross || existing.ctc_monthly || 0;
+                net_payable = existing.net_salary || existing.net_payable || 0;
                 payslip_id = existing.id;
             } else {
                 try {
@@ -546,7 +711,7 @@ exports.getPayslipById = async (req, res) => {
                 model: Employee,
                 as: "employee",
                 attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
-                // Optional: include department name if needed
+                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
             }]
         });
 
@@ -554,10 +719,22 @@ exports.getPayslipById = async (req, res) => {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
 
-        const monthName = dayjs().month(payslip.month - 1).format('MMMM');
+        if (!payslip.month || !payslip.year) {
+            return res.error("VALIDATION_ERROR", { message: "Payslip record is missing month or year data" });
+        }
+
+        const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
 
         // Fetch current adjustments to show updated ones if in Draft or just for view
-        const monthStr = `${payslip.year}-${payslip.month.toString().padStart(2, '0')}-01`;
+        const year = parseInt(payslip.year);
+        const month = parseInt(payslip.month);
+        const monthDate = dayjs(`${year}-${month}-01`);
+        
+        if (!monthDate.isValid()) {
+            return res.error("VALIDATION_ERROR", { message: "Payslip has an invalid month or year" });
+        }
+        const monthStr = monthDate.format('YYYY-MM-DD');
+
         const incentives = await commonQuery.findAllRecords(EmployeeIncentive, {
             employee_id: payslip.employee_id,
             payroll_month: monthStr,
@@ -572,8 +749,37 @@ exports.getPayslipById = async (req, res) => {
         });
 
         // Granular attendance recalculation for UI (since Payslip summary is slightly compressed)
-        const halfDays = (parseFloat(payslip.lwp_days) - parseFloat(payslip.absent_days)) / 0.5;
-        const payableDays = parseFloat(payslip.present_days) + (halfDays * 0.5) + parseFloat(payslip.leave_days || 0) + parseFloat(payslip.weekly_offs || 0) + parseFloat(payslip.holidays || 0);
+        const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
+        const absentDays = parseFloat(payslip.absent_days || 0);
+        const halfDays = (lwpDays - absentDays) / 0.5;
+        const presentDays = parseFloat(payslip.present_days || 0);
+        const leave_details = payslip.leave_details || {};
+        const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+        const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
+        const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
+        const payableDays = presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays;
+
+        // Construct breakdown if missing (for imported data)
+        let breakdown = payslip.break_down;
+        if (!breakdown || (!breakdown.earnings?.length && !breakdown.deductions?.length)) {
+            const earning_details = payslip.earning_details || {};
+            const deduction_details = payslip.deduction_details || {};
+
+            breakdown = {
+                earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
+                deductions: Object.entries(deduction_details)
+                    .filter(([name]) => {
+                        // Filter out statutory items from deductions if they exist in statutory_details
+                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        const normName = normalize(name);
+                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                        return !statutoryKeys.includes(normName);
+                    })
+                    .map(([name, val]) => ({ name, amount: val })),
+                statutory: payslip.statutory_details || {},
+                employer: payslip.employer_details || {}
+            };
+        }
 
         // Final Formatting for UI "Data Pass"
         const formattedData = {
@@ -582,7 +788,7 @@ exports.getPayslipById = async (req, res) => {
                 id: payslip.employee?.id,
                 name: payslip.employee?.first_name,
                 code: payslip.employee?.employee_code,
-                designation: payslip.employee?.designation,
+                designation: payslip.employee?.designation?.designation_name,
                 joining_date: payslip.employee?.joining_date,
                 uan: payslip.employee?.uan_number,
                 pan: payslip.employee?.pan_number,
@@ -593,33 +799,35 @@ exports.getPayslipById = async (req, res) => {
                 month: payslip.month,
                 year: payslip.year,
                 label: `${monthName} ${payslip.year}`,
-                payDate: dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('DD/MM/YYYY')
+                payDate: monthDate.endOf('month').format('DD/MM/YYYY')
             },
             attendance: {
-                present: payslip.present_days,
-                absent: payslip.absent_days,
-                halfDay: halfDays,
-                leave: payslip.leave_days,
-                weekly_off: payslip.weekly_offs,
-                holiday: payslip.holidays,
-                lwp: payslip.lwp_days,
-                payable_days: payableDays.toFixed(1)
+                present: presentDays,
+                absent: absentDays,
+                halfDay: halfDays > 0 ? halfDays : 0,
+                leave: leaveDays,
+                weekly_off: weeklyOffs,
+                holiday: holidays,
+                lwp: lwpDays,
+                payable_days: payableDays.toFixed(1),
+                lunch_count: payslip.lunch_count || 0,
+                leave_details: payslip.leave_details || {}
             },
             salary: {
-                ctc: payslip.ctc_monthly,
-                perDay: payslip.per_day_salary,
-                netPayable: payslip.net_payable,
-                fine: payslip.total_fine,
-                overtime: payslip.ot_amount,
-                lwpDeduction: payslip.lwp_deduction,
-                incentives: incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0).toFixed(2),
-                advances: advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0).toFixed(2)
+                ctc: payslip.fixed_gross || payslip.ctc_monthly,
+                perDay: payslip.per_day_salary || 0,
+                netPayable: payslip.net_salary || payslip.net_payable,
+                fine: payslip.deduct_misc || payslip.total_fine || 0,
+                overtime: payslip.paid_ot_pay || payslip.ot_amount,
+                lwpDeduction: payslip.lwp_deduction || 0,
+                incentives: (parseFloat(payslip.paid_incentive || 0) + incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0)).toFixed(2),
+                advances: (parseFloat(payslip.deduct_advance || 0) + advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)).toFixed(2)
             },
             adjustments: {
                 incentives: incentives.map(i => ({ name: i.incentiveType?.name, amount: i.amount })),
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
-            breakdown: payslip.break_down_json,
+            breakdown: breakdown,
             status: payslip.status,
             status_text: payslip.status === 0 ? "Draft" : (payslip.status === 1 ? "Finalized" : "Paid")
         };
@@ -692,7 +900,7 @@ exports.getSalaryOverview = async (req, res) => {
             });
 
             if (payslip) {
-                const breakdown = payslip.break_down_json || { earnings: [], deductions: [] };
+                const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
                 const fine = parseFloat(payslip.total_fine || 0);
 

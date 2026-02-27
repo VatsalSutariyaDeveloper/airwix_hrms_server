@@ -1,7 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
     const Employee = sequelize.define("Employee", {
 
-        employee_type: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1:staff, 2:worker" },
+        employee_type: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1:staff, 2:worker, 3:contractor" },
+        worker_type: { type: DataTypes.SMALLINT, allowNull: true, defaultValue: null, comment: "1:on-role, 2:off-role" },
         department_id: { type: DataTypes.INTEGER },
         designation_id: { type: DataTypes.INTEGER },
 
@@ -109,6 +110,9 @@ module.exports = (sequelize, DataTypes) => {
         caste: { type: DataTypes.STRING },
         hobby: { type: DataTypes.STRING },
 
+        // CUSTOM FIELDS
+        custom_fields: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
+
         emergency_contact_name: { type: DataTypes.STRING },
         emergency_contact_relation: { type: DataTypes.SMALLINT, comment: "1: Brother, 2: Sister, 3: Father, 4: Mother, 5: Spouse, 6: Son, 7: Daughter, 8: Other" },
 
@@ -160,6 +164,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.SalaryTemplate, { foreignKey: "salary_template_id", as: "salaryTemplate" });
         Employee.belongsTo(models.ShiftTemplate, { foreignKey: "shift_template", as: "shiftTemplate" });
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
+        Employee.belongsTo(models.DesignationMaster, { foreignKey: "designation_id", as: "designation" });
 
         // User-Wise Template Data
         Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "employeeAttendanceTemplate" });
@@ -170,6 +175,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.EmployeeSalaryTemplateTransaction, { foreignKey: "employee_id", as: "employeeSalaryComponents" });
         Employee.hasMany(models.EmployeeShift, { foreignKey: "employee_id", as: "employeeShifts" });
         Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "employeePrintTemplates" });
+        Employee.hasMany(models.CanteenAttendance, { foreignKey: "employee_id", as: "canteenAttendances" });
     };
 
     return Employee;

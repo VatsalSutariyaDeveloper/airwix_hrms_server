@@ -7,7 +7,7 @@ const os = require("os");
 dotenv.config({ path: ".env" });
 // const { initSocket } = require('./socket');
 const db = require("./models");
-const cron = require('node-cron');
+// const cron = require('node-cron');
 const responseFormatter = require("./middlewares/responseFormatter");
 const errorHandler = require("./middlewares/errorHandler");
 const settingsRoutes = require("./routes/settingsRoutes");
@@ -23,6 +23,9 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
 const payrollRoutes = require("./routes/payrollRoutes");
 const LeaveBalanceService = require("./services/leaveBalanceService");
+const ContractorDeactivationService = require("./services/contractorDeactivationService");
+const canteenAttendanceRoutes = require("./routes/canteenAttendanceRoutes");
+const { initCronJobs } = require("./jobs/cronJobs");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
 
@@ -85,6 +88,7 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/administration", administrationRoutes);
 app.use("/api/subscription", subscriptionRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/canteen-attendance", canteenAttendanceRoutes);
 app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use(errorHandler);
@@ -133,41 +137,8 @@ if (DB_SYNC_ENABLED) {
   startServer();
 }
 
-cron.schedule('0 0 * * *', async () => {
-  console.log('⏰ Running daily log cleanup task...');
-  try {
-    await archiveAndCleanupLogs(90); // Keep 90 days of logs
-    console.log('✅ Log cleanup completed.');
-  } catch (error) {
-    console.error('❌ Log cleanup failed:', error);
-  }
-});
-
-// ⏰ Monthly Leave Accrual Task
-// Runs on the 1st of every month at 00:05 AM
-cron.schedule('5 0 1 * *', async () => {
-  console.log('⏰ Running monthly leave accrual task...');
-  try {
-    const LeaveBalanceService = require("./services/leaveBalanceService");
-    await LeaveBalanceService.processMonthlyAccruals();
-    console.log('✅ Monthly leave accruals completed.');
-  } catch (error) {
-    console.error('❌ Monthly leave accrual failed:', error);
-  }
-});
-
-// ⏰ Year-End Leave Reset Task
-// Runs every day at 00:10 AM to check if any employee's cycle has ended
-cron.schedule('10 0 * * *', async () => {
-  console.log('⏰ Checking for year-end leave resets...');
-  try {
-    const LeaveBalanceService = require("./services/leaveBalanceService");
-    await LeaveBalanceService.processYearEndReset();
-    console.log('✅ Year-end reset check completed.');
-  } catch (error) {
-    console.error('❌ Year-end reset failed:', error);
-  }
-});
+// Initialize Cron Jobs
+initCronJobs();
 
 function getServerIP() {
   const interfaces = os.networkInterfaces();

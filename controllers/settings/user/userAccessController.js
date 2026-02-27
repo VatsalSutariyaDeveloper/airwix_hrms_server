@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster} = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -35,8 +35,8 @@ exports.sessionData = async (req, res) => {
       where: { id: user_id },
       attributes: ['id', 'user_name', 'email', 'role_id', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'branch_id', 'company_id'],
       include: [{ 
-          model: UserCompanyRoles, 
-          as: "ComapanyRole", 
+          model: RolePermission, 
+          as: "RolePermission", 
           attributes: ["permissions"],
           required: false 
       }],
@@ -55,9 +55,9 @@ exports.sessionData = async (req, res) => {
     }
     
     // Check if user has a role assigned for this specific company/branch
-    if (!userData.ComapanyRole?.[0]?.permissions && userData.role_id != 1) {
+    if (!userData.RolePermission?.permissions && userData.role_id != 1) {
       await transaction.rollback();
-      return res.error("FORBIDDEN", { message: "User does not have a role assigned in this company." });
+      return res.error(constants.FORBIDDEN, { message: "User does not have a role assigned in this company." });
     }
 
     let where = {};
@@ -71,7 +71,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // 3. Fetch Core Data (Parallel - Standard Sequelize)
-    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList] = await Promise.all([
+    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList, employeeSettings] = await Promise.all([
       // A. Company List
       CompanyMaster.findAll({
         where: where,
@@ -127,6 +127,16 @@ exports.sessionData = async (req, res) => {
           },
           attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id'],
           transaction
+      }),
+
+      // F. Employee Settings
+      EmployeeSettings.findAll({
+          where: { 
+              company_id: company_id, 
+              status: 0 
+          },
+          attributes: ['id', 'settings_name', 'settings_value'],
+          transaction
       })
     ]);
 
@@ -160,11 +170,11 @@ exports.sessionData = async (req, res) => {
     const userJson = userData.toJSON();
     const enrichedUserData = { 
         ...userJson, 
-        permission: userData.ComapanyRole?.[0]?.permissions ?? null, 
+        permission: userData.RolePermission?.permissions ?? null, 
         profile_image_url: userData.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${userData.profile_image}` : null 
     };
 
-    delete enrichedUserData.ComapanyRole;
+    delete enrichedUserData.RolePermission;
     
     // Find Current Company
     // Force Number conversion to fix string vs int issues
@@ -269,7 +279,8 @@ exports.sessionData = async (req, res) => {
       companySubscription: finalSubscriptionData,
       planStatus: planStatus,
       branch_list: branchList, 
-      branch: currentBranch 
+      branch: currentBranch,
+      employeeSettings: employeeSettings || []
     };
 
     await transaction.commit();

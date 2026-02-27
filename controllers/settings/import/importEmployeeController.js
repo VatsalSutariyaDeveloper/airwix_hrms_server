@@ -19,6 +19,7 @@ exports.importData = async (req, res) => {
   let isAborted = false;
   let cancelTimeout = null;
   let keepErrorLog = false; // Flag to preserve file temporarily
+  
   try {
     // 1. Validate Basic Request
     const indentErrors = await validateRequest(req.body, {
@@ -37,6 +38,12 @@ exports.importData = async (req, res) => {
        workerScriptPath = "./employeeImport.js";
       } else if (req.body.entity_name === "Item Import") {
         workerScriptPath = "./itemImport.js";
+      } else if (req.body.entity_name === "Leave Import") {
+        workerScriptPath = "./leaveImport.js";
+      } else if (req.body.entity_name === "Attendance Import") {
+        workerScriptPath = "./attendanceImport.js";
+      } else if (req.body.entity_name === "Payroll Import") {
+        workerScriptPath = "./payrollImport.js";
       } else {
         if (req.file && req.file.path) fs.unlinkSync(req.file.path);
         return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid Entity Name"] });
@@ -81,6 +88,8 @@ exports.importData = async (req, res) => {
 
       // 4. Handle Worker Events
       worker.on("message", (msg) => {
+        if (res.headersSent) return;
+        
         if (msg.status === "SUCCESS") {
           const result = msg.result;
 
@@ -111,7 +120,8 @@ exports.importData = async (req, res) => {
             message: result.message,
             count: result.count,
             skipped: result.skipped,
-            summary: result.summary
+            summary: result.summary,
+            errors: result.errors // Include error messages
           });
         }
         else if (msg.status === "ERROR") {
@@ -126,7 +136,9 @@ exports.importData = async (req, res) => {
 
       worker.on("error", (err) => {
         console.error("Worker Thread Error:", err);
-        return res.error(constants.SERVER_ERROR, { message: "Import worker failed unexpectedly." });
+        if (!res.headersSent) {
+          return res.error(constants.SERVER_ERROR, { message: "Import worker failed unexpectedly." });
+        }
       });
 
       worker.on("exit", (code) => {

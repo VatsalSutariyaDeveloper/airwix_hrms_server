@@ -11,13 +11,14 @@ class LeaveBalanceService {
     /**
      * Helper to get Cycle Start and End dates for an employee
      */
-    static getCycleDates(employeeJoiningDate, cycleType) {
-        const today = dayjs();
+    static getCycleDates(employeeJoiningDate, cycleType, referenceDate = dayjs()) {
+        const today = dayjs(referenceDate);
         let start, end;
 
         if (cycleType === 'CALENDAR_YEAR') {
-            start = dayjs().startOf('year');
-            end = dayjs().endOf('year');
+            start = today.startOf('year');
+            end = today.endOf('year');
+            console.log("start",start,"end",end)
         } else if (cycleType === 'FINANCIAL_YEAR') {
             // Financial Year: April 1 to March 31
             const currentYear = today.year();
@@ -40,6 +41,18 @@ class LeaveBalanceService {
                 start = anniversaryThisYear;
                 end = anniversaryThisYear.add(1, 'year').subtract(1, 'day');
             }
+        } else if (cycleType === 'MONTHLY') {
+            start = today.startOf('month');
+            end = today.endOf('month');
+        } else if (cycleType === 'QUARTERLY') {
+            const startMonth = Math.floor(today.month() / 3) * 3;
+            start = today.month(startMonth).startOf('month');
+            end = start.add(2, 'month').endOf('month');
+        } else if (cycleType === 'CUSTOM_RANGE') {
+            // Usually combined with leave_period_start from template
+            // For initialization, we use the start date from template if available
+            start = today.startOf('month'); // Fallback
+            end = start.add(1, 'year').subtract(1, 'day');
         }
 
         return { start, end };
@@ -53,7 +66,8 @@ class LeaveBalanceService {
         const end = dayjs(cycleEndDate);
         
         const monthlyRate = annualTotal / 12;
-        let diffMonths = end.diff(join.add(1, 'month').startOf('month'), 'month') + 1;
+        const nextMonthStart = join.add(1, 'month').startOf('month');
+        let diffMonths = end.isBefore(nextMonthStart) ? 0 : end.diff(nextMonthStart, 'month') + 1;
         const day = join.date();
         let joinMonthCredit = 0;
 
@@ -76,13 +90,13 @@ class LeaveBalanceService {
     /**
      * Primary entry point: Assigns/Syncs leaves to an employee.
      */
-    static async initializeBalance(employeeId, templateId, transaction = null) {
+    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
+            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
             if (!employee) throw new Error("Employee not found");
 
-            const template = await commonQuery.findOneRecord(LeaveTemplate, templateId, {
+            const template = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, templateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
             }, t, true);
 
@@ -93,16 +107,28 @@ class LeaveBalanceService {
 
             for (const category of template.categories) {
                 let allocated = 0;
-
+                console.log("category",category)
                 if (template.accrual_type === 'UPFRONT') {
                     const joinDate = dayjs(employee.joining_date);
                     if (joinDate.isAfter(start)) {
-                        allocated = this.calculateProRata(employee.joining_date, category.leave_count, end, template.join_month_rule);
+                        let annualTotal = category.leave_count;
+                        if (template.leave_policy_cycle === 'MONTHLY') {
+                            annualTotal = category.leave_count * 12;
+                        } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                            annualTotal = category.leave_count * 4;
+                        }
+                        allocated = this.calculateProRata(employee.joining_date, annualTotal, end, template.join_month_rule);
                     } else {
                         allocated = category.leave_count;
                     }
                 } else if (template.accrual_type === 'MONTHLY') {
-                    const monthlyRate = category.leave_count / 12;
+                    let monthlyRate = category.leave_count / 12; 
+                    if (template.leave_policy_cycle === 'MONTHLY') {
+                        monthlyRate = category.leave_count;
+                    } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                        monthlyRate = '';
+                    }
+
                     const day = dayjs().date();
                     
                     if (template.join_month_rule === 'THRESHOLD_BASED') {
@@ -136,7 +162,7 @@ class LeaveBalanceService {
                 const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     leave_category_id: category.id,
-                    year: start.year()
+                    status: 0
                 }, {}, t);
 
                 let balance;
@@ -156,14 +182,16 @@ class LeaveBalanceService {
                         total_allocated: allocated,
                         pending_leaves: pending,
                         leave_template_id: templateId,
-                        year: start.year()
+                        year: end.year(),
+                        month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null
                     }, t);
                 } else {
                     balance = await commonQuery.createRecord(EmployeeLeaveBalance, {
                         ...metaFields,
                         employee_id: employeeId,
                         leave_category_id: category.id,
-                        year: start.year(),
+                        year: end.year(),
+                        month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
                         leave_template_id: templateId,
                         total_allocated: allocated,
                         pending_leaves: pending,
@@ -184,10 +212,10 @@ class LeaveBalanceService {
     /**
      * Synchronizes balances when an employee's template is changed.
      */
-    static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null) {
+    static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t);
             if (!employee) throw new Error("Employee not found");
 
             if (!newTemplateId) {
@@ -200,17 +228,16 @@ class LeaveBalanceService {
                 return [];
             }
 
-            const newTemplate = await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
+            const newTemplate = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
             }, t);
 
             if (!newTemplate) throw new Error("New leave template not found");
 
             const newCategoryIds = newTemplate.categories.map(c => c.id);
-            const { start } = this.getCycleDates(employee.joining_date, newTemplate.leave_policy_cycle);
+            // const { start } = this.getCycleDates(employee.joining_date, newTemplate.leave_policy_cycle);
 
             // 1. Mark ANY active balance as status=2 (deleted/inactive) if their category is not in the new template
-            // Satisfaction of: "if any category exist in leave balannce table and it not exist in new updated leave template then delete that category data"
             await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                 employee_id: employeeId,
                 status: 0,
@@ -218,10 +245,59 @@ class LeaveBalanceService {
             }, { status: 2 }, t);
 
             // 2. Run standard initialization
-            const results = await this.initializeBalance(employeeId, newTemplateId, t);
+            const results = await this.initializeBalance(employeeId, newTemplateId, t, employee, newTemplate);
 
             if (!transaction) await t.commit();
             return results;
+        } catch (error) {
+            if (!transaction && !t.finished) await t.rollback();
+            throw error;
+        }
+    }
+
+    /**
+     * Optimized bulk synchronization of leave balances.
+     */
+    static async bulkSyncEmployeeBalances(employeeIds, newTemplateId, transaction = null, meta = {}) {
+        if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
+
+        const t = transaction || (await sequelize.transaction());
+        try {
+            if (!newTemplateId) {
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, {
+                    employee_id: { [Op.in]: employeeIds },
+                    status: 0
+                }, { status: 2 }, t);
+                if (!transaction) await t.commit();
+                return;
+            }
+
+            const template = meta.preFetchedMaster || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
+                include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
+            }, t);
+            if (!template) throw new Error("Leave template not found");
+
+            const categoryIds = template.categories.map(c => c.id);
+
+            // 1. Deactivate balances for categories not in the new template
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, {
+                employee_id: { [Op.in]: employeeIds },
+                status: 0,
+                leave_category_id: { [Op.notIn]: categoryIds }
+            }, { status: 2 }, t);
+
+            // 2. Perform bulk initialization - process in chunks to avoid memory issues
+            const chunkSize = 50;
+            for (let i = 0; i < employeeIds.length; i += chunkSize) {
+                const chunk = employeeIds.slice(i, i + chunkSize);
+                const employees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: chunk } }, {}, t);
+                
+                for (const emp of employees) {
+                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template);
+                }
+            }
+
+            if (!transaction) await t.commit();
         } catch (error) {
             if (!transaction && !t.finished) await t.rollback();
             throw error;
@@ -248,15 +324,21 @@ class LeaveBalanceService {
                 }, {}, transaction);
 
                 for (const employee of employees) {
-                    const { start } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                    const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
                     
                     for (const category of template.categories) {
-                        const monthlyRate = category.leave_count / 12;
+                        let monthlyRate = category.leave_count / 12; // Default for annual cycles
+                        if (template.leave_policy_cycle === 'MONTHLY') {
+                            monthlyRate = category.leave_count;
+                        } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                            monthlyRate = category.leave_count / 3;
+                        }
 
                         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                             employee_id: employee.id,
                             leave_category_id: category.id,
-                            year: start.year(),
+                            year: end.year(),
+                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
                             status: 0
                         }, {}, transaction);
 
@@ -303,7 +385,7 @@ class LeaveBalanceService {
                 if (!template) continue;
 
                 const yesterday = today.subtract(1, 'day');
-                const { end: lastCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                const { end: lastCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, yesterday);
                 
                 if (!yesterday.isSame(lastCycleEnd, 'day')) continue;
 
@@ -314,25 +396,41 @@ class LeaveBalanceService {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: lastYear,
+                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
                         status: 0
                     }, {}, transaction);
 
                     if (!lastBalance) continue;
 
                     let carryForwardAmount = 0;
+                    const remaining = parseFloat(lastBalance.pending_leaves || 0);
+
                     if (category.unused_leave_rule === 'CARRY_FORWARD') {
                         const limit = parseFloat(category.carry_forward_limit || 0);
-                        const remaining = parseFloat(lastBalance.pending_leaves || 0);
                         carryForwardAmount = Math.min(remaining, limit);
+                    } else if (category.unused_leave_rule === 'ENCASH') {
+                        // Logic for encashment (e.g., mark for payroll)
+                        // For now, we just don't carry it forward. 
+                        // You might want to create an Encashment record here.
+                        carryForwardAmount = 0;
+                    } else {
+                        // LAPSE
+                        carryForwardAmount = 0;
                     }
 
+                    // 1. Mark OLD balance as processed (optional: status=2 or archived)
+                    await commonQuery.updateRecordById(EmployeeLeaveBalance, lastBalance.id, { status: 1 }, transaction);
+
+                    // 2. Initialize NEW balance for the next cycle
                     await this.initializeBalance(employee.id, template.id, transaction);
 
-                    const newYear = today.year();
+                    const { end: newCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                    const newYear = newCycleEnd.year();
                     const newBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                         employee_id: employee.id,
                         leave_category_id: category.id,
                         year: newYear,
+                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
                         status: 0
                     }, {}, transaction);
 
@@ -358,8 +456,9 @@ class LeaveBalanceService {
      * @param {number} categoryId
      * @param {number} amount - Positive to deduct, Negative to add back.
      * @param {Object} transaction
+     * @param {string} date - Reference date for the adjustment (default today)
      */
-    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null) {
+    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null, date = dayjs(), employee = null) {
         if (!employeeId || !categoryId || amount === 0) return;
         
         // Round amount to nearest 0.5
@@ -368,18 +467,20 @@ class LeaveBalanceService {
 
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
-            if (!employee) throw new Error("Employee not found");
+            const emp = employee || await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            if (!emp) throw new Error("Employee not found");
 
             // Determine the correct cycle/year
-            const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, t);
-            const { start } = this.getCycleDates(employee.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR');
-            const year = start.year();
+            // Attempt to use templates from emp if they were included
+            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
+            const { end } = this.getCycleDates(emp.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', date);
+            const year = end.year();
 
             const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: employeeId,
                 leave_category_id: categoryId,
                 year: year,
+                month: (template && (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY')) ? end.month() + 1 : null,
                 status: 0
             }, {}, t);
 
@@ -422,7 +523,7 @@ class LeaveBalanceService {
      * @param {Object} transaction
      * @returns {string|null} Error message if adjustment failed
      */
-    static async syncLeaveRecord(employeeId, date, categoryId, amount, transaction = null) {
+    static async syncLeaveRecord(employeeId, date, categoryId, amount, transaction = null, employee = null) {
         if (!employeeId || !date) return null;
         const t = transaction || (await sequelize.transaction());
         try {
@@ -452,7 +553,7 @@ class LeaveBalanceService {
             if (manualRequest) {
                 // If we have an auto-generated one, cancel it (manual wins)
                 if (existingAuto) {
-                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
+                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 }
                 // We don't create/update any auto-record because manual is already there.
@@ -468,12 +569,12 @@ class LeaveBalanceService {
             // CASE A: Amount is 0 (Status changed away from Leave/HalfDay)
             if (roundedAmount === 0) {
                 if (existingAuto) {
-                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
+                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 } else if (manualRequest) {
                     // If it's a single day manual request, cancel it
                     if (manualRequest.start_date === date && manualRequest.end_date === date) {
-                        await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t);
+                        await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
                         await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                     }
                 }
@@ -482,9 +583,9 @@ class LeaveBalanceService {
             else if (existingAuto) {
                 if (existingAuto.leave_category_id !== categoryId || parseFloat(existingAuto.total_days || 0) !== roundedAmount) {
                     // Refund OLD
-                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t);
+                    await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     // Deduct NEW
-                    await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t);
+                    await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t, date, employee);
                     // Update Request
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, {
                         leave_category_id: categoryId,
@@ -496,10 +597,10 @@ class LeaveBalanceService {
             // CASE C: No existing auto-request, create one
             else {
                 // Deduct Balance
-                await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t);
+                await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t, date, employee);
                 
                 // Fetch basic employee/company info for the record
-                const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+                const emp = employee || await commonQuery.findOneRecord(Employee, employeeId, {
                     attributes: ['company_id', 'branch_id']
                 }, t);
 
@@ -513,8 +614,8 @@ class LeaveBalanceService {
                     reason: AUTO_REASON,
                     approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                     approved_by: 0, // System/Auto
-                    company_id: employee?.company_id || 0,
-                    branch_id: employee?.branch_id || 0,
+                    company_id: emp?.company_id || 0,
+                    branch_id: emp?.branch_id || 0,
                     user_id: 0,
                     status: 0
                 }, t);
@@ -524,7 +625,7 @@ class LeaveBalanceService {
             return null;
         } catch (error) {
             if (!transaction && !t.finished) await t.rollback();
-            return error.message; // Return error message instead of throwing to allow better caller handling
+            throw error;
         }
     }
     /**

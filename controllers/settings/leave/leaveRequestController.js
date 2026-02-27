@@ -4,6 +4,7 @@ const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
+const LeaveBalanceService = require("../../../services/leaveBalanceService");
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -21,7 +22,7 @@ exports.create = async (req, res) => {
             total_days: "Total Days",
         };
 
-        if(!req.body.employee_id){
+        if (!req.body.employee_id) {
             req.body.employee_id = req.user.employee_id
         }
 
@@ -35,7 +36,7 @@ exports.create = async (req, res) => {
         const currentYear = new Date(start_date).getFullYear();
 
         const LeaveBalanceService = require("../../../services/leaveBalanceService");
-        
+
         // --- Calculate total_days based on Sandwich Policy via Service ---
         const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
 
@@ -44,7 +45,7 @@ exports.create = async (req, res) => {
         const start = dayjs(start_date);
         const end = dayjs(end_date);
         const calendarDays = end.diff(start, 'day') + 1;
-        
+
         const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
         let total_days = Math.max(0, workingDays - reduction);
         total_days = Math.round(total_days * 2) / 2;
@@ -76,36 +77,45 @@ exports.create = async (req, res) => {
         }
 
         // 2. Fetch specific employee balance record
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        if (!employee || !employee.leaveTemplate) {
+            await transaction.rollback();
+            return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
+        }
+
+        const template = employee.leaveTemplate;
+        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(start_date));
+
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id,
             leave_category_id,
-            year: currentYear,
+            year: cycleDates.end.year(),
+            month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 
         if (!balance) {
             await transaction.rollback();
-            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/year" });
+            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/cycle" });
         }
 
         const isPaid = balance.is_paid;
         const isCompOff = balance.is_compoff;
 
         if (isPaid || isCompOff) {
-            // -- PAID LEAVE or COMP-OFF LOGIC --
             if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
                 await transaction.rollback();
                 return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}. ${isCompOff ? 'Compensatory Off requires earned credit.' : ''}` });
             }
 
-            // Deduct from pending
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 pending_leaves: parseFloat(balance.pending_leaves) - parseFloat(total_days),
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
         } else {
-            // -- UNPAID LEAVE (LOP) LOGIC --
-            // Simply increment used_leaves (pending stays 0 or unchanged)
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
             }, transaction);
@@ -151,13 +161,14 @@ exports.getAll = async (req, res) => {
             fieldConfig,
             {
                 include: [
-                    { 
-                        model: Employee, 
-                        as: "employee", 
+                    {
+                        model: Employee,
+                        as: "employee",
                         attributes: ["first_name", "employee_code"],
                         include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }]
                     },
-                    { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] }
+                    { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
+                    { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
                 ]
             }
         );
@@ -182,6 +193,9 @@ exports.getAll = async (req, res) => {
             } else {
                 raw.document_url = null;
             }
+
+            // Add approver name if available
+            raw.approved_by = raw.approvedBy?.user_name || null;
 
             return raw;
         });
@@ -254,8 +268,8 @@ exports.getById = async (req, res) => {
         }
 
         raw.timeline = timeline;
-        raw.next_action_at_level = totalLevels === raw.current_level && 
-            [constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED].includes(Number(raw.approval_status)) 
+        raw.next_action_at_level = totalLevels === raw.current_level &&
+            [constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED].includes(Number(raw.approval_status))
             ? null : raw.current_level;
 
         return res.ok(raw);
@@ -288,8 +302,8 @@ exports.updateStatus = async (req, res) => {
         }, transaction);
 
         if (!employee || !employee.leaveTemplate) {
-             await transaction.rollback();
-             return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
+            await transaction.rollback();
+            return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
         }
 
         const template = employee.leaveTemplate;
@@ -315,7 +329,7 @@ exports.updateStatus = async (req, res) => {
             } else {
                 updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.APPROVED;
                 updateData.approved_by = approved_by || req.user?.id;
-                
+
                 if (req.user?.is_super_admin && currentLevel < totalLevels) {
                     if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
                     updateData.approval_history = history;
@@ -333,17 +347,21 @@ exports.updateStatus = async (req, res) => {
                     await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
                 }
             }
-        } 
+        }
         else if (
-            String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.REJECTED) || 
+            String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.REJECTED) ||
             String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.CANCELLED) ||
-            approval_status === "REJECTED" || 
+            approval_status === "REJECTED" ||
             approval_status === "CANCELLED"
         ) {
+            const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(leaveRequest.start_date));
+
             const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: leaveRequest.employee_id,
                 leave_category_id: leaveRequest.leave_category_id,
-                year: new Date(leaveRequest.start_date).getFullYear()
+                year: cycleDates.end.year(),
+                month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+                status: 0
             }, {}, transaction);
 
             if (balance) {
@@ -388,65 +406,60 @@ exports.getPendingApprovals = async (req, res) => {
             status: 0
         }, {
             include: [
-                { 
-                    model: Employee, 
-                    as: "employee", 
+                {
+                    model: Employee,
+                    as: "employee",
                     attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
                 },
-                { 
-                    model: LeaveTemplateCategory, 
-                    as: "category", 
-                    attributes: ["leave_category_name"] 
+                {
+                    model: LeaveTemplateCategory,
+                    as: "category",
+                    attributes: ["leave_category_name"]
                 }
             ],
         });
 
-        // 2. Fetch templates for these requests to check approval config
-        // (Optimization: In a high-traffic app, use a join or map-reduce)
         const pendingForUser = [];
 
         for (const request of requests) {
             const employee = request.employee;
-            const employeeId = employee.id;
+
             // The initial query already includes employee.leaveTemplate
             if (!employee || !employee.leaveTemplate) continue;
 
-            const template = employee.leaveTemplate;
+            const template = employee?.leaveTemplate;
             const currentLevel = request.current_level;
             const config = template.approval_config || [];
 
-            // Find config for the current stage
             const currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) continue;
+            
             let isAuthorized = false;
-            if(req.user.is_super_admin){
+            if (req.user.is_super_admin) {
                 isAuthorized = true;
             } else {
-                // Check authorization based on stage type
+            
                 switch (currentStage.type) {
-                case 'REPORTING_MANAGER':
-                    if (employee.reporting_manager === employeeId && req.user.is_reporting_manager) isAuthorized = true;
-                    break;
-                case 'ATTENDANCE_SUPERVISOR':
-                    if (employee.attendance_supervisor === employeeId && req.user.is_attendance_supervisor) isAuthorized = true;
-                    break;
-                case 'ADMIN':
-                    if (req.user.is_admin) isAuthorized = true;
-                    break;
-                case 'EMPLOYER':
-                    // For now, assume if they are hit this endpoint and aren't a manager, 
-                    // we check if they have admin access (isApp access in your system)
-                    // You might want to check req.user.role specifically here
-                    isAuthorized = true; 
-                    break;
-                case 'ANYONE':
-                    // Anyone of Reporting Manager, Supervisor, Admin, etc.
-                    if (employee.reporting_manager === employeeId || 
-                        employee.attendance_supervisor === employeeId) {
+                    case 'REPORTING_MANAGER':
+                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        break;
+                    case 'ATTENDANCE_SUPERVISOR':
+                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        break;
+                    case 'ADMIN':
+                        if (req.user.is_admin) isAuthorized = true;
+                        break;
+                    case 'EMPLOYER':
                         isAuthorized = true;
-                    }
-                    break;
+                        break;
+                    case 'ANYONE':
+                        // Anyone of Reporting Manager, Supervisor, Admin, etc.
+                        if (employee.reporting_manager === req.user.id ||
+                            employee.attendance_supervisor === req.user.id) {
+                            isAuthorized = true;
+                        }
+                        break;
                 }
             }
             if (isAuthorized) {
@@ -483,13 +496,13 @@ exports.cancelLeave = async (req, res) => {
 
         // 2. Authorization Check (Only owner can cancel via this API)
         if (leaveRequest.employee_id !== employeeId && !req.user.is_super_admin) {
-             await transaction.rollback();
-             return res.error("UNAUTHORIZED", { message: "You can only cancel your own leave requests" });
+            await transaction.rollback();
+            return res.error("UNAUTHORIZED", { message: "You can only cancel your own leave requests" });
         }
 
         // 3. Status Check
         if (
-            Number(leaveRequest.approval_status) === constants.LEAVE_APPROVAL_STATUS.CANCELLED || 
+            Number(leaveRequest.approval_status) === constants.LEAVE_APPROVAL_STATUS.CANCELLED ||
             Number(leaveRequest.approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED
         ) {
             await transaction.rollback();
@@ -499,10 +512,19 @@ exports.cancelLeave = async (req, res) => {
         const oldStatus = leaveRequest.approval_status;
 
         // 4. Restore Balance
+        const employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        const template = employee?.leaveTemplate;
+        const LeaveBalanceService = require("../../../services/leaveBalanceService");
+        const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, template?.leave_policy_cycle || 'CALENDAR_YEAR', dayjs(leaveRequest.start_date));
+
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id: leaveRequest.employee_id,
             leave_category_id: leaveRequest.leave_category_id,
-            year: new Date(leaveRequest.start_date).getFullYear(),
+            year: cycleDates.end.year(),
+            month: template?.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 
@@ -559,7 +581,7 @@ exports.calculateLeaveDays = async (req, res) => {
 
         const LeaveBalanceService = require("../../../services/leaveBalanceService");
         const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date);
-        
+
         return res.success("Working days calculated", { total_days: workingDays });
     } catch (err) {
         return handleError(err, res, req);

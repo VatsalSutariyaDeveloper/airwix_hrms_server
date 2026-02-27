@@ -229,14 +229,14 @@ exports.create = async (req, res) => {
 
     const newUser = await commonQuery.createRecord(User, req.body, transaction);
 
-    await commonQuery.createRecord(UserCompanyRoles, {
-      user_id: newUser.id,
-      role_id: req.body.role_id,
-      branch_id: req.user.branch_id,
-      company_id: req.user.company_id,
-      permissions: req.body.permission,
-      status: 0
-    }, transaction);
+    // await commonQuery.createRecord(UserCompanyRoles, {
+    //   user_id: newUser.id,
+    //   role_id: req.body.role_id,
+    //   branch_id: req.user.branch_id,
+    //   company_id: req.user.company_id,
+    //   permissions: req.body.permission,
+    //   status: 0
+    // }, transaction);
 
     await updateDocumentUsedLimit(req.user.company_id, 'users', 1, transaction);
 
@@ -278,11 +278,9 @@ exports.verifySetupToken = async (req, res) => {
     }, {
       include: [
         {
-          model: UserCompanyRoles,
-          as: "user_company_roles",
-          where: { status: 0 },
-          required: false,
-          include: [{ model: RolePermission, as: "role", attributes: ["role_name", "permissions"] }]
+          model: RolePermission, 
+          as: "role", 
+          attributes: ["role_name", "permissions"] 
         }
       ]
     }, null, false, false);
@@ -300,7 +298,7 @@ exports.verifySetupToken = async (req, res) => {
     const loginToken = tokenHelper.generateToken(user, companyId, "magic link");
 
     // Prepare User Data (Matching standard login response)
-    const activeRole = user.user_company_roles?.[0];
+    const activeRole = user.role;
     const userData = {
       id: user.id,
       role_id: user.role_id,
@@ -308,8 +306,8 @@ exports.verifySetupToken = async (req, res) => {
       email: user.email,
       mobile_no: user.mobile_no,
       profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
-      role_name: activeRole?.role?.role_name,
-      permission: activeRole?.role?.permissions || user.permission,
+      role_name: activeRole?.role_name,
+      permission: activeRole?.permissions,
       company_id: companyId,
       branch_id: user.branch_id,
     };
@@ -348,30 +346,30 @@ exports.assignRole = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    const user = await commonQuery.findOneRecord(User, { id: user_id }, {}, null, false, false);
-    if (!user) {
-      await transaction.rollback();
-      return res.error("USER_NOT_FOUND");
-    }
+    // const user = await commonQuery.findOneRecord(User, { id: user_id }, {}, null, false, false);
+    // if (!user) {
+    //   await transaction.rollback();
+    //   return res.error("USER_NOT_FOUND");
+    // }
 
-    const role = await commonQuery.findOneRecord(RolePermission, { id: role_id }, {}, null, false, false);
-    if (!role) {
-      await transaction.rollback();
-      return res.error("ROLE_NOT_FOUND");
-    }
+    // const role = await commonQuery.findOneRecord(RolePermission, { id: role_id }, {}, null, false, false);
+    // if (!role) {
+    //   await transaction.rollback();
+    //   return res.error("ROLE_NOT_FOUND");
+    // }
 
-    const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, { user_id: user_id }, { role_id, permissions: role.permissions }, transaction, {}, false);
-    if (!userCompanyRole) {
-      const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
-        user_id: user_id,
-        role_id: role_id,
-        permissions: role.permissions,
-      }, transaction);
-      if (!newUserCompanyRole) {
-        await transaction.rollback();
-        return res.error("USER_COMPANY_ROLE_NOT_CREATED");
-      }
-    }
+    // const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, { user_id: user_id }, { role_id, permissions: role.permissions }, transaction, {}, false);
+    // if (!userCompanyRole) {
+    //   const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
+    //     user_id: user_id,
+    //     role_id: role_id,
+    //     permissions: role.permissions,
+    //   }, transaction);
+    //   if (!newUserCompanyRole) {
+    //     await transaction.rollback();
+    //     return res.error("USER_COMPANY_ROLE_NOT_CREATED");
+    //   }
+    // }
 
     const userData = await commonQuery.updateRecordById(User, { id: user_id }, { role_id: role_id }, transaction);
     if (!userData) {
@@ -464,17 +462,17 @@ exports.update = async (req, res) => {
     let requiredFields;
     let validateOptions;
 
-    const isUserPermissionUpdate =
-      req.body.user_permission !== undefined &&
-      req.body.user_permission !== null;
+    // const isUserPermissionUpdate =
+    //   req.body.user_permission !== undefined &&
+    //   req.body.user_permission !== null;
 
-    if (isUserPermissionUpdate) {
-      // Validate only permission-related fields
-      requiredFields = {
-        user_permission: "User Permission",
-      };
-      validateOptions = {};
-    } else {
+    // if (isUserPermissionUpdate) {
+    //   // Validate only permission-related fields
+    //   requiredFields = {
+    //     user_permission: "User Permission",
+    //   };
+    //   validateOptions = {};
+    // } else {
       // Normal user update
       requiredFields = {
         user_name: "User Name",
@@ -503,7 +501,7 @@ exports.update = async (req, res) => {
           excludeId: req.params.id,
         } : undefined,
       };
-    }
+    // }
 
     // ✅ Validate request
     const errors = await validateRequest(
@@ -596,21 +594,21 @@ exports.update = async (req, res) => {
     }
 
     // ✅ Permission handling
-    if (isUserPermissionUpdate) {
-      // Save user_permission exactly as it is
-      req.body.permission = req.body.user_permission;
-    } else if (req.body.permission) {
-      // Save permission directly if provided
-      req.body.permission = req.body.permission;
-    } else if (req.body.role_id) {
-      // If role_id given, load role permissions
-      const permission = await commonQuery.findOneRecord(
-        RolePermission,
-        req.body.role_id,
-        transaction
-      );
-      req.body.permission = permission?.permissions || [];
-    }
+    // if (isUserPermissionUpdate) {
+    //   // Save user_permission exactly as it is
+    //   req.body.permission = req.body.user_permission;
+    // } else if (req.body.permission) {
+    //   // Save permission directly if provided
+    //   req.body.permission = req.body.permission;
+    // } else if (req.body.role_id) {
+    //   // If role_id given, load role permissions
+    //   const permission = await commonQuery.findOneRecord(
+    //     RolePermission,
+    //     req.body.role_id,
+    //     transaction
+    //   );
+    //   req.body.permission = permission?.permissions || [];
+    // }
 
     // ✅ Hash password if updated
     if (req.body.password) {
@@ -627,43 +625,45 @@ exports.update = async (req, res) => {
     );
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
-    if (req.body.permission) {
-      const branchId = req.body.branch_id || existing.branch_id;
-      const companyId = req.body.company_id || existing.company_id;
-      const roleId = req.body.role_id || existing.role_id;
+    // if (req.body.permission) {
+    //   const branchId = req.body.branch_id || existing.branch_id;
+    //   const companyId = req.body.company_id || existing.company_id;
+    //   const roleId = req.body.role_id || existing.role_id;
 
-      const userCompanyRole = await commonQuery.findOneRecord(
-        UserCompanyRoles,
-        { user_id: req.params.id, branch_id: branchId, company_id: companyId },
-        {},
-        transaction
-      );
+    //   const userCompanyRole = await commonQuery.findOneRecord(
+    //     UserCompanyRoles,
+    //     { user_id: req.params.id, branch_id: branchId, company_id: companyId },
+    //     {},
+    //     transaction
+    //   );
 
-      if (userCompanyRole) {
-        await commonQuery.updateRecordById(
-          UserCompanyRoles,
-          userCompanyRole.id,
-          {
-            role_id: roleId,
-            permissions: req.body.permission,
-          },
-          transaction
-        );
-      } else {
-        await commonQuery.createRecord(
-          UserCompanyRoles,
-          {
-            user_id: req.params.id,
-            role_id: roleId,
-            branch_id: branchId,
-            company_id: companyId,
-            permissions: req.body.permission,
-            status: 0,
-          },
-          transaction
-        );
-      }
-    }
+    //   const permissions = req.body.permission.join(",");
+      
+    //   if (userCompanyRole) {
+    //     await commonQuery.updateRecordById(
+    //       UserCompanyRoles,
+    //       userCompanyRole.id,
+    //       {
+    //         role_id: roleId,
+    //         permissions: permissions,
+    //       },
+    //       transaction
+    //     );
+    //   } else {
+    //     await commonQuery.createRecord(
+    //       UserCompanyRoles,
+    //       {
+    //         user_id: req.params.id,
+    //         role_id: roleId,
+    //         branch_id: branchId,
+    //         company_id: companyId,
+    //         permissions: permissions,
+    //         status: 0,
+    //       },
+    //       transaction
+    //     );
+    //   }
+    // }
 
     clearUserCache(req.params.id);
 
@@ -708,9 +708,10 @@ exports.getAll = async (req, res) => {
             { role_id: 2, company_id: company_id }
           ]
         };
-        delete req.body.filter.role;
       }
     }
+
+    delete req.body.filter.role;
 
     const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
     const limit = parseInt(pageSize, 10);
@@ -808,7 +809,7 @@ exports.dropdownList = async (req, res) => {
       User,
       extraFilters,
       {
-        attributes: ["id", "user_name", "email", "mobile_no"],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
         order: [["user_name", "ASC"]],
       }
     );

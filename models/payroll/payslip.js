@@ -4,24 +4,31 @@ module.exports = (sequelize, DataTypes) => {
     month: { type: DataTypes.INTEGER, allowNull: false },
     year: { type: DataTypes.INTEGER, allowNull: false },
     
-    // Summary Fields
-    ctc_monthly: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+    // Attendance Summary
+    pd_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    ph_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    wo_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    wp_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     present_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     absent_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    leave_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    weekly_offs: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    holidays: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    lwp_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    
-    // Financials
-    per_day_salary: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-    lwp_deduction: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-    total_fine: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-    ot_amount: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-    net_payable: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-    
-    // JSON details for breakdown
-    break_down_json: { type: DataTypes.JSON, allowNull: true },
+    total_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    lunch_count: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    leave_details: { type: DataTypes.JSON, allowNull: true },
+
+    // Dynamic Components
+    earning_details: { type: DataTypes.JSON, allowNull: true },
+    deduction_details: { type: DataTypes.JSON, allowNull: true },
+    statutory_details: { type: DataTypes.JSON, allowNull: true },
+    employer_details: { type: DataTypes.JSON, allowNull: true },
+
+    // Summary Totals
+    fixed_gross: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+    paid_gross: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+    total_deduction: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+    net_salary: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+
+    // JSON details for legacy or extra breakdown
+    break_down: { type: DataTypes.JSON, allowNull: true },
     
     status: { 
         type: DataTypes.SMALLINT, 

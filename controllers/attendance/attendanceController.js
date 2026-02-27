@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -142,6 +142,12 @@ exports.getAttendanceSummary = async (req, res) => {
                 required: false
               },
               {
+                model: LeaveTemplateCategory,
+                as: "leaveCategory",
+                attributes: ["id", "leave_category_name"],
+                required: false
+              },
+              {
                 model: ShiftTemplate,
                 as: "shiftTemplate",
                 attributes: ["id", "shift_name", "start_time", "end_time"],
@@ -159,7 +165,7 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template']
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template']
       }
     );
 
@@ -192,6 +198,21 @@ exports.getAttendanceSummary = async (req, res) => {
         if (day) {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
+          
+          // Enhanced Status Text logic (Same as monthly summary)
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
+          let statusText = statusMap[day.status] || "Pending";
+          if (day.status === 4) {
+             const h = itemHolidays.find(h => h.employee_id === emp.id);
+             statusText = h ? h.name : "Holiday";
+          } else if (day.status === 6) {
+             statusText = day.leaveCategory?.leave_category_name || "Leave";
+          } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
+             statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
+          } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
+             statusText = day.leaveCategory.leave_category_name;
+          }
+          day.setDataValue('status_text', statusText);
           
           if (day.first_in) {
             const punches = day.attendancePunches || [];
@@ -242,10 +263,11 @@ exports.getAttendanceSummary = async (req, res) => {
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'punched_in_count'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count']
+          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count'],
+          [sequelize.fn('SUM', sequelize.col('fine_amount')), 'total_fine_amount']
         ],
         group: ['AttendanceDay.status'],
-        raw: true
+    raw: true
       }
     );
 
@@ -262,6 +284,7 @@ exports.getAttendanceSummary = async (req, res) => {
       pendingPunch: 0,
       overtimeHours: "0h 0m",
       fineHours: "0h 0m",
+      fineAmount: 0,
       punchedIn: 0,
       punchedOut: 0,
       incomplete: 0
@@ -276,7 +299,9 @@ exports.getAttendanceSummary = async (req, res) => {
       const status = parseInt(stat.status);
       
       if (status === 0) summary.present += count;
+      else if (status === 12) summary.present += count; // On Duty
       else if (status === 1) summary.halfDay += count;
+      else if (status === 13) summary.halfDay += count; // Half On Duty
       else if (status === 3) summary.weeklyOff += count;
       else if (status === 4) summary.holiday += count;
       else if (status === 6) summary.leave += count;
@@ -286,6 +311,7 @@ exports.getAttendanceSummary = async (req, res) => {
       totalAccounted += count;
       totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
+      summary.fineAmount += parseFloat(stat.total_fine_amount || 0);
       summary.shortPresence += parseInt(stat.short_presence_count || 0);
       summary.punchedIn += parseInt(stat.punched_in_count || 0);
       summary.punchedOut += parseInt(stat.punched_out_count || 0);
@@ -328,23 +354,29 @@ exports.updateAttendanceDay = async (req, res) => {
     const emp = await commonQuery.findOneRecord(Employee, { id: req.body.employee_id }, {
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
     });
     const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
+    
+    // Get shift_id from employee if available
+    const shift_id = emp && emp.shift_template ? emp.shift_template : null;
 
     // Add conditional required fields based on status
-    if (req.body.status === 0) {
+    if ([0, 12].includes(req.body.status)) {
       if(!req.body.note && isTrackInOutOn){
-        requiredFields.first_in = "In Time";
+        // requiredFields.first_in = "In Time";
       }
-    } else if (req.body.status === 1) {
+    } else if ([1, 13].includes(req.body.status)) {
       if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
         // requiredFields.last_out = "Out Time";
       }
-      requiredFields.leave_category_id = "Leave Category";
+      if (req.body.status === 1) {
+          requiredFields.leave_category_id = "Leave Category";
+      }
     }
 
     const errors = await validateRequest(req.body, requiredFields);
@@ -372,9 +404,8 @@ exports.updateAttendanceDay = async (req, res) => {
       fine_data,
       is_locked,
       note,
-      shift_id
     } = req.body;
-
+    
     const day = await getOrCreateAttendanceDay(
       employee_id,
       attendance_date,
@@ -397,7 +428,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // If employee is Absent/Leave/Holiday (3,4,5,6) and frontend sends Present/HalfDay (0,1)
     // We IGNORE the frontend status and keep the existing one UNLESS times are explicitly being updated.
     const isExistingNonWorking = [3, 4, 5, 6].includes(day.status);
-    const isIncomingWorking = [0, 1].includes(status);
+    const isIncomingWorking = [0, 1, 12, 13].includes(status);
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
     if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate && isTrackInOutOn) {
@@ -476,32 +507,53 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     // Only trigger punch update if strictly needed
-    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut)) {
+    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
+      
+      // Check if today is a holiday - if so, store working hours as overtime
+      let isTodayHoliday = false;
+      if (emp.holiday_template) {
+        const holidayRecord = await commonQuery.findOneRecord(
+          HolidayTransaction,
+          {
+            template_id: emp.holiday_template,
+            date: attendance_date,
+            status: 0
+          },
+          {},
+          t
+        );
+        isTodayHoliday = !!holidayRecord;
+      }
+      
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
         branch_id: req.user.branch_id,
         shift_id: shift_id,
-        bypassShiftRestrictions: true
+        bypassShiftRestrictions: true,
+        employee: emp, // Pass pre-fetched employee
+        existingDay: day, // Pass pre-fetched day
+        punches: req.body.punches, // Pass punches array if provided
+        isHoliday: isTodayHoliday // Pass holiday flag to helper
       }, t);
     }
  
      // Handle manualPunch with status 1,2,3,5 - delete punches for today
-    if ([1, 3, 4, 6].includes(req.body.status)) {
-      const today = dayjs().format('YYYY-MM-DD');
-      console.log("update manualPunch for status 1,2,3,5 - deleting punches for today");
-      const deletedPunches = await commonQuery.updateRecordById(
+    // Clear punches for non-working status
+    // [MOD] Removed clearing punches for non-working status to allow punches for Half Day, Overtime on WO/Holiday, etc.
+    /*
+    if ([1, 3, 4, 5, 6].includes(req.body.status)) {
+      console.log(`Clearing punches for status ${req.body.status} on ${attendance_date}`);
+      await commonQuery.updateRecordById(
         AttendancePunch, 
         {
           employee_id: employee_id,
-          punch_time: {
-            [Op.between]: [`${today} 00:00:00`, `${today} 23:59:59`]
-          },
-          device_id: "MANUAL",
+          day_id: day.id,
           status: 0
         }, 
         { status: 2 }, t);
     }
+    */
      const payload = {
       employee_id,
       attendance_date,
@@ -578,6 +630,12 @@ exports.updateAttendanceDay = async (req, res) => {
         if (leave_session !== undefined) payload.leave_session = leave_session;
     }
 
+    // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
+    if (status !== undefined && ![1, 6, 13].includes(status)) {
+      payload.leave_category_id = null;
+      payload.leave_session = null;
+    }
+
     if (is_locked !== undefined) payload.is_locked = is_locked;
     if (note !== undefined) payload.note = note;
 
@@ -589,6 +647,74 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t);
+
+    // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
+    // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
+    if (emp.leave_template) {
+        // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
+        const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+        
+        const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+            leave_template_id: emp.leave_template,
+            leave_category_name: "Short Leave",
+            status: 0
+        }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
+
+        if (shortLeaveCategory && currentDay) {
+            const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
+            const currentLateMinutes = currentDay.late_minutes || 0;
+            const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
+            const currentLastOut = currentDay.last_out;
+            
+            const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
+            const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+
+            const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id: employee_id,
+                start_date: attendance_date,
+                leave_category_id: shortLeaveCategory.id,
+                reason: AUTO_REASON_LATE,
+                status: 0
+            }, {}, t);
+
+            if (isLateForShortLeave) {
+                if (!existingShortLeave) {
+                    // Check balance before deducting
+                    const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+                        employee_id: employee_id,
+                        leave_category_id: shortLeaveCategory.id,
+                        status: 0
+                    }, {}, t);
+
+
+                    if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
+                        const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
+                        if (leaveError) {
+                            console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
+                            await t.rollback();
+                            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+                        }
+                        await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
+                            where: { 
+                                employee_id: employee_id, 
+                                start_date: attendance_date, 
+                                leave_category_id: shortLeaveCategory.id,
+                                reason: "Auto-generated from Attendance"
+                            },
+                            transaction: t 
+                        });
+                    } 
+                }
+            } else if (existingShortLeave) {
+                // Reverse deduction if conditions are no longer met
+                const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
+                if (leaveError) {
+                    await t.rollback();
+                    return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+                }
+            }
+        }
+    }
 
     await t.commit();
     return res.success(constants.ATTENDANCE_UPDATED, result);
@@ -717,13 +843,36 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Employee IDs array and Date are required");
     }
 
+    // Pre-fetch all employees to avoid redundant queries in the loop
+    const employees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employee_ids } }, {
+      include: [
+        { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
+      ]
+    }, t);
+    const empMap = new Map(employees.map(e => [e.id, e]));
+
     for (const employee_id of employee_ids) {
+      const emp = empMap.get(employee_id);
+      
+      // Get shift_id from employee if available
+      const employee_shift_id = emp && emp.shift_template ? emp.shift_template : null;
+      
+      const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
+        employee_id, 
+        attendance_date,
+      }, {}, t);
+
       // Reuse manualPunch if times are provided
       if (first_in || last_out) {
         await manualPunch(employee_id, attendance_date, first_in, last_out, {
           user_id: req.user.id,
           company_id: req.user.company_id,
-          branch_id: req.user.branch_id
+          branch_id: req.user.branch_id,
+          shift_id: employee_shift_id,
+          employee: emp, // Pass pre-fetched employee
+          existingDay: existingRecord // Pass pre-fetched day
         }, t);
       }
 
@@ -739,6 +888,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (status !== undefined) payload.status = status;
       if (first_in !== undefined) payload.first_in = first_in;
       if (last_out !== undefined) payload.last_out = last_out;
+      if (employee_shift_id) payload.shift_id = employee_shift_id;
 
       // Clear non-working data for status 3,4,5,6 if no times provided
       if ([3, 4, 5, 6].includes(status)) {
@@ -750,6 +900,13 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
             payload.worked_minutes = 0;
             payload.overtime_minutes = 0;
         }
+        
+        // Also clear punches
+        await commonQuery.updateRecordById(AttendancePunch, {
+          employee_id,
+          day_id: existingRecord?.id,
+          status: 0
+        }, { status: 2 }, t);
       }
 
       if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
@@ -760,13 +917,8 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
-      const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-        employee_id, 
-        attendance_date,
-      }, {}, t);
-
       // Synchronize leave balance based on status changes (Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t, emp);
       if (balanceError) {
         await t.rollback();
         return res.error(balanceError);
@@ -860,7 +1012,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
       const dayOfWeek = dayjs(attendance_date).day();
       const weekNo = Math.ceil(dayjs(attendance_date).date() / 7);
 
-      const [isHoliday, isWeeklyOff] = await Promise.all([
+      let [isHoliday, isWeeklyOff] = await Promise.all([
         commonQuery.findOneRecord(EmployeeHoliday, { 
           employee_id, 
           date: attendance_date, 
@@ -874,6 +1026,24 @@ exports.getAttendanceDayDetails = async (req, res) => {
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
         })
       ]);
+
+      // Fallback to Master Templates
+      if (!isHoliday && attendanceDay?.employee?.holiday_template) {
+          isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
+              template_id: attendanceDay.employee.holiday_template,
+              date: attendance_date,
+              status: 0
+          });
+      }
+      if (!isWeeklyOff && attendanceDay?.employee?.weekly_off_template) {
+          isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
+              template_id: attendanceDay.employee.weekly_off_template,
+              day_of_week: dayOfWeek,
+              [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+              is_off: true,
+              status: 0
+          });
+      }
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
       attendanceDayJson.is_scheduled_weekly_off = !!isWeeklyOff;
@@ -940,10 +1110,11 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
     });
 
@@ -961,28 +1132,45 @@ exports.getMonthlyAttendance = async (req, res) => {
       include: [
         {
           model: ShiftTemplate,
-          as: "shiftTemplate",
-          attributes: ["id", "shift_name", "start_time", "end_time"]
+          as: "shiftTemplate"
         },
         {
           model: LeaveTemplateCategory,
-          as: "leaveCategory",
-          attributes: ["id", "leave_category_name"]
+          as: "leaveCategory"
         }
       ],
       order: [["attendance_date", "ASC"]]
     });
 
     // 2.1 Fetch Holidays for the month
-    const employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
+    let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
-      date: { [Op.between]: [startDate, endDate] }
+      date: { [Op.between]: [startDate, endDate] },
+      status: 0
     });
+    // Fallback to Master Template
+    if (employeeHolidays.length === 0 && employee.holiday_template) {
+        employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
+            template_id: employee.holiday_template,
+            date: { [Op.between]: [startDate, endDate] },
+            status: 0
+        });
+    }
 
     // 2.2 Fetch Weekly Offs for the employee
-    const employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+    let employeeWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
       employee_id,
+      status: 0,
+      is_off: true
     });
+    // Fallback to Master Template
+    if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
+        employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
+            template_id: employee.weekly_off_template,
+            is_off: true,
+            status: 0
+        });
+    }
 
     // 3. Fetch all raw punches for the month with User info
     const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1006,6 +1194,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       absent: 0,
       leave: 0,
       fine: 0,
+      fineAmount: 0,
       overtime: 0
     };
 
@@ -1040,16 +1229,30 @@ exports.getMonthlyAttendance = async (req, res) => {
 
       if (attendanceDay) {
         // Summary Counts
-        if (attendanceDay.status === 0) summary.present++;
-        else if (attendanceDay.status === 1) summary.halfDay++;
+        if (attendanceDay.status === 0 || attendanceDay.status === 12) summary.present++;
+        else if (attendanceDay.status === 1 || attendanceDay.status === 13) summary.halfDay++;
         else if (attendanceDay.status === 5) summary.absent++;
         else if (attendanceDay.status === 6) summary.leave++;
 
-        totalFineMins += (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
-        totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0) + (parseInt(attendanceDay.early_overtime_minutes) || 0);
+        // Only calculate fine minutes if a fine amount actually exists (as requested)
+        let dayFinePenaltyMins = 0;
+        if (attendanceDay.fine_data) {
+          const fd = attendanceDay.fine_data;
+          if (fd.late_entry?.minutes > 0) dayFinePenaltyMins += parseInt(fd.late_entry.minutes) || 0;
+          if (fd.early_exit?.minutes > 0) dayFinePenaltyMins += parseInt(fd.early_exit.minutes) || 0;
+          if (fd.excess_breaks?.minutes > 0) dayFinePenaltyMins += parseInt(fd.excess_breaks.minutes) || 0;
+        } else if ((parseFloat(attendanceDay.fine_amount) || 0) > 0) {
+          // Fallback if fine_data is missing but fine_amount exists
+          dayFinePenaltyMins = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+        }
+
+        totalFineMins += dayFinePenaltyMins;
+        summary.fineAmount += parseFloat(attendanceDay.fine_amount) || 0;
+        // overtime_minutes is already the total (early + late) from helper, so no need to add early_overtime_minutes again
+        totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0);
 
         const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
@@ -1057,6 +1260,10 @@ exports.getMonthlyAttendance = async (req, res) => {
         } else if (attendanceDay.status === 4) {
           const h = employeeHolidays.find(h => h.date === curDate);
           statusText = h ? h.name : "Holiday";
+        } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
+          statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
+        } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
+          statusText = attendanceDay.leaveCategory.leave_category_name;
         }
 
         let timeRange = "0:00 Hrs";
@@ -1067,21 +1274,48 @@ exports.getMonthlyAttendance = async (req, res) => {
         }
 
         let varianceStr = "";
-        const dayFine = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
-        if (dayFine > 0) {
+        const dayFine = dayFinePenaltyMins;
+        const totalOvertime = (parseInt(attendanceDay.overtime_minutes) || 0);
+        
+        if (dayFine > 0 && totalOvertime > 0) {
+          // Show both fine and overtime
+          varianceStr = ` [+ ${Math.floor(totalOvertime / 60)}:${(totalOvertime % 60).toString().padStart(2, '0')} Hrs] [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
+        } else if (dayFine > 0) {
+          // Show only fine
           varianceStr = ` [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
-        } else if ((attendanceDay.overtime_minutes || 0) > 0) {
-          const ot = parseInt(attendanceDay.overtime_minutes);
-          varianceStr = ` [+ ${Math.floor(ot / 60)}:${(ot % 60).toString().padStart(2, '0')} Hrs]`;
+        } else if (totalOvertime > 0) {
+          // Show only overtime
+          varianceStr = ` [+ ${Math.floor(totalOvertime / 60)}:${(totalOvertime % 60).toString().padStart(2, '0')} Hrs]`;
         }
 
         dayData = {
           ...dayData,
+          id: attendanceDay.id,
+          first_in: attendanceDay.first_in,
+          last_out: attendanceDay.last_out,
+          worked_minutes: attendanceDay.worked_minutes,
+          late_minutes: attendanceDay.late_minutes,
+          early_out_minutes: attendanceDay.early_out_minutes,
+          early_overtime_minutes: attendanceDay.early_overtime_minutes,
+          overtime_minutes: attendanceDay.overtime_minutes,
+          fine_amount: attendanceDay.fine_amount,
+          overtime_data: attendanceDay.overtime_data,
+          fine_data: attendanceDay.fine_data,
+          leave_session: attendanceDay.leave_session,
+          is_locked: attendanceDay.is_locked,
+          shift_id: attendanceDay.shift_id,
           shift_name: shiftName,
           time_range: timeRange + varianceStr,
           day_status: attendanceDay.status,
           status: statusText,
           note: attendanceDay.note,
+          leave_category_id: attendanceDay.leave_category_id,
+          is_scheduled_holiday: !!employeeHolidays.find(h => h.date === curDate),
+          is_scheduled_weekly_off: !!employeeWeeklyOffs.find(wo => {
+             const dayOfWeek = dayObj.day();
+             const weekOfMonth = Math.ceil(dayObj.date() / 7);
+             return wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth);
+          }),
           punches: dayPunches.map(p => ({
             id: p.id,
             time: dayjs(p.punch_time).format("hh:mm a"),
@@ -1103,7 +1337,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           const dayOfWeek = dayObj.day(); // 0 is Sunday
           const weekOfMonth = Math.ceil(dayObj.date() / 7);
           const isWO = employeeWeeklyOffs.find(wo => 
-            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth)
+            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
           );
           if (isWO) {
             dayData.status = "Weekly Off";
@@ -1121,7 +1355,7 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     // Finalize Summary Formatting
-    summary.fine = `- ${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
+    summary.fine = `${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
     summary.overtime = `${Math.floor(totalOvertimeMins / 60)}:${(totalOvertimeMins % 60).toString().padStart(2, '0')}`;
 
     return res.ok({
@@ -1151,10 +1385,22 @@ exports.getLeaveSummary = async (req, res) => {
     }
 
     // 1. Fetch Leave Balances
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
-      employee_id,
-      status: 0
+    const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+      include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
     });
+
+    let balanceCriteria = { employee_id, status: 0 };
+    if (employee && employee.leaveTemplate) {
+      const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
+      balanceCriteria.year = end.year();
+      if (employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') {
+        balanceCriteria.month = end.month() + 1;
+      } else {
+        balanceCriteria.month = null;
+      }
+    }
+
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {
@@ -1166,6 +1412,14 @@ exports.getLeaveSummary = async (req, res) => {
           model: LeaveTemplateCategory,
           as: "category",
           attributes: ["id", "leave_category_name"]
+        }
+        ,
+        // Include approver user so we can show name in history
+        {
+          model: User,
+          as: "approvedBy",
+          attributes: ["id", "user_name"],
+          required: false
         }
       ],
       order: [["start_date", "DESC"]]
@@ -1238,7 +1492,8 @@ exports.getLeaveSummary = async (req, res) => {
         reason: leave.reason || "",
         status_id: leave.approval_status,
         status: statusMap[leave.approval_status] || "PENDING",
-        status_color: colorMap[leave.approval_status] || "#F59E0B"
+        status_color: colorMap[leave.approval_status] || "#F59E0B",
+        approved_by: leave.approvedBy?.user_name || null
       });
     });
 

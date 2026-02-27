@@ -1,5 +1,5 @@
 ﻿const { Permission, ModuleMaster, ModuleEntityMaster, RoutePermission } = require("../../../models");
-const { sequelize, commonQuery, validateRequest, constants, handleError } = require("../../../helpers");
+const { sequelize, commonQuery, validateRequest, constants, handleError, Op } = require("../../../helpers");
 const { reloadRoutePermissions } = require("../../../helpers/cache");
 
 // --- 1. Manage Permissions (Granular Actions) ---
@@ -76,61 +76,73 @@ exports.getAllPermissions = async (req, res) => {
 // ✅ ADDED: This function is required for your 'npm run gen:perms' script
 exports.getPermissionConstants = async (req, res) => {
     try {
-        const permissions = await commonQuery.findAllRecords(
-            Permission,
-            {},
-            {
-                attributes: ['id', 'action', 'slug'],
-                include: [
-                    // 1. Fetch 'id' from ModuleMaster
-                    {
-                        model: ModuleMaster,
-                        as: 'module',
-                        attributes: ['id', 'module_name']
-                    },
-                    // 2. Fetch 'id' from ModuleEntityMaster
-                    {
-                        model: ModuleEntityMaster,
-                        as: 'entity',
-                        attributes: ['id', 'entity_name', 'cust_entity_name']
+
+        const permissions = await Permission.findAll({
+            where: {
+                status: { [Op.ne]: 2 }   // optional (if you use soft delete)
+            },
+            attributes: ['id', 'action', 'slug'],
+            include: [
+                {
+                    model: ModuleMaster,
+                    as: 'module',
+                    attributes: ['id', 'module_name'],
+                    required: true,
+                    where: {
+                        status: { [Op.ne]: 2 } // ModuleMaster status
                     }
-                ],
-                raw: true,
-                nest: true
-            }, null, false);
+                },
+                {
+                    model: ModuleEntityMaster,
+                    as: 'entity',
+                    attributes: ['id', 'entity_name', 'cust_entity_name'],
+                    required: true,
+                    where: {
+                        status: { [Op.ne]: 2 } // ModuleMaster status
+                    }
+                }
+            ],
+            raw: true,
+            nest: true
+        });
 
         const constantTree = {};
-        const formatKey = (str) => str ? str.toUpperCase().replace(/[^A-Z0-9]/g, '_') : 'UNKNOWN';
+        const formatKey = (str) =>
+            str ? str.toUpperCase().replace(/[^A-Z0-9]/g, '_') : 'UNKNOWN';
 
         permissions.forEach((p) => {
             const modKey = formatKey(p.module.module_name);
-            const entKey = formatKey(p.entity.cust_entity_name || p.entity.entity_name);
+            const entKey = formatKey(
+                p.entity.cust_entity_name || p.entity.entity_name
+            );
             const actKey = formatKey(p.action);
 
-            // --- LEVEL 1: MODULE ---
+            // LEVEL 1: MODULE
             if (!constantTree[modKey]) {
                 constantTree[modKey] = {
-                    ID: p.module.id, // <--- Add Module ID here
+                    ID: p.module.id,
                 };
             }
 
-            // --- LEVEL 2: ENTITY ---
+            // LEVEL 2: ENTITY
             if (!constantTree[modKey][entKey]) {
                 constantTree[modKey][entKey] = {
-                    ID: p.entity.id, // <--- Add Entity ID here
+                    ID: p.entity.id,
                 };
             }
 
-            // --- LEVEL 3: ACTION ---
-            // Map the CONSTANT to the Permission ID
+            // LEVEL 3: ACTION → Permission ID
             constantTree[modKey][entKey][actKey] = p.id;
         });
 
         return res.success(constants.FETCHED, constantTree);
+
     } catch (error) {
+        console.error(error);
         return handleError(error, res, req);
     }
 };
+
 
 exports.getPermissionHierarchy = async (req, res) => {
     try {

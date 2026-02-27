@@ -121,7 +121,8 @@ exports.getById = async (req, res) => {
   try {
     const record = await commonQuery.findOneRecord(
       RolePermission,
-      req.params.id
+      req.params.id,
+      {}, null, false, false
     );
     
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND, { code: constants.ROLE_PERMISSION_NOT_FOUND });
@@ -170,7 +171,9 @@ exports.update = async (req, res) => {
       RolePermission,
       req.params.id,
       req.body,
-      transaction
+      transaction,
+      false,
+      false
     );
 
     if (!updated || updated.status === 2) {
@@ -178,12 +181,12 @@ exports.update = async (req, res) => {
       return res.error(constants.NOT_FOUND);
     }
 
-      await commonQuery.updateRecordById(
-        UserCompanyRoles,
-        { role_id: req.params.id },
-        { permissions: permissions },
-        transaction
-      );
+      // await commonQuery.updateRecordById(
+      //   UserCompanyRoles,
+      //   { role_id: req.params.id },
+      //   { permissions: permissions },
+      //   transaction
+      // );
     
     await transaction.commit();
     return res.success(constants.ROLE_PERMISSION_UPDATED, updated);
@@ -215,7 +218,7 @@ exports.delete = async (req, res) => {
       return res.error(constants.INVALID_INPUT);
     }
     
-    const deleted = await commonQuery.softDeleteById(RolePermission, ids, transaction);
+    const deleted = await commonQuery.softDeleteById(RolePermission, ids, transaction, false);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);

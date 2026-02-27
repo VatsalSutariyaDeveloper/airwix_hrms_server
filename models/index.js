@@ -97,6 +97,7 @@ const EmployeeHoliday = require("./employeeData/EmployeeHoliday")(sequelize, Dat
 const EmployeeWeeklyOff = require("./employeeData/EmployeeWeeklyOff")(sequelize, DataTypes);
 const EmployeePrintTemplate = require("./employeeData/EmployeePrintTemplate")(sequelize, DataTypes);
 const EmployeeSettings = require("./settings/employeeSettings")(sequelize, DataTypes);
+const CustomField = require("./settings/customField")(sequelize, DataTypes);
 
 // Payroll models
 const Payslip = require("./payroll/payslip")(sequelize, DataTypes); 
@@ -104,6 +105,8 @@ const IncentiveType = require("./settings/incentiveType")(sequelize, DataTypes);
 const EmployeeIncentive = require("./payroll/employeeIncentive")(sequelize, DataTypes);
 const EmployeeAdvance = require("./payroll/employeeAdvance")(sequelize, DataTypes);
 const PaymentHistory = require("./payroll/paymentHistory")(sequelize, DataTypes);
+
+const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(sequelize, DataTypes);
 
 // Collect all models in one db object
 const db = {
@@ -202,6 +205,9 @@ const db = {
   EmployeeWeeklyOff,
   EmployeePrintTemplate,
   EmployeeSettings,
+  
+  // Custom Fields
+  CustomField,
 
   // Payroll
   Payslip,
@@ -209,6 +215,9 @@ const db = {
   EmployeeIncentive,
   EmployeeAdvance,
   PaymentHistory,
+
+  // Canteen Attendance
+  CanteenAttendance,
 };
 
 Object.keys(db).forEach(modelName => {

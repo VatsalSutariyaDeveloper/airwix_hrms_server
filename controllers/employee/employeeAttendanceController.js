@@ -32,9 +32,26 @@ const employeeAttendanceController = {
     getShiftSetting: async (req, res) => {
         try {
             const { employeeId } = req.params;
-            const settings = await commonQuery.findAllRecords(EmployeeShift, { 
-                employee_id: employeeId 
+            let settings = await commonQuery.findAllRecords(EmployeeShift, { 
+                employee_id: employeeId,
+                status: 0
             });
+
+            // Fallback to Master Template if no individual setting exists
+            if (settings.length === 0) {
+                const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['shift_template'] });
+                if (employee && employee.shift_template) {
+                    const masterShifts = await commonQuery.findAllRecords(ShiftTemplate, employee.shift_template);
+                    // Map master to match the expected format if needed, 
+                    // though shift_template itself has the columns.
+                    // Usually ShiftTemplate is a single row, but maybe there's logic for multiple?
+                    // In the existing sync, it was creating rows 0-6.
+                    settings = masterShifts.map(s => ({
+                        ...s.toJSON(),
+                        is_template: true
+                    }));
+                }
+            }
 
             return res.success("Employee shift settings fetched successfully", settings);
         } catch (error) {
@@ -88,9 +105,22 @@ const employeeAttendanceController = {
     getWeeklyOffs: async (req, res) => {
         try {
             const { employeeId } = req.params;
-            const weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
-                employee_id: employeeId 
+            let weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
+                employee_id: employeeId,
+                status: 0
             });
+
+            // Fallback to Master Template
+            if (weeklyOffs.length === 0) {
+                const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['weekly_off_template'] });
+                if (employee && employee.weekly_off_template) {
+                    weeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
+                        template_id: employee.weekly_off_template,
+                        status: 0
+                    });
+                    weeklyOffs = weeklyOffs.map(wo => ({ ...wo.toJSON(), is_template: true }));
+                }
+            }
 
             return res.success("Employee weekly offs fetched successfully", weeklyOffs);
         } catch (error) {

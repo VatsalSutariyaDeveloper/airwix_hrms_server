@@ -250,7 +250,9 @@ exports.update = async (req, res) => {
             { 
               action: action.action
             },
-            transaction
+            transaction,
+            false,
+            false
           );
           
           if (updatedPermission) {
@@ -278,7 +280,10 @@ exports.update = async (req, res) => {
             module_id: POST.module_id,
             entity_id: req.params.id,
             action: action.action,
-          }, transaction);
+            company_id: -1,
+            user_id: -1,
+            branch_id: -1,
+          }, transaction, false, false);
 
           createdPermissions.push(newPerm);
           sentActionIds.push(newPerm.id);
@@ -298,13 +303,14 @@ exports.update = async (req, res) => {
 
       const existingPermissionIds = existingPermissions.map(p => p.id);
       const idsToDelete = existingPermissionIds.filter(id => !sentActionIds.includes(id));
-
       if (idsToDelete.length > 0) {
         for (const id of idsToDelete) {
           await commonQuery.hardDeleteRecords(
             Permission,
             { id },
-            transaction
+            transaction,
+            false,
+            false
           );
         }
       }

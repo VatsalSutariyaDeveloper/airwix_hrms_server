@@ -70,8 +70,10 @@ function withDebug(options = {}, transaction = null) {
  * Merges input normalization, status filtering, and tenant logic.
  * * @param {Object|Array|String|Number} whereInput - The filter condition
  * @param {Boolean} applyDefaults - If true, injects Company, Branch, and User IDs based on settings
+ * @param {Boolean} [skipStatus=false] - When true the default status (not equal 2) check is skipped;
+ *                                       useful for include queries where status should not be applied
  */
-async function buildWhere(whereInput, applyDefaults = true) {
+async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) {
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -89,8 +91,11 @@ async function buildWhere(whereInput, applyDefaults = true) {
 
   // --- 2. Apply Status Filter ---
   // If status is not explicitly set, default to excluding deleted (2)
-  if (where.status === undefined) {
-    where.status = { [Op.ne]: 2 };
+  // `skipStatus` allows callers (e.g. include logic) to bypass this check completely
+  if (!skipStatus) {
+    if (where.status === undefined) {
+      where.status = { [Op.ne]: 2 };
+    }
   }
 
   const ctx = getContext();
@@ -211,8 +216,10 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
+    let ctx = null;
+
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       enrichedData.company_id= ctx.company_id;
       enrichedData.user_id= ctx.user_id;
       enrichedData.branch_id= ctx.branch_id;
@@ -232,7 +239,7 @@ module.exports = {
         record_id: result.id,
         new_data: result.toJSON ? result.toJSON() : result,
         ...commonData,
-        ip_address: ctx.ip,
+        ip_address: ctx ? ctx.ip : null,
       }, transaction);
     } catch (logErr) {
       console.error("Audit log failed:", logErr.message);
@@ -250,9 +257,10 @@ module.exports = {
       company_id: extraFields.company_id,
       branch_id: extraFields.branch_id,
     };
+    let ctx = null;
 
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       enriched = dataArray.map((item) => ({
         ...item,
         company_id: ctx.company_id,
@@ -277,7 +285,7 @@ module.exports = {
             entity_name: Model.name,
             record_id: record.id,
             ...commonData,
-            ip_address: ctx.ip,
+            ip_address: ctx ? ctx.ip : null,
           }, transaction);
         }
       } catch (logErr) {
@@ -299,8 +307,10 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
+    let ctx = null;
+
     if(requireTenantFields){
-      const ctx = getContext();
+      ctx = getContext();
       safeData.company_id= ctx.company_id;
       safeData.user_id= ctx.user_id;
       safeData.branch_id= ctx.branch_id;
@@ -311,10 +321,7 @@ module.exports = {
       };
     }
 
-    let oldRecord = null;
-    try {
-      oldRecord = await model.findOne({ where: condition, transaction, raw: true });
-    } catch (e) {}
+    const oldRecord = await model.findOne({ where: condition, transaction, raw: true });
     if (!oldRecord) return null;
     const [count] = await model.update(
       safeData,
@@ -323,7 +330,11 @@ module.exports = {
 
     if (count === 0) return null;
 
-    const newRecord = await model.findOne({ where: condition, transaction });
+    const idField = model.primaryKeyAttribute || 'id';
+    const newRecord = await model.findOne({ 
+      where: { [idField]: oldRecord[idField] }, 
+      transaction 
+    });
     if (newRecord && forceReload) await newRecord.reload({ transaction });
 
     try {
@@ -335,10 +346,10 @@ module.exports = {
         old_data: oldRecord,
         new_data: newRecord.toJSON(),
         ...commonData,
-        ip_address: ctx.ip,
+        ip_address: ctx ? ctx.ip : null,
       }, transaction);
     } catch (logErr) {
-      console.error("Audit log failed:", logErr.message);
+      console.error(`[commonQuery] Log failed for ${model.name} (Non-fatal):`, logErr.message);
     }
 
     return newRecord;
@@ -499,20 +510,21 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
 
       let filters = {};
 
-      // A. Status
-      if (reqBody?.status !== undefined && reqBody?.status !== "All") {
-        if (Array.isArray(reqBody?.status) && reqBody?.status.length > 0) {
-          filters.status = { [Op.in]: reqBody?.status };
-        } else {
-          const s = reqBody?.status;
-          if (["Active", "0", 0].includes(s)) filters.status = 0;
-          else if (["Deactive", "1", 1].includes(s)) filters.status = 1;
-          else filters.status = s;
+      // A. Status (skip entirely if `include` object is provided)
+      if (!reqBody?.include) {
+        if (reqBody?.status !== undefined && reqBody?.status !== "All") {
+          if (Array.isArray(reqBody?.status) && reqBody?.status.length > 0) {
+            filters.status = { [Op.in]: reqBody?.status };
+          } else {
+            const s = reqBody?.status;
+            if (["Active", "0", 0].includes(s)) filters.status = 0;
+            else if (["Deactive", "1", 1].includes(s)) filters.status = 1;
+            else filters.status = s;
+          }
+        } else if (reqBody?.status === "All") {
+          // Optional: explicitly allow all statuses if needed, usually we just don't filter
+          delete filters.status;
         }
-      } 
-      else if (reqBody?.status === "All") {
-        // Optional: explicitly allow all statuses if needed, usually we just don't filter
-        delete filters.status;
       }
 
       // B. Filter Object
@@ -622,7 +634,8 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
             else if (value) includeConditions.push({ [key]: value });
         }
         if (includeConditions.length > 0) {
-            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields);
+            // we intentionally bypass default status filtering for include logic
+            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields, true);
             const extraRecords = await model.findAll({ where: stickyWhere, ...options });
             const existingIds = new Set(data.map(d => String(d.id)));
             const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));
@@ -656,7 +669,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         totalPages: isFetchAll ? 1 : Math.ceil(totalCount / (limit || 1)),
         hasNextPage: isFetchAll ? false : (page * limit) < totalCount,
         hasPreviousPage: isFetchAll ? false : page > 1,
-        appliedFilters: { ...reqBody, searchFields, filters: Object.keys(filters).length },
+        appliedFilters: { ...reqBody, searchFields, sortableFields, filters: Object.keys(filters).length },
       };
 
     } catch (err) {

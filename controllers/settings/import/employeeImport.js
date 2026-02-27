@@ -6,6 +6,7 @@ const { Op } = require("sequelize");
 const xlsx = require("xlsx");
 const fs = require("fs");
 const { fail } = require('../../../helpers/Err');
+const { requestContext } = require("../../../utils/requestContext");
 
 const moment = require("moment");
 
@@ -22,11 +23,12 @@ function parseExcelDate(value, rowIndex, fieldName = "Date") {
 
     // 2️⃣ If Excel numeric date (e.g. 45567)
     if (typeof value === "number") {
+        if (value <= 0) return null; // Handle zero or negative dates gracefully
         const excelEpoch = new Date(Date.UTC(1899, 11, 30));
         const parsed = new Date(excelEpoch.getTime() + value * 86400000);
 
         if (isNaN(parsed)) {
-            throw new Error(`Row ${rowIndex}: Invalid ${fieldName}`);
+            return null; // Return null instead of throwing to keep processing
         }
         return parsed;
     }
@@ -55,6 +57,72 @@ const normalizeText = (v) => {
     if (v === undefined || v === null) return null;
     const s = String(v).trim();
     return s === "" ? null : s.toLowerCase();
+};
+
+const getGenderValue = (v) => {
+    const s = String(v || "").trim().toLowerCase();
+    if (!s) return null;
+    if (s.startsWith("m") || s.includes("male")) return 1;
+    if (s.startsWith("f") || s.includes("female")) return 2;
+    if (s.startsWith("o") || s.includes("other")) return 3;
+    return null;
+};
+
+const getMaritalStatusValue = (v) => {
+    const s = String(v || "").trim().toLowerCase();
+    if (!s) return null;
+    if (s.startsWith("m")) return 1; // Married
+    if (s.startsWith("u") || s.startsWith("n") || s.startsWith("s")) return 2; // Unmarried / Single / No
+    return null;
+};
+
+const BLOOD_GROUP_MAP = {
+    "a+": 1, "a positive": 1, "a-": 2, "a negative": 2,
+    "b+": 3, "b positive": 3, "b-": 4, "b negative": 4,
+    "o+": 5, "o positive": 5, "o-": 6, "o negative": 6,
+    "ab+": 7, "ab positive": 7, "ab-": 8, "ab negative": 8
+};
+
+const getEmployeeTypeDetails = (typeStr, codeStr) => {
+    const s = String(typeStr || '').toLowerCase();
+    const c = String(codeStr || '').toLowerCase();
+    
+    let employee_type = 1; // Default to Staff
+    let worker_type = null;
+
+    if (s.includes('staff')) {
+        employee_type = 1;
+    } else if (s.includes('worker') || c.includes('worker')) {
+        employee_type = 2;
+        // Check for on-role/off-role
+        if (s.includes('on-role') || s.includes('on role') || c.includes('on-role') || c.includes('on role')) {
+            worker_type = 1; 
+        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-role') || c.includes('off role')) {
+            worker_type = 2; 
+        }
+    } else if (s.includes('contractor')) {
+        employee_type = 3; // Contractor
+    } else if (s === '1' || s === '2' || s === '3') {
+        employee_type = parseInt(s);
+    }
+    
+    return { employee_type, worker_type };
+};
+
+const getWorkerTypeValue = (v) => {
+    const s = String(v || "").trim().toLowerCase();
+    if (!s) return null;
+    if (s.includes('on-role') || s.includes('on role') || s === '1') return 1;
+    if (s.includes('off-role') || s.includes('off role') || s === '2') return 2;
+    return null;
+};
+
+const getBloodGroupValue = (v) => {
+    let s = String(v || "").trim().toLowerCase().replace(/'/g, '').replace(/\s+/g, " ");
+    if (!s) return null;
+    // Handle variants like "b positive" vs "b+"
+    if (s === "b+ positive") s = "b+";
+    return BLOOD_GROUP_MAP[s] || null;
 };
 
 let isCancelled = false;
@@ -94,21 +162,37 @@ const runWorker = async () => {
     const workbook = xlsx.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const row = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
-    const excelHeaders = (row[0] || [])
+    
+    // 🔍 Find the header row dynamically
+    const allRows = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+    let headerRowIndex = 0;
+    const HEADER_KEYWORDS = ["employee code", "sr.no", "name", "first name", "doj", "joining date"];
+
+    for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+        const rowData = (allRows[i] || []).map(c => String(c || "").trim().toLowerCase());
+        const matchCount = HEADER_KEYWORDS.filter(k => rowData.includes(k)).length;
+        if (matchCount >= 2) { // Require at least 2 matches
+            headerRowIndex = i;
+            break;
+        }
+    }
+
+    const excelHeaders = (allRows[headerRowIndex] || [])
         .map(h => String(h || "").trim())
         .filter(Boolean);
     
     // Auto-match common required fields even if required_fields is not provided
     const COMMON_FIELD_MAPPINGS = [
-        { key: "first_name", aliases: ["first name", "name", "full name", "employee", "emp name", "employee name"] },
-        { key: "joining_date", aliases: ["date of joing", "date of joining", "doj", "joining date"] },
-        { key: "dob", aliases: ["date of birth", "dob", "birth date"] },
+        { key: "first_name", aliases: ["first name", "name", "full name", "employee", "emp name", "employee name", "emp. name"] },
+        { key: "employee_type", aliases: ["employee type", "emp type", "emp. type", "type", "staff type"] },
+        { key: "worker_type", aliases: ["worker type", "employment type"] },
+        { key: "joining_date", aliases: ["date of joing", "date of joining", "doj", "joining date", "doj."] },
+        { key: "dob", aliases: ["date of birth", "dob", "birth date", "dob."] },
         { key: "gender", aliases: ["gender", "sex"] },
-        { key: "mobile_no", aliases: ["mobile number", "mobile", "phone", "phone number", "contact", "mobile no"] },
-        { key: "department_id", aliases: ["department", "dept"] },
-        { key: "designation_id", aliases: ["designation", "desig"] },
-        { key: "employee_code", aliases: ["employee code", "emp code", "code"] },
+        { key: "mobile_no", aliases: ["mobile number", "mobile", "phone", "phone number", "contact", "mobile no",  "mo no", "monumber", "mo.no", "mob.", "mobile no."] },
+        { key: "department_id", aliases: ["department", "dept", "dept."] },
+        { key: "designation_id", aliases: ["designation", "desig", "desig."] },
+        { key: "employee_code", aliases: ["employee code", "emp code", "code", "emp. code", "employee id", "emp id"] },
         { key: "attendance_supervisor", aliases: ["attendance supervisor", "supervisor"] },
         { key: "is_attendance_supervisor", aliases: ["is attendance supervisor", "attendance supervisor flag"] },
         { key: "reporting_manager", aliases: ["reporting manager", "manager"] },
@@ -136,7 +220,7 @@ const runWorker = async () => {
         { key: "present_country_id", aliases: ["present country", "present country name"] },
         { key: "uan_number", aliases: ["uan number", "uan"] },
         { key: "name_as_per_pan", aliases: ["name as per pan", "pan name"] },
-        { key: "pan_number", aliases: ["pan number", "pan"] },
+        { key: "pan_number", aliases: ["pan number", "pan", "pan no.", "pan_no.", "pan no", "pan_no"] },
         { key: "name_as_per_aadhaar", aliases: ["name as per aadhaar", "aadhaar name"] },
         { key: "aadhaar_number", aliases: ["aadhaar number", "aadhaar"] },
         { key: "pf_number", aliases: ["pf number", "pf"] },
@@ -192,9 +276,8 @@ const runWorker = async () => {
     
     try {
         errorFileStream = fs.createWriteStream(errorLogPath);
-        const rawHeaders = (xlsx.utils.sheet_to_json(worksheet, { header: 1 })[0] || []);
-        const headers = rawHeaders.map(h => String(h).trim());
-        const originalRows = xlsx.utils.sheet_to_json(worksheet);
+        const originalRows = xlsx.utils.sheet_to_json(worksheet, { range: headerRowIndex });
+        const headers = (allRows[headerRowIndex] || []).map(h => String(h || "").trim());
         const rows = transformRows(originalRows, headers, fieldMapping);
         
         if (isCancelled) fail("IMPORT_CANCELLED");
@@ -327,8 +410,6 @@ const runWorker = async () => {
             { attributes: ['id', 'name'], raw: true },
             transaction
         );
-
-        console.log("Existing departments:--------------------------------------------------");
         
         // Map existing departments
         existingDepartments.forEach(dept => {
@@ -435,9 +516,11 @@ const runWorker = async () => {
             const rowIndex = i + 2;
 
             try {
-                const firstName = String(record.first_name || '').trim().toLowerCase();
+                const firstNameRaw = record.first_name || '';
+                const firstName = String(firstNameRaw).trim();
                 const email = String(record.email || '').trim().toLowerCase();
-                const mobile = String(record.mobile_no || '').trim();
+                const mobile = record.mobile_no ? String(record.mobile_no).trim() : null;
+                const empCode = record.employee_code ? String(record.employee_code).trim() : null;
                 const pan = record.pan_number ? String(record.pan_number).trim().toUpperCase() : null;
                 const uan = record.uan_number ? String(record.uan_number).trim() : null;
                 const aadhaar = record.aadhaar_number ? String(record.aadhaar_number).replace(/\s/g, '') : null;
@@ -445,30 +528,50 @@ const runWorker = async () => {
                 const voterId = record.voter_id_number ? String(record.voter_id_number).trim().toUpperCase() : null;
                 const bankAccount = record.bank_account_number ? String(record.bank_account_number).trim() : null;
 
+                // 🛑 SILENT SKIP: If row has no name, code, OR mobile, it's likely a summary/divider row
+                // OR if firstName is a known header noise word like "Management", "Account", etc.
+                const noiseWords = ["management", "account", "admin", "branding", "design", "proposals", "hr", "safety", "it", "planning", "manufacturing", "purchase", "documentation", "qc", "sales", "store", "project", "aepl worker"];
+                if ((!firstName && !empCode && !mobile) || (firstName && noiseWords.includes(firstName.toLowerCase()))) {
+                    continue; 
+                }
+
                 if (!firstName) fail("First Name is required");
-                if (!mobile) fail("Mobile Number is required");
-                if(!record.joining_date) fail("Joining Date is required");
-                if(!record.dob) fail("Date of Birth is required");
-                if(!record.gender) fail("Gender is required");
+                // if (!mobile) fail("Mobile Number is required");
+                
+                // Make these optional if missing in Excel to avoid blocking rows, 
+                // but keep database requirements in mind. DB might throw, but let it try.
+                const joiningDate = parseExcelDate(record.joining_date, rowIndex, "Joining Date");
+                const dob = parseExcelDate(record.dob, rowIndex, "DOB");
+                const gender = getGenderValue(record.gender);
+
+                // Optional: You could fail here if you MUST have them, 
+                // but let's see if providing what we HAVE helps.
+                // if (!joiningDate) fail("Joining Date is required");
+                // if (!dob) fail("Date of Birth is required");
+                // if (!gender) fail("Gender is required");
 
                 // Check for duplicates (only in Excel file for employee code)
                 if (record.employee_code && employeeData.fileEmpCodeSet.has(record.employee_code)) fail(`Employee Code '${record.employee_code}' already exists`);
                 if (email && employeeData.dbEmailSet.has(email)) fail(`Email '${email}' already exists`);
-                if (employeeData.dbEmpMobileSet.has(mobile)) fail(`Mobile '${mobile}' already exists`);
+                if (mobile && employeeData.dbEmpMobileSet.has(mobile)) fail(`Mobile '${mobile}' already exists`);
                 if (pan && employeeData.dbPanSet.has(pan)) fail(`PAN '${pan}' already exists`);
                 if (uan && employeeData.dbUanSet.has(uan)) fail(`UAN '${uan}' already exists`);
                 if (aadhaar && employeeData.dbAadhaarSet.has(aadhaar)) fail(`Aadhaar '${record.aadhaar_number}' already exists`);
                 if (drivingLicense && employeeData.dbDrivingLicenseSet.has(drivingLicense)) fail(`Driving License '${drivingLicense}' already exists`);
                 if (voterId && employeeData.dbVoterIdSet.has(voterId)) fail(`Voter ID '${voterId}' already exists`);
                 if (bankAccount && employeeData.dbBankAccountSet.has(bankAccount)) fail(`Bank Account '${bankAccount}' already exists`);
-                if (employeeData.fileEmpMobileSet.has(mobile)) fail(`Duplicate Mobile '${mobile}' found in file`);
+                if (mobile && employeeData.fileEmpMobileSet.has(mobile)) fail(`Duplicate Mobile '${mobile}' found in file`);
 
                 
                 // Prepare employee data
+                const typeDetails = getEmployeeTypeDetails(record.employee_type, record.employee_code);
+
                 const prepareData = {
                     employee_code: record.employee_code,
                     first_name: firstName,
                     mobile_no: mobile,
+                    employee_type: typeDetails.employee_type,
+                    worker_type: typeDetails.worker_type || getWorkerTypeValue(record.worker_type),
                     department_id: record.department_id ? departmentMap.get(String(record.department_id).trim().toLowerCase()) : null,
                     designation_id: record.designation_id ? designationMap.get(String(record.designation_id).trim().toLowerCase()) : null,
                     attendance_supervisor: record.attendance_supervisor,
@@ -476,17 +579,19 @@ const runWorker = async () => {
                     reporting_manager: record.reporting_manager,
                     is_reporting_manager: record.is_reporting_manager,
 
-                    gender: record.gender,
-                    dob: parseExcelDate(record.dob, rowIndex, "DOB"),
+                    gender: gender,
+                    dob: dob,
                     email: email || null,
-                    marital_status: record.marital_status,
-                    blood_group: record.blood_group,
+                    marital_status: getMaritalStatusValue(record.marital_status),
+                    blood_group: getBloodGroupValue(record.blood_group),
                     physically_challenged: record.physically_challenged,
                     emergency_contact_mobile: record.emergency_contact_mobile,
                     father_name: normalizeText(record.father_name),
                     mother_name: normalizeText(record.mother_name),
                     spouse_name: normalizeText(record.spouse_name),
                     same_as_current: record.same_as_current,
+                    
+                    joining_date: joiningDate,
 
                     permanent_address1: record.permanent_address1,
                     permanent_address2: record.permanent_address2,
@@ -507,7 +612,6 @@ const runWorker = async () => {
                 })() : null,
                     present_country_id: record.present_country_id,
 
-                    joining_date: parseExcelDate(record.joining_date, rowIndex, "Joining Date"),
                     uan_number: uan,
                     name_as_per_pan: record.name_as_per_pan,
                     pan_number: pan,
@@ -536,7 +640,7 @@ const runWorker = async () => {
 
                 // Add to valid employees array
                 validEmployees.push(prepareData);
-                employeeData.fileEmpMobileSet.add(mobile);
+                if (mobile) employeeData.fileEmpMobileSet.add(mobile);
                 createdCount++;
 
             } catch (rowError) {
@@ -594,5 +698,18 @@ const runWorker = async () => {
     }
 };
 
-runWorker();
-runWorker();
+const startWorker = async () => {
+    const { user_id, branch_id, company_id } = workerData;
+    const mockStore = {
+        userId: user_id,
+        companyId: company_id,
+        branchId: branch_id,
+        ip: "127.0.0.1"
+    };
+
+    await requestContext.run(mockStore, async () => {
+        await runWorker();
+    });
+};
+
+startWorker();

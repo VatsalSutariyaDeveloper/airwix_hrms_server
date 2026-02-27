@@ -162,13 +162,28 @@ exports.update = async (req, res) => {
 
         // Trigger sync for all employees using this template
         const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction);
-        for (const emp of employeesToSync) {
-            // First sync the weekly off data
-            await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'weekly_off_template', id, null, transaction);
-            // Then re-sync their shift template because shift settings depend on off-days (they skip off-days)
-            if (emp.shift_template) {
-                await EmployeeTemplateService.syncSpecificTemplate(emp.id, 'shift_template', emp.shift_template, null, transaction);
+        if (employeesToSync.length > 0) {
+            const employeeIds = employeesToSync.map(emp => emp.id);
+            
+            // 1. First sync the weekly off data in bulk (skip rebuild here)
+            await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'weekly_off_template', id, transaction, { skipRebuild: true });
+            
+            // 2. Then re-sync their shift template in bulk because shift settings depend on off-days
+            const shiftTemplateGroups = {};
+            employeesToSync.forEach(emp => {
+                if (emp.shift_template) {
+                    if (!shiftTemplateGroups[emp.shift_template]) shiftTemplateGroups[emp.shift_template] = [];
+                    shiftTemplateGroups[emp.shift_template].push(emp.id);
+                }
+            });
+
+            for (const [sId, ids] of Object.entries(shiftTemplateGroups)) {
+                // Sync shifts in bulk (skip rebuild here too)
+                await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, 'shift_template', sId, transaction, { skipRebuild: true });
             }
+
+            // 3. FINALLY: Rebuild attendance for all affected employees ONCE
+            await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIds, transaction);
         }
 
         await transaction.commit();

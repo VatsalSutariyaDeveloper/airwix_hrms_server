@@ -2,20 +2,21 @@ const {
     Employee,
     EmployeeFamilyMember,
     User,
-    ModuleEntityMaster,
-    ApprovalRequest,
-    StateMaster,     // Assuming you have these for Address includes
-    CountryMaster,
     UserCompanyRoles,
-    CompanyConfigration,
     RolePermission,
     AttendancePunch,
     AttendanceDay,
     EmployeeSalaryTemplate,
-    SalaryComponent,
     WeeklyOffTemplate,
     WeeklyOffTemplateDay,
-    EmployeeSettings
+    EmployeeSettings,
+    AttendanceTemplate,
+    HolidayTransaction,
+    LeaveTemplate,
+    LeaveTemplateCategory,
+    SalaryTemplate,
+    SalaryTemplateTransaction,
+    ShiftTemplate
 } = require("../../models");
 
 const {
@@ -28,28 +29,23 @@ const {
     constants,
     Op,
     whatsappService,
-    fileExists
+    fileExists,
+    handleExport,
+    streamExport
 } = require("../../helpers");
 
 const {
-    generateSeriesNumber,
-    updateSeriesNumber,
-    fixDecimals,
+
     calculateWorkingAndOffDays
 } = require("../../helpers/functions/commonFunctions");
 
-const { ENTITIES } = require('../../helpers/constants');
-const ApprovalEngine = require("../../helpers/approvalEngine");
-const { MODULES } = require("../../helpers/moduleEntitiesConstants");
-const bcrypt = require("bcrypt");
+
 const { getContext } = require("../../utils/requestContext");
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const FormData = require('form-data');
-const LeaveBalanceService = require("../../services/leaveBalanceService");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
-const { LOADIPHLPAPI } = require("dns/promises");
 
 const dayjs = require("dayjs");
 const crypto = require("crypto");
@@ -102,9 +98,7 @@ const FILE_COLUMNS = [
 
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
-    // 'education_details' is a column in Employee (JSONB)
-    // 'family_details' is NOT a column, but we send it as JSON to process into FamilyMember table
-    const fieldsToParse = ["education_details"];
+    const fieldsToParse = ["education_details", "custom_fields"];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
@@ -123,12 +117,13 @@ const sanitizeTemplateFields = (body) => {
     ALLOWED_TEMPLATE_FIELDS.forEach((field) => {
         if (body[field] === "") {
             body[field] = 0;
-        } 
+        }
         // else if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined") {
-        
+
         // }
     });
 };
+
 
 /**
  * Creates a new Employee and their Family Members.
@@ -154,12 +149,9 @@ exports.create = async (req, res) => {
         }, transaction);
 
         if (req.body.employee_code) {
-            const employeeCodeExists = await Employee.findOne({
-                where: {
-                    employee_code: req.body.employee_code,
-                },
-                transaction,
-            });
+            const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
+                employee_code: req.body.employee_code,
+            }, {}, transaction);
 
             if (employeeCodeExists) {
                 await transaction.rollback();
@@ -311,6 +303,12 @@ exports.update = async (req, res) => {
             const hasManualData = POST[`manual_${field}_data`] !== undefined;
             const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
 
+            // Special handling for leave_template - reject pending requests BEFORE updating
+            if (field === 'leave_template' && fieldValueChanged) {
+                console.log(`🔄 [EMP_UPDATE] Rejecting pending requests before template change for employee ${id}`);
+                await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(id, req, null, existingEmployee.leave_template);
+            }
+
             // For leave template, we also sync if joining date changed
             const shouldSyncLeave = field === 'leave_template' && (fieldValueChanged || joiningDateChanged);
             // For other templates, we sync if the value changed or if manual data is provided
@@ -319,7 +317,24 @@ exports.update = async (req, res) => {
             if (shouldSyncLeave || shouldSyncOthers || (field === 'leave_template' && hasManualData)) {
                 const manualDataKey = `manual_${field}_data`;
                 const manualData = POST[manualDataKey] || null;
-                await EmployeeTemplateService.syncSpecificTemplate(id, field, POST[field] !== undefined ? POST[field] : existingEmployee[field], manualData, transaction);
+                
+                // Prepare meta data for syncLeaveTemplate to handle pending request rejection
+                const meta = {
+                    employee: existingEmployee,
+                    preFetchedMaster: null,
+                    req: req,
+                    existingEmployee: existingEmployee
+                };
+                
+                await EmployeeTemplateService.syncSpecificTemplate(
+                    id, 
+                    field, 
+                    POST[field] !== undefined ? POST[field] : existingEmployee[field], 
+                    manualData, 
+                    transaction,
+                    false,
+                    meta
+                );
             }
         }
 
@@ -522,14 +537,11 @@ exports.checkEmployeeCode = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { employee_code } = req.body;
-        const emp = await commonQuery.findOneRecord(
-            Employee,
-            { employee_code },
-            {},
-            transaction
-        );
+        const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
+            employee_code: employee_code,
+        }, {}, transaction);
         await transaction.commit();
-        return res.ok({ exists: !!emp });
+        return res.ok({ exists: !!employeeCodeExists });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -605,18 +617,34 @@ exports.getPunch = async (req, res) => {
 exports.dropdownList = async (req, res) => {
     try {
         const POST = req.body;
-        const fieldConfig = [
-            ["first_name", true, true],
-        ];
+        const { employee_id } = POST;
 
-        const data = await commonQuery.fetchPaginatedData(
-            Employee,
-            { ...POST, status: 0 },
-            fieldConfig,
-            {},
-            false,
-        );
-        return res.ok(data);
+        if (employee_id) {
+            const data = await commonQuery.fetchPaginatedData(
+                Employee,
+                { ...POST, id: employee_id, status: { [Op.in]: [0, 1, 2] } },
+                {},
+                {},
+                false,
+            );
+            return res.ok(data);
+        } else {
+            const fieldConfig = [
+                ["first_name", true, true],
+                ["employee_code", true, true],
+            ];
+
+            const data = await commonQuery.fetchPaginatedData(
+                Employee,
+                { ...POST, status: 0 },
+                fieldConfig,
+                {
+                    attributes: ["id", "first_name", "employee_code", "status"],
+                },
+                false,
+            );
+            return res.ok(data);
+        }
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -654,7 +682,6 @@ exports.updateStatus = async (req, res) => {
 
 exports.assignRole = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { company_id } = getContext();
     const POST = req.body;
 
     try {
@@ -703,7 +730,7 @@ exports.assignRole = async (req, res) => {
         }
 
         // 4. Get permissions from RolePermission table
-        const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
+        // const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);
 
         // 5. Update all users and their roles
         const updatePromises = users.map(async (user) => {
@@ -711,15 +738,15 @@ exports.assignRole = async (req, res) => {
             await commonQuery.updateRecordById(User, user.id, { role_id: newRoleId }, transaction);
 
             // Update UserCompanyRoles with role_id and permissions
-            return commonQuery.updateRecordById(
-                UserCompanyRoles,
-                { user_id: user.id, company_id: company_id },
-                {
-                    role_id: newRoleId,
-                    permissions: rolePermission.permissions
-                },
-                transaction, false, false
-            );
+            // return commonQuery.updateRecordById(
+            //     UserCompanyRoles,
+            //     { user_id: user.id, company_id: company_id },
+            //     {
+            //         role_id: newRoleId,
+            //         permissions: rolePermission.permissions
+            //     },
+            //     transaction, false, false
+            // );
         });
 
         await Promise.all(updatePromises);
@@ -739,7 +766,49 @@ exports.assignRole = async (req, res) => {
 exports.assignTemplate = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { field_name, employees } = req.body;
+        let { field_name, employees, is_select_all, filter_params, target_value, excluded_ids } = req.body;
+
+        if (is_select_all) {
+            const where = {};
+
+            // Example: Apply Search
+            if (filter_params?.search) {
+                where[Op.or] = [
+                    { first_name: { [Op.like]: `%${filter_params.search}%` } },
+                    // { last_name: { [Op.like]: `%${filter_params.search}%` } },
+                    { employee_code: { [Op.like]: `%${filter_params.search}%` } } // Added common search field
+                ];
+            }
+
+            // Exclude specifically deselected IDs
+            if (Array.isArray(excluded_ids) && excluded_ids.length > 0) {
+                where.id = { [Op.notIn]: excluded_ids };
+            }
+
+            // Example: Apply Tab Context (Assigned vs Unassigned)
+            // If tab is 'unselected' (is_access: false), we find employees WITHOUT this template
+            if (filter_params?.is_access === false) {
+                where[field_name] = { [Op.or]: [null, 0] };
+            }
+
+            else if (filter_params?.is_access === true && filter_params?.value) {
+                where[field_name] = filter_params.value;
+            }
+
+            // 2. Fetch ALL matching IDs from the database
+            const allMatchingEmployees = await commonQuery.findAllRecords(
+                Employee,
+                where,
+                ['id'], // Only select ID
+                null,
+                false
+            );
+
+            employees = allMatchingEmployees.map(emp => ({
+                id: emp.id,
+                value: target_value // The value to set (e.g., templateId or 0)
+            }));
+        }
 
         // 1. Allowed Fields Whitelist
         if (!ALLOWED_TEMPLATE_FIELDS.includes(field_name)) {
@@ -753,25 +822,102 @@ exports.assignTemplate = async (req, res) => {
             return res.error(constants.EMPLOYEE_DATA_IS_REQUIRED_AND_MUST_BE_AN_ARRAY);
         }
 
-        // 3. Process Updates in Chunks for Concurrency
-        const CHUNK_SIZE = 10;
+        // 3. Pre-fetch Master Data and Employees for optimization
+        const firstEmployee = employees[0];
+        const commonValue = employees.every(e => e.value === firstEmployee.value) ? firstEmployee.value : null;
+
+        let masterData = null;
+        if (commonValue) {
+            switch (field_name) {
+                case 'attendance_setting_template':
+                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction);
+                    break;
+                case 'holiday_template':
+                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction);
+                    break;
+                case 'weekly_off_template':
+                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction);
+                    break;
+                case 'leave_template':
+                    masterData = await commonQuery.findOneRecord(LeaveTemplate, commonValue, {
+                        include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
+                    }, transaction);
+                    break;
+                case 'salary_template_id':
+                    masterData = await commonQuery.findOneRecord(SalaryTemplate, commonValue, {
+                        include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
+                    }, transaction);
+                    break;
+                case 'shift_template':
+                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction);
+                    break;
+            }
+        }
+
+        // Pre-fetch all involved employees (needed for leave sync and attendance logic)
+        const employeeIds = employees.map(e => e.id);
+        const preFetchedEmployees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employeeIds } }, {}, transaction);
+        const empMap = new Map(preFetchedEmployees.map(e => [e.id, e]));
+
+        // 4. Group employees by target value for bulk processing
+        const groups = {};
+        employees.forEach(emp => {
+            if (emp.id && emp.value !== undefined) {
+                if (!groups[emp.value]) groups[emp.value] = [];
+                groups[emp.value].push(emp.id);
+            }
+        });
+
         const employeeIdsToRebuild = [];
 
-        for (let i = 0; i < employees.length; i += CHUNK_SIZE) {
-            const chunk = employees.slice(i, i + CHUNK_SIZE);
+        for (const [val, ids] of Object.entries(groups)) {
+            const targetValue = val === 'null' ? null : parseInt(val);
 
-            await Promise.all(chunk.map(async (emp) => {
-                if (emp.id && emp.value !== undefined) {
-                    // Update each employee record
-                    await commonQuery.updateRecordById(Employee, emp.id, { [field_name]: emp.value }, transaction);
-
-                    // Sync the specific template that was assigned
-                    // We pass skipRebuild = true to avoid heavy calculations inside the transaction loop
-                    await EmployeeTemplateService.syncSpecificTemplate(emp.id, field_name, emp.value, null, transaction, true);
-
-                    employeeIdsToRebuild.push(emp.id);
+            // Special handling for leave_template - reject pending requests BEFORE updating
+            if (field_name === 'leave_template') {
+                for (const employeeId of ids) {
+                    const existingEmployee = empMap.get(employeeId);
+                    if (existingEmployee && existingEmployee.leave_template !== targetValue) {
+                        await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(employeeId, req, null, existingEmployee.leave_template);
+                    }
                 }
-            }));
+            }
+
+            // 1. Bulk Update Employee table
+            await commonQuery.updateRecordById(Employee, { id: { [Op.in]: ids } }, { [field_name]: targetValue }, transaction);
+
+            // 2. Bulk Sync Templates (skip rebuild for now)
+            const syncMeta = {
+                preFetchedMaster: (targetValue === commonValue) ? masterData : null,
+                skipRebuild: true
+            };
+
+            if (field_name === 'leave_template') {
+                syncMeta.req = req;
+                syncMeta.employees = empMap;
+            }
+
+            await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, field_name, targetValue, transaction, syncMeta);
+
+            // 3. Collect IDs for background rebuild
+            employeeIdsToRebuild.push(...ids);
+
+            // Special case: If weekly_off_template is updated, we MUST also re-sync shift_templates 
+            // because shift day-wise settings (EmployeeShift) depend on weekly off days.
+            if (field_name === 'weekly_off_template') {
+                const employeesWithShifts = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: ids }, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction);
+                const shiftGroups = {};
+                employeesWithShifts.forEach(e => {
+                    if (e.shift_template) {
+                        if (!shiftGroups[e.shift_template]) shiftGroups[e.shift_template] = [];
+                        shiftGroups[e.shift_template].push(e.id);
+                    }
+                });
+
+                for (const [sId, sIds] of Object.entries(shiftGroups)) {
+                    await EmployeeTemplateService.bulkSyncSpecificTemplate(sIds, 'shift_template', parseInt(sId), transaction, { skipRebuild: true });
+                }
+            }
         }
 
         await transaction.commit();
@@ -785,15 +931,8 @@ exports.assignTemplate = async (req, res) => {
             (async () => {
                 try {
                     console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
-                    // We process rebuilds sequentially or with limited concurrency to avoid overwhelming the DB
-                    // Since this is background, we don't use the main transaction.
-                    for (const empId of employeeIdsToRebuild) {
-                        try {
-                            await EmployeeTemplateService.rebuildCurrentMonthAttendance(empId, null);
-                        } catch (rebuildErr) {
-                            console.error(`[Background] Error rebuilding attendance for employee ${empId}:`, rebuildErr);
-                        }
-                    }
+                    // We process rebuilds in bulk using the optimized method
+                    await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIdsToRebuild, null);
                     console.log(`[Background] Completed attendance rebuild.`);
                 } catch (err) {
                     console.error("[Background] Global error in attendance rebuild task:", err);
@@ -1212,7 +1351,7 @@ exports.facePunch = async (req, res) => {
 
 exports.getWages = async (req, res) => {
     try {
-        const { employee_id: employeeId } = req.body;
+        const { employee_id: employeeId, attendance_date: attendanceDate } = req.body;
 
         if (!employeeId) {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
@@ -1226,7 +1365,7 @@ exports.getWages = async (req, res) => {
             AttendanceDay,
             {
                 employee_id: employeeId,
-                attendance_date: currentDate
+                attendance_date: attendanceDate
             },
             {
                 attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
@@ -1261,8 +1400,14 @@ exports.getWages = async (req, res) => {
             }
         );
 
+        // Only calculate wages if employeeSalaryTemplate exists
         if (!employeeSalaryTemplate) {
-            return res.error(constants.NOT_FOUND, { message: "Salary template not found for this employee" });
+            const responseData = {
+                last_out: attendanceDay.last_out || null,
+                overtime_data: attendanceDay?.overtime_data || null,
+                fine_data: attendanceDay?.fine_data || null,
+            };
+            return res.success(constants.SUCCESS, responseData);
         }
 
         let dailyWage = null;
@@ -1354,31 +1499,27 @@ exports.inviteUser = async (req, res) => {
 
         if (!user) {
             // This case should theoretically not happen with auto-creation, but handle it for legacy employees
-            const role_id = 5;
-            const rolePermission = await commonQuery.findOneRecord(RolePermission, role_id, {}, transaction);
-
             user = await commonQuery.createRecord(User, {
                 user_name: employee.first_name,
                 email: employee.email,
                 mobile_no: employee.mobile_no,
                 employee_id: employee.id,
-                role_id: role_id,
+                role_id: 5,
                 company_id: employee.company_id,
                 branch_id: employee.branch_id,
                 company_access: employee.company_id,
-                permission: rolePermission ? rolePermission.permissions : null,
                 status: 1,
                 is_activated: false
             }, transaction);
 
-            await commonQuery.createRecord(UserCompanyRoles, {
-                user_id: user.id,
-                role_id: role_id,
-                branch_id: employee.branch_id,
-                company_id: employee.company_id,
-                permissions: user.permission,
-                status: 0
-            }, transaction);
+            // await commonQuery.createRecord(UserCompanyRoles, {
+            //     user_id: user.id,
+            //     role_id: role_id,
+            //     branch_id: employee.branch_id,
+            //     company_id: employee.company_id,
+            //     permissions: user.permission,
+            //     status: 0
+            // }, transaction);
         }
 
         // Generate Activation Code
@@ -1407,5 +1548,344 @@ exports.inviteUser = async (req, res) => {
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
+    }
+};
+
+// Employee Export Field Definitions
+const ALL_POSSIBLE_FIELDS = {
+    // Basic Information
+    employee_code: {
+        key: 'employee_code',
+        header: 'Employee Code',
+        formatter: (value) => value || 'N/A'
+    },
+    first_name: { key: 'first_name', header: 'First Name' },
+    mobile_no: { key: 'mobile_no', header: 'Mobile Number' },
+    email: { key: 'email', header: 'Email' },
+
+    // Employment Details
+    employee_type: {
+        key: 'employee_type',
+        header: 'Employee Type',
+        formatter: (value) => value === 1 ? 'Staff' : value === 2 ? 'Worker' : value
+    },
+    department_id: {
+        key: 'department.name',
+        header: 'Department',
+        include: 'department'
+    },
+    designation_id: { key: 'designation_id', header: 'Designation ID' },
+    joining_date: {
+        key: 'joining_date',
+        header: 'Joining Date',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+    confirmation_date: {
+        key: 'confirmation_date',
+        header: 'Confirmation Date',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+
+    // Personal Information
+    gender: {
+        key: 'gender',
+        header: 'Gender',
+        formatter: (value) => value === 1 ? 'Male' : value === 2 ? 'Female' : value === 3 ? 'Others' : value
+    },
+    dob: {
+        key: 'dob',
+        header: 'Date of Birth',
+        formatter: (value) => value ? new Date(value).toLocaleDateString() : ''
+    },
+    marital_status: {
+        key: 'marital_status',
+        header: 'Marital Status',
+        formatter: (value) => value === 1 ? 'Married' : value === 2 ? 'Unmarried' : value
+    },
+    blood_group: {
+        key: 'blood_group',
+        header: 'Blood Group',
+        formatter: (value) => {
+            const groups = { 1: 'A+', 2: 'A-', 3: 'B+', 4: 'B-', 5: 'O+', 6: 'O-', 7: 'AB+', 8: 'AB-' };
+            return groups[value] || value;
+        }
+    },
+    physically_challenged: {
+        key: 'physically_challenged',
+        header: 'Physically Challenged',
+        formatter: (value) => value ? 'Yes' : 'No'
+    },
+
+    // Contact Information
+    emergency_contact_name: { key: 'emergency_contact_name', header: 'Emergency Contact Name' },
+    emergency_contact_mobile: { key: 'emergency_contact_mobile', header: 'Emergency Contact Mobile' },
+    emergency_contact_relation: {
+        key: 'emergency_contact_relation',
+        header: 'Emergency Contact Relation',
+        formatter: (value) => {
+            const relations = { 1: 'Brother', 2: 'Sister', 3: 'Father', 4: 'Mother', 5: 'Spouse', 6: 'Son', 7: 'Daughter', 8: 'Other' };
+            return relations[value] || value;
+        }
+    },
+
+    // Family Information
+    father_name: { key: 'father_name', header: 'Father Name' },
+    mother_name: { key: 'mother_name', header: 'Mother Name' },
+    spouse_name: { key: 'spouse_name', header: 'Spouse Name' },
+
+    // Address Information
+    present_address1: { key: 'present_address1', header: 'Present Address 1' },
+    present_address2: { key: 'present_address2', header: 'Present Address 2' },
+    present_city: { key: 'present_city', header: 'Present City' },
+    present_pincode: { key: 'present_pincode', header: 'Present Pincode' },
+    permanent_address1: { key: 'permanent_address1', header: 'Permanent Address 1' },
+    permanent_address2: { key: 'permanent_address2', header: 'Permanent Address 2' },
+    permanent_city: { key: 'permanent_city', header: 'Permanent City' },
+    permanent_pincode: { key: 'permanent_pincode', header: 'Permanent Pincode' },
+
+    // Bank Information
+    name_as_per_bank: { key: 'name_as_per_bank', header: 'Name as per Bank' },
+    bank_name: { key: 'bank_name', header: 'Bank Name' },
+    bank_account_number: { key: 'bank_account_number', header: 'Bank Account Number' },
+    bank_ifsc_code: { key: 'bank_ifsc_code', header: 'Bank IFSC Code' },
+    upi_id: { key: 'upi_id', header: 'UPI ID' },
+
+    // Government IDs
+    aadhaar_number: { key: 'aadhaar_number', header: 'Aadhaar Number' },
+    pan_number: { key: 'pan_number', header: 'PAN Number' },
+    uan_number: { key: 'uan_number', header: 'UAN Number' },
+    pf_number: { key: 'pf_number', header: 'PF Number' },
+    esi_number: { key: 'esi_number', header: 'ESI Number' },
+
+    // Status
+    status: {
+        key: 'status',
+        header: 'Status',
+        formatter: (value) => value === 0 ? 'Active' : value === 1 ? 'Inactive' : value === 2 ? 'Deleted' : value
+    },
+
+    // Leave Information (added dynamically when leave: true)
+    leave_category1: {
+        key: 'leave_category1',
+        header: 'Leave Category1',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count1: {
+        key: 'leave_count1',
+        header: 'Leave Count1',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category2: {
+        key: 'leave_category2',
+        header: 'Leave Category2',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count2: {
+        key: 'leave_count2',
+        header: 'Leave Count2',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category3: {
+        key: 'leave_category3',
+        header: 'Leave Category3',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count3: {
+        key: 'leave_count3',
+        header: 'Leave Count3',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category4: {
+        key: 'leave_category4',
+        header: 'Leave Category4',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count4: {
+        key: 'leave_count4',
+        header: 'Leave Count4',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_category5: {
+        key: 'leave_category5',
+        header: 'Leave Category5',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    },
+    leave_count5: {
+        key: 'leave_count5',
+        header: 'Leave Count5',
+        formatter: (value, record) => {
+            // Empty column - no data fetching
+            return '';
+        }
+    }
+};
+
+// Sequelize Include Definitions
+const ALL_SEQUELIZE_INCLUDES = {
+    department: {
+        model: require("../../models").Department,
+        as: 'department',
+        attributes: ['id', 'name'],
+        required: false
+    }
+};
+
+exports.exportData = async (req, res) => {
+    try {
+        const { limit, fields, leave } = req.body;
+
+        // Validate req.user exists
+        if (!req.user || !req.user.company_id) {
+            return res.status(401).json({
+                success: false,
+                error: "UNAUTHORIZED",
+                message: "User authentication required"
+            });
+        }
+
+        const { company_id, id: user_id, branch_id } = req.user;
+
+        const commonData = { company_id, user_id, branch_id };
+
+        // 1. Parse Fields
+        let requestedFields = typeof fields === 'string' ? JSON.parse(fields) : fields;
+        if (!requestedFields || Object.keys(requestedFields).length === 0) {
+            return res.error("VALIDATION_ERROR", { errors: ["The 'fields' parameter is required."] });
+        }
+
+        // 2. Add leave fields if leave: true
+        if (leave === true) {
+            // Add 5 pairs of leave columns to existing fields
+            requestedFields = {
+                ...requestedFields,
+                leave_category1: 'leave_category1',
+                leave_count1: 'leave_count1',
+                leave_category2: 'leave_category2',
+                leave_count2: 'leave_count2',
+                leave_category3: 'leave_category3',
+                leave_count3: 'leave_count3',
+                leave_category4: 'leave_category4',
+                leave_count4: 'leave_count4',
+                leave_category5: 'leave_category5',
+                leave_count5: 'leave_count5'
+            };
+        }
+
+        const dynamicMappers = [];
+        const neededIncludes = new Set();
+        const fieldNamesInOrder = Object.values(requestedFields);
+
+        for (const fieldName of fieldNamesInOrder) {
+            const masterField = ALL_POSSIBLE_FIELDS[fieldName];
+            if (masterField) {
+                dynamicMappers.push(masterField);
+                if (masterField.include) neededIncludes.add(masterField.include);
+            }
+        }
+
+        if (dynamicMappers.length === 0) {
+            return res.error("VALIDATION_ERROR", { errors: ["None of the requested fields are valid for export."] });
+        }
+
+        const sequelizeIncludes = Array.from(neededIncludes).map(key => ALL_SEQUELIZE_INCLUDES[key]).filter(Boolean);
+
+        // 3. Select Attributes
+        const userRequestedMainAttributes = dynamicMappers
+            .filter(m => !m.key.includes('.') && !m.include && !['leave_category1', 'leave_count1', 'leave_category2', 'leave_count2', 'leave_category3', 'leave_count3', 'leave_category4', 'leave_count4', 'leave_category5', 'leave_count5'].includes(m.key)) // Direct fields only, exclude virtual fields
+            .map(m => m.key);
+
+        const requiredForeignKeys = sequelizeIncludes.flatMap(inc => {
+            const association = Employee.associations[inc.as];
+            return association ? [association.foreignKey] : [];
+        });
+        const selectAttributes = [...new Set([...userRequestedMainAttributes, ...requiredForeignKeys, 'id'])];
+
+        const baseQueryOptions = {
+            where: { ...commonData, status: 0 },
+            include: sequelizeIncludes,
+            attributes: selectAttributes,
+        };
+
+        // 4. Handle Export
+        if (limit) {
+            const recordLimit = parseInt(limit, 10);
+            const exportConfig = {
+                model: Employee,
+                mappers: dynamicMappers,
+                queryOptions: {
+                    ...baseQueryOptions,
+                    limit: recordLimit,
+                    order: [['id', 'DESC']],
+                },
+                ...commonData
+            };
+
+            const { jsonData } = await handleExport(exportConfig);
+            return res.success(constants.EMPLOYEE_EXPORTED, {
+                message: `Successfully fetched ${jsonData.length} employees for export.`,
+                count: jsonData.length,
+                data: jsonData,
+            });
+
+        } else {
+            // Full Export Mode (Stream Excel)
+            const exportConfig = {
+                model: Employee,
+                sheetName: 'Employees',
+                mappers: dynamicMappers,
+                queryOptions: baseQueryOptions,
+                ...commonData
+            };
+
+            try {
+                await streamExport(exportConfig, res);
+            } catch (streamErr) {
+                console.error("Stream export failed:", streamErr);
+                // Don't send response if headers already sent
+                if (!res.headersSent) {
+                    if (streamErr.message === "No records found to export.") {
+                        return res.error("NOT_FOUND", { errors: [streamErr.message] });
+                    }
+                    return handleError(streamErr, res, req);
+                }
+            }
+            return; // Exit early for stream export
+        }
+
+    } catch (err) {
+        console.error("Export failed:", err);
+        if (!res.headersSent) {
+            if (err.message === "No records found to export.") {
+                return res.error("NOT_FOUND", { errors: [err.message] });
+            }
+            return handleError(err, res, req);
+        }
     }
 };
