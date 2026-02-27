@@ -213,7 +213,8 @@ exports.getById = async (req, res) => {
         const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {
             include: [
                 { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "leave_template"] },
-                { model: LeaveTemplateCategory, as: "category" }
+                { model: LeaveTemplateCategory, as: "category" },
+                { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
             ]
         });
 
@@ -228,6 +229,9 @@ exports.getById = async (req, res) => {
         } else {
             raw.document_url = null;
         }
+
+        // Add approver name if available
+        raw.approved_by = raw.approvedBy?.user_name || null;
 
         const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template);
         const totalLevels = template ? template.approval_levels : 1;
