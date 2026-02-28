@@ -298,46 +298,40 @@ exports.advanceView = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
         
-        const whereCondition = { employee_id };
+        let whereCondition = { employee_id };
         if (payroll_month) {
             const yearMonth = payroll_month.substring(0, 7);
-            whereCondition[Op.and] = [
-                sequelize.where(
-                    sequelize.fn('TO_CHAR', sequelize.col('payroll_month'), 'YYYY-MM'),
-                    yearMonth
-                )
-            ];
+            whereCondition = {
+                [Op.and]: [
+                    { employee_id },
+                    sequelize.where(
+                        sequelize.fn('TO_CHAR', sequelize.col('payroll_month'), 'YYYY-MM'),
+                        yearMonth
+                    )
+                ]
+            };
         }
-        
-        const advances = await commonQuery.findAllRecords(
+
+        const advance = await commonQuery.fetchPaginatedData(
             EmployeeAdvance,
-            whereCondition,
+            req.body,
+            [],
             {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['id', 'employee_code', 'first_name', 'mobile_no']
-                },
-                {
-                    model: PaymentHistory,
-                    as: 'paymentHistory',
-                    attributes: ['id', 'ref_id', 'amount', 'payment_date', 'payment_mode', 'status']
-                }
-            ]
-        });
+                include: [
+                    { model: Employee, as: 'employee', attributes: [] },
+                    { model: PaymentHistory, as: 'paymentHistory', attributes: [] }
+                ],
+                attributes: ['id', 'employee_id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'status']
+            },
+            true,
+            'createdAt',
+            whereCondition
+        );
+
+        const total = await commonQuery.sumRecords(EmployeeAdvance, 'amount', whereCondition);
         
-        // Calculate total amount
-        const totalAmount = advances.reduce((sum, advance) => {
-            return sum + parseFloat(advance.amount || 0);
-        }, 0);
         
-        const response = {
-            data: advances,
-            total_amount: totalAmount.toFixed(2)
-        };
-        
-       return res.ok(response);
+       return res.ok({ ...advance, total });
     } catch (err) {
         return handleError(err, res, req);
     }
