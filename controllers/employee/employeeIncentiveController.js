@@ -52,14 +52,14 @@ exports.getAll = async (req, res) => {
                         as: "employee",
                         required: false,
                         attributes: [],
-                        where: { status: { [Op.ne]: 2 } },
+                        where: { status: { [Op.in]: [0, 1, 2] } },
                     },
                     {
                         model: IncentiveType,
                         as: "incentiveType",
                         required: false,
                         attributes: [],
-                        where: { status: { [Op.ne]: 2 } },
+                        where: { status: { [Op.in]: [0, 1, 2] } },
                     },
                 ],
                 attributes:[

@@ -321,17 +321,17 @@ exports.advanceView = async (req, res) => {
                     { model: Employee, as: 'employee', attributes: [] },
                     { model: PaymentHistory, as: 'paymentHistory', attributes: [] }
                 ],
-                attributes: ['id', 'employee_id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'status']
+                attributes: ['id', 'employee_id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'notes', 'status']
             },
             true,
             'createdAt',
             whereCondition
         );
 
-        const total = await commonQuery.sumRecords(EmployeeAdvance, 'amount', whereCondition);
+        const total_amount = await commonQuery.sumRecords(EmployeeAdvance, 'amount', whereCondition);
         
         
-       return res.ok({ ...advance, total });
+       return res.ok({ ...advance, total_amount });
     } catch (err) {
         return handleError(err, res, req);
     }
