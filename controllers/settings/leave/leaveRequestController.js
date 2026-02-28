@@ -155,6 +155,30 @@ exports.getAll = async (req, res) => {
             ["employee_id", true, false],
         ];
 
+        // Add date filtering based on payload
+        let whereClause = {};
+        const { filter } = req.body;
+        
+        if (filter) {
+            const today = dayjs().startOf('day');
+            const todayEnd = dayjs().endOf('day');
+            
+            switch (filter) {
+                case 'previous':
+                    // Previous: before today
+                    whereClause.start_date = {
+                        [Op.lt]: today.format('YYYY-MM-DD HH:mm:ss')
+                    };
+                    break;
+                case 'upcoming':
+                    // Upcoming: after today
+                    whereClause.start_date = {
+                        [Op.gt]: todayEnd.format('YYYY-MM-DD HH:mm:ss')
+                    };
+                    break;
+            }
+        }
+
         const data = await commonQuery.fetchPaginatedData(
             LeaveRequest,
             req.body,
@@ -165,11 +189,13 @@ exports.getAll = async (req, res) => {
                         model: Employee,
                         as: "employee",
                         attributes: ["first_name", "employee_code"],
-                        include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }]
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }],
+                        where: { status: { [Op.in]: [0, 1, 2] } }
                     },
                     { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
                     { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
-                ]
+                ],
+                where: whereClause
             }
         );
 
@@ -185,6 +211,7 @@ exports.getAll = async (req, res) => {
                 [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
             };
             const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+            const total = raw.employee?.leaveTemplate?.approval_levels || 1;
             raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level} of ${total})`;
 
             if (raw.document) {

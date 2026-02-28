@@ -60,7 +60,8 @@ exports.getAll = async (req, res) => {
                         model: Employee,
                         as: "employee",
                         required: false,
-                        attributes: ["first_name"],
+                        attributes: [],
+                        where: { status: { [Op.in]: [0, 1, 2] } },
                     }
                 ],
                 attributes: [
@@ -72,7 +73,7 @@ exports.getAll = async (req, res) => {
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
-                   [sequelize.col('employee.first_name'), 'employee_name']
+                   ["employee.first_name", "employee_name"],
                 ]
             },
         );
