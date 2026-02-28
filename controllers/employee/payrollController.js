@@ -9,6 +9,30 @@ const dayjs = require("dayjs");
  */
 
 /**
+ * Internal helper to evaluate formula-based components
+ */
+const evaluateComponentFormula = (formula, valuesMap) => {
+    if (!formula) return 0;
+    try {
+        let evalStr = formula.toUpperCase();
+        // Replace placeholders like {BASIC}, {GROSS} with actual values
+        Object.keys(valuesMap).forEach(key => {
+            const regex = new RegExp(`{${key}}`, 'g');
+            evalStr = evalStr.replace(regex, valuesMap[key] || 0);
+        });
+
+        // Clean up any remaining non-math characters for safety
+        evalStr = evalStr.replace(/[^0-9+\-*/().]/g, '');
+
+        // Simple evaluation - using Function as a safe alternative to eval
+        return new Function(`return ${evalStr}`)() || 0;
+    } catch (e) {
+        console.error("Formula evaluation failed:", formula, e.message);
+        return 0;
+    }
+};
+
+/**
  * Internal helper to calculate salary for an employee
  */
 const performSalaryCalculation = async (employee_id, month, year, transaction = null) => {
@@ -134,15 +158,38 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
     let takeHomeEarnings = 0;
     let totalDeductions = 0;
 
+    // Values map for formula evaluation
+    const valuesMap = {
+        BASIC: 0,
+        GROSS: monthlyGross,
+        CTC: monthlyGross // Assuming CTC is Gross for now, will refine below
+    };
+
+    // First pass to find Basic (many formulas depend on it)
     rawComponents.forEach(trans => {
-        // More robust component extraction
         const comp = trans.component || trans.SalaryComponent || (trans.get && trans.get('component'));
-        const amount = parseFloat(trans.monthly_amount || 0);
+        if (comp && (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic'))) {
+            valuesMap.BASIC = parseFloat(trans.monthly_amount || 0);
+        }
+    });
+
+    rawComponents.forEach(trans => {
+        const comp = trans.component || trans.SalaryComponent || (trans.get && trans.get('component'));
+        if (!comp) return;
+
+        let amount = parseFloat(trans.monthly_amount || 0);
         const isEmployer = trans.is_employer_contribution === true || trans.is_employer_contribution === 'true';
 
-        if (!comp) return; // Skip if no component info found
+        // Recalculate if it's a Formula
+        if (comp.calculation_type === 'FORMULA' && comp.formula) {
+            amount = evaluateComponentFormula(comp.formula, valuesMap);
+        }
 
-        if (isEmployer) {
+        // Add to values map if not already there (for other formulas to use)
+        const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
+        valuesMap[nameKey] = amount;
+
+        if (isEmployer || comp.component_type === 'EMPLOYER_CONTRIBUTION') {
             employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
             return;
         }
@@ -157,7 +204,7 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             return;
         }
 
-        if (comp.component_type === "EARNING") {
+        if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
             const actualAmount = comp.is_lwp_impacted 
                 ? parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2)) 
                 : amount;
@@ -177,6 +224,16 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
                 is_employer: isEmployer
             });
             if (!isEmployer) totalDeductions += amount;
+        } else if (comp.component_type === "BENEFIT") {
+            // Benefits are usually non-cashable but included in CTC
+            earnings.push({
+                name: comp.component_name,
+                base_amount: amount,
+                actual_amount: amount,
+                is_benefit: true
+            });
+            // Don't add to takeHomeEarnings if it's a non-cashable benefit
+            // (Business rule dependent - for now, treat as non-cash)
         }
     });
 
@@ -458,11 +515,12 @@ exports.finalizeMonthlySalary = async (req, res) => {
             company_id: summary.meta.company_id
         };
 
+        let finalizedPayslip;
         const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0 }, {}, transaction);
         if (draft) {
-            await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
+            finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
         } else {
-            await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+            finalizedPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
         }
 
         // Lock Attendance Records
@@ -478,7 +536,11 @@ exports.finalizeMonthlySalary = async (req, res) => {
         });
 
         await transaction.commit();
-        return res.success("PAYROLL_FINALIZED", { message: "Payroll finalized and attendance locked successfully", netPayable: summary.salary.netPayable });
+        return res.success("PAYROLL_FINALIZED", { 
+            message: "Payroll finalized and attendance locked successfully", 
+            id: finalizedPayslip.id,
+            netPayable: summary.salary.netPayable 
+        });
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -914,6 +976,15 @@ exports.getSalaryOverview = async (req, res) => {
                     amount: parseFloat(d.amount || 0).toFixed(2) 
                 }));
 
+                // Include Statutory Employee Deductions in list
+                const statDetails = payslip.statutory_details || {};
+                Object.entries(statDetails).forEach(([name, amount]) => {
+                    const amt = parseFloat(amount || 0);
+                    if (amt > 0) {
+                        dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                    }
+                });
+
                 if (ot > 0 && !earnList.find(e => e.is_ot || e.name === "Overtime")) earnList.push({ name: "Overtime", amount: ot.toFixed(2) });
                 if (fine > 0 && !dedList.find(d => d.is_fine || d.name === "Fines")) dedList.push({ name: "Fines", amount: fine.toFixed(2) });
 
@@ -924,16 +995,20 @@ exports.getSalaryOverview = async (req, res) => {
                 const payableDays = parseFloat(payslip.present_days) + (derivedHalfDays * 0.5) + parseFloat(payslip.leave_days || 0) + parseFloat(payslip.weekly_offs || 0) + parseFloat(payslip.holidays || 0);
 
                 overview.push({
+                    id: payslip.id,
                     month: m.month,
                     year: m.year,
                     month_label: `${monthName}, ${yearShort}`,
-                    due_amount: payslip.net_payable,
+                    due_amount: payslip.net_salary || payslip.net_payable || 0,
                     date_range: `01 ${monthName}'${yearShort} - ${dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
-                    net_receivable: payslip.net_payable,
+                    net_receivable: payslip.net_salary || payslip.net_payable || 0,
                     payable_days: payableDays.toFixed(1),
                     lwp_days: payslip.lwp_days || 0,
                     earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                     deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                    statutory: payslip.statutory_details || {},
+                    employer: payslip.employer_details || {},
+                    breakdown: payslip.break_down || { earnings: [], deductions: [] }, 
                     payments: "0.00", // Will be filled below
                     adjustments: "0.00", // Will be filled below
                     ot_amount: ot.toFixed(2),
@@ -952,6 +1027,14 @@ exports.getSalaryOverview = async (req, res) => {
 
                     let earnList = [];
                     let dedList = summary.breakdown.deductions.map(d => ({ name: d.name, amount: parseFloat(d.amount || 0).toFixed(2) }));
+
+                    // Include Statutory Employee Deductions in dynamic list
+                    Object.entries(summary.breakdown.statutory || {}).forEach(([name, amount]) => {
+                        const amt = parseFloat(amount || 0);
+                        if (amt > 0) {
+                            dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                        }
+                    });
 
                     const ot = parseFloat(summary.salary.overtimeAmount || 0);
                     const fine = parseFloat(summary.salary.totalFine || 0);
@@ -984,6 +1067,9 @@ exports.getSalaryOverview = async (req, res) => {
                         lwp_days: summary.attendance.totalLWP,
                         earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                         deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                        statutory: summary.breakdown.statutory || {}, 
+                        employer: summary.breakdown.employer || {},
+                        breakdown: summary.breakdown, // Keep full breakdown if needed
                         payments: "0.00", 
                         adjustments: "0.00",
                         ot_amount: ot.toFixed(2),

@@ -2,7 +2,7 @@ module.exports = (sequelize, DataTypes) => {
   const CompanySettingsMaster = sequelize.define("CompanySettingsMaster", {
     setting_key: { type: DataTypes.STRING(150), allowNull: false, unique: true },
     setting_label: { type: DataTypes.STRING(255) },
-    setting_group: { type: DataTypes.ENUM('GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL'), defaultValue: 'GENERAL' },
+    setting_group: { type: DataTypes.ENUM('GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL', 'PAYROLL'), defaultValue: 'GENERAL' },
     input_type: { type: DataTypes.ENUM('TEXT', 'NUMBER', 'TEXTAREA', 'SELECT', 'SWITCH'), defaultValue: 'TEXT' },
     options: { type: DataTypes.JSONB, allowNull: true, comment: "Stores options for select/multiselect input types" },
     default_value: { type: DataTypes.TEXT, allowNull: true },

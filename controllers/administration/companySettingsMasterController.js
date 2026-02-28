@@ -1,7 +1,7 @@
 const { CompanySettingsMaster, CompanyConfigration, CompanyMaster } = require("../../models");
 const { validateRequest, commonQuery, handleError, sequelize, constants } = require("../../helpers");
 
-const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL']; // Add your groups
+const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL', 'PAYROLL']; // Add your groups
 
 // -------------------------------------------------------------------------
 //  INTERNAL HELPER FUNCTION (Not Exported)

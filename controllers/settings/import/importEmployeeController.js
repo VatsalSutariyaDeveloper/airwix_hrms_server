@@ -44,6 +44,8 @@ exports.importData = async (req, res) => {
         workerScriptPath = "./attendanceImport.js";
       } else if (req.body.entity_name === "Payroll Import") {
         workerScriptPath = "./payrollImport.js";
+      } else if (req.body.entity_name === "Salary Structure Import") {
+        workerScriptPath = "./salaryStructureImport.js";
       } else {
         if (req.file && req.file.path) fs.unlinkSync(req.file.path);
         return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid Entity Name"] });

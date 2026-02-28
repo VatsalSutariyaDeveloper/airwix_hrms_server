@@ -425,7 +425,7 @@ const runWorker = async () => {
             result: {
                 importErrors: true,
                 message: "Import failed: Some employees in the Excel file do not exist in the system or are duplicated.",
-                errors: validationErrors.slice(0, MAX_SAMPLE),
+                errors: validationErrors,
                 errorCount: validationErrors.length
             }
         });

@@ -309,7 +309,7 @@ const runWorker = async () => {
             result: {
                 importErrors: true,
                 message: "Import failed: Some employees in the Excel file do not exist in the system. Please register them first.",
-                errors: validationErrors.slice(0, MAX_SAMPLE),
+                errors: validationErrors,
                 errorCount: validationErrors.length
             }
         });
