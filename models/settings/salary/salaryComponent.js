@@ -2,13 +2,17 @@ module.exports = (sequelize, DataTypes) => {
   const SalaryComponent = sequelize.define("SalaryComponent", {
     component_name: { type: DataTypes.STRING(150), allowNull: false },
     component_type: {
-      type: DataTypes.ENUM("EARNING", "DEDUCTION"),
+      type: DataTypes.ENUM("EARNING", "DEDUCTION", "EMPLOYER_CONTRIBUTION", "VARIABLE_EARNING", "BENEFIT", "ANNUAL_COMPONENT"),
       allowNull: false
     },
     component_category: {
       type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY"),
       allowNull: true
     },
+    is_part_of_ctc: { type: DataTypes.BOOLEAN, defaultValue: true },
+    is_part_of_gross: { type: DataTypes.BOOLEAN, defaultValue: true },
+    is_part_of_take_home: { type: DataTypes.BOOLEAN, defaultValue: true },
+    is_system_component: { type: DataTypes.BOOLEAN, defaultValue: false },
     calculation_type: {
       type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM"),
       allowNull: true
@@ -21,6 +25,7 @@ module.exports = (sequelize, DataTypes) => {
     fixed_amount: { type: DataTypes.DECIMAL(12,2) },
     min_limit: { type: DataTypes.DECIMAL(12,2) },
     max_limit: { type: DataTypes.DECIMAL(12,2) },
+    formula: { type: DataTypes.TEXT },
     rounding_rule: {
       type: DataTypes.ENUM("ROUND", "CEIL", "FLOOR"),
       defaultValue: "ROUND"
@@ -35,7 +40,8 @@ module.exports = (sequelize, DataTypes) => {
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
   }, {
     tableName: "salary_components",
-    timestamps: true
+    timestamps: true,
+    underscored: true
   });
 
   return SalaryComponent;

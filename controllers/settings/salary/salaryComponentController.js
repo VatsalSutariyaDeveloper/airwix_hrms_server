@@ -4,7 +4,11 @@ const { constants } = require("../../../helpers/constants");
 
 const COMPONENT_TYPE = {
   EARNING: "EARNING",
-  DEDUCTION: "DEDUCTION"
+  DEDUCTION: "DEDUCTION",
+  EMPLOYER_CONTRIBUTION: "EMPLOYER_CONTRIBUTION",
+  VARIABLE_EARNING: "VARIABLE_EARNING",
+  BENEFIT: "BENEFIT",
+  ANNUAL_COMPONENT: "ANNUAL_COMPONENT"
 };
 
 const COMPONENT_CATEGORY = {
@@ -103,6 +107,10 @@ exports.getAll = async (req, res) => {
       ["is_taxable", true, true],
       ["is_statutory", true, true],
       ["is_lwp_impacted", true, true],
+      ["is_part_of_ctc", true, true],
+      ["is_part_of_gross", true, true],
+      ["is_part_of_take_home", true, true],
+      ["is_system_component", true, true],
     ];
 
     const data = await commonQuery.fetchPaginatedData(
@@ -139,7 +147,7 @@ exports.dropdownList = async (req, res) => {
       SalaryComponent,
       { ...POST, status: 0 },
       fieldConfig,
-      { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted"] },
+      { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component"] },
       false
     );
     return res.ok(data);

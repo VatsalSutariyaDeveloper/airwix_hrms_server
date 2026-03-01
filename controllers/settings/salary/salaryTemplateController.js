@@ -174,7 +174,7 @@ exports.getById = async (req, res) => {
             {
               model: SalaryComponent,
               as: "component",
-              attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted"]
+              attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component"]
             }
           ]
         }

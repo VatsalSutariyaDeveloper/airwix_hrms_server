@@ -3,7 +3,7 @@ module.exports = (sequelize, DataTypes) => {
     salary_template_id: { type: DataTypes.INTEGER, allowNull: false },
     component_id: { type: DataTypes.INTEGER, allowNull: true },
     component_category: {
-      type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY"),
+      type: DataTypes.ENUM("FIXED", "VARIABLE", "STATUTORY", "EMPLOYER_CONTRIBUTION", "VARIABLE_EARNING", "BENEFIT", "ANNUAL_COMPONENT"),
       allowNull: true
     },
     monthly_amount: { type: DataTypes.DECIMAL(12, 2) },

@@ -33,6 +33,7 @@ router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
 // Employee Salary Template Routes
 router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
 router.put("/salary-template/:employeeId", employeeSalaryTemplateController.updateTemplate);
+router.get("/salary-revision/:employeeId", employeeSalaryTemplateController.getRevisionHistory);
 
 // Employee Leave Balance Routes
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);

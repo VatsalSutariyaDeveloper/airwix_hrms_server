@@ -303,10 +303,9 @@ exports.update = async (req, res) => {
             const hasManualData = POST[`manual_${field}_data`] !== undefined;
             const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
 
-            // Special handling for leave_template - reject pending requests BEFORE updating
+             // Special handling for leave_template - reject pending requests BEFORE updating
             if (field === 'leave_template' && fieldValueChanged) {
-                console.log(`🔄 [EMP_UPDATE] Rejecting pending requests before template change for employee ${id}`);
-                await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(id, req, null, existingEmployee.leave_template);
+                await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(id, req, transaction, existingEmployee[field]);
             }
 
             // For leave template, we also sync if joining date changed
@@ -876,9 +875,10 @@ exports.assignTemplate = async (req, res) => {
             // Special handling for leave_template - reject pending requests BEFORE updating
             if (field_name === 'leave_template') {
                 for (const employeeId of ids) {
-                    const existingEmployee = empMap.get(employeeId);
-                    if (existingEmployee && existingEmployee.leave_template !== targetValue) {
-                        await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(employeeId, req, null, existingEmployee.leave_template);
+                    const empId = Number(employeeId);
+                    const existingEmployee = empMap.get(empId);
+                    if (existingEmployee && String(existingEmployee.leave_template) !== String(targetValue)) {
+                        await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(empId, req, transaction, existingEmployee.leave_template);
                     }
                 }
             }

@@ -363,7 +363,7 @@ const runWorker = async () => {
             if (duplicates.length > 0) {
                 errorCount++;
                 const errorMessage = `Duplicate values found in Excel: ${duplicates.join(', ')}`;
-                if (errorCount <= MAX_SAMPLE) errorSample.push(`Row ${rowIndex}: ${errorMessage}`);
+                errorSample.push(`Row ${rowIndex}: ${errorMessage}`);
                 writeError(errorFileStream, originalRecord, errorMessage);
             }
         }
@@ -645,7 +645,7 @@ const runWorker = async () => {
 
             } catch (rowError) {
                 errorCount++;
-                if (errorCount <= MAX_SAMPLE) errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
+                errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
                 writeError(errorFileStream, originalRecord, rowError.message);
             }
         }

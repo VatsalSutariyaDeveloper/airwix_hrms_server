@@ -86,6 +86,7 @@ const SalaryComponent = require("./settings/salary/salaryComponent")(sequelize, 
 // Employee Salary Template models
 const EmployeeSalaryTemplate = require("./employeeData/EmployeeSalaryTemplate")(sequelize, DataTypes);
 const EmployeeSalaryTemplateTransaction = require("./employeeData/EmployeeSalaryTemplateTransaction")(sequelize, DataTypes);
+const SalaryRevisionHistory = require("./employeeData/SalaryRevisionHistory")(sequelize, DataTypes);
 
 //Department models
 const Department = require("./settings/department")(sequelize, DataTypes);
@@ -218,6 +219,7 @@ const db = {
 
   // Canteen Attendance
   CanteenAttendance,
+  SalaryRevisionHistory
 };
 
 Object.keys(db).forEach(modelName => {
