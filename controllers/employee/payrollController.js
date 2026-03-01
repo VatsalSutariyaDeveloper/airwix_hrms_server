@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -111,6 +111,17 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
         totalOTMins += parseInt(day.overtime_minutes || 0);
     });
 
+    // Step A.1: Calculate Canteen/Lunch Counts
+    const lunchRecords = await CanteenAttendance.count({
+        where: {
+            employee_id,
+            date: { [Op.between]: [startDate, endDate] },
+            status: 0 // PRESENT status for meal
+        },
+        transaction
+    });
+    const lunchCount = lunchRecords || 0;
+
     // Logic for LWP
     const totalLWP = absentDays + (halfDays * 0.5);
 
@@ -218,12 +229,24 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
 
             if (!isEmployer) takeHomeEarnings += actualAmount;
         } else if (comp.component_type === "DEDUCTION") {
+            let finalDeductionAmount = amount;
+            
+            // Logic for Food/Canteen Deduction based on attendance
+            if (comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen')) {
+                // If a Food component exists, we assume the 'monthly_amount' is the PER MEAL rate
+                // and we calculate deduction as lunchCount * rate.
+                finalDeductionAmount = lunchCount * amount;
+            }
+
             deductions.push({
                 name: comp.component_name,
-                amount: amount,
-                is_employer: isEmployer
+                amount: finalDeductionAmount,
+                is_employer: isEmployer,
+                is_food: comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen'),
+                meal_count: lunchCount,
+                rate: amount
             });
-            if (!isEmployer) totalDeductions += amount;
+            if (!isEmployer) totalDeductions += finalDeductionAmount;
         } else if (comp.component_type === "BENEFIT") {
             // Benefits are usually non-cashable but included in CTC
             earnings.push({
@@ -304,6 +327,7 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             weeklyOffs,
             holidays,
             totalLWP,
+            lunchCount,
             payableDays: (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2)
         },
         salary: {
@@ -489,6 +513,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
             leave_details: { "Leave": summary.attendance.leaveDays },
+            lunch_count: summary.attendance.lunchCount || 0,
             
             // Dynamic JSON Components
             earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => {
@@ -1004,6 +1029,7 @@ exports.getSalaryOverview = async (req, res) => {
                     net_receivable: payslip.net_salary || payslip.net_payable || 0,
                     payable_days: payableDays.toFixed(1),
                     lwp_days: payslip.lwp_days || 0,
+                    lunch_count: payslip.lunch_count || 0,
                     earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                     deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                     statutory: payslip.statutory_details || {},
@@ -1065,6 +1091,7 @@ exports.getSalaryOverview = async (req, res) => {
                         net_receivable: netPayable.toFixed(2),
                         payable_days: payableDays.toFixed(1),
                         lwp_days: summary.attendance.totalLWP,
+                        lunch_count: summary.attendance.lunchCount || 0,
                         earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                         deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
