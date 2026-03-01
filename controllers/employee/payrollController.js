@@ -1,6 +1,6 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
-const { Op } = require("sequelize");
+const { Op, QueryTypes } = require("sequelize");
 const dayjs = require("dayjs");
 
 /**
@@ -39,7 +39,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
 
-    // 1. Fetch Employee with Salary Mapping & Overrides
+    // 1. Fetch Employee with Salary Mapping & Overrides using ORM for automatic nesting
     const employee = await commonQuery.findOneRecord(Employee, employee_id, {
         include: [
             {
@@ -68,27 +68,27 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         ]
     }, transaction);
     
-    if (!employee || (!employee.salaryTemplate && !employee.employeeSalaryTemplate)) {
+    if (!employee) {
+        return fail("Employee not found.");
+    }
+
+    const employeeSalaryTemplate = employee.employeeSalaryTemplate;
+    const baseSalaryTemplate = employee.salaryTemplate;
+
+    if (!employeeSalaryTemplate && !baseSalaryTemplate) {
         return fail("Employee or Salary Template not found. Please map the employee first.");
     }
 
     // Determine which template to use (Override vs Base)
-    const template = employee.employeeSalaryTemplate || employee.salaryTemplate;
+    const template = employeeSalaryTemplate || baseSalaryTemplate;
     
     // Normalize components list regardless of which template was used
-    const rawComponents = employee.employeeSalaryTemplate
-        ? (employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions || [])
-        : (employee.salaryTemplate.SalaryTemplateTransactions || employee.salaryTemplate.salaryTemplateTransactions || []);
-console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions",employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions)
+    const rawComponents = employeeSalaryTemplate
+        ? (employeeSalaryTemplate.employeeSalaryTemplateTransactions || [])
+        : (baseSalaryTemplate.salaryTemplateTransactions || []);
+
     // Step A: Aggregate Counts
-    let presentDays = 0;
-    let halfDays = 0;
-    let absentDays = 0;
-    let leaveDays = 0; 
-    let weeklyOffs = 0;
-    let holidays = 0;
-    let totalFine = 0;
-    let totalOTMins = 0;
+    let presentDays = 0, halfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0;
 
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
         employee_id,
@@ -98,10 +98,8 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
 
     attendanceRecords.forEach(day => {
         switch (parseInt(day.status)) {
-            case 0: presentDays++; break;
-            case 12: presentDays++; break; // OD is treated as Present
-            case 1: halfDays++; break;
-            case 13: halfDays++; break; // HALF_OD is treated as Half Day
+            case 0: case 12: presentDays++; break;
+            case 1: case 13: halfDays++; break;
             case 3: weeklyOffs++; break;
             case 4: holidays++; break;
             case 5: absentDays++; break;
@@ -136,7 +134,7 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
         daysInCalculation = daysInMonth - weeklyOffs;
     }
 
-    const perDaySalary = monthlyGross / daysInCalculation;
+    const perDaySalary = monthlyGross / (daysInCalculation || 1);
     const lwpDeductionTotal = totalLWP * perDaySalary;
     const perHourSalary = perDaySalary / 8;
     const otAmount = (totalOTMins / 60) * perHourSalary * 1.5;
@@ -162,45 +160,50 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
 
     // Step F: Prepare Detailed Breakdown
-    const earnings = [];
-    const deductions = [];
-    const statutory = {};
-    const employer = {};
-    let takeHomeEarnings = 0;
-    let totalDeductions = 0;
+    const earnings = [], deductions = [], statutory = {}, employer = {};
+    let takeHomeEarnings = 0, totalDeductions = 0;
 
     // Values map for formula evaluation
     const valuesMap = {
         BASIC: 0,
         GROSS: monthlyGross,
-        CTC: monthlyGross // Assuming CTC is Gross for now, will refine below
+        CTC: monthlyGross,
+        CANTEEN_ATTENDANCE: lunchCount,
+        DAYS_IN_MONTH: daysInMonth,
+        PRESENT_DAYS: presentDays,
+        ABSENT_DAYS: absentDays,
+        PAYABLE_DAYS: daysInMonth - totalLWP
     };
 
+    // Pre-process components to resolve association issues
+    const processedComponents = rawComponents.map(trans => {
+        const isModel = typeof trans.get === 'function';
+        const plain = isModel ? trans.get({ plain: true }) : trans;
+        const comp = plain.component || plain.SalaryComponent || (isModel ? trans.get('component') : null);
+        return { plain, comp };
+    });
+
     // First pass to find Basic (many formulas depend on it)
-    rawComponents.forEach(trans => {
-        const comp = trans.component || trans.SalaryComponent || (trans.get && trans.get('component'));
+    processedComponents.forEach(({ plain, comp }) => {
         if (comp && (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic'))) {
-            valuesMap.BASIC = parseFloat(trans.monthly_amount || 0);
+            valuesMap.BASIC = parseFloat(plain.monthly_amount || 0);
         }
     });
 
-    rawComponents.forEach(trans => {
-        const comp = trans.component || trans.SalaryComponent || (trans.get && trans.get('component'));
+    processedComponents.forEach(({ plain, comp }) => {
         if (!comp) return;
 
-        let amount = parseFloat(trans.monthly_amount || 0);
-        const isEmployer = trans.is_employer_contribution === true || trans.is_employer_contribution === 'true';
-
-        // Recalculate if it's a Formula
+        let amount = parseFloat(plain.monthly_amount || 0);
         if (comp.calculation_type === 'FORMULA' && comp.formula) {
             amount = evaluateComponentFormula(comp.formula, valuesMap);
         }
 
-        // Add to values map if not already there (for other formulas to use)
         const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
         valuesMap[nameKey] = amount;
 
-        if (isEmployer || comp.component_type === 'EMPLOYER_CONTRIBUTION') {
+        const isEmployer = plain.is_employer_contribution === true || plain.is_employer_contribution === 'true' || comp.component_type === 'EMPLOYER_CONTRIBUTION';
+
+        if (isEmployer) {
             employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
             return;
         }
@@ -223,84 +226,53 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
-                actual_amount: actualAmount,
-                is_employer: isEmployer
+                actual_amount: actualAmount
             });
 
-            if (!isEmployer) takeHomeEarnings += actualAmount;
+            takeHomeEarnings += actualAmount;
         } else if (comp.component_type === "DEDUCTION") {
-            let finalDeductionAmount = amount;
-            
-            // Logic for Food/Canteen Deduction based on attendance
-            if (comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen')) {
-                // If a Food component exists, we assume the 'monthly_amount' is the PER MEAL rate
-                // and we calculate deduction as lunchCount * rate.
-                finalDeductionAmount = lunchCount * amount;
-            }
-
+            const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
             deductions.push({
                 name: comp.component_name,
-                amount: finalDeductionAmount,
-                is_employer: isEmployer,
-                is_food: comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen'),
+                amount: amount,
+                is_food: isFoodComp,
                 meal_count: lunchCount,
                 rate: amount
             });
-            if (!isEmployer) totalDeductions += finalDeductionAmount;
+            totalDeductions += amount;
         } else if (comp.component_type === "BENEFIT") {
-            // Benefits are usually non-cashable but included in CTC
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
                 actual_amount: amount,
                 is_benefit: true
             });
-            // Don't add to takeHomeEarnings if it's a non-cashable benefit
-            // (Business rule dependent - for now, treat as non-cash)
         }
     });
 
-    // Add OT and Incentives to earnings
+    // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({
-            name: "Overtime",
-            base_amount: 0,
-            actual_amount: parseFloat(otAmount.toFixed(2)),
-            is_ot: true
-        });
+        earnings.push({ name: "Overtime", base_amount: 0, actual_amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
     incentives.forEach(inc => {
-        earnings.push({
-            name: inc.incentiveType?.name || "Incentive",
-            base_amount: parseFloat(inc.amount),
-            actual_amount: parseFloat(inc.amount),
-            is_adjustment: true
-        });
-        takeHomeEarnings += parseFloat(inc.amount);
+        const amt = parseFloat(inc.amount || 0);
+        earnings.push({ name: inc.incentiveType?.name || "Incentive", base_amount: amt, actual_amount: amt, is_adjustment: true });
+        takeHomeEarnings += amt;
     });
 
-    // Add Fines and Advances to deductions
     if (totalFine > 0) {
-        deductions.push({
-            name: "Fines",
-            amount: parseFloat(totalFine.toFixed(2)),
-            is_fine: true
-        });
+        deductions.push({ name: "Fines", amount: parseFloat(totalFine.toFixed(2)), is_fine: true });
         totalDeductions += totalFine;
     }
 
     advances.forEach(adv => {
-        deductions.push({
-            name: "Advance Repayment",
-            amount: parseFloat(adv.amount),
-            is_advance: true
-        });
-        totalDeductions += parseFloat(adv.amount);
+        const amt = parseFloat(adv.amount || 0);
+        deductions.push({ name: "Advance Repayment", amount: amt, is_advance: true });
+        totalDeductions += amt;
     });
 
-    // FINAL PAYABLE
     const netPayable = takeHomeEarnings - totalDeductions;
 
     return {
@@ -312,24 +284,8 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             designation: employee.designation?.designation_name,
             joining_date: employee.joining_date
         },
-        period: {
-            month,
-            year,
-            daysInMonth,
-            daysInCalculation,
-            monthName: dayjs(startDate).format('MMMM')
-        },
-        attendance: {
-            presentDays,
-            halfDays,
-            absentDays,
-            leaveDays,
-            weeklyOffs,
-            holidays,
-            totalLWP,
-            lunchCount,
-            payableDays: (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2)
-        },
+        period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, payableDays: (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2) },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -343,10 +299,7 @@ console.log("employee.employeeSalaryTemplate.employeeSalaryTemplateTransactions"
             totalDeductions: totalDeductions.toFixed(2)
         },
         breakdown: { earnings, deductions, statutory, employer },
-        meta: {
-            branch_id: employee.branch_id,
-            company_id: employee.company_id
-        }
+        meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
 
@@ -985,7 +938,6 @@ exports.getSalaryOverview = async (req, res) => {
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
             });
-
             if (payslip) {
                 const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
@@ -998,7 +950,10 @@ exports.getSalaryOverview = async (req, res) => {
                 }));
                 const dedList = (breakdown.deductions || []).map(d => ({ 
                     name: d.name, 
-                    amount: parseFloat(d.amount || 0).toFixed(2) 
+                    amount: parseFloat(d.amount || 0).toFixed(2),
+                    is_food: d.is_food,
+                    meal_count: d.meal_count,
+                    rate: d.rate
                 }));
 
                 // Include Statutory Employee Deductions in list
@@ -1047,12 +1002,17 @@ exports.getSalaryOverview = async (req, res) => {
                 // Perform dynamic calculation
                 try {
                     const summary = await performSalaryCalculation(employee_id, m.month, m.year);
-                    console.log("summary",summary)
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     const daysInCalculation = summary.period.daysInCalculation || summary.period.daysInMonth;
 
                     let earnList = [];
-                    let dedList = summary.breakdown.deductions.map(d => ({ name: d.name, amount: parseFloat(d.amount || 0).toFixed(2) }));
+                    let dedList = summary.breakdown.deductions.map(d => ({ 
+                        name: d.name, 
+                        amount: parseFloat(d.amount || 0).toFixed(2),
+                        is_food: d.is_food,
+                        meal_count: d.meal_count,
+                        rate: d.rate
+                    }));
 
                     // Include Statutory Employee Deductions in dynamic list
                     Object.entries(summary.breakdown.statutory || {}).forEach(([name, amount]) => {
