@@ -15,6 +15,7 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM", "CANTEEN_BASED"),
             allowNull: true
         },
+        formula: { type: DataTypes.TEXT },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
