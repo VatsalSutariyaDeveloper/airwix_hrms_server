@@ -35,8 +35,6 @@ exports.create = async (req, res) => {
         let { employee_id, leave_category_id, start_date, end_date } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
-        const LeaveBalanceService = require("../../../services/leaveBalanceService");
-
         // --- Calculate total_days based on Sandwich Policy via Service ---
         const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
 
@@ -610,10 +608,58 @@ exports.calculateLeaveDays = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
         }
 
-        const LeaveBalanceService = require("../../../services/leaveBalanceService");
-        const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date);
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        });
 
-        return res.success("Working days calculated", { total_days: workingDays });
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const template = employee.leaveTemplate;
+        const countSandwich = template ? template.count_sandwich_leaves : false;
+
+        const start = dayjs(start_date);
+        const end = dayjs(end_date);
+        const calendarDays = end.diff(start, 'day') + 1;
+
+        let workingDays = 0;
+        const dateWiseBreakdown = [];
+
+        for (let i = 0; i < calendarDays; i++) {
+            const cur = start.add(i, 'day').format('YYYY-MM-DD');
+            const dayOff = await getDayOffInfo(employee, cur);
+
+            let dayStatus = "Working Day";
+            let isWorking = true;
+
+            if (dayOff.isHoliday) {
+                dayStatus = dayOff.holidayDetails?.name || "Holiday";
+                isWorking = false;
+            } else if (dayOff.isWeeklyOff) {
+                dayStatus = "Week Off";
+                isWorking = false;
+            }
+
+            dateWiseBreakdown.push({
+                date: cur,
+                name: dayStatus,
+                is_working: isWorking
+            });
+
+            if (countSandwich) {
+                workingDays += 1;
+            } else {
+                if (isWorking) {
+                    workingDays += 1;
+                }
+            }
+        }
+
+        return res.success("Working days calculated", { 
+            total_days: workingDays,
+            breakdown: dateWiseBreakdown
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
