@@ -118,14 +118,27 @@ async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) 
     // --- STANDARD STRICT BEHAVIOR ---
     if (ctx.company_id) where.company_id = ctx.company_id;
 
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) {
-      where.branch_id = ctx.branch_id;
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true)) {
+      if (ctx.branch_id) {
+        where.branch_id = ctx.branch_id;
+      } else if (ctx.branch_id === 0) {
+        // "All Branches" mode
+        if (ctx.role_id != 1) {
+          const access = ctx.branch_access;
+          let branchAccessList = [];
+          if (Array.isArray(access)) branchAccessList = access.map(String);
+          else if (typeof access === "string") branchAccessList = access.split(",").map((id) => id.trim()).filter(Boolean);
+          
+          if (branchAccessList.length > 0) {
+            where.branch_id = { [Op.in]: branchAccessList };
+          }
+        }
+      }
     } 
 
     if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) {
-      where.user_id = ctx.user_id;
+       where.user_id = ctx.user_id;
     }
-
   } else {
     // --- LOOSE BEHAVIOR (-1 OR ContextID) ---
     
@@ -135,8 +148,19 @@ async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) 
     }
 
     // 2. Branch Logic (ONLY if enabled in settings)
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) {
-       where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true)) {
+        if (ctx.branch_id) {
+           where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+        } else if (ctx.branch_id === 0 && ctx.role_id != 1) {
+            const access = ctx.branch_access;
+            let branchAccessList = [];
+            if (Array.isArray(access)) branchAccessList = access.map(String);
+            else if (typeof access === "string") branchAccessList = access.split(",").map((id) => id.trim()).filter(Boolean);
+            
+            if (branchAccessList.length > 0) {
+                where.branch_id = { [Op.or]: [-1, { [Op.in]: branchAccessList }] };
+            }
+        }
     }
 
     // 3. User Logic (ONLY if enabled in settings)
@@ -625,6 +649,31 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         null,
         requireTenantFields
       );
+
+      // 👇 AUTO-INJECT BRANCH NAME (if branch_id=0 and model has branch_id field)
+      const context = getContext();
+      if (context.branch_id === 0 && Array.isArray(data) && data.length > 0 && model.rawAttributes.branch_id) {
+          try {
+              const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined))];
+              if (branchIds.length > 0) {
+                  const branches = await sequelize.models.BranchMaster.findAll({
+                      where: { id: { [Op.in]: branchIds } },
+                      attributes: ['id', 'branch_name'],
+                      raw: true
+                  });
+                  const branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
+                  data = data.map(item => {
+                      const itemJson = item.get ? item.get({ plain: true }) : item;
+                      return {
+                          ...itemJson,
+                          branch_name: branchMap[itemJson.branch_id] || "N/A"
+                      };
+                  });
+              }
+          } catch (err) {
+              console.error("Auto branch_name enrichment failed:", err.message);
+          }
+      }
 
       // Sticky Includes (Logic preserved)
       if (reqBody?.include && typeof reqBody?.include === "object") {

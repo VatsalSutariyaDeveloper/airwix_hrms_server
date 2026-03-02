@@ -12,6 +12,7 @@ function getContext() {
     company_id: store.companyId,
     organization_id: store.organizationId,
     branch_id: store.branchId,
+    branch_access: store.branchAccess,
     role_id: store.roleId,
     ip: store.ip
   };

@@ -519,6 +519,7 @@ exports.getAll = async (req, res) => {
                     "employee_code",
                     "mobile_no",
                     "joining_date",
+                    "branch_id",
                     "created_at",
                 ]
             },
