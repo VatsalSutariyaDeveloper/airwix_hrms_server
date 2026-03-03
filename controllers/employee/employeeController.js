@@ -34,6 +34,9 @@ const {
     streamExport
 } = require("../../helpers");
 
+// helper for dealing with image uploads inside custom field arrays
+const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../../helpers/customFieldImageHandler");
+
 const {
 
     calculateWorkingAndOffDays
@@ -164,6 +167,29 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
+        // handle custom field images first (they may consume uploaded files)
+        if (Array.isArray(POST.custom_fields)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) {
+                    allFilesArray.push(...req.files);
+                } else {
+                    Object.values(req.files).forEach(v => {
+                        if (Array.isArray(v)) allFilesArray.push(...v);
+                        else allFilesArray.push(v);
+                    });
+                }
+            }
+            POST.custom_fields = await handleCustomFieldImages(
+                req,
+                res,
+                POST.custom_fields,
+                allFilesArray,
+                constants.CUSTOM_FIELD_IMG_FOLDER,
+                transaction
+            );
+        }
+
         // 1. Handle File Uploads
         // We map the uploaded file keys to the database column names
         if (req.files && Object.keys(req.files).length > 0) {
@@ -262,6 +288,30 @@ exports.update = async (req, res) => {
         if (!existingEmployee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
+        }
+
+        // handle custom field images (existingEmployee used for cleanup info)
+        if (Array.isArray(POST.custom_fields)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) {
+                    allFilesArray.push(...req.files);
+                } else {
+                    Object.values(req.files).forEach(v => {
+                        if (Array.isArray(v)) allFilesArray.push(...v);
+                        else allFilesArray.push(v);
+                    });
+                }
+            }
+            POST.custom_fields = await handleCustomFieldImages(
+                req,
+                res,
+                POST.custom_fields,
+                allFilesArray,
+                constants.CUSTOM_FIELD_IMG_FOLDER,
+                transaction,
+                existingEmployee
+            );
         }
 
         // 1. Handle File Uploads & Cleanup
@@ -426,6 +476,22 @@ exports.getById = async (req, res) => {
             } catch (e) {
                 plainRecord.education_details = [];
             }
+        }
+
+        // also ensure custom_fields is parsed and convert any image references to URLs
+        if (typeof plainRecord.custom_fields === 'string') {
+            try {
+                plainRecord.custom_fields = JSON.parse(plainRecord.custom_fields);
+            } catch (e) {
+                plainRecord.custom_fields = [];
+            }
+        }
+
+        if (Array.isArray(plainRecord.custom_fields)) {
+            plainRecord.custom_fields = generateCustomFieldImageUrls(
+                plainRecord.custom_fields,
+                constants.CUSTOM_FIELD_IMG_FOLDER
+            );
         }
 
         return res.ok(plainRecord);

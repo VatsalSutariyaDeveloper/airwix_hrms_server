@@ -23,6 +23,7 @@ const constants = {
   EMPLOYEE_IMG_FOLDER: "employee/images/",
   PUNCH_IMAGE_FOLDER: "punch_images/",
   LEAVE_DOC_FOLDER: "employee/leave_docs/",
+  CUSTOM_FIELD_IMG_FOLDER: "custom_fields/",
 
   /* =======================
    * COMMON / GENERIC

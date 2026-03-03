@@ -1,5 +1,5 @@
 const { CustomField, ModuleMaster, ModuleEntityMaster, User } = require("../../models");
-const { validateRequest, commonQuery, handleError, constants, Op, sequelize, ENTITIES } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, constants, Op, sequelize, ENTITIES, uploadFile } = require("../../helpers");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 
 /**
@@ -146,7 +146,7 @@ exports.dropdownList = async (req, res) => {
 
     const data = await commonQuery.fetchPaginatedData(
       CustomField,
-      { ...req.body, status: 0, entity_id: req.body.entity_id }, // Force Active status
+      { ...req.body, status: 0, limit: 100, entity_id: req.body.entity_id }, // Force Active status
       fieldConfig,
       { 
         include: [
@@ -157,14 +157,17 @@ exports.dropdownList = async (req, res) => {
       },
     );
 
-    if (data && data.records) {
-      data.records = data.records.map(record => {
-        if (record.field_type === 'image' && record.default_value) {
-          record.image_url = `${process.env.FILE_SERVER_URL || ''}${constants.CUSTOM_FIELD_IMG_FOLDER}${record.default_value}`;
+    if (data && data.items) { 
+      data.items = data.items.map(record => { 
+        const item = record.toJSON ? record.toJSON() : record;
+
+        if (item.field_type === 'image' && item.default_value) {
+          item.image_url = `${process.env.FILE_SERVER_URL}${constants.CUSTOM_FIELD_IMG_FOLDER}${item.default_value}`;
         } else {
-          record.image_url = null;
+          item.image_url = null;
         }
-        return record;
+        
+        return item;
       });
     }
 

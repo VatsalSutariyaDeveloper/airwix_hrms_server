@@ -10,7 +10,7 @@ const importEmployeeController = require("../controllers/settings/import/importE
 
 // const { bufferImage } = require("../helpers/fileUpload");
 
-router.post("/", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.create);
+router.post("/", bufferFile(), employeeController.create);
 router.post("/get-transactions", employeeController.getAll);
 router.post("/check-employee-code", employeeController.checkEmployeeCode);
 router.post("/get-punch", employeeController.getPunch);
@@ -21,7 +21,7 @@ router.post("/get-employees-by-template", employeeController.getEmployeesByTempl
 router.post("/assign-role", employeeController.assignRole);
 router.patch("/status", employeeController.updateStatus);
 router.get("/:id", employeeController.getById);
-router.put("/:id", bufferFile(["profile_image", "bank_proof_doc", "pan_doc", "aadhaar_doc", "passport_doc", "permanent_address_proof_doc", "present_address_proof_doc", "driving_license_doc", "voter_id_doc", "uan_doc"]), employeeController.update);
+router.put("/:id", bufferFile(), employeeController.update);
 router.delete("/", employeeController.delete);
 router.post("/invite-user", employeeController.inviteUser);
 router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
