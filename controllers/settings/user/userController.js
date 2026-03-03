@@ -332,11 +332,12 @@ exports.verifySetupToken = async (req, res) => {
 exports.assignRole = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { user_id, role_id } = req.body;
+    const { id, field_name, branch_access } = req.body;
 
     const requiredFields = {
-      user_id: "User ID",
-      role_id: "Role ID",
+      id: "User ID",
+      field_name: "Field Name",
+      branch_access: "Branch Access",
     };
 
     const errors = await validateRequest(req.body, requiredFields, {}, null);
@@ -346,32 +347,17 @@ exports.assignRole = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    // const user = await commonQuery.findOneRecord(User, { id: user_id }, {}, null, false, false);
-    // if (!user) {
-    //   await transaction.rollback();
-    //   return res.error("USER_NOT_FOUND");
-    // }
+    let newRoleId;
+    if (field_name === 'is_reporting_manager') {
+      newRoleId = 4;
+    } else if (field_name === 'is_attendance_supervisor') {
+      newRoleId = 3;
+    }
 
-    // const role = await commonQuery.findOneRecord(RolePermission, { id: role_id }, {}, null, false, false);
-    // if (!role) {
-    //   await transaction.rollback();
-    //   return res.error("ROLE_NOT_FOUND");
-    // }
-
-    // const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, { user_id: user_id }, { role_id, permissions: role.permissions }, transaction, {}, false);
-    // if (!userCompanyRole) {
-    //   const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
-    //     user_id: user_id,
-    //     role_id: role_id,
-    //     permissions: role.permissions,
-    //   }, transaction);
-    //   if (!newUserCompanyRole) {
-    //     await transaction.rollback();
-    //     return res.error("USER_COMPANY_ROLE_NOT_CREATED");
-    //   }
-    // }
-
-    const userData = await commonQuery.updateRecordById(User, { id: user_id }, { role_id: role_id }, transaction);
+    const userData = await commonQuery.updateRecordById(User, id, { 
+      role_id: newRoleId,
+      branch_access: branch_access
+    }, transaction);
     if (!userData) {
       await transaction.rollback();
       return res.error("USER_NOT_UPDATED");
@@ -476,7 +462,7 @@ exports.update = async (req, res) => {
       // Normal user update
       requiredFields = {
         user_name: "User Name",
-        role_id: "Role",
+        // role_id: "Role",
       };
 
       // Conditionally add required fields based on login_type
