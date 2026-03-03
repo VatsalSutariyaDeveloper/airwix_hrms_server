@@ -1,4 +1,6 @@
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 const { archiveAndCleanupLogs } = require('../helpers');
 const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
@@ -52,7 +54,39 @@ const initCronJobs = () => {
         }
     });
 
+    // ⏰ Hourly Payslip PDF Cleanup Task
+    // Runs every hour to delete PDFs older than 24 hours
+    cron.schedule('0 * * * *', async () => {
+        console.log('⏰ Running hourly payslip PDF cleanup task...');
+        try {
+            const payslipDir = path.join(process.cwd(), 'uploads', 'payslips');
+            if (fs.existsSync(payslipDir)) {
+                const files = fs.readdirSync(payslipDir);
+                const now = Date.now();
+                const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+
+                let deleteCount = 0;
+                files.forEach(file => {
+                    const filePath = path.join(payslipDir, file);
+                    const stats = fs.statSync(filePath);
+                    if (stats.isFile() && stats.mtimeMs < twentyFourHoursAgo) {
+                        fs.unlinkSync(filePath);
+                        deleteCount++;
+                    }
+                });
+                if (deleteCount > 0) {
+                    console.log(`✅ Deleted ${deleteCount} expired payslip PDFs.`);
+                } else {
+                    console.log('ℹ️ No expired payslip PDFs found.');
+                }
+            }
+        } catch (error) {
+            console.error('❌ Payslip PDF cleanup failed:', error);
+        }
+    });
+
     console.log('🚀 Internal Cron Jobs Initialized');
+
 };
 
 module.exports = { initCronJobs };

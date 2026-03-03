@@ -1,4 +1,4 @@
-const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee } = require("../../../models");
+const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee, BranchMaster } = require("../../../models");
 const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription, } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 const bcrypt = require("bcrypt");
@@ -227,7 +227,7 @@ exports.create = async (req, res) => {
     req.body.activation_code = crypto.randomBytes(20).toString("hex");
     req.body.is_activated = false;
 
-    const newUser = await commonQuery.createRecord(User, req.body, transaction);
+    const newUser = await commonQuery.createRecord(User, req.body, transaction, { company_id: true });
 
     // await commonQuery.createRecord(UserCompanyRoles, {
     //   user_id: newUser.id,
@@ -332,11 +332,12 @@ exports.verifySetupToken = async (req, res) => {
 exports.assignRole = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { user_id, role_id } = req.body;
+    const { id, field_name, branch_access } = req.body;
 
     const requiredFields = {
-      user_id: "User ID",
-      role_id: "Role ID",
+      id: "User ID",
+      field_name: "Field Name",
+      branch_access: "Branch Access",
     };
 
     const errors = await validateRequest(req.body, requiredFields, {}, null);
@@ -346,32 +347,17 @@ exports.assignRole = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    // const user = await commonQuery.findOneRecord(User, { id: user_id }, {}, null, false, false);
-    // if (!user) {
-    //   await transaction.rollback();
-    //   return res.error("USER_NOT_FOUND");
-    // }
+    let newRoleId;
+    if (field_name === 'is_reporting_manager') {
+      newRoleId = 4;
+    } else if (field_name === 'is_attendance_supervisor') {
+      newRoleId = 3;
+    }
 
-    // const role = await commonQuery.findOneRecord(RolePermission, { id: role_id }, {}, null, false, false);
-    // if (!role) {
-    //   await transaction.rollback();
-    //   return res.error("ROLE_NOT_FOUND");
-    // }
-
-    // const userCompanyRole = await commonQuery.updateRecordById(UserCompanyRoles, { user_id: user_id }, { role_id, permissions: role.permissions }, transaction, {}, false);
-    // if (!userCompanyRole) {
-    //   const newUserCompanyRole = await commonQuery.createRecord(UserCompanyRoles, {
-    //     user_id: user_id,
-    //     role_id: role_id,
-    //     permissions: role.permissions,
-    //   }, transaction);
-    //   if (!newUserCompanyRole) {
-    //     await transaction.rollback();
-    //     return res.error("USER_COMPANY_ROLE_NOT_CREATED");
-    //   }
-    // }
-
-    const userData = await commonQuery.updateRecordById(User, { id: user_id }, { role_id: role_id }, transaction);
+    const userData = await commonQuery.updateRecordById(User, id, { 
+      role_id: newRoleId,
+      branch_access: branch_access
+    }, transaction);
     if (!userData) {
       await transaction.rollback();
       return res.error("USER_NOT_UPDATED");
@@ -476,7 +462,7 @@ exports.update = async (req, res) => {
       // Normal user update
       requiredFields = {
         user_name: "User Name",
-        role_id: "Role",
+        // role_id: "Role",
       };
 
       // Conditionally add required fields based on login_type
@@ -621,7 +607,9 @@ exports.update = async (req, res) => {
       User,
       req.params.id,
       { ...req.body, employee_id: req.body.employee_id || existing.employee_id },
-      transaction
+      transaction,
+      true,
+      { company_id: true }
     );
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
@@ -704,20 +692,32 @@ exports.getAll = async (req, res) => {
 
         extraFilters = {
           [Op.or]: [
-            { role_id: 1, company_id: { [Op.in]: organizationCompanyIds } },
+            { is_super_admin: true, company_id: { [Op.in]: organizationCompanyIds } },
             { role_id: 2, company_id: company_id }
           ]
         };
       }
     }
 
-    delete req.body.filter.role;
+    if (req.body.filter) delete req.body.filter.role;
 
     const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
     const limit = parseInt(pageSize, 10);
     const offset = (parseInt(page, 10) - 1) * limit;
 
     const where = { ...extraFilters };
+
+    // --- Branch Access Logic ---
+    if (!req.user.is_super_admin) {
+      if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
+        if (where.branch_id === undefined) where.branch_id = req.user.branch_id;
+      } else if (req.user.branch_access) {
+        const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        if (branches.length > 0) {
+          where.branch_id = { [Op.in]: branches };
+        }
+      }
+    }
 
     // --- Search Logic ---
     if (search) {
@@ -757,6 +757,12 @@ exports.getAll = async (req, res) => {
           attributes: [],
           required: false,
         },
+        {
+          model: BranchMaster,
+          as: "Branch",
+          attributes: [],
+          required: false,
+        },
       ],
       attributes: [
         "id",
@@ -767,8 +773,10 @@ exports.getAll = async (req, res) => {
         "status",
         "profile_image",
         "authorized_signature",
+        "branch_id",
         "createdAt",
         [sequelize.col("RolePermission.role_name"), "role_name"],
+        [sequelize.col("Branch.branch_name"), "branch_name"],
         [sequelize.col("Employee.first_name"), "first_name"],
         [sequelize.col("Employee.employee_code"), "employee_code"],
       ],

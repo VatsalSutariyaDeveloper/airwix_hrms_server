@@ -84,7 +84,7 @@ class LeaveBalanceService {
         }
 
         let total = (diffMonths * monthlyRate) + joinMonthCredit;
-        return Math.round(total * 2) / 2;
+        return Math.round(total * 10) / 10;
     }
 
     /**
@@ -146,7 +146,7 @@ class LeaveBalanceService {
                 }
 
                 // Apply Rounding to Allocation
-                allocated = Math.round(allocated * 2) / 2;
+                allocated = Math.round(allocated * 10) / 10;
 
                 // Metadata to store from template category
                 const metaFields = {
@@ -169,7 +169,7 @@ class LeaveBalanceService {
                 // Calculate pending leaves (considering existing usage if applicable)
                 const carryForward = existingBalance ? parseFloat(existingBalance.carry_forward_leaves || 0) : 0;
                 const used = existingBalance ? parseFloat(existingBalance.used_leaves || 0) : 0;
-                let pending = Math.round((allocated + carryForward - used) * 2) / 2;
+                let pending = Math.round((allocated + carryForward - used) * 10) / 10;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
                 if ((!category.is_paid && !category.is_compoff) || pending < 0) {
@@ -215,7 +215,7 @@ class LeaveBalanceService {
     static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true, { company_id: true });
             if (!employee) throw new Error("Employee not found");
 
             if (!newTemplateId) {
@@ -347,8 +347,8 @@ class LeaveBalanceService {
                             const newPending = parseFloat(balance.pending_leaves || 0) + monthlyRate;
                             
                             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
-                                total_allocated: Math.round(newTotal * 2) / 2,
-                                pending_leaves: Math.round(newPending * 2) / 2
+                                total_allocated: Math.round(newTotal * 10) / 10,
+                                pending_leaves: Math.round(newPending * 10) / 10
                             }, transaction);
                         }
                     }
@@ -462,7 +462,7 @@ class LeaveBalanceService {
         if (!employeeId || !categoryId || amount === 0) return;
         
         // Round amount to nearest 0.5
-        const roundedAmount = Math.round(amount * 2) / 2;
+        const roundedAmount = Math.round(amount * 10) / 10;
         if (roundedAmount === 0) return;
 
         const t = transaction || (await sequelize.transaction());
@@ -489,8 +489,8 @@ class LeaveBalanceService {
                 return;
             }
 
-            const used = Math.round((parseFloat(balance.used_leaves || 0) + roundedAmount) * 2) / 2;
-            let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 2) / 2;
+            const used = Math.round((parseFloat(balance.used_leaves || 0) + roundedAmount) * 10) / 10;
+            let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 10) / 10;
 
             // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
             if (pending < 0 && (balance.is_paid || balance.is_compoff)) {
@@ -564,7 +564,7 @@ class LeaveBalanceService {
             // --- Manage Auto-Generated Record ---
 
             // Round amount
-            const roundedAmount = Math.round(amount * 2) / 2;
+            const roundedAmount = Math.round(amount * 10) / 10;
 
             // CASE A: Amount is 0 (Status changed away from Leave/HalfDay)
             if (roundedAmount === 0) {

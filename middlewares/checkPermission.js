@@ -78,7 +78,7 @@ module.exports = async function checkPermission(req, res, next) {
       return res.error(constants.FORBIDDEN, [constants.USER_INACTIVE]);
     }
 
-    if (Number(user.role_id) === 1) return next();
+    if (user.is_super_admin || Number(user.role_id) === 1) return next();
 
     const userPermissions = String(user.permission || "")
       .split(",")

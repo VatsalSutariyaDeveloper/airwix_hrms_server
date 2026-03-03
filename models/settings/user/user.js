@@ -19,6 +19,7 @@ module.exports = (sequelize, DataTypes) => {
     reset_password_expires: { type: DataTypes.DATE, allowNull: true },
     status: { type: DataTypes.INTEGER, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
     is_activated: { type: DataTypes.BOOLEAN, defaultValue: false },
+    is_super_admin: { type: DataTypes.BOOLEAN, defaultValue: false },
     activation_code: { type: DataTypes.STRING(255), allowNull: true },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -49,6 +50,10 @@ module.exports = (sequelize, DataTypes) => {
     User.belongsTo(models.Employee, {
       foreignKey: "employee_id",
       as: "Employee",
+    });
+    User.belongsTo(models.BranchMaster, {
+      foreignKey: "branch_id",
+      as: "Branch",
     });
   };
   return User;

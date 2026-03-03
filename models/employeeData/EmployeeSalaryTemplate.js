@@ -17,7 +17,7 @@ module.exports = (sequelize, DataTypes) => {
     currency: { type: DataTypes.STRING(10), defaultValue: "INR" },
     lwp_calculation_basis: {
       type: DataTypes.ENUM("DAYS_IN_MONTH", "FIXED_30_DAYS", "WORKING_DAYS"),
-      defaultValue: "DAYS_IN_MONTH"
+      defaultValue: "WORKING_DAYS"
     },
     statutory_config: {
       type: DataTypes.JSONB,

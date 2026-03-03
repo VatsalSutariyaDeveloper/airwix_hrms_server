@@ -47,11 +47,12 @@ function authMiddleware(req, res, next) {
       organization_id: decoded.organization_id || null, // Decrypt organization_id
       branch_id: decoded.branch_id,
       role_id: decoded.role_id,
+      branch_access: decoded.branch_access || "",
       permissions: decoded.permissions || [],
       access_by: decoded.access_by || "web login",
       is_attendance_supervisor: decoded.is_attendance_supervisor,
       is_reporting_manager: decoded.is_reporting_manager,
-      is_super_admin: decoded.role_id == 1,
+      is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
       is_admin: decoded.role_id == 2
     };
 
@@ -62,10 +63,11 @@ function authMiddleware(req, res, next) {
         companyId: decoded.company_id,
         organizationId: decoded.organization_id || null, // Link organizationId to context
         branchId: decoded.branch_id,
+        branchAccess: decoded.branch_access || "",
         roleId: decoded.role_id,
         is_attendance_supervisor: decoded.is_attendance_supervisor,
         is_reporting_manager: decoded.is_reporting_manager,
-        is_super_admin: decoded.role_id == 1,
+        is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
         is_admin: decoded.role_id == 2,
         ip: req.ip
       },

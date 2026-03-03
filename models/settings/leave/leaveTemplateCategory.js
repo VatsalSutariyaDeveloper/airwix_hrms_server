@@ -9,14 +9,14 @@ const LeaveTemplateCategory = sequelize.define("LeaveTemplateCategory",{
         },
     },
     leave_category_name: { type: DataTypes.STRING(100), allowNull: false },
-    leave_count: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+    leave_count: { type: DataTypes.DECIMAL(10, 1), defaultValue: 0 },
     unused_leave_rule: {
         type: DataTypes.ENUM('LAPSE', 'CARRY_FORWARD', 'ENCASH'),
         allowNull: false,
         defaultValue: 'LAPSE',
         comment: "LAPSE: Lost, CARRY_FORWARD: Transfer to next year, ENCASH: Paid out",
     },
-    carry_forward_limit: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+    carry_forward_limit: { type: DataTypes.DECIMAL(10, 1), defaultValue: 0 },
     is_paid: { 
         type: DataTypes.BOOLEAN, 
         defaultValue: true, 

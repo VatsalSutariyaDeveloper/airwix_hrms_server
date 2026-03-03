@@ -72,6 +72,7 @@ exports.getAll = async (req, res) => {
                     "notes",
                     "adjusted_in_payroll",
                     "status",
+                    "branch_id",
                     ["employee.first_name", "employee_name"],
                     ["incentiveType.name", "incentive_type_name"]
 

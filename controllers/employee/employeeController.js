@@ -34,6 +34,9 @@ const {
     streamExport
 } = require("../../helpers");
 
+// helper for dealing with image uploads inside custom field arrays
+const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../../helpers/customFieldImageHandler");
+
 const {
 
     calculateWorkingAndOffDays
@@ -164,6 +167,29 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
+        // handle custom field images first (they may consume uploaded files)
+        if (Array.isArray(POST.custom_fields)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) {
+                    allFilesArray.push(...req.files);
+                } else {
+                    Object.values(req.files).forEach(v => {
+                        if (Array.isArray(v)) allFilesArray.push(...v);
+                        else allFilesArray.push(v);
+                    });
+                }
+            }
+            POST.custom_fields = await handleCustomFieldImages(
+                req,
+                res,
+                POST.custom_fields,
+                allFilesArray,
+                constants.CUSTOM_FIELD_IMG_FOLDER,
+                transaction
+            );
+        }
+
         // 1. Handle File Uploads
         // We map the uploaded file keys to the database column names
         if (req.files && Object.keys(req.files).length > 0) {
@@ -187,11 +213,11 @@ exports.create = async (req, res) => {
                 settings_value: POST.number,
             };
 
-            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
+            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction, { company_id: true });
         }
 
         // 3. Create Employee Record
-        const employee = await commonQuery.createRecord(Employee, POST, transaction);
+        const employee = await commonQuery.createRecord(Employee, POST, transaction, { company_id: true });
 
         if (!employee) {
             await transaction.rollback();
@@ -211,7 +237,7 @@ exports.create = async (req, res) => {
                 status: 0
             }));
 
-            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction, { company_id: true });
         }
         await transaction.commit();
         return res.success(constants.EMPLOYEE_CREATED);
@@ -264,6 +290,30 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
+        // handle custom field images (existingEmployee used for cleanup info)
+        if (Array.isArray(POST.custom_fields)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) {
+                    allFilesArray.push(...req.files);
+                } else {
+                    Object.values(req.files).forEach(v => {
+                        if (Array.isArray(v)) allFilesArray.push(...v);
+                        else allFilesArray.push(v);
+                    });
+                }
+            }
+            POST.custom_fields = await handleCustomFieldImages(
+                req,
+                res,
+                POST.custom_fields,
+                allFilesArray,
+                constants.CUSTOM_FIELD_IMG_FOLDER,
+                transaction,
+                existingEmployee
+            );
+        }
+
         // 1. Handle File Uploads & Cleanup
         if (req.files && (Array.isArray(req.files) ? req.files.length > 0 : Object.keys(req.files).length > 0)) {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
@@ -283,7 +333,7 @@ exports.update = async (req, res) => {
 
         // 2. Update Employee Record
         // Note: 'education_details' is in POST and will be updated automatically as it's a JSONB column
-        const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
+        const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction, false, false);
 
         // Sync specific templates if they were updated in POST
         const templateFields = [
@@ -428,6 +478,22 @@ exports.getById = async (req, res) => {
             }
         }
 
+        // also ensure custom_fields is parsed and convert any image references to URLs
+        if (typeof plainRecord.custom_fields === 'string') {
+            try {
+                plainRecord.custom_fields = JSON.parse(plainRecord.custom_fields);
+            } catch (e) {
+                plainRecord.custom_fields = [];
+            }
+        }
+
+        if (Array.isArray(plainRecord.custom_fields)) {
+            plainRecord.custom_fields = generateCustomFieldImageUrls(
+                plainRecord.custom_fields,
+                constants.CUSTOM_FIELD_IMG_FOLDER
+            );
+        }
+
         return res.ok(plainRecord);
     } catch (err) {
         return handleError(err, res, req);
@@ -519,6 +585,7 @@ exports.getAll = async (req, res) => {
                     "employee_code",
                     "mobile_no",
                     "joining_date",
+                    "branch_id",
                     "created_at",
                 ]
             },

@@ -15,17 +15,20 @@ const normalizeCompanyAccess = (access) => {
 };
 
 const generateToken = (user, companyId, access_by = "web login") => {
+  const branch_id = (user.branch_access && user.branch_access.split(',')[0]) ? parseInt(user.branch_access.split(',')[0]) : user.branch_id;
   return jwt.sign(
     {
       id: user.id,
       employee_id: user.employee_id,
       role_id: user.role_id,
-      branch_id: user.branch_id,
+      branch_id: branch_id,
       company_id: companyId,
       organization_id: user.organization_id || null,
       access_by: access_by,
+      branch_access: user.branch_access,
       is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager
+      is_reporting_manager: user.is_reporting_manager,
+      is_super_admin: user.is_super_admin || user.role_id == 1
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "1d" }
@@ -111,7 +114,7 @@ exports.login = async (req, res) => {
     const userAttributes = [
         'id', 'user_name', 'email', 'mobile_no', 'password', 
         'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 'company_access', 'is_activated',
+        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
     // --- A. DETERMINE LOGIN METHOD ---
@@ -245,13 +248,13 @@ exports.login = async (req, res) => {
     let companyId = company.company_id || company.id;
 
     const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
-    if (user.role_id != 1 && companyAccessList.length === 0) {
+    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (user.role_id == 1){
+    if (user.is_super_admin || user.role_id == 1){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -282,7 +285,7 @@ exports.login = async (req, res) => {
       }
     }
 
-    if(user.role_id != 1){
+    if(!user.is_super_admin && user.role_id != 1){
       // Use Sequelize findOne for Employee
       const employee = await Employee.findOne({
           where: { id: user.employee_id },
@@ -327,6 +330,7 @@ exports.login = async (req, res) => {
     const userData = {
       id: user.id,
       role_id: user.role_id,
+      is_super_admin: user.is_super_admin || user.role_id == 1,
       user_name: user.user_name,
       email: user.email,
       mobile_no: user.mobile_no,
@@ -376,7 +380,10 @@ exports.logout = async (req, res) => {
     const user = await commonQuery.findOneRecord(
       User,
       { id: req.user.id },
-      transaction
+      {},
+      transaction, 
+      true, 
+      { company_id: true }
     );
 
     if (!user) {

@@ -79,6 +79,7 @@ module.exports = (sequelize, DataTypes) => {
         hps_eligible: { type: DataTypes.BOOLEAN, defaultValue: false },
         driving_license_number: { type: DataTypes.STRING },
         voter_id_number: { type: DataTypes.STRING },
+        employee_grade: { type: DataTypes.STRING },
 
         // BANK INFORMATION
         name_as_per_bank: { type: DataTypes.STRING },

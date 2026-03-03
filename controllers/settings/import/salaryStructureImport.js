@@ -36,6 +36,29 @@ const normalizeText = (v) => {
     return String(v).trim().toLowerCase();
 };
 
+const parseExcelDate = (val, rowIndex, fieldName) => {
+    if (!val) return null;
+    if (val instanceof Date) return val;
+    
+    // Excel numeric date
+    if (!isNaN(val) && typeof val === 'number') {
+        return new Date(Math.round((val - 25569) * 86400 * 1000));
+    }
+
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d;
+    
+    // Try DD-MM-YYYY or DD/MM/YYYY
+    const parts = String(val).split(/[-/]/);
+    if (parts.length === 3) {
+        // Assume DD-MM-YYYY
+        const d2 = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+        if (!isNaN(d2.getTime())) return d2;
+    }
+
+    return null;
+};
+
 const runWorker = async () => {
     try { await sequelize.authenticate(); } catch (error) {
         parentPort.postMessage({ status: "ERROR", error: "Database connection failed." });
@@ -80,6 +103,17 @@ const runWorker = async () => {
         allComponents.forEach(comp => {
             componentMap.set(normalizeText(comp.component_name), comp);
         });
+
+        // Pre-fetch specific component IDs for calculations
+        const basicCompId = allComponents.find(c => normalizeText(c.component_name) === 'basic')?.id;
+        const employeePFCompId = allComponents.find(c => {
+            const n = normalizeText(c.component_name);
+            return n.includes('pf') && (n.includes('deduction') || n.includes('employee'));
+        })?.id;
+        const employerPFCompId = allComponents.find(c => {
+            const n = normalizeText(c.component_name);
+            return n.includes('pf') && (n.includes('employer') || n.includes('contribution'));
+        })?.id;
 
         // 2. Identify which columns are components
         const headerComponentMap = new Map();
@@ -158,7 +192,12 @@ const runWorker = async () => {
             rEsiStat: getStatHeader(["employer", "esi", "status"]),
             rLwfStat: getStatHeader(["employer", "lwf", "status"]),
             grossKey: headers.find(h => normalizeText(h) === "gross" || normalizeText(h) === "monthly gross"),
-            ctcKey: headers.find(h => normalizeText(h) === "ctc" || normalizeText(h) === "monthly ctc")
+            ctcKey: headers.find(h => normalizeText(h) === "ctc" || normalizeText(h) === "monthly ctc"),
+            effectiveDateKey: headers.find(h => normalizeText(h).includes("effective") || normalizeText(h).includes("revision date")),
+            calculationBasisKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis");
+            })
         };
 
         let createdCount = 0;
@@ -174,14 +213,17 @@ const runWorker = async () => {
 
         const normalizeLimit = (val, side) => {
             const s = cleanStr(val || "");
-            if (!s || s === 'yes' || s === 'default') return side === 'employee' ? '12% of Basic' : '12% of Basic';
+            if (s === 'yes') {
+                return side === 'employee' ? '₹1,800 Fixed' : '₹ 1800 Limit';
+            }
+            if (s === 'no') {
+                return '12% of Basic';
+            }
+            // Existing fallback logic
             if (s.includes('1800')) {
                 return side === 'employee' ? '₹1,800 Fixed' : '₹ 1800 Limit';
             }
-            if (s.includes('12') || s.includes('basic') || s.includes('variable')) {
-                return side === 'employee' ? '12% of Basic' : '12% of Basic';
-            }
-            return val;
+            return '12% of Basic';
         };
 
         const templatesToUpdate = [];
@@ -265,31 +307,122 @@ const runWorker = async () => {
                     return match ? { enabled: true, amount: match.monthly_amount } : null;
                 };
 
-                const empPFAmt = findCompValue(["employer pf", "pf contribution", "pf emplyer"]);
-                if (empPFAmt) { statutory_config.employer_pf.enabled = true; statutory_config.employer_pf.amount = empPFAmt.amount; }
+                // --- Basic Amount for PF/ESI calculations ---
+                const basicTrans = rowTransactions.find(t => t.component_id === basicCompId);
+                const basicAmount = basicTrans ? basicTrans.monthly_amount : 0;
+
+                // --- Employee PF Logic ---
+                if (statHeaderKeys.ePfStat) statutory_config.employee_pf.enabled = isYes(row[statHeaderKeys.ePfStat]);
+                else if (rowTransactions.find(t => t.component_id === employeePFCompId)) statutory_config.employee_pf.enabled = true;
+
+                if (statutory_config.employee_pf.enabled) {
+                    let amt = 0;
+                    if (statHeaderKeys.ePfLim) {
+                        const limVal = row[statHeaderKeys.ePfLim];
+                        statutory_config.employee_pf.calculation_type = normalizeLimit(limVal, 'employee');
+                        if (isYes(limVal)) {
+                            amt = 1800;
+                        } else if (normalizeText(limVal) === 'no') {
+                            amt = Math.round(basicAmount * 0.12);
+                        } else {
+                            amt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+                        }
+                    } else {
+                        amt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+                    }
+                    statutory_config.employee_pf.amount = amt;
+                    
+                    const t = rowTransactions.find(t => t.component_id === employeePFCompId);
+                    if (t) {
+                        t.monthly_amount = amt;
+                        t.yearly_amount = amt * 12;
+                    } else if (amt > 0 && employeePFCompId) {
+                        rowTransactions.push({
+                            employee_id: employee.id,
+                            component_id: employeePFCompId,
+                            component_category: 'FIXED',
+                            monthly_amount: amt,
+                            yearly_amount: amt * 12,
+                            included_in_ctc: true,
+                            is_employer_contribution: false,
+                            company_id,
+                            branch_id,
+                            user_id
+                        });
+                    }
+                }
+
+                // --- Employer PF Logic ---
+                if (statHeaderKeys.rPfStat) statutory_config.employer_pf.enabled = isYes(row[statHeaderKeys.rPfStat]);
+                else if (rowTransactions.find(t => t.component_id === employerPFCompId)) statutory_config.employer_pf.enabled = true;
+
+                if (statutory_config.employer_pf.enabled) {
+                    let amt = 0;
+                    if (statHeaderKeys.rPfLim) {
+                        const limVal = row[statHeaderKeys.rPfLim];
+                        statutory_config.employer_pf.calculation_type = normalizeLimit(limVal, 'employer');
+                        if (isYes(limVal)) {
+                            amt = 1800;
+                        } else if (normalizeText(limVal) === 'no') {
+                            amt = Math.round(basicAmount * 0.12);
+                        } else {
+                            amt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+                        }
+                    } else {
+                        amt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+                    }
+                    
+                    const t = rowTransactions.find(t => t.component_id === employerPFCompId);
+                    const oldAmt = t ? t.monthly_amount : 0;
+                    statutory_config.employer_pf.amount = amt;
+
+                    if (t) {
+                        ctcMonthly = ctcMonthly - oldAmt + amt;
+                        t.monthly_amount = amt;
+                        t.yearly_amount = amt * 12;
+                    } else if (amt > 0 && employerPFCompId) {
+                        rowTransactions.push({
+                            employee_id: employee.id,
+                            component_id: employerPFCompId,
+                            component_category: 'EMPLOYER_CONTRIBUTION',
+                            monthly_amount: amt,
+                            yearly_amount: amt * 12,
+                            included_in_ctc: true,
+                            is_employer_contribution: true,
+                            company_id,
+                            branch_id,
+                            user_id
+                        });
+                        ctcMonthly += amt;
+                    }
+                }
+
+                // --- Other Statutory (ESI, PT, LWF) ---
                 const empESIAmt = findCompValue(["employer esi", "esic", "employer share esi"]);
                 if (empESIAmt) { statutory_config.employer_esi.enabled = true; statutory_config.employer_esi.amount = empESIAmt.amount; }
                 const empLWFAmt = findCompValue(["lwf", "labour welfare"]);
                 if (empLWFAmt) { statutory_config.employer_lwf.enabled = true; statutory_config.employer_lwf.amount = empLWFAmt.amount; }
-                const dedPFAmt = findCompValue(["pf deduction", "employee pf", "provident fund"]);
-                if (dedPFAmt) { statutory_config.employee_pf.enabled = true; statutory_config.employee_pf.amount = dedPFAmt.amount; }
                 const dedESIAmt = findCompValue(["esi deduction", "employee esi", "health insurance"]);
                 if (dedESIAmt) { statutory_config.employee_esi.enabled = true; statutory_config.employee_esi.amount = dedESIAmt.amount; }
                 const dedPTAmt = findCompValue(["pt", "professional tax", "prof tax"]);
                 if (dedPTAmt) { statutory_config.pt.enabled = true; statutory_config.pt.amount = dedPTAmt.amount; }
 
-                if (statHeaderKeys.ePfStat) statutory_config.employee_pf.enabled = isYes(row[statHeaderKeys.ePfStat]);
-                if (statHeaderKeys.ePfLim && row[statHeaderKeys.ePfLim]) statutory_config.employee_pf.calculation_type = normalizeLimit(row[statHeaderKeys.ePfLim], 'employee');
                 if (statHeaderKeys.eEsiStat) statutory_config.employee_esi.enabled = isYes(row[statHeaderKeys.eEsiStat]);
                 if (statHeaderKeys.ptStat) statutory_config.pt.enabled = isYes(row[statHeaderKeys.ptStat]);
                 if (statHeaderKeys.eLwfStat) statutory_config.employee_lwf.enabled = isYes(row[statHeaderKeys.eLwfStat]);
-                if (statHeaderKeys.rPfStat) statutory_config.employer_pf.enabled = isYes(row[statHeaderKeys.rPfStat]);
-                if (statHeaderKeys.rPfLim && row[statHeaderKeys.rPfLim]) statutory_config.employer_pf.calculation_type = normalizeLimit(row[statHeaderKeys.rPfLim], 'employer');
                 if (statHeaderKeys.edliStat) statutory_config.pf_edli_admin.enabled = isYes(row[statHeaderKeys.edliStat]);
                 if (statHeaderKeys.rEsiStat) statutory_config.employer_esi.enabled = isYes(row[statHeaderKeys.rEsiStat]);
                 if (statHeaderKeys.rLwfStat) statutory_config.employer_lwf.enabled = isYes(row[statHeaderKeys.rLwfStat]);
 
                 if (statHeaderKeys.grossKey && row[statHeaderKeys.grossKey]) ctcMonthly = parseFloat(row[statHeaderKeys.ctcKey]) || ctcMonthly;
+
+                let calculationBasis = 'WORKING_DAYS';
+                if (statHeaderKeys.calculationBasisKey && row[statHeaderKeys.calculationBasisKey]) {
+                    const val = String(row[statHeaderKeys.calculationBasisKey]).trim().toUpperCase();
+                    if (["DAYS_IN_MONTH", "FIXED_30_DAYS", "WORKING_DAYS"].includes(val)) {
+                        calculationBasis = val;
+                    }
+                }
 
                 const template = templateMap.get(employee.id);
                 const oldCTC = template ? parseFloat(template.ctc_monthly) || 0 : 0;
@@ -299,7 +432,7 @@ const runWorker = async () => {
                     template_name: `Imported Template - ${employee.first_name}`,
                     staff_type: 'Regular', salary_type: 'Monthly',
                     ctc_monthly: ctcMonthly, ctc_yearly: ctcMonthly * 12,
-                    lwp_calculation_basis: 'DAYS_IN_MONTH',
+                    lwp_calculation_basis: calculationBasis,
                     statutory_config, company_id, branch_id, user_id, status: 0
                 };
 
@@ -309,13 +442,20 @@ const runWorker = async () => {
                     templatesToCreate.push(templatePayload);
                 }
 
-                if (oldCTC !== ctcMonthly) {
+                if (template) {
+                    const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
                     revisionsToCreate.push({
-                        employee_id: employee.id, previous_ctc: oldCTC, new_ctc: ctcMonthly,
-                        effective_date: new Date(), increment_amount: ctcMonthly - oldCTC,
+                        employee_id: employee.id, 
+                        previous_ctc: oldCTC, 
+                        new_ctc: ctcMonthly,
+                        effective_date: effectiveDate, 
+                        increment_amount: ctcMonthly - oldCTC,
                         increment_percentage: oldCTC > 0 ? ((ctcMonthly - oldCTC) / oldCTC) * 100 : 0,
-                        remarks: "Imported via Excel", status: 1, approved_by: user_id,
-                        company_id, branch_id
+                        remarks: "Salary Revised via Excel Import", 
+                        status: 1, 
+                        approved_by: user_id,
+                        company_id, 
+                        branch_id
                     });
                 }
 
@@ -402,7 +542,7 @@ const runWorker = async () => {
             }
         }
 
-        if (createdCount === 0 && errorCount > 0) {
+        if (errorCount > 0) {
             await transaction.rollback();
             parentPort.postMessage({
                 status: "SUCCESS",
@@ -410,7 +550,7 @@ const runWorker = async () => {
                     importErrors: true,
                     errors: errorSample,
                     errorCount: errorCount,
-                    message: `${errorCount} errors found. No salary structures were imported.`
+                    message: `${errorCount} errors found. Please fix all errors before importing.`
                 }
             });
             return;
@@ -435,6 +575,8 @@ const startWorker = async () => {
         userId: user_id,
         companyId: company_id,
         branchId: branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
         ip: "127.0.0.1"
     };
 

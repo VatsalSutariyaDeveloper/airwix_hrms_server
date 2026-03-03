@@ -14,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
     is_part_of_take_home: { type: DataTypes.BOOLEAN, defaultValue: true },
     is_system_component: { type: DataTypes.BOOLEAN, defaultValue: false },
     calculation_type: {
-      type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM"),
+      type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM", "CANTEEN_BASED"),
       allowNull: true
     },
     percentage_of: {

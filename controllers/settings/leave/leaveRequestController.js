@@ -35,8 +35,6 @@ exports.create = async (req, res) => {
         let { employee_id, leave_category_id, start_date, end_date } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
-        const LeaveBalanceService = require("../../../services/leaveBalanceService");
-
         // --- Calculate total_days based on Sandwich Policy via Service ---
         const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
 
@@ -48,7 +46,7 @@ exports.create = async (req, res) => {
 
         const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
         let total_days = Math.max(0, workingDays - reduction);
-        total_days = Math.round(total_days * 2) / 2;
+        total_days = Math.round(total_days * 10) / 10;
 
         // Check for Overlapping Leaves
         const overlap = await commonQuery.findOneRecord(LeaveRequest, {
@@ -81,25 +79,26 @@ exports.create = async (req, res) => {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         }, transaction);
 
-        if (!employee || !employee.leaveTemplate) {
+        if (!employee) {
             await transaction.rollback();
-            return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
         const template = employee.leaveTemplate;
-        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(start_date));
+        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs(start_date));
 
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id,
             leave_category_id,
             year: cycleDates.end.year(),
-            month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+            month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 
         if (!balance) {
             await transaction.rollback();
-            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category/cycle" });
+            return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category. Please check employee's leave balance." });
         }
 
         const isPaid = balance.is_paid;
@@ -332,14 +331,14 @@ exports.updateStatus = async (req, res) => {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         }, transaction);
 
-        if (!employee || !employee.leaveTemplate) {
+        if (!employee) {
             await transaction.rollback();
-            return res.error("TEMPLATE_NOT_FOUND", { message: "Employee has no leave template assigned" });
+            return res.error(constants.NOT_FOUND);
         }
 
         const template = employee.leaveTemplate;
         const currentLevel = leaveRequest.current_level;
-        const totalLevels = template.approval_levels || 1;
+        const totalLevels = template?.approval_levels || 1;
 
         if (String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED") {
             const history = leaveRequest.approval_history || [];
@@ -385,13 +384,14 @@ exports.updateStatus = async (req, res) => {
             approval_status === "REJECTED" ||
             approval_status === "CANCELLED"
         ) {
-            const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(leaveRequest.start_date));
+            const cycleType = template?.leave_policy_cycle || 'CALENDAR_YEAR';
+            const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs(leaveRequest.start_date));
 
             const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
                 employee_id: leaveRequest.employee_id,
                 leave_category_id: leaveRequest.leave_category_id,
                 year: cycleDates.end.year(),
-                month: template.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+                month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
                 status: 0
             }, {}, transaction);
 
@@ -457,11 +457,11 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
 
             // The initial query already includes employee.leaveTemplate
-            if (!employee || !employee.leaveTemplate) continue;
+            if (!employee) continue;
 
             const template = employee?.leaveTemplate;
             const currentLevel = request.current_level;
-            const config = template.approval_config || [];
+            const config = template ? (template.approval_config || []) : [];
 
             const currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) continue;
@@ -548,14 +548,15 @@ exports.cancelLeave = async (req, res) => {
         }, transaction);
 
         const template = employee?.leaveTemplate;
+        const cycleType = template?.leave_policy_cycle || 'CALENDAR_YEAR';
         const LeaveBalanceService = require("../../../services/leaveBalanceService");
-        const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, template?.leave_policy_cycle || 'CALENDAR_YEAR', dayjs(leaveRequest.start_date));
+        const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, cycleType, dayjs(leaveRequest.start_date));
 
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id: leaveRequest.employee_id,
             leave_category_id: leaveRequest.leave_category_id,
             year: cycleDates.end.year(),
-            month: template?.leave_policy_cycle === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+            month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
 
@@ -605,15 +606,76 @@ exports.cancelLeave = async (req, res) => {
 // 8. Calculate Leave Days (Frontend Helper)
 exports.calculateLeaveDays = async (req, res) => {
     try {
-        const { employee_id, start_date, end_date } = req.body;
-        if (!employee_id || !start_date || !end_date) {
-            return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
+        let { employee_id, start_date, end_date } = req.body;
+        if(!employee_id){
+            employee_id = req.user.employee_id;
+            req.body.employee_id = employee_id;
         }
 
-        const LeaveBalanceService = require("../../../services/leaveBalanceService");
-        const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date);
+        const requiredFields = {
+            employee_id: "Employee",
+            start_date: "Start Date",
+            end_date: "End Date"
+        };
 
-        return res.success("Working days calculated", { total_days: workingDays });
+        const errors = await validateRequest(req.body, requiredFields, {}, null);
+
+        if (errors) {
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const template = employee.leaveTemplate;
+        const countSandwich = template ? template.count_sandwich_leaves : false;
+
+        const start = dayjs(start_date);
+        const end = dayjs(end_date);
+        const calendarDays = end.diff(start, 'day') + 1;
+
+        let workingDays = 0;
+        const dateWiseBreakdown = [];
+
+        for (let i = 0; i < calendarDays; i++) {
+            const cur = start.add(i, 'day').format('YYYY-MM-DD');
+            const dayOff = await getDayOffInfo(employee, cur);
+
+            let dayStatus = "Working Day";
+            let isWorking = true;
+
+            if (dayOff.isHoliday) {
+                dayStatus = dayOff.holidayDetails?.name || "Holiday";
+                isWorking = false;
+            } else if (dayOff.isWeeklyOff) {
+                dayStatus = "Week Off";
+                isWorking = false;
+            }
+
+            dateWiseBreakdown.push({
+                date: cur,
+                name: dayStatus,
+                is_working: isWorking
+            });
+
+            if (countSandwich) {
+                workingDays += 1;
+            } else {
+                if (isWorking) {
+                    workingDays += 1;
+                }
+            }
+        }
+
+        return res.success("Working days calculated", { 
+            total_days: workingDays,
+            breakdown: dateWiseBreakdown
+        });
     } catch (err) {
         return handleError(err, res, req);
     }

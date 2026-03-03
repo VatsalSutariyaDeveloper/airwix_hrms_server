@@ -623,7 +623,7 @@ exports.updateItemCurrentStock = async (itemId, baseQty, stockFlag, transaction)
     const adminUsers = await commonQuery.findAllRecords(
       User,
       {
-        role_id: 1, 
+        is_super_admin: true, 
         company_id: item.company_id,
         status: 0
       },

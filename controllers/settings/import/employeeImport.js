@@ -289,32 +289,90 @@ const runWorker = async () => {
         const errorSample = [];
         const MAX_SAMPLE = 10;
 
-        const employeeCode = new Set();
-        const mobileNo = new Set();
-        const emails = new Set();
-        const panNumbers = new Set();
-        const uanNumbers = new Set();
-        const aadhaarNumbers = new Set();
-        const drivingLicenses = new Set();
-        const voterIds = new Set();
-        const bankAccountNumbers = new Set();
+        // 1. Collect all unique identifiers to check against DB
+        const employeeCodeSet = new Set();
+        const mobileNoSet = new Set();
+        const emailsSet = new Set();
+        const panNumbersSet = new Set();
+        const uanNumbersSet = new Set();
+        const aadhaarNumbersSet = new Set();
+        const drivingLicensesSet = new Set();
+        const voterIdsSet = new Set();
+        const bankAccountNumbersSet = new Set();
 
-        rows.forEach(r => {
-            if (r.employee_code) employeeCode.add(String(r.employee_code).trim().toLowerCase());
-            if (r.mobile_no) mobileNo.add(String(r.mobile_no).trim());
-            if (r.email) emails.add(String(r.email).trim().toLowerCase());
-            if (r.pan_number) panNumbers.add(String(r.pan_number).trim().toUpperCase());
-            if (r.uan_number) uanNumbers.add(String(r.uan_number).trim());
+        rows.forEach((r,index) => {
+            if (r.employee_code) employeeCodeSet.add(String(r.employee_code).trim());
+            if (r.mobile_no) mobileNoSet.add(String(r.mobile_no).trim());
+            if (r.email) emailsSet.add(String(r.email).trim().toLowerCase());
+            if (r.pan_number) panNumbersSet.add(String(r.pan_number).trim().toUpperCase());
+            if (r.uan_number) uanNumbersSet.add(String(r.uan_number).trim());
             if (r.aadhaar_number) {
                 const cleanAadhaar = String(r.aadhaar_number).replace(/\s/g, '');
-                if (cleanAadhaar) aadhaarNumbers.add(cleanAadhaar);
+                if (cleanAadhaar) aadhaarNumbersSet.add(cleanAadhaar);
             }
-            if (r.driving_license_number) drivingLicenses.add(String(r.driving_license_number).trim().toUpperCase());
-            if (r.voter_id_number) voterIds.add(String(r.voter_id_number).trim().toUpperCase());
-            if (r.bank_account_number) bankAccountNumbers.add(String(r.bank_account_number).trim());
+            if (r.driving_license_number) drivingLicensesSet.add(String(r.driving_license_number).trim().toUpperCase());
+            if (r.voter_id_number) voterIdsSet.add(String(r.voter_id_number).trim().toUpperCase());
+            if (r.bank_account_number) bankAccountNumbersSet.add(String(r.bank_account_number).trim());
         });
 
-        // Check for duplicates within the Excel file
+        // 2. Fetch existing records from database for all unique fields
+        const queryConditions = [];
+        if (employeeCodeSet.size > 0) queryConditions.push({ employee_code: { [Op.in]: Array.from(employeeCodeSet) } });
+        if (mobileNoSet.size > 0) queryConditions.push({ mobile_no: { [Op.in]: Array.from(mobileNoSet) } });
+        if (emailsSet.size > 0) queryConditions.push({ email: { [Op.in]: Array.from(emailsSet) } });
+        if (panNumbersSet.size > 0) queryConditions.push({ pan_number: { [Op.in]: Array.from(panNumbersSet) } });
+        if (aadhaarNumbersSet.size > 0) queryConditions.push({ aadhaar_number: { [Op.in]: Array.from(aadhaarNumbersSet) } });
+        if (uanNumbersSet.size > 0) queryConditions.push({ uan_number: { [Op.in]: Array.from(uanNumbersSet) } });
+        if (drivingLicensesSet.size > 0) queryConditions.push({ driving_license_number: { [Op.in]: Array.from(drivingLicensesSet) } });
+        if (voterIdsSet.size > 0) queryConditions.push({ voter_id_number: { [Op.in]: Array.from(voterIdsSet) } });
+        if (bankAccountNumbersSet.size > 0) queryConditions.push({ bank_account_number: { [Op.in]: Array.from(bankAccountNumbersSet) } });
+
+        const employeeData = {
+            dbEmpCodeSet: new Set(),
+            dbEmpMobileSet: new Set(),
+            dbEmailSet: new Set(),
+            dbPanSet: new Set(),
+            dbUanSet: new Set(),
+            dbAadhaarSet: new Set(),
+            dbDrivingLicenseSet: new Set(),
+            dbVoterIdSet: new Set(),
+            dbBankAccountSet: new Set(),
+
+            fileEmpCodeSet: new Set(),
+            fileEmpMobileSet: new Set(),
+
+            fileTrackingEmployeeMap: new Map()
+        };
+
+        if (queryConditions.length > 0) {
+            const existingInDb = await commonQuery.findAllRecords(
+                Employee,
+                {
+                    company_id,
+                    status: { [Op.ne]: 2 }, // Not deleted
+                    [Op.or]: queryConditions
+                },
+                { 
+                    attributes: ['employee_code', 'mobile_no', 'email', 'pan_number', 'aadhaar_number', 'uan_number', 'driving_license_number', 'voter_id_number', 'bank_account_number'],
+                    raw: true 
+                },
+                transaction
+            );
+
+            existingInDb.forEach(emp => {
+                if (emp.employee_code) employeeData.dbEmpCodeSet.add(String(emp.employee_code).trim().toLowerCase());
+                if (emp.mobile_no) employeeData.dbEmpMobileSet.add(String(emp.mobile_no).trim());
+                if (emp.email) employeeData.dbEmailSet.add(String(emp.email).trim().toLowerCase());
+                if (emp.pan_number) employeeData.dbPanSet.add(String(emp.pan_number).trim().toUpperCase());
+                if (emp.aadhaar_number) employeeData.dbAadhaarSet.add(String(emp.aadhaar_number).replace(/\s/g, ''));
+                if (emp.uan_number) employeeData.dbUanSet.add(String(emp.uan_number).trim());
+                if (emp.driving_license_number) employeeData.dbDrivingLicenseSet.add(String(emp.driving_license_number).trim().toUpperCase());
+                if (emp.voter_id_number) employeeData.dbVoterIdSet.add(String(emp.voter_id_number).trim().toUpperCase());
+                if (emp.bank_account_number) employeeData.dbBankAccountSet.add(String(emp.bank_account_number).trim());
+            });
+        }
+
+        // 3. Check for duplicates (within Excel AND against Database) - Hard Block
         for (let i = 0; i < rows.length; i++) {
             const record = rows[i];
             const rowIndex = i + 2;
@@ -330,45 +388,40 @@ const runWorker = async () => {
             const voterId = record.voter_id_number ? String(record.voter_id_number).trim().toUpperCase() : null;
             const bankAccount = record.bank_account_number ? String(record.bank_account_number).trim() : null;
 
-            // Check duplicates in current row data
             const duplicates = [];
-            if (empCode && rows.filter((r, idx) => idx !== i && r.employee_code && String(r.employee_code).trim().toLowerCase() === empCode).length > 0) {
-                duplicates.push(`Employee Code '${record.employee_code}'`);
-            }
-            if (mobile && rows.filter((r, idx) => idx !== i && r.mobile_no && String(r.mobile_no).trim() === mobile).length > 0) {
-                duplicates.push(`Mobile '${mobile}'`);
-            }
-            if (email && rows.filter((r, idx) => idx !== i && r.email && String(r.email).trim().toLowerCase() === email).length > 0) {
-                duplicates.push(`Email '${email}'`);
-            }
-            if (pan && rows.filter((r, idx) => idx !== i && r.pan_number && String(r.pan_number).trim().toUpperCase() === pan).length > 0) {
-                duplicates.push(`PAN '${pan}'`);
-            }
-            if (uan && rows.filter((r, idx) => idx !== i && r.uan_number && String(r.uan_number).trim() === uan).length > 0) {
-                duplicates.push(`UAN '${uan}'`);
-            }
-            if (aadhaar && rows.filter((r, idx) => idx !== i && r.aadhaar_number && String(r.aadhaar_number).replace(/\s/g, '') === aadhaar).length > 0) {
-                duplicates.push(`Aadhaar '${record.aadhaar_number}'`);
-            }
-            if (drivingLicense && rows.filter((r, idx) => idx !== i && r.driving_license_number && String(r.driving_license_number).trim().toUpperCase() === drivingLicense).length > 0) {
-                duplicates.push(`Driving License '${drivingLicense}'`);
-            }
-            if (voterId && rows.filter((r, idx) => idx !== i && r.voter_id_number && String(r.voter_id_number).trim().toUpperCase() === voterId).length > 0) {
-                duplicates.push(`Voter ID '${voterId}'`);
-            }
-            if (bankAccount && rows.filter((r, idx) => idx !== i && r.bank_account_number && String(r.bank_account_number).trim() === bankAccount).length > 0) {
-                duplicates.push(`Bank Account '${bankAccount}'`);
-            }
+            
+            // Check Excel-to-Excel duplicates
+            if (empCode && rows.filter((r, idx) => idx !== i && r.employee_code && String(r.employee_code).trim().toLowerCase() === empCode).length > 0) duplicates.push(`Employee Code '${record.employee_code}' (Excel Duplicate)`);
+            if (mobile && rows.filter((r, idx) => idx !== i && r.mobile_no && String(r.mobile_no).trim() === mobile).length > 0) duplicates.push(`Mobile '${mobile}' (Excel Duplicate)`);
+            if (email && rows.filter((r, idx) => idx !== i && r.email && String(r.email).trim().toLowerCase() === email).length > 0) duplicates.push(`Email '${email}' (Excel Duplicate)`);
+            if (pan && rows.filter((r, idx) => idx !== i && r.pan_number && String(r.pan_number).trim().toUpperCase() === pan).length > 0) duplicates.push(`PAN '${pan}' (Excel Duplicate)`);
+            if (uan && rows.filter((r, idx) => idx !== i && r.uan_number && String(r.uan_number).trim() === uan).length > 0) duplicates.push(`UAN '${uan}' (Excel Duplicate)`);
+            if (aadhaar && rows.filter((r, idx) => idx !== i && r.aadhaar_number && String(r.aadhaar_number).replace(/\s/g, '') === aadhaar).length > 0) duplicates.push(`Aadhaar '${record.aadhaar_number}' (Excel Duplicate)`);
+            if (drivingLicense && rows.filter((r, idx) => idx !== i && r.driving_license_number && String(r.driving_license_number).trim().toUpperCase() === drivingLicense).length > 0) duplicates.push(`Driving License '${drivingLicense}' (Excel Duplicate)`);
+            if (voterId && rows.filter((r, idx) => idx !== i && r.voter_id_number && String(r.voter_id_number).trim().toUpperCase() === voterId).length > 0) duplicates.push(`Voter ID '${voterId}' (Excel Duplicate)`);
+            if (bankAccount && rows.filter((r, idx) => idx !== i && r.bank_account_number && String(r.bank_account_number).trim() === bankAccount).length > 0) duplicates.push(`Bank Account '${bankAccount}' (Excel Duplicate)`);
+
+            // Check against Database
+            if (empCode && employeeData.dbEmpCodeSet.has(empCode)) duplicates.push(`Employee Code '${record.employee_code}' (Exists in System)`);
+            if (mobile && employeeData.dbEmpMobileSet.has(mobile)) duplicates.push(`Mobile '${mobile}' (Exists in System)`);
+            if (email && employeeData.dbEmailSet.has(email)) duplicates.push(`Email '${email}' (Exists in System)`);
+            if (pan && employeeData.dbPanSet.has(pan)) duplicates.push(`PAN '${pan}' (Exists in System)`);
+            if (uan && employeeData.dbUanSet.has(uan)) duplicates.push(`UAN '${uan}' (Exists in System)`);
+            if (aadhaar && employeeData.dbAadhaarSet.has(aadhaar)) duplicates.push(`Aadhaar '${record.aadhaar_number}' (Exists in System)`);
+            if (drivingLicense && employeeData.dbDrivingLicenseSet.has(drivingLicense)) duplicates.push(`Driving License '${drivingLicense}' (Exists in System)`);
+            if (voterId && employeeData.dbVoterIdSet.has(voterId)) duplicates.push(`Voter ID '${voterId}' (Exists in System)`);
+            if (bankAccount && employeeData.dbBankAccountSet.has(bankAccount)) duplicates.push(`Bank Account '${bankAccount}' (Exists in System)`);
 
             if (duplicates.length > 0) {
                 errorCount++;
-                const errorMessage = `Duplicate values found in Excel: ${duplicates.join(', ')}`;
+                const empName = record.first_name ? String(record.first_name).trim() : 'Unknown';
+                const errorMessage = `Duplicate found for ${empName}: ${duplicates.join(', ')}`;
                 errorSample.push(`Row ${rowIndex}: ${errorMessage}`);
                 writeError(errorFileStream, originalRecord, errorMessage);
             }
         }
 
-        // If duplicates found in Excel, stop processing
+        // If ANY duplicates found (Excel or DB), fail the entire import
         if (errorCount > 0) {
             if (errorFileStream) errorFileStream.end();
             await transaction.rollback();
@@ -378,13 +431,13 @@ const runWorker = async () => {
                     importErrors: true,
                     errors: errorSample,
                     errorCount: errorCount,
-                    message: `${errorCount} errors found. Please fix duplicates in Excel file before importing.`
+                    message: `${errorCount} duplicate errors found. Please fix duplicates before importing.`
                 }
             });
             return;
         }
 
-        console.log("No duplicates found in Excel, proceeding with import...");
+        console.log("No duplicates found, proceeding with validation and import...");
 
         // Create/find departments, designations, and states first using bulk operations
         const departmentMap = new Map();
@@ -486,22 +539,6 @@ const runWorker = async () => {
             stateMap.set(String(state.state_name).toLowerCase(), state.id);
         });
 
-        const employeeData = {
-            dbEmpCodeSet: new Set(),
-            dbEmpMobileSet: new Set(),
-            dbEmailSet: new Set(),
-            dbPanSet: new Set(),
-            dbUanSet: new Set(),
-            dbAadhaarSet: new Set(),
-            dbDrivingLicenseSet: new Set(),
-            dbVoterIdSet: new Set(),
-            dbBankAccountSet: new Set(),
-
-            fileEmpCodeSet: new Set(),
-            fileEmpMobileSet: new Set(),
-
-            fileTrackingEmployeeMap: new Map()
-        };
 
         let createdCount = 0;
         const validEmployees = [];
@@ -520,7 +557,7 @@ const runWorker = async () => {
                 const firstName = String(firstNameRaw).trim();
                 const email = String(record.email || '').trim().toLowerCase();
                 const mobile = record.mobile_no ? String(record.mobile_no).trim() : null;
-                const empCode = record.employee_code ? String(record.employee_code).trim() : null;
+                const empCode = record.employee_code ? String(record.employee_code).trim().toLowerCase() : null;
                 const pan = record.pan_number ? String(record.pan_number).trim().toUpperCase() : null;
                 const uan = record.uan_number ? String(record.uan_number).trim() : null;
                 const aadhaar = record.aadhaar_number ? String(record.aadhaar_number).replace(/\s/g, '') : null;
@@ -531,8 +568,14 @@ const runWorker = async () => {
                 // 🛑 SILENT SKIP: If row has no name, code, OR mobile, it's likely a summary/divider row
                 // OR if firstName is a known header noise word like "Management", "Account", etc.
                 const noiseWords = ["management", "account", "admin", "branding", "design", "proposals", "hr", "safety", "it", "planning", "manufacturing", "purchase", "documentation", "qc", "sales", "store", "project", "aepl worker"];
-                if ((!firstName && !empCode && !mobile) || (firstName && noiseWords.includes(firstName.toLowerCase()))) {
+                if ((!firstName && !empCode && !mobile)) {
+                    // console.log(`Debug: Silent skipping Row ${rowIndex} - empty row.`);
                     continue; 
+                }
+
+                if (firstName && noiseWords.includes(firstName.toLowerCase())) {
+                    console.log(`Debug: Skipping Row ${rowIndex} - name matches noise word: '${firstName}'.`);
+                    continue;
                 }
 
                 if (!firstName) fail("First Name is required");
@@ -550,19 +593,6 @@ const runWorker = async () => {
                 // if (!dob) fail("Date of Birth is required");
                 // if (!gender) fail("Gender is required");
 
-                // Check for duplicates (only in Excel file for employee code)
-                if (record.employee_code && employeeData.fileEmpCodeSet.has(record.employee_code)) fail(`Employee Code '${record.employee_code}' already exists`);
-                if (email && employeeData.dbEmailSet.has(email)) fail(`Email '${email}' already exists`);
-                if (mobile && employeeData.dbEmpMobileSet.has(mobile)) fail(`Mobile '${mobile}' already exists`);
-                if (pan && employeeData.dbPanSet.has(pan)) fail(`PAN '${pan}' already exists`);
-                if (uan && employeeData.dbUanSet.has(uan)) fail(`UAN '${uan}' already exists`);
-                if (aadhaar && employeeData.dbAadhaarSet.has(aadhaar)) fail(`Aadhaar '${record.aadhaar_number}' already exists`);
-                if (drivingLicense && employeeData.dbDrivingLicenseSet.has(drivingLicense)) fail(`Driving License '${drivingLicense}' already exists`);
-                if (voterId && employeeData.dbVoterIdSet.has(voterId)) fail(`Voter ID '${voterId}' already exists`);
-                if (bankAccount && employeeData.dbBankAccountSet.has(bankAccount)) fail(`Bank Account '${bankAccount}' already exists`);
-                if (mobile && employeeData.fileEmpMobileSet.has(mobile)) fail(`Duplicate Mobile '${mobile}' found in file`);
-
-                
                 // Prepare employee data
                 const typeDetails = getEmployeeTypeDetails(record.employee_type, record.employee_code);
 
@@ -636,19 +666,19 @@ const runWorker = async () => {
                     bank_ifsc_code: record.bank_ifsc_code,
                     bank_account_holder_name: record.bank_account_holder_name,
                     upi_id: record.upi_id,
+                    branch_id,
+                    company_id,
                 };
 
                 // Add to valid employees array
                 validEmployees.push(prepareData);
-                if (mobile) employeeData.fileEmpMobileSet.add(mobile);
                 createdCount++;
-
             } catch (rowError) {
                 errorCount++;
                 errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
                 writeError(errorFileStream, originalRecord, rowError.message);
             }
-        }
+        } // Close for-loop here
 
         // Bulk create all valid employees
         if (validEmployees.length > 0) {
@@ -657,7 +687,7 @@ const runWorker = async () => {
 
         if (errorFileStream) errorFileStream.end();
 
-        if (createdCount === 0 && errorCount > 0) {
+        if (errorCount > 0) {
             await transaction.rollback();
 
             parentPort.postMessage({
@@ -666,26 +696,17 @@ const runWorker = async () => {
                     importErrors: true,
                     errors: errorSample,
                     errorCount: errorCount,
-                    message: `${errorCount} errors found. No employees were imported.`
+                    message: `${errorCount} errors found in the file. No employees were imported. Please fix all errors before importing again.`
                 }
             });
             return;
         }
 
-        const tooManyErrors = errorCount > (rows.length * 0.5) && rows.length > 10;
-        if (tooManyErrors) {
-            await transaction.rollback();
-            parentPort.postMessage({
-                status: "SUCCESS",
-                result: { importErrors: true, errors: errorSample, errorCount, message: "Too many errors. Import rolled back." }
-            });
-        } else {
-            await transaction.commit();
-            parentPort.postMessage({
-                status: "SUCCESS",
-                result: { success: true, message: `${createdCount} employees processed successfully.`, count: createdCount, errorCount, errors: errorSample }
-            });
-        }
+        await transaction.commit();
+        parentPort.postMessage({
+            status: "SUCCESS",
+            result: { success: true, message: `${createdCount} employees processed successfully.`, count: createdCount, errorCount, errors: errorSample }
+        });
 
     } catch (err) {
         if (transaction && !transaction.finished) await transaction.rollback();
@@ -704,6 +725,8 @@ const startWorker = async () => {
         userId: user_id,
         companyId: company_id,
         branchId: branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
         ip: "127.0.0.1"
     };
 

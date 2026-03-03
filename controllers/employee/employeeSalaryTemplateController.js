@@ -27,14 +27,14 @@ const employeeSalaryTemplateController = {
                         include: [{
                             model: SalaryComponent,
                             as: "component",
-                            attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component"]
+                            attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component","formula"]
                         }]
                     }]
                 }
             );
 
             if (!template) {
-                return res.success(null, "No salary template assigned to this employee");
+                return res.error("VALIDATION_ERROR", "No salary template assigned to this employee");
             }
 
             return res.success("Employee salary template fetched successfully", template);
@@ -134,6 +134,7 @@ const employeeSalaryTemplateController = {
                     employee_id: employeeId,
                     employee_salary_template_id: employeeTemplate.id,
                     component_id: comp.component_id,
+                    formula: comp.formula || null,
                     component_category: (comp.component_category || 'FIXED').toUpperCase(),
                     monthly_amount: parseFloat(comp.monthly_amount) || 0,
                     yearly_amount: parseFloat(comp.yearly_amount) || (parseFloat(comp.monthly_amount) * 12),

@@ -11,6 +11,11 @@ module.exports = (sequelize, DataTypes) => {
         yearly_amount: { type: DataTypes.DECIMAL(12, 2) },
         included_in_ctc: { type: DataTypes.BOOLEAN, defaultValue: true },
         is_employer_contribution: { type: DataTypes.BOOLEAN, defaultValue: false },
+        calculation_type: {
+            type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM", "CANTEEN_BASED"),
+            allowNull: true
+        },
+        formula: { type: DataTypes.TEXT },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

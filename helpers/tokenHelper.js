@@ -14,7 +14,8 @@ const generateToken = (user, companyId, access_by = "web login") => {
       organization_id: user.organization_id || null,
       access_by: access_by,
       is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager
+      is_reporting_manager: user.is_reporting_manager,
+      is_super_admin: user.is_super_admin || user.role_id == 1
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "1d" }

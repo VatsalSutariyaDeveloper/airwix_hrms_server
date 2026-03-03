@@ -156,7 +156,7 @@ class EmployeeTemplateService {
     static async syncAllTemplates(employeeId, transaction = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, t, true, { company_id: true });
             if (!employee) throw new Error("Employee not found");
 
             await this.syncAttendanceTemplate(employee.id, employee.attendance_setting_template, null, t);
