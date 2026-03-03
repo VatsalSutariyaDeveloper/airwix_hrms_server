@@ -758,4 +758,22 @@ const runWorker = async () => {
   }
 };
 
-runWorker();
+const startWorker = async () => {
+    const { user_id, branch_id, company_id } = workerData;
+    const mockStore = {
+        userId: user_id,
+        companyId: company_id,
+        branchId: branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
+        ip: "127.0.0.1"
+    };
+
+    await requestContext.run(mockStore, async () => {
+        await runWorker();
+    });
+};
+
+startWorker().catch(error => {
+  parentPort.postMessage({ status: "ERROR", error: error.message });
+});

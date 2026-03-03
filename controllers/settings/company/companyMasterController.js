@@ -225,8 +225,8 @@ exports.create = async (req, res) => {
     // Update company_access for the creator
     await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
 
-    // Create UserCompanyRole entry for all Super Admins (role_id: 1)
-    const superAdmins = await commonQuery.findAllRecords(User, { role_id: 1, status: 0 }, { attributes: ['id'] }, transaction);
+    // Create UserCompanyRole entry for all Super Admins (is_super_admin: true)
+    const superAdmins = await commonQuery.findAllRecords(User, { is_super_admin: true, status: 0 }, { attributes: ['id'] }, transaction);
     if (superAdmins && superAdmins.length > 0) {
       for (const admin of superAdmins) {
         // Find an existing role entry for this superadmin to copy permissions from

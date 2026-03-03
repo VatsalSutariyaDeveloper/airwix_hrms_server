@@ -52,7 +52,7 @@ function authMiddleware(req, res, next) {
       access_by: decoded.access_by || "web login",
       is_attendance_supervisor: decoded.is_attendance_supervisor,
       is_reporting_manager: decoded.is_reporting_manager,
-      is_super_admin: decoded.role_id == 1,
+      is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
       is_admin: decoded.role_id == 2
     };
 
@@ -67,7 +67,7 @@ function authMiddleware(req, res, next) {
         roleId: decoded.role_id,
         is_attendance_supervisor: decoded.is_attendance_supervisor,
         is_reporting_manager: decoded.is_reporting_manager,
-        is_super_admin: decoded.role_id == 1,
+        is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
         is_admin: decoded.role_id == 2,
         ip: req.ip
       },

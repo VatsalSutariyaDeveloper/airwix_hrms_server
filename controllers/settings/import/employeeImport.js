@@ -568,8 +568,14 @@ const runWorker = async () => {
                 // 🛑 SILENT SKIP: If row has no name, code, OR mobile, it's likely a summary/divider row
                 // OR if firstName is a known header noise word like "Management", "Account", etc.
                 const noiseWords = ["management", "account", "admin", "branding", "design", "proposals", "hr", "safety", "it", "planning", "manufacturing", "purchase", "documentation", "qc", "sales", "store", "project", "aepl worker"];
-                if ((!firstName && !empCode && !mobile) || (firstName && noiseWords.includes(firstName.toLowerCase()))) {
+                if ((!firstName && !empCode && !mobile)) {
+                    // console.log(`Debug: Silent skipping Row ${rowIndex} - empty row.`);
                     continue; 
+                }
+
+                if (firstName && noiseWords.includes(firstName.toLowerCase())) {
+                    console.log(`Debug: Skipping Row ${rowIndex} - name matches noise word: '${firstName}'.`);
+                    continue;
                 }
 
                 if (!firstName) fail("First Name is required");
@@ -667,12 +673,12 @@ const runWorker = async () => {
                 // Add to valid employees array
                 validEmployees.push(prepareData);
                 createdCount++;
-
             } catch (rowError) {
                 errorCount++;
                 errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
                 writeError(errorFileStream, originalRecord, rowError.message);
-        }
+            }
+        } // Close for-loop here
 
         // Bulk create all valid employees
         if (validEmployees.length > 0) {
@@ -681,7 +687,7 @@ const runWorker = async () => {
 
         if (errorFileStream) errorFileStream.end();
 
-        if (createdCount === 0 && errorCount > 0) {
+        if (errorCount > 0) {
             await transaction.rollback();
 
             parentPort.postMessage({
@@ -690,7 +696,7 @@ const runWorker = async () => {
                     importErrors: true,
                     errors: errorSample,
                     errorCount: errorCount,
-                    message: `${errorCount} errors found. No employees were imported.`
+                    message: `${errorCount} errors found in the file. No employees were imported. Please fix all errors before importing again.`
                 }
             });
             return;
@@ -701,7 +707,6 @@ const runWorker = async () => {
             status: "SUCCESS",
             result: { success: true, message: `${createdCount} employees processed successfully.`, count: createdCount, errorCount, errors: errorSample }
         });
-    }
 
     } catch (err) {
         if (transaction && !transaction.finished) await transaction.rollback();
@@ -720,6 +725,8 @@ const startWorker = async () => {
         userId: user_id,
         companyId: company_id,
         branchId: branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
         ip: "127.0.0.1"
     };
 

@@ -73,7 +73,7 @@ function withDebug(options = {}, transaction = null) {
  * @param {Boolean} [skipStatus=false] - When true the default status (not equal 2) check is skipped;
  *                                       useful for include queries where status should not be applied
  */
-async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) {
+async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -90,84 +90,63 @@ async function buildWhere(whereInput, applyDefaults = true, skipStatus = false) 
   }
 
   // --- 2. Apply Status Filter ---
-  // If status is not explicitly set, default to excluding deleted (2)
-  // `skipStatus` allows callers (e.g. include logic) to bypass this check completely
   if (!skipStatus) {
     if (where.status === undefined) {
       where.status = { [Op.ne]: 2 };
     }
   }
 
-  const ctx = getContext();
+  const isObj = typeof tenantConfig === "object" && tenantConfig !== null;
+  const isEmptyObj = isObj && Object.keys(tenantConfig).length === 0;
 
-  // 1. Always Fetch Settings First (You need them for both IF and ELSE)
+  let ctx = {};
   let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
-  try {
-    if (ctx.company_id) {
-      settings = await getCompanySetting(ctx.company_id);
-    }
-  } catch (err) {
-    console.warn("⚠️ Failed to fetch company settings:", err.message);
-  }
 
-  // (Your temporary override if needed)
+  if (!isEmptyObj) {
+    ctx = getContext();
+    try {
+      if (ctx.company_id) {
+        settings = await getCompanySetting(ctx.company_id);
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to fetch company settings:", err.message);
+    }
+  }  
+
+  // Temporary override if needed
   settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
   const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
-  if (applyDefaults) {
-    // --- STANDARD STRICT BEHAVIOR ---
+
+  if (tenantConfig === true) {
     if (ctx.company_id) where.company_id = ctx.company_id;
-
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true)) {
-      if (ctx.branch_id) {
+    if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
+      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
         where.branch_id = ctx.branch_id;
-      } else if (ctx.branch_id === 0) {
-        // "All Branches" mode
-        if (ctx.role_id != 1) {
-          const access = ctx.branch_access;
-          let branchAccessList = [];
-          if (Array.isArray(access)) branchAccessList = access.map(String);
-          else if (typeof access === "string") branchAccessList = access.split(",").map((id) => id.trim()).filter(Boolean);
-          
-          if (branchAccessList.length > 0) {
-            where.branch_id = { [Op.in]: branchAccessList };
-          }
-        }
+      } else if (!ctx.is_super_admin && ctx.branch_access) {
+        const branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        if (branches.length > 0) where.branch_id = { [Op.in]: branches };
       }
-    } 
-
-    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) {
-       where.user_id = ctx.user_id;
     }
-  } else {
-    // --- LOOSE BEHAVIOR (-1 OR ContextID) ---
-    
-    // 1. Company Logic (Always check context)
-    if (ctx.company_id) {
-      where.company_id = { [Op.or]: [-1, ctx.company_id] };
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) where.user_id = ctx.user_id;
+  } else if (tenantConfig === false) {
+    if (ctx.company_id) where.company_id = { [Op.or]: [-1, ctx.company_id] };
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) where.user_id = { [Op.or]: [-1, ctx.user_id] };
+  } else if (isObj && !isEmptyObj) {
+    // --- EXPLICIT TOGGLES ---
+    if (tenantConfig.company_id && ctx.company_id) where.company_id = ctx.company_id;
+    if (tenantConfig.branch_id) {
+      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
+        where.branch_id = ctx.branch_id;
+      } else if (!ctx.is_super_admin && ctx.branch_access) {
+        const branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        if (branches.length > 0) where.branch_id = { [Op.in]: branches };
+      }
     }
-
-    // 2. Branch Logic (ONLY if enabled in settings)
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true)) {
-        if (ctx.branch_id) {
-           where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
-        } else if (ctx.branch_id === 0 && ctx.role_id != 1) {
-            const access = ctx.branch_access;
-            let branchAccessList = [];
-            if (Array.isArray(access)) branchAccessList = access.map(String);
-            else if (typeof access === "string") branchAccessList = access.split(",").map((id) => id.trim()).filter(Boolean);
-            
-            if (branchAccessList.length > 0) {
-                where.branch_id = { [Op.or]: [-1, { [Op.in]: branchAccessList }] };
-            }
-        }
-    }
-
-    // 3. User Logic (ONLY if enabled in settings)
-    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) {
-       where.user_id = { [Op.or]: [-1, ctx.user_id] };
-    }
+    if (tenantConfig.user_id && ctx.user_id) where.user_id = ctx.user_id;
   }
+
   return where;
 }
 
@@ -240,18 +219,23 @@ module.exports = {
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
-    let ctx = null;
 
-    if(requireTenantFields){
-      ctx = getContext();
-      enrichedData.company_id= ctx.company_id;
-      enrichedData.user_id= ctx.user_id;
-      enrichedData.branch_id= ctx.branch_id;
-      commonData = {
-        user_id: ctx.user_id,
-        company_id: ctx.company_id,
-        branch_id: ctx.branch_id,
-      };
+    const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
+    const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
+
+    let ctx = {};
+    if (!isEmptyObj) {
+      ctx = getContext();  
+    }
+
+    if (requireTenantFields === true) {
+      if (ctx.company_id && enrichedData.company_id === undefined) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (ctx.user_id && enrichedData.user_id === undefined) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+    } else if (isObj && !isEmptyObj) {
+      if (requireTenantFields.company_id && ctx.company_id && enrichedData.company_id === undefined) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (requireTenantFields.user_id && ctx.user_id && enrichedData.user_id === undefined) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
     const result = await model.create(enrichedData, withDebug({}, transaction));
@@ -281,22 +265,39 @@ module.exports = {
       company_id: extraFields.company_id,
       branch_id: extraFields.branch_id,
     };
-    let ctx = null;
+    const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
+    const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
 
-    if(requireTenantFields){
-      ctx = getContext();
-      enriched = dataArray.map((item) => ({
-        ...item,
-        company_id: ctx.company_id,
-        user_id: ctx.user_id,
-        branch_id: ctx.branch_id,
-      }));
+    let ctx = {};
+    if (!isEmptyObj) {
+      ctx = getContext();  
+    }
 
-      commonData = {
-        user_id: ctx.user_id,
-        company_id: ctx.company_id,
-        branch_id: ctx.branch_id,
-      };
+    let attachCompany = false, attachUser = false, attachBranch = false;
+    
+    if (requireTenantFields === true) {
+      attachCompany = !!ctx.company_id;
+      attachUser = !!ctx.user_id;
+      attachBranch = !!ctx.branch_id;
+    } else if (isObj && !isEmptyObj) {
+      attachCompany = !!(requireTenantFields.company_id && ctx.company_id);
+      attachUser = !!(requireTenantFields.user_id && ctx.user_id);
+      attachBranch = !!(requireTenantFields.branch_id && ctx.branch_id);
+    }
+
+    if (attachCompany || attachUser || attachBranch) {
+      enriched = dataArray.map((item) => {
+        let newItem = { ...item, ...extraFields };
+        // 🚀 ONLY INJECT IF UNDEFINED
+        if (attachCompany && newItem.company_id === undefined) newItem.company_id = ctx.company_id;
+        if (attachUser && newItem.user_id === undefined) newItem.user_id = ctx.user_id;
+        if (attachBranch && newItem.branch_id === undefined) newItem.branch_id = ctx.branch_id;
+        return newItem;
+      });
+
+      if (attachCompany && commonData.company_id === undefined) commonData.company_id = ctx.company_id;
+      if (attachUser && commonData.user_id === undefined) commonData.user_id = ctx.user_id;
+      if (attachBranch && commonData.branch_id === undefined) commonData.branch_id = ctx.branch_id;
     }
 
     const createdRecords = await Model.bulkCreate(enriched, withDebug({}, transaction));
@@ -325,27 +326,35 @@ module.exports = {
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
     let condition = await buildWhere(whereInput, requireTenantFields); 
     
-    let safeData = { ...data }
+    let safeData = { ...data };
     let commonData = {
       user_id: data.user_id,
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
-    let ctx = null;
+    
+    const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
+    const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
 
-    if(requireTenantFields){
-      ctx = getContext();
-      safeData.company_id= ctx.company_id;
-      safeData.user_id= ctx.user_id;
-      safeData.branch_id= ctx.branch_id;
-      commonData = {
-        user_id: ctx.user_id,
-        company_id: ctx.company_id,
-        branch_id: ctx.branch_id,
-      };
+    let ctx = {};
+    if (!isEmptyObj) {
+      ctx = getContext();  
     }
 
-    const oldRecord = await model.findOne({ where: condition, transaction, raw: true });
+    if (requireTenantFields === true) {
+      if (ctx.company_id && safeData.company_id === undefined) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (ctx.user_id && safeData.user_id === undefined) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (ctx.branch_id && safeData.branch_id === undefined) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+    } else if (isObj && !isEmptyObj) {
+      if (requireTenantFields.company_id && ctx.company_id && safeData.company_id === undefined) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (requireTenantFields.user_id && ctx.user_id && safeData.user_id === undefined) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (requireTenantFields.branch_id && ctx.branch_id && safeData.branch_id === undefined) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+    }
+
+    let oldRecord = null;
+    try {
+      oldRecord = await model.findOne({ where: condition, transaction, raw: true });
+    } catch (e) {}
     if (!oldRecord) return null;
     const [count] = await model.update(
       safeData,
@@ -354,11 +363,7 @@ module.exports = {
 
     if (count === 0) return null;
 
-    const idField = model.primaryKeyAttribute || 'id';
-    const newRecord = await model.findOne({ 
-      where: { [idField]: oldRecord[idField] }, 
-      transaction 
-    });
+    const newRecord = await model.findOne({ where: condition, transaction });
     if (newRecord && forceReload) await newRecord.reload({ transaction });
 
     try {
@@ -381,7 +386,13 @@ module.exports = {
 
   // 4. Soft Delete
   softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true) => {
-    const ctx = getContext();
+    const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
+    const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
+
+    let ctx = {};
+    if (!isEmptyObj) {
+      ctx = getContext();  
+    }
     const condition = await buildWhere(whereInput, requireTenantFields);
 
     const recordsToDelete = await model.findAll({
@@ -564,7 +575,11 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
 
       // C. Explicit Tenant overrides
       if (reqBody?.company_id) filters.company_id = reqBody?.company_id;
-      if (reqBody?.branch_id) filters.branch_id = reqBody?.branch_id;
+      if (reqBody?.branch_id !== undefined && reqBody?.branch_id !== null && reqBody?.branch_id !== "") {
+        if (reqBody.branch_id !== "All" && reqBody.branch_id !== "all" && reqBody.branch_id !== 0 && reqBody.branch_id !== "0") {
+          filters.branch_id = reqBody.branch_id;
+        }
+      }
       if (reqBody?.user_id) filters.user_id = reqBody?.user_id;
 
       // D. Date Range

@@ -12,6 +12,8 @@ router.post("/get-calculation-history", payrollController.getCalculationHistory)
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
+router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
+
 
 // ==========================
 // EMPLOYEE_INCENTIVE

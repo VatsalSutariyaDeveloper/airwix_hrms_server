@@ -67,6 +67,8 @@ exports.importData = async (req, res) => {
           user_id: req.user ? req.user.id : req.body.user_id,
           branch_id: req.user ? req.user.branch_id : req.body.branch_id,
           company_id: req.user ? req.user.company_id : req.body.company_id,
+          is_super_admin: req.user ? req.user.is_super_admin : false,
+          branch_access: req.user ? req.user.branch_access : "",
         }
       });
 

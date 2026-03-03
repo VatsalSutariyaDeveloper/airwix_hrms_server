@@ -73,6 +73,7 @@ exports.getAll = async (req, res) => {
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
+                    "branch_id",
                    ["employee.first_name", "employee_name"],
                 ]
             },

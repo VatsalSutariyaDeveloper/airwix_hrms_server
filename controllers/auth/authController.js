@@ -235,6 +235,7 @@ exports.register = async (req, res) => {
         country_id,
         pincode,
         role_id: 1,
+        is_super_admin: true,
         permission: defaultPermission ? defaultPermission.permissions : null,
         company_id: newCompany.id,
         company_access: JSON.stringify([newCompany.id]),
@@ -319,7 +320,8 @@ exports.register = async (req, res) => {
       {
         id: newUser.id,
         company_id: newUser.company_id,
-        organization_id: newOrg.id
+        organization_id: newOrg.id,
+        is_super_admin: true
       },
       process.env.JWT_SECRET || "your_jwt_secret",
       { expiresIn: "1d" }

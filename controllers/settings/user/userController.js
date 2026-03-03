@@ -1,4 +1,4 @@
-const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee } = require("../../../models");
+const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee, BranchMaster } = require("../../../models");
 const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription, } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 const bcrypt = require("bcrypt");
@@ -227,7 +227,7 @@ exports.create = async (req, res) => {
     req.body.activation_code = crypto.randomBytes(20).toString("hex");
     req.body.is_activated = false;
 
-    const newUser = await commonQuery.createRecord(User, req.body, transaction);
+    const newUser = await commonQuery.createRecord(User, req.body, transaction, { company_id: true });
 
     // await commonQuery.createRecord(UserCompanyRoles, {
     //   user_id: newUser.id,
@@ -607,7 +607,9 @@ exports.update = async (req, res) => {
       User,
       req.params.id,
       { ...req.body, employee_id: req.body.employee_id || existing.employee_id },
-      transaction
+      transaction,
+      true,
+      { company_id: true }
     );
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
@@ -690,20 +692,32 @@ exports.getAll = async (req, res) => {
 
         extraFilters = {
           [Op.or]: [
-            { role_id: 1, company_id: { [Op.in]: organizationCompanyIds } },
+            { is_super_admin: true, company_id: { [Op.in]: organizationCompanyIds } },
             { role_id: 2, company_id: company_id }
           ]
         };
       }
     }
 
-    delete req.body.filter.role;
+    if (req.body.filter) delete req.body.filter.role;
 
     const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
     const limit = parseInt(pageSize, 10);
     const offset = (parseInt(page, 10) - 1) * limit;
 
     const where = { ...extraFilters };
+
+    // --- Branch Access Logic ---
+    if (!req.user.is_super_admin) {
+      if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
+        if (where.branch_id === undefined) where.branch_id = req.user.branch_id;
+      } else if (req.user.branch_access) {
+        const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        if (branches.length > 0) {
+          where.branch_id = { [Op.in]: branches };
+        }
+      }
+    }
 
     // --- Search Logic ---
     if (search) {
@@ -743,6 +757,12 @@ exports.getAll = async (req, res) => {
           attributes: [],
           required: false,
         },
+        {
+          model: BranchMaster,
+          as: "Branch",
+          attributes: [],
+          required: false,
+        },
       ],
       attributes: [
         "id",
@@ -753,8 +773,10 @@ exports.getAll = async (req, res) => {
         "status",
         "profile_image",
         "authorized_signature",
+        "branch_id",
         "createdAt",
         [sequelize.col("RolePermission.role_name"), "role_name"],
+        [sequelize.col("Branch.branch_name"), "branch_name"],
         [sequelize.col("Employee.first_name"), "first_name"],
         [sequelize.col("Employee.employee_code"), "employee_code"],
       ],

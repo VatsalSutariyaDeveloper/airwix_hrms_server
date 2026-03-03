@@ -1,7 +1,11 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes } = require("sequelize");
 const dayjs = require("dayjs");
+const pdfService = require("../../helpers/functions/pdfService");
+const path = require("path");
+const fs = require("fs");
+
 
 /**
  * Payroll Controller - Phase 5 Conclusion
@@ -132,6 +136,19 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         daysInCalculation = 30;
     } else if (template.lwp_calculation_basis === "WORKING_DAYS") {
         daysInCalculation = daysInMonth - weeklyOffs;
+    }
+    
+    // Step B.1: Calculate accurate Payable Days based on Basis
+    let payableDaysValue = 0;
+    if (template.lwp_calculation_basis === "WORKING_DAYS") {
+        // Exclude Weekly Offs from payable days
+        payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+    } else if (template.lwp_calculation_basis === "FIXED_30_DAYS") {
+        // Standard 30 days basis. Payable days = 30 - (Absent + Half Days)
+        payableDaysValue = 30 - totalLWP;
+    } else {
+        // Default: DAYS_IN_MONTH
+        payableDaysValue = daysInMonth - totalLWP;
     }
 
     const perDaySalary = monthlyGross / (daysInCalculation || 1);
@@ -285,7 +302,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, payableDays: (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2) },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, payableDays: parseFloat(payableDaysValue).toFixed(2) },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -317,7 +334,23 @@ const formatPayslipToSummary = async (payslip) => {
     const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
     const weeklyOffs = parseFloat(payslip.wo_days || 0);
     const holidays = parseFloat(payslip.ph_days || 0);
-    const payableDays = (presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays).toFixed(2);
+
+    // Fetch computation basis for calculation
+    const employee = await commonQuery.findOneRecord(Employee, payslip.employee_id, {
+        include: [{ model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['lwp_calculation_basis'] }]
+    });
+    const basis = employee?.employeeSalaryTemplate?.lwp_calculation_basis || 'DAYS_IN_MONTH';
+
+    let payableDaysValue = 0;
+    if (basis === "WORKING_DAYS") {
+        payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+    } else if (basis === "FIXED_30_DAYS") {
+        payableDaysValue = 30 - lwpDays;
+    } else {
+        const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
+        payableDaysValue = daysInMonth - lwpDays;
+    }
+    const payableDays = parseFloat(payableDaysValue).toFixed(2);
 
     // Recalculate dynamic totals if needed, but primarily use stored values
     const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
@@ -797,7 +830,21 @@ exports.getPayslipById = async (req, res) => {
         const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
         const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
         const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
-        const payableDays = presentDays + (halfDays * 0.5) + leaveDays + weeklyOffs + holidays;
+
+        // Fetch computation basis for calculation
+        const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: payslip.employee_id });
+        const basis = template?.lwp_calculation_basis || 'DAYS_IN_MONTH';
+
+        let payableDaysValue = 0;
+        if (basis === "WORKING_DAYS") {
+            payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+        } else if (basis === "FIXED_30_DAYS") {
+            payableDaysValue = 30 - lwpDays;
+        } else {
+            const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
+            payableDaysValue = daysInMonth - lwpDays;
+        }
+        const payableDays = parseFloat(payableDaysValue);
 
         // Construct breakdown if missing (for imported data)
         let breakdown = payslip.break_down;
@@ -888,14 +935,21 @@ exports.getSalaryOverview = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
         }
 
-        // 1. Fetch Employee for joining date
+        // 1. Fetch Employee for joining date & Salary Template for computation basis
         const employee = await commonQuery.findOneRecord(Employee, employee_id, {
-            attributes: ['id', 'joining_date']
+            attributes: ['id', 'joining_date', 'branch_id', 'company_id'],
+            include: [{
+                model: EmployeeSalaryTemplate,
+                as: 'employeeSalaryTemplate',
+                attributes: ['lwp_calculation_basis']
+            }]
         });
 
         if (!employee) {
             return res.error("NOT_FOUND", { message: "Employee not found" });
         }
+
+        const basis = employee.employeeSalaryTemplate?.lwp_calculation_basis || 'WORKING_DAYS';
 
         // 2. Generate list of months from current date back to joining date
         const monthList = [];
@@ -971,8 +1025,24 @@ exports.getSalaryOverview = async (req, res) => {
                 const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                 const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
 
-                const derivedHalfDays = (parseFloat(payslip.lwp_days || 0) - parseFloat(payslip.absent_days || 0)) / 0.5;
-                const payableDays = parseFloat(payslip.present_days) + (derivedHalfDays * 0.5) + parseFloat(payslip.leave_days || 0) + parseFloat(payslip.weekly_offs || 0) + parseFloat(payslip.holidays || 0);
+                const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
+                const absentDays = parseFloat(payslip.absent_days || 0);
+                const halfDays = (lwpDays - absentDays) / 0.5;
+                const presentDays = parseFloat(payslip.present_days || 0);
+                const leave_details = payslip.leave_details || {};
+                const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+                const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
+                const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
+console.log("basis",basis)
+                let payableDays = 0;
+                if (basis === "WORKING_DAYS") {
+                    payableDays = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+                } else if (basis === "FIXED_30_DAYS") {
+                    payableDays = 30 - lwpDays;
+                } else {
+                    const daysInMonth = dayjs(`${m.year}-${m.month}-01`).daysInMonth();
+                    payableDays = daysInMonth - lwpDays;
+                }
 
                 overview.push({
                     id: payslip.id,
@@ -983,7 +1053,7 @@ exports.getSalaryOverview = async (req, res) => {
                     date_range: `01 ${monthName}'${yearShort} - ${dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
                     net_receivable: payslip.net_salary || payslip.net_payable || 0,
                     payable_days: payableDays.toFixed(1),
-                    lwp_days: payslip.lwp_days || 0,
+                    lwp_days: lwpDays || 0,
                     lunch_count: payslip.lunch_count || 0,
                     earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                     deductions: { total: totalDed.toFixed(2), breakdown: dedList },
@@ -1091,6 +1161,130 @@ exports.getSalaryOverview = async (req, res) => {
         }
 
         return res.ok(overview);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.generatePayslipPdf = async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) {
+            return res.error("VALIDATION_ERROR", { message: "Payslip ID is required" });
+        }
+
+        // Fetch Payslip with Employee and Designation details
+        const payslip = await commonQuery.findOneRecord(Payslip, id, {
+            include: [{
+                model: Employee,
+                as: "employee",
+                attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
+                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
+            }]
+        });
+
+        if (!payslip) {
+            return res.error("NOT_FOUND", { message: "Payslip not found" });
+        }
+
+        // Fetch company details
+        const company = await commonQuery.findOneRecord(CompanyMaster, req.user.company_id, {
+            attributes: ['company_name', 'address', 'logo_image']
+        });
+
+        const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+
+        // Granular attendance calculation
+        const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
+        const absentDays = parseFloat(payslip.absent_days || 0);
+        const halfDays = (lwpDays - absentDays) / 0.5;
+        const presentDays = parseFloat(payslip.present_days || 0);
+        const leave_details = payslip.leave_details || {};
+        const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
+        const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
+
+        // Construct breakdown if it's missing or compressed
+        let breakdown = payslip.break_down;
+        if (!breakdown || (!breakdown.earnings?.length && !breakdown.deductions?.length)) {
+            const earning_details = payslip.earning_details || {};
+            const deduction_details = payslip.deduction_details || {};
+
+            breakdown = {
+                earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
+                deductions: Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
+                statutory: payslip.statutory_details || {},
+                employer: payslip.employer_details || {}
+            };
+        }
+
+        // Add Statutory deductions into the deductions list for the PDF display
+        const statutoryDeductions = Object.entries(breakdown.statutory || {}).map(([name, amount]) => ({
+            name,
+            amount: parseFloat(amount || 0)
+        })).filter(d => d.amount > 0);
+
+        const fullDeductionList = [
+            ...(breakdown.deductions || []).map(d => ({ name: d.name, amount: parseFloat(d.amount || 0) })),
+            ...statutoryDeductions
+        ];
+
+        // Recalculate totals for display
+        const totalEarnings = (breakdown.earnings || []).reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+        const totalDeductions = fullDeductionList.reduce((sum, d) => sum + d.amount, 0);
+
+        const data = {
+            payslipData: {
+                employee: {
+                    name: payslip.employee?.first_name,
+                    code: payslip.employee?.employee_code,
+                    designation: payslip.employee?.designation?.designation_name,
+                    joining_date: payslip.employee?.joining_date ? dayjs(payslip.employee.joining_date).format('DD/MM/YYYY') : 'N/A'
+                },
+                period: {
+                    label: `${monthName} ${payslip.year}`,
+                    payDate: dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('DD/MM/YYYY')
+                },
+                attendance: {
+                    present: presentDays,
+                    lwp: lwpDays,
+                    lunch_count: payslip.lunch_count || 0,
+                    leave_details: leave_details
+                },
+                salary: {
+                    netPayable: payslip.net_salary || payslip.net_payable
+                },
+                breakdown: {
+                    earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount })),
+                    deductions: fullDeductionList
+                }
+            },
+            companyData: {
+                company_name: company?.company_name || 'Airwix HRMS',
+                address: company?.address || 'Gujarat, India'
+            },
+            totalEarnings,
+            totalDeductions
+        };
+
+        const templatePath = path.join(process.cwd(), 'views', 'payslip', 'slip.ejs');
+        const filename = `payslip_${id}_${Date.now()}.pdf`;
+        const outputDir = path.join(process.cwd(), 'uploads', 'payslips');
+        
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+        
+        const outputPath = path.join(outputDir, filename);
+
+        await pdfService.generatePdfFromTemplate(templatePath, data, outputPath);
+
+        // Construct download link
+        const downloadLink = `${req.protocol}://${req.get('host')}/uploads/payslips/${filename}`;
+
+        return res.ok({
+            download_link: downloadLink,
+            filename: filename
+        });
     } catch (err) {
         return handleError(err, res, req);
     }

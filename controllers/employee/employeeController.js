@@ -213,11 +213,11 @@ exports.create = async (req, res) => {
                 settings_value: POST.number,
             };
 
-            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
+            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction, { company_id: true });
         }
 
         // 3. Create Employee Record
-        const employee = await commonQuery.createRecord(Employee, POST, transaction);
+        const employee = await commonQuery.createRecord(Employee, POST, transaction, { company_id: true });
 
         if (!employee) {
             await transaction.rollback();
@@ -237,7 +237,7 @@ exports.create = async (req, res) => {
                 status: 0
             }));
 
-            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction, { company_id: true });
         }
         await transaction.commit();
         return res.success(constants.EMPLOYEE_CREATED);
@@ -333,7 +333,7 @@ exports.update = async (req, res) => {
 
         // 2. Update Employee Record
         // Note: 'education_details' is in POST and will be updated automatically as it's a JSONB column
-        const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction);
+        const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction, false, false);
 
         // Sync specific templates if they were updated in POST
         const templateFields = [

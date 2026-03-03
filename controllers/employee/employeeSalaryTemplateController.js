@@ -34,7 +34,7 @@ const employeeSalaryTemplateController = {
             );
 
             if (!template) {
-                return res.success(null, "No salary template assigned to this employee");
+                return res.error("VALIDATION_ERROR", "No salary template assigned to this employee");
             }
 
             return res.success("Employee salary template fetched successfully", template);

@@ -2,6 +2,7 @@ const { parentPort, workerData } = require("worker_threads");
 const { sequelize, commonQuery } = require("../../../helpers");
 const {
   Employee,
+  LeaveTemplate,
   EmployeeLeaveBalance,
   LeaveTemplateCategory
 } = require("../../../models");
@@ -55,257 +56,269 @@ const runWorker = async () => {
     const workbook = xlsx.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const rawHeaders = (xlsx.utils.sheet_to_json(worksheet, { header: 1 })[0] || []);
-    const headers = rawHeaders.map(h => String(h).trim());
-    const originalRows = xlsx.utils.sheet_to_json(worksheet);
-    const rows = transformRows(originalRows, headers, fieldMapping);
+    const allRows = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+    let headerRowIndex = 0;
+    const HEADER_KEYWORDS = ["employee code", "first name", "name", "code"];
 
+    for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+        const rowData = (allRows[i] || []).map(c => String(c || "").trim().toLowerCase());
+        const matchCount = HEADER_KEYWORDS.filter(k => rowData.includes(k)).length;
+        if (matchCount >= 2) {
+            headerRowIndex = i;
+            break;
+        }
+    }
+
+    const rawHeaders = allRows[headerRowIndex] || [];
+    const headers = rawHeaders.map(h => String(h || "").trim());
+    const originalRows = xlsx.utils.sheet_to_json(worksheet, { range: headerRowIndex });
+    
+    // Auto-map headers
+    const cleanStr = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    let empCodeHeader = headers.find(h => cleanStr(h).includes('code'));
+    
     if (isCancelled) fail("IMPORT_CANCELLED");
+
+    const mockStore = {
+        userId: workerData.user_id,
+        companyId: workerData.company_id,
+        branchId: workerData.branch_id,
+    };
 
     transaction = await sequelize.transaction();
 
-    // --- 2. PRE-SCAN ---
-    const employeeCodes = new Set();
-    const leaveCategories = new Set();
-
-    rows.forEach(r => {
-      if (r['Employee Code'] || r.employee_code) {
-        const empCode = String(r['Employee Code'] || r.employee_code).trim();
-        if (empCode) employeeCodes.add(empCode);
-      }
-
-      // Extract leave categories from numbered columns
-      Object.keys(r).forEach(key => {
-        if (key.toLowerCase().startsWith('leave category') || key.toLowerCase().startsWith('leave_category')) {
-          const category = String(r[key] || '').trim();
-          if (category) leaveCategories.add(category);
-        }
-      });
-    });
-
-    const mockStore = {
-      userId: workerData.user_id,
-      companyId: workerData.company_id,
-      branchId: workerData.branch_id,
-    };
-    
-    // Run the query within the context
-    const employees = await requestContext.run(mockStore, async () => {
-      return await commonQuery.findAllRecords(Employee, {
-        employee_code: { [Op.in]: Array.from(employeeCodes) }
-      }, {
-        attributes: ['id', 'employee_code', 'first_name', 'leave_template'],
+    // 1. Fetch ALL LeaveTemplateCategory for the company to identify headers
+    const allCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
+        company_id: workerData.company_id,
+        status: 0
+    }, {
+        attributes: ['id', 'leave_template_id', 'leave_category_name', 'is_paid', 'is_compoff', 'unused_leave_rule', 'carry_forward_limit'],
         raw: true
-      }, transaction);
+    }, transaction);
+
+    // 2. Map headers to categories - exact match preferred, otherwise prep for creation
+    const leaveColumns = [];
+    headers.forEach((header, index) => {
+        const cleanedHeader = cleanStr(header);
+        if (!cleanedHeader || cleanedHeader.includes('code') || cleanedHeader.includes('name')) return;
+
+        // Try to find an EXACT matching category by name
+        const match = allCategories.find(cat => cleanStr(cat.leave_category_name) === cleanedHeader);
+        
+        leaveColumns.push({
+            header: header,
+            index: index,
+            categoryName: match ? match.leave_category_name : header,
+            canonicalCleanedName: match ? cleanStr(match.leave_category_name) : cleanedHeader,
+            categoryData: match || null
+        });
     });
 
-    // Fetch leave template categories for all employees
-    const leaveTemplateIds = [...new Set(employees.map(emp => emp.leave_template).filter(id => id > 0))];
-    const categoryMap = new Map();
-    
-    if (leaveTemplateIds.length > 0) {
-      const categories = await requestContext.run(mockStore, async () => {
-        return await commonQuery.findAllRecords(LeaveTemplateCategory, {
-          leave_template_id: { [Op.in]: leaveTemplateIds },
-          status: 0
-        }, {
-          attributes: ['id', 'leave_template_id', 'name'],
-          raw: true
-        }, transaction);
-      });
-      
-      // Build category map: template_id + category_name -> category_id
-      categories.forEach(cat => {
-        const key = `${cat.leave_template_id}:${cat.name.toLowerCase()}`;
-        categoryMap.set(key, cat.id);
-      });
+    if (leaveColumns.length === 0) {
+        fail("No valid leave category columns found in headers. Please check header names.");
     }
 
-    // --- 4. BUILD MAPS ---
-    const masterData = {
-      employeeMap: new Map(),
-      employeeCodeMap: new Map(),
-      categoryMap: categoryMap
-    };
+    // 3. PRE-FETCH Employees
+    const employeeCodes = [...new Set(originalRows.map(r => String(r[empCodeHeader] || '').trim()).filter(Boolean))];
+    const employees = await commonQuery.findAllRecords(Employee, {
+        employee_code: { [Op.in]: employeeCodes },
+        company_id: mockStore.companyId,
+        status: { [Op.ne]: 2 }
+    }, {
+        attributes: ['id', 'employee_code', 'first_name', 'leave_template', 'branch_id'],
+        raw: true
+    }, transaction);
 
-    // Build employee maps
+    const employeeMap = new Map();
     employees.forEach(emp => {
-      masterData.employeeMap.set(emp.id, emp);
-      if (emp.employee_code) {
-        masterData.employeeCodeMap.set(String(emp.employee_code).trim().toLowerCase(), emp.id);
-      }
+        employeeMap.set(cleanStr(emp.employee_code), emp);
     });
 
-    // --- 5. PROCESSING LOOP ---
+    // 4. Pre-fetch existing balances to decide create vs update
+    const existingBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+        employee_id: { [Op.in]: employees.map(e => e.id) },
+        year: currentYear,
+        status: 0
+    }, {
+        attributes: ['id', 'employee_id', 'leave_category_name', 'leave_category_id', 'total_allocated', 'used_leaves'],
+        raw: true
+    }, transaction);
+
+    const balanceMap = new Map();
+    existingBalances.forEach(b => {
+        const key = `${b.employee_id}:${cleanStr(b.leave_category_name)}`;
+        balanceMap.set(key, b);
+    });
+
+    // 5. Build Template-Category lookup & Fallback Map
+    const templateCategoryMap = new Map();
+    const categoryFallbackMap = new Map();
+
+    allCategories.forEach(cat => {
+        // Map per template
+        if (!templateCategoryMap.has(cat.leave_template_id)) {
+            templateCategoryMap.set(cat.leave_template_id, new Map());
+        }
+        templateCategoryMap.get(cat.leave_template_id).set(cleanStr(cat.leave_category_name), cat);
+
+        // Map for company-wide fallback (first match wins)
+        const cName = cleanStr(cat.leave_category_name);
+        if (!categoryFallbackMap.has(cName)) {
+            categoryFallbackMap.set(cName, cat);
+        }
+    });
+
+    // 0. Ensure a default template exists for the company
+    let defaultTemplate = await commonQuery.findOneRecord(LeaveTemplate, { company_id: mockStore.companyId, status: 0 }, {}, transaction);
+    if (!defaultTemplate) {
+        defaultTemplate = await commonQuery.createRecord(LeaveTemplate, {
+            template_name: "Default Leave Template",
+            company_id: mockStore.companyId,
+            branch_id: mockStore.branchId,
+            user_id: mockStore.userId,
+            status: 0
+        }, transaction);
+    }
+
+    // 6. PROCESSING LOOP
     let createdCount = 0;
     let updatedCount = 0;
     let errorCount = 0;
     const errorSample = [];
     const MAX_SAMPLE = 10;
+    const balancesToCreate = [];
+    const balancesToUpdate = [];
 
-    for (let i = 0; i < rows.length; i++) {
-      if (i % 500 === 0 && i > 0) await new Promise(resolve => setImmediate(resolve));
-      if (isCancelled) fail("IMPORT_CANCELLED");
+    for (let i = 0; i < originalRows.length; i++) {
+        if (i % 500 === 0 && i > 0) await new Promise(resolve => setImmediate(resolve));
+        if (isCancelled) fail("IMPORT_CANCELLED");
 
-      const record = rows[i];
-      const originalRecord = originalRows[i];
-      const rowIndex = i + 2;
+        const record = originalRows[i];
+        const rowIndex = i + headerRowIndex + 2;
 
-      try {
-        // --- VALIDATION ---
-        const employeeCode = String(record['Employee Code'] || record.employee_code || '').trim();
+        try {
+            const empCode = String(record[empCodeHeader] || '').trim();
+            if (!empCode) continue;
 
-        if (!employeeCode) {
-          fail("Employee Code is required");
+            const employee = employeeMap.get(cleanStr(empCode));
+            if (!employee) {
+                fail(`Employee with code '${empCode}' not found in system.`);
+            }
+
+            const employeeTemplateId = employee.leave_template || null;
+            const employeeCategories = employeeTemplateId ? templateCategoryMap.get(employeeTemplateId) : null;
+
+            for (const col of leaveColumns) {
+                const countVal = record[col.header];
+                if (countVal === undefined || countVal === null || String(countVal).trim() === '') continue;
+
+                const count = parseFloat(countVal);
+                if (isNaN(count)) {
+                    fail(`Invalid count '${countVal}' for category '${col.header}'`);
+                }
+
+                // Find the category record: Try employee's template first, then fallback to company-wide
+                let categoryData = employeeCategories ? employeeCategories.get(col.canonicalCleanedName) : null;
+                
+                if (!categoryData) {
+                    categoryData = categoryFallbackMap.get(col.canonicalCleanedName);
+                }
+                
+                if (!categoryData) {
+                    // CREATE CATEGORY IF NOT EXISTS (User requested auto-creation)
+                    categoryData = await commonQuery.createRecord(LeaveTemplateCategory, {
+                        leave_template_id: employeeTemplateId || defaultTemplate.id,
+                        leave_category_name: col.categoryName,
+                        unused_leave_rule: 'LAPSE',
+                        is_paid: true,
+                        is_compoff: col.canonicalCleanedName.includes('compoff'),
+                        company_id: mockStore.companyId,
+                        branch_id: employee.branch_id || mockStore.branchId,
+                        user_id: mockStore.userId,
+                        status: 0
+                    }, transaction);
+                    
+                    // Update maps for subsequent rows
+                    categoryFallbackMap.set(col.canonicalCleanedName, categoryData);
+                    if (employeeTemplateId) {
+                        if (!templateCategoryMap.has(employeeTemplateId)) {
+                            templateCategoryMap.set(employeeTemplateId, new Map());
+                        }
+                        templateCategoryMap.get(employeeTemplateId).set(col.canonicalCleanedName, categoryData);
+                    }
+                }
+
+                const balKey = `${employee.id}:${col.canonicalCleanedName}`;
+                const existing = balanceMap.get(balKey);
+
+                const payload = {
+                    employee_id: employee.id,
+                    leave_template_id: employeeTemplateId,
+                    leave_category_id: categoryData.id,
+                    year: currentYear,
+                    leave_category_name: categoryData.leave_category_name,
+                    total_allocated: count,
+                    pending_leaves: count,
+                    used_leaves: 0,
+                    is_paid: categoryData.is_paid,
+                    is_compoff: categoryData.is_compoff,
+                    unused_leave_rule: categoryData.unused_leave_rule,
+                    carry_forward_limit: categoryData.carry_forward_limit,
+                    company_id: mockStore.companyId,
+                    branch_id: employee.branch_id || mockStore.branchId,
+                    user_id: mockStore.userId,
+                    status: 0
+                };
+
+                if (existing) {
+                    const currentTotal = parseFloat(existing.total_allocated || 0);
+                    const addedCount = count;
+                    const newTotal = currentTotal + addedCount;
+                    const used = parseFloat(existing.used_leaves || 0);
+                    const newPending = newTotal - used;
+
+                    balancesToUpdate.push({ 
+                        ...payload,
+                        total_allocated: newTotal,
+                        pending_leaves: newPending > 0 ? newPending : 0,
+                        used_leaves: used, // Preserve existing used leaves
+                        id: existing.id 
+                    });
+                    updatedCount++;
+                } else {
+                    balancesToCreate.push(payload);
+                    createdCount++;
+                }
+            }
+        } catch (rowError) {
+            errorCount++;
+            if (errorCount <= MAX_SAMPLE) errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
+            writeError(errorFileStream, record, rowError.message);
         }
-
-        const employeeId = masterData.employeeCodeMap.get(employeeCode.toLowerCase());
-
-        if (!employeeId) {
-          fail(`Employee not found: ${employeeCode}`);
-        }
-
-        // Log the entire record for debugging
-        // console.log(`Row ${rowIndex} - Full Record Data-----------------------\n:`, JSON.stringify(record, null, 2));
-        
-        // Extract leave categories and counts from numbered columns
-        const leaveData = [];
-        let categoryIndex = 1;
-
-        while (true) {
-          const categoryKey = `Leave Category${categoryIndex}`;
-          const countKey = `Leave Count${categoryIndex}`;
-          const altCategoryKey = `leave category${categoryIndex}`;
-          const altCountKey = `leave count${categoryIndex}`;
-
-          const category = String(record[categoryKey] || record[altCategoryKey] || '').trim();
-          const count = record[countKey] !== undefined ? record[countKey] : record[altCountKey];
-
-          // Check if columns exist in the record
-          const hasCategoryColumn = record.hasOwnProperty(categoryKey) || record.hasOwnProperty(altCategoryKey);
-          const hasCountColumn = record.hasOwnProperty(countKey) || record.hasOwnProperty(altCountKey);
-          
-          // Stop when neither column exists AND we've checked enough columns
-          if (!hasCategoryColumn && !hasCountColumn && categoryIndex > 5) break;
-
-          // If category exists but count is missing, that's an error
-          if (hasCategoryColumn && !hasCountColumn && category) {
-            fail(`Leave Count ${categoryIndex} is missing for category '${category}'`);
-          }
-
-          // If count exists but category is missing, that's an error
-          if (hasCountColumn && !hasCategoryColumn && count !== undefined) {
-            fail(`Leave Category ${categoryIndex} is missing but count is provided`);
-          }
-
-          // Validate category if column exists
-          if (hasCategoryColumn) {
-            if (!category) {
-              fail(`Leave Category ${categoryIndex} cannot be empty`);
-            }
-          }
-
-          // Validate count if column exists  
-          if (hasCountColumn) {
-            if (count === null || count === undefined || count === '') {
-              fail(`Leave Count ${categoryIndex} cannot be empty for category '${category}'`);
-            }
-          }
-
-          // If we have valid category, validate count
-          if (category) {
-            if (count === null || count === undefined || count === '') {
-              fail(`Leave Count ${categoryIndex} cannot be empty when category '${category}' is provided`);
-            }
-
-            const leaveCount = parseFloat(count);
-            if (isNaN(leaveCount) || leaveCount < 0) {
-              fail(`Invalid Leave Count ${categoryIndex}: '${count}' for category '${category}'`);
-            }
-
-            leaveData.push({ category: category, count: leaveCount });
-          }
-
-          categoryIndex++;
-          
-          // Safety break to prevent infinite loop
-          if (categoryIndex > 50) break;
-        }
-
-        if (leaveData.length === 0) {
-          fail("At least one leave category and count is required");
-        }
-        // Process each leave category for this employee
-        for (const { category, count } of leaveData) {
-
-          let existingBalance = null;
-          try {
-            existingBalance = await requestContext.run(mockStore, async () => {
-              return await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                employee_id: employeeId,
-                leave_category_name: category,
-                year: currentYear,
-                company_id: mockStore.companyId,
-                branch_id: mockStore.branchId,
-                user_id: mockStore.userId,
-                status: { [Op.ne]: 2 }
-              }, {
-                attributes: ['id', 'total_allocated']
-              }, transaction);
-            });
-          } catch (dbError) {
-            console.error(`Database error for employee ${employeeId}, category ${category}:`, dbError);
-            throw dbError;
-          }
-
-          if (existingBalance) {
-            // Update existing record
-            let update = null;
-            try {
-              update = await requestContext.run(mockStore, async () => {
-                return await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, {
-                  total_allocated: count,
-                  company_id: mockStore.companyId,
-                  branch_id: mockStore.branchId,
-                  user_id: mockStore.userId
-                }, transaction);
-              });
-            } catch (updateError) {
-              console.error(`Update error for employee ${employeeId}, category ${category}:`, updateError);
-              throw updateError;
-            }
-            updatedCount++;
-          } else {
-            // Create new record
-            let create = null;
-            try {
-              create = await requestContext.run(mockStore, async () => {
-                return await commonQuery.bulkCreate(EmployeeLeaveBalance, [{
-                  employee_id: employeeId,
-                  year: currentYear,
-                  leave_category_name: category,
-                  total_allocated: count,
-                  company_id: mockStore.companyId,
-                  branch_id: mockStore.branchId,
-                  user_id: mockStore.userId
-                }], {}, transaction);
-              });
-            } catch (createError) {
-              console.error(`Create error for employee ${employeeId}, category ${category}:`, createError);
-              throw createError;
-            }
-            createdCount++;
-          }
-        }
-
-
-      } catch (rowError) {
-        errorCount++;
-        if (errorCount <= MAX_SAMPLE) errorSample.push(`Row ${rowIndex}: ${rowError.message}`);
-        writeError(errorFileStream, originalRecord, rowError.message);
-      }
     }
 
+    // PHASE 2: Batch Execute
+    if (errorCount > 0) {
+        await transaction.rollback();
+        parentPort.postMessage({
+            status: "SUCCESS",
+            result: {
+                importErrors: true,
+                message: `${errorCount} errors found. No data was imported. Please fix all errors.`,
+                errors: errorSample,
+                errorCount
+            }
+        });
+        return;
+    }
+
+    if (balancesToCreate.length > 0) {
+        await commonQuery.bulkCreate(EmployeeLeaveBalance, balancesToCreate, {}, transaction);
+    }
+
+    for (const b of balancesToUpdate) {
+        await commonQuery.updateRecordById(EmployeeLeaveBalance, b.id, b, transaction);
+    }
 
     await transaction.commit();
 
@@ -339,6 +352,21 @@ const runWorker = async () => {
   }
 };
 
-runWorker().catch(error => {
+const startWorker = async () => {
+    const mockStore = {
+        userId: workerData.user_id,
+        companyId: workerData.company_id,
+        branchId: workerData.branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
+        ip: "127.0.0.1"
+    };
+
+    await requestContext.run(mockStore, async () => {
+        await runWorker(mockStore);
+    });
+};
+
+startWorker().catch(error => {
   parentPort.postMessage({ status: "ERROR", error: error.message });
 });

@@ -55,7 +55,7 @@ exports.getAll = async (req, res) => {
                     {},
                     false
                 );
-                record.dataValues.employee_count = employeeCount;
+                record.dataValues.employee_count = employeeCount || 0;
             }
         }
 

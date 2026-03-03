@@ -91,12 +91,12 @@ const parseTime = (timeVal, dateStr) => {
     timeStr = timeStr.replace(/([0-9])([AP]M)/i, '$1 $2');
 
     const formats = [
-        "YYYY-MM-DD HH:mm:ss", 
-        "YYYY-MM-DD HH:mm", 
+        "YYYY-MM-DD h:mm:ss A",
+        "YYYY-MM-DD hh:mm:ss A",
         "YYYY-MM-DD h:mm A", 
         "YYYY-MM-DD hh:mm A",
-        "YYYY-MM-DD h:mm:ss A",
-        "YYYY-MM-DD hh:mm:ss A"
+        "YYYY-MM-DD HH:mm:ss", 
+        "YYYY-MM-DD HH:mm"
     ];
 
     // Try parsing with the attached date
@@ -104,7 +104,7 @@ const parseTime = (timeVal, dateStr) => {
     if (parsed.isValid()) return parsed.toDate();
 
     // Fallback for time formats without leading date if needed
-    const timeOnlyFormats = ["HH:mm:ss", "HH:mm", "h:mm A", "hh:mm A"];
+    const timeOnlyFormats = ["h:mm:ss A", "hh:mm:ss A", "h:mm A", "hh:mm A", "HH:mm:ss", "HH:mm"];
     const parsedTime = dayjs(timeStr, timeOnlyFormats);
     if (parsedTime.isValid()) {
         return dayjs(dateStr).hour(parsedTime.hour()).minute(parsedTime.minute()).second(parsedTime.second()).toDate();
@@ -148,10 +148,14 @@ const runWorker = async () => {
     userId: workerData.user_id,
     companyId: workerData.company_id,
     branchId: workerData.branch_id,
+    is_super_admin: workerData.is_super_admin,
+    branch_access: workerData.branch_access,
     // Add snake_case too for direct access safety
     user_id: workerData.user_id,
     company_id: workerData.company_id,
     branch_id: workerData.branch_id,
+    is_super_admin: workerData.is_super_admin,
+    branch_access: workerData.branch_access,
     ip: "127.0.0.1"
   };
 
@@ -208,42 +212,29 @@ const runWorker = async () => {
     const dateHeaders = []; 
     const dateMapping = {}; 
 
-    // Year detection
-    const currentYear = new Date().getFullYear();
-    let sheetYear = currentYear;
+    // Month/Year from body (Required)
+    const providedMonth = parseInt(body.month);
+    const providedYear = parseInt(body.year);
 
-    // Check sheet name and file path first
-    const pathMatch = (sheetName + filePath).match(/(\d{4})/);
-    if (pathMatch) {
-        const yr = parseInt(pathMatch[1]);
-        if (yr > 2000 && yr < 2100) sheetYear = yr;
+    if (isNaN(providedMonth) || isNaN(providedYear)) {
+        fail("Month and Year are required for Attendance Import.");
     }
 
-    // Scan first 10 rows for a potential year if sheet name didn't have a valid one
-    for (let i = 0; i < Math.min(formattedRows.length, 10); i++) {
-        const row = formattedRows[i];
-        if (!row) continue;
-        const yearMatch = row.find(cell => {
-            const val = parseInt(cell);
-            return val > 2000 && val < 2100;
-        });
-        if (yearMatch) {
-            sheetYear = parseInt(yearMatch);
-            break;
-        }
-    }
+    const sheetYear = providedYear;
+    const monthName = dayjs().month(providedMonth - 1).format("MMM");
 
     const startIdx = daysIdx !== -1 ? daysIdx + 1 : 0;
     for (let i = startIdx; i < formattedHeaders.length; i++) {
         const h = String(formattedHeaders[i] || '').trim();
-        if (h.match(/^\d{1,2}-[a-zA-Z]+/)) {
+        // Match any header starting with a number (e.g., 1, 01, 1-Jan, etc.)
+        if (h.match(/^\d{1,2}/)) {
             dateHeaders.push(i);
             dateMapping[i] = h;
         }
     }
 
     if (dateHeaders.length === 0) {
-        fail(`Could not find any date columns (e.g., '1-Jan') in sheet '${sheetName}'.`);
+        fail(`Could not find any date columns starting with a number in sheet '${sheetName}'.`);
     }
 
     if (isCancelled) fail("IMPORT_CANCELLED");
@@ -314,17 +305,30 @@ const runWorker = async () => {
         if (id) empIdList.push(id);
     });
 
-    // 2. Determine date range
+    // 2. Pre-process Dates and determine date range
+    const parsedDatesMap = new Map();
     let minDate = null;
     let maxDate = null;
+
     for (const colIdx of dateHeaders) {
-        const dateStr = dateMapping[colIdx];
-        const fullDateStr = `${dateStr}-${sheetYear}`.replace(/\s+/g, '-');
-        const mDate = dayjs(fullDateStr, ["DD-MMM-YYYY", "D-MMM-YYYY", "DD-MMMM-YYYY", "D-MMMM-YYYY"]);
-        if (mDate.isValid()) {
-            const d = mDate.format("YYYY-MM-DD");
-            if (!minDate || d < minDate) minDate = d;
-            if (!maxDate || d > maxDate) maxDate = d;
+        const dateStrRaw = dateMapping[colIdx];
+        const dayMatch = dateStrRaw.match(/^(\d{1,2})/);
+        if (dayMatch) {
+            const dayNum = dayMatch[1];
+            const fullDateStr = `${dayNum}-${monthName}-${sheetYear}`;
+            const mDate = dayjs(fullDateStr, "D-MMM-YYYY");
+            
+            if (mDate.isValid()) {
+                const formattedDate = mDate.format("YYYY-MM-DD");
+                parsedDatesMap.set(colIdx, {
+                    obj: mDate,
+                    formatted: formattedDate,
+                    year: mDate.year()
+                });
+
+                if (!minDate || formattedDate < minDate) minDate = formattedDate;
+                if (!maxDate || formattedDate > maxDate) maxDate = formattedDate;
+            }
         }
     }
 
@@ -360,21 +364,6 @@ const runWorker = async () => {
         balances.forEach(b => {
             balanceCache.add(`${b.employee_id}_${b.leave_category_id}_${sheetYear}`);
         });
-    }
-
-    // 4. Pre-process Dates to avoid repeated parsing
-    const parsedDatesMap = new Map();
-    for (const colIdx of dateHeaders) {
-        const dateStr = dateMapping[colIdx];
-        const fullDateStr = `${dateStr}-${sheetYear}`.replace(/\s+/g, '-');
-        const mDate = dayjs(fullDateStr, ["DD-MMM-YYYY", "D-MMM-YYYY", "DD-MMMM-YYYY", "D-MMMM-YYYY"]);
-        if (mDate.isValid()) {
-            parsedDatesMap.set(colIdx, {
-                obj: mDate,
-                formatted: mDate.format("YYYY-MM-DD"),
-                year: mDate.year()
-            });
-        }
     }
     // ----------------------------------------------------------
 
@@ -953,6 +942,19 @@ const runWorker = async () => {
   }
 };
 
-runWorker().catch(error => {
+const startWorker = async () => {
+    const mockStore = {
+        userId: workerData.user_id,
+        companyId: workerData.company_id,
+        branchId: workerData.branch_id,
+        ip: "127.0.0.1"
+    };
+
+    await requestContext.run(mockStore, async () => {
+        await runWorker();
+    });
+};
+
+startWorker().catch(error => {
   parentPort.postMessage({ status: "ERROR", error: error.message });
 });

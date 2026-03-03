@@ -14,6 +14,7 @@ function getContext() {
     branch_id: store.branchId,
     branch_access: store.branchAccess,
     role_id: store.roleId,
+    is_super_admin: store.is_super_admin || false,
     ip: store.ip
   };
 }
