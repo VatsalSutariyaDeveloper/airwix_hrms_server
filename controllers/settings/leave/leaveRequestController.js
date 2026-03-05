@@ -1,4 +1,4 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -436,6 +436,22 @@ exports.getPendingApprovals = async (req, res) => {
             approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
             status: 0
         }, {
+            attributes: [
+                "id",
+                "employee_id",
+                "leave_category_id",
+                "start_date",
+                "end_date",
+                "total_days",
+                "reason",
+                "approval_status",
+                "current_level",
+                "approval_history",
+                "approved_by",
+                "document",
+                "branch.branch_name",
+                "status"
+            ],
             include: [
                 {
                     model: Employee,
@@ -447,6 +463,11 @@ exports.getPendingApprovals = async (req, res) => {
                     model: LeaveTemplateCategory,
                     as: "category",
                     attributes: ["leave_category_name"]
+                },
+                {
+                    model: BranchMaster,
+                    as: "branch",
+                    attributes: []
                 }
             ],
         });

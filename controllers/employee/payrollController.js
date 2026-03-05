@@ -69,6 +69,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 model: DesignationMaster,
                 as: "designation",
                 attributes: ['designation_name']
+            },
+            {
+                model: EmployeeAdvance,
+                as: "employeeAdvances",
+                attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payroll_month']
             }
         ]
     }, transaction);
@@ -321,6 +326,7 @@ console.log("processedComponents",processedComponents)
             totalDeductions: totalDeductions.toFixed(2)
         },
         breakdown: { earnings, deductions, statutory, employer },
+        employeeAdvances: (employee.employeeAdvances || []).map(advance => advance.get({ plain: true })),
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
@@ -1113,6 +1119,16 @@ console.log("basis",basis)
 
                     const ot = parseFloat(summary.salary.overtimeAmount || 0);
                     const fine = parseFloat(summary.salary.totalFine || 0);
+
+                    // Include Employee Advances in deductions
+                    if (summary.employeeAdvances && summary.employeeAdvances.length > 0) {
+                        summary.employeeAdvances.forEach(adv => {
+                            const amt = parseFloat(adv.amount || 0);
+                            if (amt > 0) {
+                                dedList.push({ name: "Advance Repayment", amount: amt.toFixed(2), is_advance: true, advance_id: adv.id, payment_mode: adv.payment_mode });
+                            }
+                        });
+                    }
 
                     if (isCurrentMonth) {
                         summary.breakdown.earnings.forEach(e => {
