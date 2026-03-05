@@ -59,6 +59,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 model: EmployeeSalaryTemplate,
                 as: "employeeSalaryTemplate",
                 include: [{
+                    separate: true,
                     model: EmployeeSalaryTemplateTransaction,
                     as: "employeeSalaryTemplateTransactions",
                     include: [{ model: SalaryComponent, as: "component" }]
@@ -114,15 +115,20 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     });
 
     // Step A.1: Calculate Canteen/Lunch Counts
-    const lunchRecords = await CanteenAttendance.count({
-        where: {
-            employee_id,
+    const lunchRecords = await commonQuery.findAllRecords(
+        CanteenAttendance,
+        {
+            employee_id,    
             date: { [Op.between]: [startDate, endDate] },
-            status: 0 // PRESENT status for meal
         },
+        { attributes: ['date', 'created_at'] },
         transaction
-    });
-    const lunchCount = lunchRecords || 0;
+    );
+    const lunchHistory = lunchRecords.map(r => ({
+        date: dayjs(r.getDataValue('date')).format('YYYY-MM-DD'),
+        time: dayjs(r.getDataValue('created_at')).format('hh:mm A')
+    }));
+    const lunchCount = lunchHistory.length;
 
     // Logic for LWP
     const totalLWP = absentDays + (halfDays * 0.5);
@@ -199,7 +205,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         const comp = plain.component || plain.SalaryComponent || (isModel ? trans.get('component') : null);
         return { plain, comp };
     });
-
+console.log("processedComponents",processedComponents)
     // First pass to find Basic (many formulas depend on it)
     processedComponents.forEach(({ plain, comp }) => {
         if (comp && (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic'))) {
@@ -234,7 +240,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             }
             return;
         }
-
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
             const actualAmount = comp.is_lwp_impacted 
                 ? parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2)) 
@@ -302,7 +307,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, payableDays: parseFloat(payableDaysValue).toFixed(2) },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2) },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -1044,6 +1049,19 @@ console.log("basis",basis)
                     payableDays = daysInMonth - lwpDays;
                 }
 
+                // Fetch Lunch History for finalized payslip
+                const startDate = dayjs(`${m.year}-${m.month}-01`).startOf('month').format('YYYY-MM-DD');
+                const endDate = dayjs(`${m.year}-${m.month}-01`).endOf('month').format('YYYY-MM-DD');
+                const lunchRecords = await commonQuery.findAllRecords(
+                    CanteenAttendance,
+                    { employee_id, date: { [Op.between]: [startDate, endDate] } },
+                    { attributes: ['date', 'created_at'] }
+                );
+                const lunchHistory = lunchRecords.map(r => ({
+                    date: dayjs(r.getDataValue('date')).format('YYYY-MM-DD'),
+                    time: dayjs(r.getDataValue('created_at')).format('hh:mm A')
+                }));
+
                 overview.push({
                     id: payslip.id,
                     month: m.month,
@@ -1055,6 +1073,7 @@ console.log("basis",basis)
                     payable_days: payableDays.toFixed(1),
                     lwp_days: lwpDays || 0,
                     lunch_count: payslip.lunch_count || 0,
+                    lunch_history: lunchHistory,
                     earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                     deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                     statutory: payslip.statutory_details || {},
@@ -1122,6 +1141,7 @@ console.log("basis",basis)
                         payable_days: payableDays.toFixed(1),
                         lwp_days: summary.attendance.totalLWP,
                         lunch_count: summary.attendance.lunchCount || 0,
+                        lunch_history: summary.attendance.lunchHistory || [],
                         earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
                         deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
