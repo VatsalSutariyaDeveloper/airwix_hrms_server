@@ -10,6 +10,8 @@ const constants = {
   ATTENDANCE_SUPERVISOR_ROLE_ID: 3,
   REPORTING_MANAGER_ROLE_ID: 4,
 
+  EMPLOYEE_ENTITY_ID: 60,
+
   /* Files Path Constants */
   COMPANY_LOGO_IMG_FOLDER: "companies/logo/",
   COMPANY_SIGN_IMG_FOLDER: "companies/signatures/",
