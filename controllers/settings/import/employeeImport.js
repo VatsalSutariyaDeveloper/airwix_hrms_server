@@ -1,6 +1,6 @@
 const { parentPort, workerData } = require("worker_threads");
-const { sequelize, commonQuery } = require("../../../helpers");
-const { Employee, Department, DesignationMaster, StateMaster } = require("../../../models");
+const { sequelize, commonQuery, constants } = require("../../../helpers");
+const { Employee, Department, DesignationMaster, StateMaster, CustomField, BranchMaster } = require("../../../models");
 const { transformRows } = require("../../../helpers/functions/excelService");
 const { Op } = require("sequelize");
 const xlsx = require("xlsx");
@@ -59,6 +59,11 @@ const normalizeText = (v) => {
     return s === "" ? null : s.toLowerCase();
 };
 
+const normalizeHeader = (h) => {
+    if (h === undefined || h === null) return "";
+    return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+};
+
 const getGenderValue = (v) => {
     const s = String(v || "").trim().toLowerCase();
     if (!s) return null;
@@ -90,14 +95,22 @@ const getEmployeeTypeDetails = (typeStr, codeStr) => {
     let employee_type = 1; // Default to Staff
     let worker_type = null;
 
+    // Check for on-role/off-role first as it implies Worker type
+    if (s.includes('on-role') || s.includes('on role')) {
+        return { employee_type: 2, worker_type: 1 };
+    }
+    if (s.includes('off-role') || s.includes('off role')) {
+        return { employee_type: 2, worker_type: 2 };
+    }
+
     if (s.includes('staff')) {
         employee_type = 1;
     } else if (s.includes('worker') || c.includes('worker')) {
         employee_type = 2;
-        // Check for on-role/off-role
-        if (s.includes('on-role') || s.includes('on role') || c.includes('on-role') || c.includes('on role')) {
+        // Check code for on-role/off-role if not in type string
+        if (c.includes('on-role') || c.includes('on role')) {
             worker_type = 1; 
-        } else if (s.includes('off-role') || s.includes('off role') || c.includes('off-role') || c.includes('off role')) {
+        } else if (c.includes('off-role') || c.includes('off role')) {
             worker_type = 2; 
         }
     } else if (s.includes('contractor')) {
@@ -123,6 +136,13 @@ const getBloodGroupValue = (v) => {
     // Handle variants like "b positive" vs "b+"
     if (s === "b+ positive") s = "b+";
     return BLOOD_GROUP_MAP[s] || null;
+};
+
+const getBooleanValue = (v) => {
+    if (v === undefined || v === null) return false;
+    if (typeof v === "boolean") return v;
+    const s = String(v).trim().toLowerCase();
+    return ["true", "1", "yes", "y"].includes(s);
 };
 
 let isCancelled = false;
@@ -206,7 +226,7 @@ const runWorker = async () => {
         { key: "mother_name", aliases: ["mother name", "mother"] },
         { key: "spouse_name", aliases: ["spouse name", "spouse"] },
         { key: "same_as_current", aliases: ["same as current", "same as present"] },
-        { key: "permanent_address1", aliases: ["permanent address1", "permanent address 1"] },
+        { key: "permanent_address1", aliases: ["permanent address1", "permanent address 1", "address", "permanent address"] },
         { key: "permanent_address2", aliases: ["permanent address2", "permanent address 2"] },
         { key: "permanent_city", aliases: ["permanent city", "permanent city name"] },
         { key: "permanent_pincode", aliases: ["permanent pincode", "permanent pin", "permanent zipcode"] },
@@ -235,37 +255,43 @@ const runWorker = async () => {
         { key: "eps_exit_date", aliases: ["eps exit date", "eps exit"] },
         { key: "hps_eligible", aliases: ["hps eligible", "hps eligibility"] },
         { key: "driving_license_number", aliases: ["driving license number", "driving license", "dl"] },
+        { key: "employee_grade", aliases: ["employee grade", "grade", "emp grade"] },
         { key: "voter_id_number", aliases: ["voter id number", "voter id"] },
         { key: "name_as_per_bank", aliases: ["name as per bank", "bank name"] },
         { key: "bank_name", aliases: ["bank name", "bank"] },
         { key: "bank_account_number", aliases: ["bank account number", "account number", "bank account"] },
         { key: "bank_ifsc_code", aliases: ["bank ifsc code", "ifsc code", "ifsc"] },
         { key: "bank_account_holder_name", aliases: ["bank account holder name", "account holder name"] },
-        { key: "upi_id", aliases: ["upi id", "upi"] }
+        { key: "upi_id", aliases: ["upi id", "upi"] },
+        { key: "education_details", aliases: ["education details", "education", "qualification", "degree"] }
     ];
     
-    // Always map common fields
-    COMMON_FIELD_MAPPINGS.forEach(field => {
-        const matchedHeader = excelHeaders.find(header => 
-            field.aliases.some(alias => 
-                String(header).trim().toLowerCase() === String(alias).trim().toLowerCase()
-            )
-        );
-        
-        if (matchedHeader) {
-            fieldMapping[matchedHeader] = field.key;
+    // Always run auto-match for any headers that haven't been mapped yet
+    COMMON_FIELD_MAPPINGS.forEach(requiredField => {
+        // If this field key isn't already mapped to some header...
+        if (!Object.values(fieldMapping).includes(requiredField.key)) {
+            const matchedHeader = excelHeaders.find(header => {
+                const normalizedHeader = normalizeHeader(header);
+                return requiredField.aliases.some(alias => 
+                    normalizedHeader === normalizeHeader(alias)
+                );
+            });
+            
+            if (matchedHeader && !fieldMapping[matchedHeader]) {
+                fieldMapping[matchedHeader] = requiredField.key;
+            }
         }
     });
-    
     // Also map user-provided required_fields if available
     if (body.required_fields && Array.isArray(body.required_fields)) {
         body.required_fields.forEach(requiredField => {
             if (requiredField.key && requiredField.aliases && Array.isArray(requiredField.aliases)) {
-                const matchedHeader = excelHeaders.find(header => 
-                    requiredField.aliases.some(alias => 
-                        String(header).trim().toLowerCase() === String(alias).trim().toLowerCase()
-                    )
-                );
+                const matchedHeader = excelHeaders.find(header => {
+                    const normalizedHeader = normalizeHeader(header);
+                    return requiredField.aliases.some(alias => 
+                        normalizedHeader === normalizeHeader(alias)
+                    );
+                });
                 
                 if (matchedHeader) {
                     fieldMapping[matchedHeader] = requiredField.key;
@@ -273,7 +299,43 @@ const runWorker = async () => {
             }
         });
     }
-    
+
+    const activeCustomFields = await commonQuery.findAllRecords(
+        CustomField,
+        {
+            company_id,
+            entity_id: constants.EMPLOYEE_ENTITY_ID,
+            status: 0
+        },
+        { attributes: ['id', 'field_name', 'field_label', 'field_type'], raw: true },null,{}
+    );
+
+    // Fetch all active branches for the company - direct query to avoid tenant filtering
+    const branches = await commonQuery.findAllRecords(
+        BranchMaster,
+        {
+            company_id,
+            status: 0
+        },
+        {attributes: ['id', 'branch_name']},null,{}
+    );
+
+    // Create branch name to ID mapping for quick lookup
+    const branchNameToIdMap = {};
+    branches.forEach(branch => {
+        branchNameToIdMap[normalizeHeader(branch.branch_name)] = branch.id;
+    });
+
+    activeCustomFields.forEach(cf => {
+        const matchedHeader = excelHeaders.find(header => {
+            const normalizedHeader = normalizeHeader(header);
+            return normalizedHeader === normalizeHeader(cf.field_name) || normalizedHeader === normalizeHeader(cf.field_label);
+        });
+        if (matchedHeader) {
+            fieldMapping[matchedHeader] = `CUSTOM_FIELD_${cf.field_name}`;
+        }
+    });
+
     try {
         errorFileStream = fs.createWriteStream(errorLogPath);
         const originalRows = xlsx.utils.sheet_to_json(worksheet, { range: headerRowIndex });
@@ -437,7 +499,6 @@ const runWorker = async () => {
             return;
         }
 
-        console.log("No duplicates found, proceeding with validation and import...");
 
         // Create/find departments, designations, and states first using bulk operations
         const departmentMap = new Map();
@@ -449,9 +510,6 @@ const runWorker = async () => {
             ...rows.map(r => r.present_state_id).filter(Boolean),
             ...rows.map(r => r.permanent_state_id).filter(Boolean)
         ])];
-
-
-        console.log("Bulk creating departments, designations, and states...");
 
         // Bulk create/find departments
         const existingDepartments = await commonQuery.findAllRecords(
@@ -565,24 +623,17 @@ const runWorker = async () => {
                 const voterId = record.voter_id_number ? String(record.voter_id_number).trim().toUpperCase() : null;
                 const bankAccount = record.bank_account_number ? String(record.bank_account_number).trim() : null;
 
-                // 🛑 SILENT SKIP: If row has no name, code, OR mobile, it's likely a summary/divider row
-                // OR if firstName is a known header noise word like "Management", "Account", etc.
                 const noiseWords = ["management", "account", "admin", "branding", "design", "proposals", "hr", "safety", "it", "planning", "manufacturing", "purchase", "documentation", "qc", "sales", "store", "project", "aepl worker"];
                 if ((!firstName && !empCode && !mobile)) {
-                    // console.log(`Debug: Silent skipping Row ${rowIndex} - empty row.`);
                     continue; 
                 }
 
                 if (firstName && noiseWords.includes(firstName.toLowerCase())) {
-                    console.log(`Debug: Skipping Row ${rowIndex} - name matches noise word: '${firstName}'.`);
                     continue;
                 }
 
                 if (!firstName) fail("First Name is required");
                 // if (!mobile) fail("Mobile Number is required");
-                
-                // Make these optional if missing in Excel to avoid blocking rows, 
-                // but keep database requirements in mind. DB might throw, but let it try.
                 const joiningDate = parseExcelDate(record.joining_date, rowIndex, "Joining Date");
                 const dob = parseExcelDate(record.dob, rowIndex, "DOB");
                 const gender = getGenderValue(record.gender);
@@ -647,17 +698,22 @@ const runWorker = async () => {
                     pan_number: pan,
                     name_as_per_aadhaar: record.name_as_per_aadhaar,
                     aadhaar_number: aadhaar,
-                    pf_number: record.pf_number,
-                    pf_joining_date: parseExcelDate(record.pf_joining_date, rowIndex, "PF Joining Date"),
-                    pf_eligible: record.pf_eligible || false,
-                    esi_eligible: record.esi_eligible || false,
-                    esi_number: record.esi_number,
-                    pt_eligible: record.pt_eligible || false,
-                    lwf_eligible: record.lwf_eligible || false,
-                    eps_eligible: record.eps_eligible || false,
-                    eps_joining_date: parseExcelDate(record.eps_joining_date, rowIndex, "EPS Joining Date"),
-                    eps_exit_date: parseExcelDate(record.eps_exit_date, rowIndex, "EPS Exit Date"),
-                    hps_eligible: record.hps_eligible || false,
+                    
+                    pf_eligible: getBooleanValue(record.pf_eligible),
+                    pf_number: getBooleanValue(record.pf_eligible) ? record.pf_number : null,
+                    pf_joining_date: getBooleanValue(record.pf_eligible) ? parseExcelDate(record.pf_joining_date, rowIndex, "PF Joining Date") : null,
+                    
+                    esi_eligible: getBooleanValue(record.esi_eligible),
+                    esi_number: getBooleanValue(record.esi_eligible) ? record.esi_number : null,
+                    
+                    pt_eligible: getBooleanValue(record.pt_eligible),
+                    lwf_eligible: getBooleanValue(record.lwf_eligible),
+                    
+                    eps_eligible: getBooleanValue(record.eps_eligible),
+                    eps_joining_date: getBooleanValue(record.eps_eligible) ? parseExcelDate(record.eps_joining_date, rowIndex, "EPS Joining Date") : null,
+                    eps_exit_date: getBooleanValue(record.eps_eligible) ? parseExcelDate(record.eps_exit_date, rowIndex, "EPS Exit Date") : null,
+                    
+                    hps_eligible: getBooleanValue(record.hps_eligible),
                     driving_license_number: drivingLicense,
                     voter_id_number: voterId,
                     name_as_per_bank: record.name_as_per_bank,
@@ -666,8 +722,65 @@ const runWorker = async () => {
                     bank_ifsc_code: record.bank_ifsc_code,
                     bank_account_holder_name: record.bank_account_holder_name,
                     upi_id: record.upi_id,
-                    branch_id,
+                    education_details: record.education_details ? (Array.isArray(record.education_details) ? record.education_details : [{ education: record.education_details }]) : [],
+                    custom_fields: (() => {
+                        const cfArray = [];
+                        // System expects: [{ field_name, field_label, field_type, value }, ...]
+                        activeCustomFields.forEach(cf => {
+                            let value = undefined;
+
+                            // 1. Check for prefixed keys in transformed 'record'
+                            const prefixedKey = `CUSTOM_FIELD_${cf.field_name}`;
+                            if (record[prefixedKey] !== undefined) {
+                                value = record[prefixedKey];
+                            } else {
+                                // 2. Fallback: Search originalRecord case-insensitively
+                                const matchedKey = Object.keys(originalRecord).find(k => 
+                                    normalizeHeader(k) === normalizeHeader(cf.field_name) || 
+                                    normalizeHeader(k) === normalizeHeader(cf.field_label)
+                                );
+                                if (matchedKey) value = originalRecord[matchedKey];
+                            }
+
+                            if (value !== undefined) {
+                                cfArray.push({
+                                    field_name: cf.field_name,
+                                    field_label: cf.field_label,
+                                    type: cf.field_type,
+                                    value: value
+                                });
+                            }
+                        });
+                        return cfArray;
+                    })(),
+                    employee_grade: record.employee_grade || (() => {
+                        const gradeKey = Object.keys(originalRecord).find(k => normalizeHeader(k) === "grade" || normalizeHeader(k) === "employeegrade");
+                        return gradeKey ? originalRecord[gradeKey] : null;
+                    })(),
+                    branch_id: (() => {
+                        const workLocationKey = Object.keys(originalRecord).find(k => 
+                            normalizeHeader(k) === "worklocation" || 
+                            normalizeHeader(k) === "workrelatedlocation" ||
+                            normalizeHeader(k) === "location" ||
+                            normalizeHeader(k) === "branch" ||
+                            normalizeHeader(k) === "branchname"
+                        );
+                        
+                        if (workLocationKey && originalRecord[workLocationKey]) {
+                            const workLocation = String(originalRecord[workLocationKey]).trim();
+                            const normalizedWorkLocation = normalizeHeader(workLocation);
+                            
+                            if (branchNameToIdMap[normalizedWorkLocation]) {
+                                return branchNameToIdMap[normalizedWorkLocation];
+                            } else {
+                                return branch_id;
+                            }
+                        }
+                        
+                        return branch_id;
+                    })(),
                     company_id,
+                    user_id
                 };
 
                 // Add to valid employees array
@@ -682,7 +795,7 @@ const runWorker = async () => {
 
         // Bulk create all valid employees
         if (validEmployees.length > 0) {
-            await commonQuery.bulkCreate(Employee, validEmployees, {}, transaction);
+            await commonQuery.bulkCreate(Employee, validEmployees, {}, transaction, false);
         }
 
         if (errorFileStream) errorFileStream.end();

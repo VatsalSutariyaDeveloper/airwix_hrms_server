@@ -133,7 +133,7 @@ exports.getAll = async (req, res) => {
           // { model: ZoneMaster, as: "zone", attributes: [], required:false },
         ],
         attributes: [
-          "id", "branch_name", "city", "pincode", "status",
+          "id", "branch_name", "city", "pincode", "status","company_id",
           "country.country_name", 
           "state.state_name", 
           // "zone.zone_name", 
