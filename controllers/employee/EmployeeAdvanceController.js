@@ -104,7 +104,11 @@ exports.getAll = async (req, res) => {
         if (data.items && Array.isArray(data.items)) {
             data.items.forEach(record => {
                 if (record.payroll_month && totalsMap[record.payroll_month]) {
-                    record.dataValues.monthly_total = totalsMap[record.payroll_month];
+                    if (record.dataValues) {
+                        record.dataValues.monthly_total = totalsMap[record.payroll_month];
+                    } else {
+                        record.monthly_total = totalsMap[record.payroll_month];
+                    }
                 }
             });
         }

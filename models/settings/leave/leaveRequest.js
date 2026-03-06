@@ -37,6 +37,7 @@ module.exports = (sequelize, DataTypes) => {
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
+            is_encashment: { type: DataTypes.BOOLEAN, defaultValue: false },
         },
         {
             tableName: "leave_requests",

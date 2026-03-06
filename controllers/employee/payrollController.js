@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes } = require("sequelize");
 const dayjs = require("dayjs");
@@ -187,9 +187,33 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
 
+    // Step E.1: Fetch Approved Encashment Requests
+    const encashments = await commonQuery.findAllRecords(LeaveRequest, {
+        employee_id,
+        approval_status: 3, // APPROVED
+        is_encashment: true,
+        start_date: { [Op.between]: [startDate, endDate] },
+        status: 0
+    }, {}, transaction);
+
+    const totalEncashedDays = encashments.reduce((sum, e) => sum + parseFloat(e.total_days || 0), 0);
+    const encashmentAmount = totalEncashedDays * perDaySalary;
+
     // Step F: Prepare Detailed Breakdown
     const earnings = [], deductions = [], statutory = {}, employer = {};
     let takeHomeEarnings = 0, totalDeductions = 0;
+
+    // Add Encashment to earnings if any
+    if (encashmentAmount > 0) {
+        earnings.push({
+            name: "Leave Encashment",
+            base_amount: encashmentAmount,
+            actual_amount: parseFloat(encashmentAmount.toFixed(2)),
+            days: totalEncashedDays,
+            is_encashment: true
+        });
+        takeHomeEarnings += encashmentAmount;
+    }
 
     // Values map for formula evaluation
     const valuesMap = {
@@ -321,6 +345,7 @@ console.log("processedComponents",processedComponents)
             overtimeAmount: otAmount.toFixed(2),
             incentiveAmount: totalIncentive.toFixed(2),
             advanceAmount: totalAdvance.toFixed(2),
+            encashmentAmount: encashmentAmount.toFixed(2),
             netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
@@ -1132,7 +1157,7 @@ console.log("basis",basis)
 
                     if (isCurrentMonth) {
                         summary.breakdown.earnings.forEach(e => {
-                            if (e.is_adjustment || e.is_ot) {
+                            if (e.is_adjustment || e.is_ot || e.is_encashment) {
                                 earnList.push({ name: e.name, amount: parseFloat(e.actual_amount || 0).toFixed(2), is_employer: e.is_employer });
                             } else {
                                 const compPerDay = e.base_amount / daysInCalculation;

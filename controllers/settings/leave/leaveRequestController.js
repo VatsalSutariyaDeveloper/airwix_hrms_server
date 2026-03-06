@@ -35,43 +35,51 @@ exports.create = async (req, res) => {
         let { employee_id, leave_category_id, start_date, end_date } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
-        // --- Calculate total_days based on Sandwich Policy via Service ---
-        const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
-
         // Map requested total_days to preserved half-days/custom entries
         const requestedTotal = parseFloat(req.body.total_days || 0);
         const start = dayjs(start_date);
         const end = dayjs(end_date);
         const calendarDays = end.diff(start, 'day') + 1;
 
-        const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
-        let total_days = Math.max(0, workingDays - reduction);
-        total_days = Math.round(total_days * 10) / 10;
+        let total_days = 0;
+        let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
 
-        // Check for Overlapping Leaves
-        const overlap = await commonQuery.findOneRecord(LeaveRequest, {
-            employee_id,
-            approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
-            status: 0,
-            [Op.or]: [
-                {
-                    start_date: { [Op.between]: [start_date, end_date] }
-                },
-                {
-                    end_date: { [Op.between]: [start_date, end_date] }
-                },
-                {
-                    [Op.and]: [
-                        { start_date: { [Op.lte]: start_date } },
-                        { end_date: { [Op.gte]: end_date } }
-                    ]
-                }
-            ]
-        }, {}, transaction);
+        if (is_encashment) {
+            total_days = requestedTotal;
+        } else {
+            // --- Calculate total_days based on Sandwich Policy via Service ---
+            const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
 
-        if (overlap) {
-            await transaction.rollback();
-            return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+            const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
+            total_days = Math.max(0, workingDays - reduction);
+            total_days = Math.round(total_days * 10) / 10;
+
+            // Check for Overlapping Leaves (Only for regular leaves)
+            const overlap = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id,
+                approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
+                status: 0,
+                is_encashment: false,
+                [Op.or]: [
+                    {
+                        start_date: { [Op.between]: [start_date, end_date] }
+                    },
+                    {
+                        end_date: { [Op.between]: [start_date, end_date] }
+                    },
+                    {
+                        [Op.and]: [
+                            { start_date: { [Op.lte]: start_date } },
+                            { end_date: { [Op.gte]: end_date } }
+                        ]
+                    }
+                ]
+            }, {}, transaction);
+
+            if (overlap) {
+                await transaction.rollback();
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+            }
         }
 
         // 2. Fetch specific employee balance record
@@ -151,7 +159,8 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["approval_status", true, true],
-            ["employee_id", true, false],
+            ["first_name", true, false],
+            ["employee_code", true, false],
         ];
 
         // Add date filtering based on payload
@@ -194,7 +203,8 @@ exports.getAll = async (req, res) => {
                     { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
                     { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
                 ],
-                where: whereClause
+                where: whereClause,
+                order: [['created_at', 'DESC']]
             }
         );
 
@@ -368,7 +378,7 @@ exports.updateStatus = async (req, res) => {
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
 
-            if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+            if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
                 const diff = end.diff(start, 'day');
@@ -431,6 +441,7 @@ exports.updateStatus = async (req, res) => {
 // 6. Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
+        console.log("req.user",req.user)
         // const employeeId = req.body.employee_id;
         const requests = await commonQuery.findAllRecords(LeaveRequest, {
             approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
@@ -476,7 +487,6 @@ exports.getPendingApprovals = async (req, res) => {
 
         for (const request of requests) {
             const employee = request.employee;
-
             // The initial query already includes employee.leaveTemplate
             if (!employee) continue;
 
@@ -484,8 +494,8 @@ exports.getPendingApprovals = async (req, res) => {
             const currentLevel = request.current_level;
             const config = template ? (template.approval_config || []) : [];
 
-            const currentStage = config.find(c => c.level === currentLevel);
-            if (!currentStage) continue;
+            let currentStage = config.find(c => c.level === currentLevel);
+            if (!currentStage) currentStage = "ANYONE";
             
             let isAuthorized = false;
             if (req.user.is_super_admin) {
@@ -606,7 +616,7 @@ exports.cancelLeave = async (req, res) => {
         }, transaction);
 
         // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
-        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
             const start = dayjs(leaveRequest.start_date);
             const end = dayjs(leaveRequest.end_date);
             const diff = end.diff(start, 'day');
@@ -662,33 +672,38 @@ exports.calculateLeaveDays = async (req, res) => {
 
         let workingDays = 0;
         const dateWiseBreakdown = [];
+        const isEncashment = req.body.is_encashment === true || req.body.is_encashment === "true";
 
-        for (let i = 0; i < calendarDays; i++) {
-            const cur = start.add(i, 'day').format('YYYY-MM-DD');
-            const dayOff = await getDayOffInfo(employee, cur);
+        if (isEncashment) {
+            workingDays = calendarDays;
+        } else {
+            for (let i = 0; i < calendarDays; i++) {
+                const cur = start.add(i, 'day').format('YYYY-MM-DD');
+                const dayOff = await getDayOffInfo(employee, cur);
 
-            let dayStatus = "Working Day";
-            let isWorking = true;
+                let dayStatus = "Working Day";
+                let isWorking = true;
 
-            if (dayOff.isHoliday) {
-                dayStatus = dayOff.holidayDetails?.name || "Holiday";
-                isWorking = false;
-            } else if (dayOff.isWeeklyOff) {
-                dayStatus = "Week Off";
-                isWorking = false;
-            }
+                if (dayOff.isHoliday) {
+                    dayStatus = dayOff.holidayDetails?.name || "Holiday";
+                    isWorking = false;
+                } else if (dayOff.isWeeklyOff) {
+                    dayStatus = "Week Off";
+                    isWorking = false;
+                }
 
-            dateWiseBreakdown.push({
-                date: cur,
-                name: dayStatus,
-                is_working: isWorking
-            });
+                dateWiseBreakdown.push({
+                    date: cur,
+                    name: dayStatus,
+                    is_working: isWorking
+                });
 
-            if (countSandwich) {
-                workingDays += 1;
-            } else {
-                if (isWorking) {
+                if (countSandwich) {
                     workingDays += 1;
+                } else {
+                    if (isWorking) {
+                        workingDays += 1;
+                    }
                 }
             }
         }

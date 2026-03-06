@@ -20,7 +20,7 @@ exports.create = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    const template = await commonQuery.createRecord(HolidayTemplate, POST, transaction);
+    const template = await commonQuery.createRecord(HolidayTemplate, POST, transaction, { company_id: true });
 
     if (POST.holiday_transactions && Array.isArray(POST.holiday_transactions)) {
       for (const holidayTransaction of POST.holiday_transactions) {
@@ -28,7 +28,7 @@ exports.create = async (req, res) => {
           ...holidayTransaction,
           template_id: template.id
         };
-        await commonQuery.createRecord(HolidayTransaction, transactionData, transaction);
+        await commonQuery.createRecord(HolidayTransaction, transactionData, transaction, { company_id: true });
       }
     }
 
@@ -59,21 +59,21 @@ exports.update = async (req, res) => {
 
     const existingHolidayTemplate = await commonQuery.findOneRecord(HolidayTemplate, id, {
       include: [{ model: HolidayTransaction, as: "holidayTransactions" }],
-    }, transaction);
+    }, transaction, false, { company_id: true });
 
     if (!existingHolidayTemplate) {
       await transaction.rollback();
       return res.error(constants.HOLIDAY_TEMPLATE_NOT_FOUND);
     }
 
-    await commonQuery.updateRecordById(HolidayTemplate, id, POST, transaction);
+    await commonQuery.updateRecordById(HolidayTemplate, id, POST, transaction, false, { company_id: true });
 
     if (POST.holiday_transactions) {
       await syncHolidayTransactions(id, POST.holiday_transactions, existingHolidayTemplate.holidayTransactions || [], transaction);
     }
 
     // Trigger sync for all employees using this template
-    const employeesToSync = await commonQuery.findAllRecords(Employee, { holiday_template: id, status: 0 }, { attributes: ['id'] }, transaction);
+    const employeesToSync = await commonQuery.findAllRecords(Employee, { holiday_template: id, status: 0 }, { attributes: ['id'] }, transaction, { company_id: true } );
     if (employeesToSync.length > 0) {
         const employeeIds = employeesToSync.map(emp => emp.id);
         await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'holiday_template', id, transaction);
@@ -100,6 +100,7 @@ exports.getAll = async (req, res) => {
       req.body,
       fieldConfig,
       {},
+      { company_id: true }
     );
 
     if (data.items && data.items.length > 0) {
@@ -107,7 +108,7 @@ exports.getAll = async (req, res) => {
         data.items.map(async (item) => {
           const holiday_count = await commonQuery.countRecords(HolidayTransaction, {
             template_id: item.id
-          });
+          }, {}, { company_id: true });
 
           return {
             ...(item.toJSON ? item.toJSON() : item),
@@ -123,7 +124,7 @@ exports.getAll = async (req, res) => {
           Employee,
           { holiday_template: record.id, status: 0 },
           {},
-          false
+          { company_id: true }
         );
         record.employee_count = employeeCount;
       }
@@ -147,7 +148,7 @@ exports.getById = async (req, res) => {
 
         }
       ]
-    });
+    }, null, false, { company_id: true });
     if (!record || record.status === 2) return res.error(constants.HOLIDAY_TEMPLATE_NOT_FOUND);
 
     return res.ok(record);
@@ -167,7 +168,7 @@ exports.dropdownList = async (req, res) => {
           attributes: ['id', 'template_id', 'name', 'date', 'status'],
         },
       ]
-    });
+    }, null, { company_id: true });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
@@ -184,13 +185,13 @@ exports.delete = async (req, res) => {
       return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
 
-    const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, null, transaction);
+    const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, null, transaction, { company_id: true });
     if (holidayTemplateCount === 0) {
       await transaction.rollback();
       return res.error(constants.NO_RECORDS_FOUND);
     }
 
-    await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, null, transaction);
+    await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, null, transaction, { company_id: true });
 
     await transaction.commit();
     return res.success(constants.HOLIDAY_TEMPLATE_DELETED);
@@ -213,7 +214,9 @@ exports.updateStatus = async (req, res) => {
       HolidayTemplate,
       ids,
       { status },
-      transaction
+      transaction,
+      false,
+      { company_id: true }
     );
 
     if (!updated) {
@@ -221,7 +224,7 @@ exports.updateStatus = async (req, res) => {
       return res.error(constants.NOT_FOUND);
     }
 
-    await commonQuery.updateRecordById(HolidayTransaction, { template_id: ids }, { status }, transaction);
+    await commonQuery.updateRecordById(HolidayTransaction, { template_id: ids }, { status }, transaction, false, { company_id: true });
 
     await transaction.commit();
     return res.success(constants.HOLIDAY_TEMPLATE_UPDATED);
@@ -239,7 +242,7 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
   // Use existing transactions passed from controller instead of fetching again
   const transactionsToDelete = existingTransactions.filter(att => !incomingIds.includes(att.id));
   for (const transactionToDelete of transactionsToDelete) {
-    await commonQuery.softDeleteById(HolidayTransaction, { id: transactionToDelete.id }, transaction);
+    await commonQuery.softDeleteById(HolidayTransaction, { id: transactionToDelete.id }, transaction, false, { company_id: true });
   }
 
   // Process each transaction from request
@@ -254,10 +257,10 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
 
     if (transactionData.id) {
       // Update existing transaction
-      await commonQuery.updateRecordById(HolidayTransaction, transactionData.id, dbPayload, transaction);
+      await commonQuery.updateRecordById(HolidayTransaction, transactionData.id, dbPayload, transaction, false, { company_id: true });
     } else {
       // Create new transaction
-      await commonQuery.createRecord(HolidayTransaction, dbPayload, transaction);
+      await commonQuery.createRecord(HolidayTransaction, dbPayload, transaction, { company_id: true });
     }
   }
 }

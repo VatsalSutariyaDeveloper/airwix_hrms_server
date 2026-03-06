@@ -536,6 +536,7 @@ class LeaveBalanceService {
                 start_date: { [Op.lte]: date },
                 end_date: { [Op.gte]: date },
                 approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+                is_encashment: false,
                 status: 0,
                 reason: { [Op.ne]: AUTO_REASON }
             }, {}, t);

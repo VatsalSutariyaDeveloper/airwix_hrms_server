@@ -4,7 +4,8 @@ const {
     EmployeeSalaryTemplate,
     EmployeeSalaryTemplateTransaction,
     SalaryComponent,
-    sequelize
+    sequelize,
+    SalaryRevisionHistory
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
@@ -95,7 +96,6 @@ const employeeSalaryTemplateController = {
 
             // 2. History Recording
             if (oldCTC !== newCTC || (employeeTemplate && employeeTemplate.template_id !== (salary_template_id || null))) {
-                const { SalaryRevisionHistory } = require("../../models");
                 await commonQuery.createRecord(SalaryRevisionHistory, {
                     employee_id: employeeId,
                     previous_template_id: employeeTemplate?.template_id || null,

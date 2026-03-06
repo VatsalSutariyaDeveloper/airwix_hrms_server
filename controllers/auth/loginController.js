@@ -383,7 +383,7 @@ exports.logout = async (req, res) => {
       {},
       transaction, 
       true, 
-      { company_id: true }
+      {}
     );
 
     if (!user) {
