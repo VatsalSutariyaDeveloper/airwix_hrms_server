@@ -115,10 +115,10 @@ exports.getAll = async (req, res) => {
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryComponent,
-      { ...POST },
+      { ...POST, limit:"All" },
       fieldConfig,
       {},
-      false
+      {company_id: true}
     );
 
     return res.ok(data);
