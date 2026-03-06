@@ -183,31 +183,30 @@ exports.login = async (req, res) => {
 
     // 0. Activation Logic
     if(req.body.access_by === "application"){
-      if (verify_code) {
-          if (user.activation_code === verify_code) {
-              // Activate User using Sequelize directly
-              await User.update({
-                  is_activated: true,
-                  activation_code: null,
-                  status: 0 
-              }, {
-                  where: { id: user.id },
-                  transaction
-              });
+      // if (verify_code) {
+      //     if (user.activation_code === verify_code) {
+      //         // Activate User using Sequelize directly
+      //         await User.update({
+      //             is_activated: true,
+      //             activation_code: null,
+      //             status: 0 
+      //         }, {
+      //             where: { id: user.id },
+      //             transaction
+      //         });
 
-              user.is_activated = true;
-              user.status = 0;
-          } else if (!user.is_activated) {
-              await transaction.rollback();
-              return res.error(400, { message: "Invalid activation code." });
-          }
-      } else {
-        console.log("user", user);
+      //         user.is_activated = true;
+      //         user.status = 0;
+      //     } else if (!user.is_activated) {
+      //         await transaction.rollback();
+      //         return res.error(400, { message: "Invalid activation code." });
+      //     }
+      // } else {
           if (!user.is_activated) {
               await transaction.rollback();
               return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
           }
-      }
+      // }
     }
 
     // 1. Enforce Platform Restriction (Employee = App Only)

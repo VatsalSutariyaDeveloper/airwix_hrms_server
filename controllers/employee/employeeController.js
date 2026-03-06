@@ -1576,7 +1576,7 @@ exports.inviteUser = async (req, res) => {
                 branch_id: employee.branch_id,
                 company_access: employee.company_id,
                 status: 1,
-                is_activated: false
+                is_activated: true
             }, transaction);
 
             // await commonQuery.createRecord(UserCompanyRoles, {
@@ -1594,7 +1594,7 @@ exports.inviteUser = async (req, res) => {
 
         await commonQuery.updateRecordById(User, user.id, {
             activation_code: activation_code,
-            is_activated: false, // Ensure it's reset to false
+            is_activated: true, // Ensure it's reset to false
             status: 1 // Keep inactive
         }, transaction);
 
