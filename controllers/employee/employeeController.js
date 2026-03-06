@@ -1575,7 +1575,7 @@ exports.inviteUser = async (req, res) => {
                 company_id: employee.company_id,
                 branch_id: employee.branch_id,
                 company_access: employee.company_id,
-                status: 1,
+                status: 0,
                 is_activated: true
             }, transaction);
 
@@ -1595,7 +1595,7 @@ exports.inviteUser = async (req, res) => {
         await commonQuery.updateRecordById(User, user.id, {
             activation_code: activation_code,
             is_activated: true, // Ensure it's reset to false
-            status: 1 // Keep inactive
+            status: 0 // Keep inactive
         }, transaction);
 
         await transaction.commit();

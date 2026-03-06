@@ -5,6 +5,7 @@ const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
+const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 
 
 /**
@@ -324,6 +325,33 @@ console.log("processedComponents",processedComponents)
         totalDeductions += amt;
     });
 
+    // Step G: Calculate Statutory TDS (Tax Deducted at Source)
+    let tdsAmount = 0;
+    let tdsPercentage = 0;
+    if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
+        const tdsConfig = template.statutory_config.tds;
+        if (tdsConfig.calculation_type === 'Manual Amount') {
+            tdsAmount = parseFloat(tdsConfig.amount || 0);
+        } else if (tdsConfig.calculation_type !== 'None') {
+            const annualGross = monthlyGross * 12;
+            const regimeMap = {
+                'System Calculated': 'new_regime',
+                'New Regime': 'new_regime',
+                'Old Regime': 'old_regime'
+            };
+            const regime = regimeMap[tdsConfig.calculation_type] || 'new_regime';
+            const { monthlyTDS, percentage } = calculateTDS(annualGross, regime);
+            tdsAmount = monthlyTDS;
+            tdsPercentage = percentage;
+        }
+    }
+
+    if (tdsAmount > 0) {
+        statutory["Income Tax (TDS)"] = tdsAmount;
+        statutory["Income Tax (TDS) %"] = tdsPercentage;
+        totalDeductions += tdsAmount;
+    }
+
     const netPayable = takeHomeEarnings - totalDeductions;
 
     return {
@@ -346,6 +374,7 @@ console.log("processedComponents",processedComponents)
             incentiveAmount: totalIncentive.toFixed(2),
             advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount.toFixed(2),
+            tdsPercentage: tdsPercentage.toFixed(2),
             netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
@@ -1048,10 +1077,16 @@ exports.getSalaryOverview = async (req, res) => {
 
                 // Include Statutory Employee Deductions in list
                 const statDetails = payslip.statutory_details || {};
+                const tdsPercent = statDetails["Income Tax (TDS) %"];
                 Object.entries(statDetails).forEach(([name, amount]) => {
                     const amt = parseFloat(amount || 0);
-                    if (amt > 0) {
-                        dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                    if (amt > 0 && name !== "Income Tax (TDS) %") {
+                        dedList.push({ 
+                            name, 
+                            amount: amt.toFixed(2), 
+                            is_statutory: true,
+                            percentage: name === "Income Tax (TDS)" ? tdsPercent : null
+                        });
                     }
                 });
 
@@ -1135,10 +1170,16 @@ console.log("basis",basis)
                     }));
 
                     // Include Statutory Employee Deductions in dynamic list
+                    const tdsPercent = (summary.breakdown.statutory || {})["Income Tax (TDS) %"];
                     Object.entries(summary.breakdown.statutory || {}).forEach(([name, amount]) => {
                         const amt = parseFloat(amount || 0);
-                        if (amt > 0) {
-                            dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                        if (amt > 0 && name !== "Income Tax (TDS) %") {
+                            dedList.push({ 
+                                name, 
+                                amount: amt.toFixed(2), 
+                                is_statutory: true,
+                                percentage: name === "Income Tax (TDS)" ? tdsPercent : null
+                            });
                         }
                     });
 

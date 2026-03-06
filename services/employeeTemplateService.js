@@ -386,8 +386,8 @@ class EmployeeTemplateService {
 
     static async syncSalaryTemplate(employeeId, templateId, manualData, transaction, meta = {}) {
         if (!templateId && !manualData) {
-            await commonQuery.softDeleteById(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction);
-            await commonQuery.softDeleteById(EmployeeSalaryTemplate, { employee_id: employeeId }, transaction);
+            await commonQuery.softDeleteById(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction, { company_id: true });
+            await commonQuery.softDeleteById(EmployeeSalaryTemplate, { employee_id: employeeId }, transaction, { company_id: true });
             return;
         }
 
@@ -398,7 +398,7 @@ class EmployeeTemplateService {
         if (!templateData && templateId) {
             const masterTemplate = meta.preFetchedMaster || await commonQuery.findOneRecord(SalaryTemplate, templateId, {
                 include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
-            }, transaction);
+            }, transaction, false, { company_id: true });
             
             if (masterTemplate) {
                 templateData = masterTemplate.toJSON();
@@ -411,7 +411,7 @@ class EmployeeTemplateService {
         let employeeSalaryTemplateId = null;
 
         if (templateData) {
-            const existingTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: employeeId }, {}, transaction);
+            const existingTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: employeeId }, {}, transaction, false, { company_id: true });
             const templatePayload = { 
                 ...templateData, 
                 employee_id: employeeId, 
@@ -419,10 +419,10 @@ class EmployeeTemplateService {
             };
 
             if (existingTemplate) {
-                await commonQuery.updateRecordById(EmployeeSalaryTemplate, existingTemplate.id, templatePayload, transaction);
+                await commonQuery.updateRecordById(EmployeeSalaryTemplate, existingTemplate.id, templatePayload, transaction, false, { company_id: true });
                 employeeSalaryTemplateId = existingTemplate.id;
             } else {
-                const newRecord = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
+                const newRecord = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction, { company_id: true });
                 employeeSalaryTemplateId = newRecord.id;
             }
 
@@ -435,11 +435,11 @@ class EmployeeTemplateService {
                     esi_eligible: sc?.employee_esi?.enabled || false,
                     pt_eligible: sc?.pt?.enabled || false,
                     lwf_eligible: sc?.employee_lwf?.enabled || false,
-                }, transaction);
+                }, transaction, false, { company_id: true });
             } else {
                  await commonQuery.updateRecordById(Employee, employeeId, {
                     salary_template_id: templateId || 0
-                }, transaction);
+                }, transaction, false, { company_id: true });
             }
         }
 
@@ -460,23 +460,23 @@ class EmployeeTemplateService {
                 };
             });
 
-            await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, transaction, { company_id: true });
             if (mappedItems.length > 0) {
-                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, mappedItems, {}, transaction);
+                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, mappedItems, {}, transaction, { company_id: true });
             }
         }
     }
 
     static async bulkSyncSalaryTemplate(employeeIds, templateId, transaction, meta = {}) {
         if (!templateId) {
-            await commonQuery.softDeleteById(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: employeeIds } }, transaction);
-            await commonQuery.softDeleteById(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            await commonQuery.softDeleteById(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
+            await commonQuery.softDeleteById(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
             return;
         }
 
         const masterTemplate = meta.preFetchedMaster || await commonQuery.findOneRecord(SalaryTemplate, templateId, {
             include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
-        }, transaction);
+        }, transaction, false, { company_id: true });
 
         if (!masterTemplate) return;
 
@@ -486,7 +486,7 @@ class EmployeeTemplateService {
         delete templateData.salaryTemplateTransactions;
 
         // 1. Sync Main Template Records in Bulk
-        const existing = await commonQuery.findAllRecords(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, {}, transaction);
+        const existing = await commonQuery.findAllRecords(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, {}, transaction, { company_id: true });
         const existingMap = new Map(existing.map(e => [e.employee_id, e]));
 
         const toCreateTemplates = [];
@@ -500,14 +500,14 @@ class EmployeeTemplateService {
         }
 
         if (toCreateTemplates.length > 0) {
-            await commonQuery.bulkCreate(EmployeeSalaryTemplate, toCreateTemplates, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeSalaryTemplate, toCreateTemplates, {}, transaction, { company_id: true });
         }
         for (const item of toUpdateTemplates) {
-            await commonQuery.updateRecordById(EmployeeSalaryTemplate, item.id, item.payload, transaction);
+            await commonQuery.updateRecordById(EmployeeSalaryTemplate, item.id, item.payload, transaction, false, { company_id: true });
         }
 
         // Refresh mapping to get IDs of newly created records for transactions
-        const allEmpTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, { attributes: ['id', 'employee_id'] }, transaction);
+        const allEmpTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, { employee_id: { [Op.in]: employeeIds } }, { attributes: ['id', 'employee_id'] }, transaction, { company_id: true });
         const empTemplateIdMap = new Map(allEmpTemplates.map(et => [et.employee_id, et.id]));
 
         // 2. Sync Components in Bulk
@@ -526,9 +526,9 @@ class EmployeeTemplateService {
             }
         }
 
-        await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
         if (componentPayloads.length > 0) {
-            await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction, { company_id: true });
         }
 
         // 3. Sync Employee Table Fields
@@ -541,18 +541,18 @@ class EmployeeTemplateService {
             empUpdatePayload.lwf_eligible = sc?.employee_lwf?.enabled || false;
         }
 
-        await commonQuery.updateRecordById(Employee, { id: { [Op.in]: employeeIds } }, empUpdatePayload, transaction);
+        await commonQuery.updateRecordById(Employee, { id: { [Op.in]: employeeIds } }, empUpdatePayload, transaction, false, { company_id: true });
     }
 
     static async syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false, meta = {}) {
         if (!templateId && !manualData) {
-            await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction, { company_id: true });
             return;
         }
 
         let data = manualData;
         if (!data && templateId) {
-            const master = meta.preFetchedMaster || await commonQuery.findOneRecord(ShiftTemplate, templateId, {}, transaction);
+            const master = meta.preFetchedMaster || await commonQuery.findOneRecord(ShiftTemplate, templateId, {}, transaction, false, { company_id: true });
             if (master) {
                 data = master.toJSON();
                 // Store master template ID as shift_id in the employee setting
@@ -564,7 +564,7 @@ class EmployeeTemplateService {
         if (!data) return;
 
         // 1. Clear existing day-wise settings for this employee
-        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: employeeId }, transaction, { company_id: true });
 
         // 2. Fetch Weekly Offs for this employee to identify "All Week" offs
         const weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
@@ -586,7 +586,7 @@ class EmployeeTemplateService {
             }));
 
         if (payloads.length > 0) {
-            await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction, { company_id: true });
         }
 
         // Trigger attendance rebuild for current month to reflect new shift timings
@@ -599,7 +599,7 @@ class EmployeeTemplateService {
         // STYLE CHANGE: Transitioning to "Inherit by Default".
         // Syncing 7 rows per employee into employee_shift was extremely slow. 
         // Now we just clear any individual overrides, allowing fallback to ShiftTemplate.
-        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
 
         // 4. Batch rebuild
         if (!skipRebuild) {
@@ -638,7 +638,7 @@ class EmployeeTemplateService {
             employee_id: { [Op.in]: employeeIds },
             punch_time: { [Op.between]: [`${startOfMonth} 00:00:00`, `${endOfMonth} 23:59:59`] },
             status: 0
-        }, { order: [['punch_time', 'ASC']] }, transaction);
+        }, { order: [['punch_time', 'ASC']] }, transaction, { company_id: true });
 
         const punchMap = new Map(); // Key: empId_YYYY-MM-DD
         allMonthPunches.forEach(p => {
@@ -654,7 +654,7 @@ class EmployeeTemplateService {
             template_id: { [Op.in]: holidayTemplateIds },
             date: { [Op.between]: [startOfMonth, endOfMonth] },
             status: 0
-        }, {}, transaction) : [];
+        }, {}, transaction, { company_id: true } ) : [];
         const holidayMap = new Map(); // Key: templateId_YYYY-MM-DD
         allHolidays.forEach(h => holidayMap.set(`${h.template_id}_${h.date}`, h));
 

@@ -75,6 +75,7 @@ exports.getAll = async (req, res) => {
           sequelize.col("users.user_name"),
           ", "
         ),
+        "is_system",
         "status",
         "created_at",
         "updated_at",
