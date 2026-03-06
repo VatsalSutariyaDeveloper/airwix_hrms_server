@@ -31,7 +31,7 @@ exports.create = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    const result = await commonQuery.createRecord(BranchMaster, req.body, transaction);
+    const result = await commonQuery.createRecord(BranchMaster, req.body, transaction, { company_id: true });
     await transaction.commit();
     return res.success(constants.CREATED, ENTITY, result);
   } catch (err) {
@@ -68,7 +68,7 @@ exports.update = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    const updated = await commonQuery.updateRecordById(BranchMaster, req.params.id, req.body, transaction);
+    const updated = await commonQuery.updateRecordById(BranchMaster, req.params.id, req.body, transaction, false, { company_id: true });
     if (!updated || updated.status === 2) {
       await transaction.rollback();
       return res.error("NOT_FOUND");
@@ -98,7 +98,9 @@ exports.getById = async (req, res) => {
           "state_id", "state.state_name", 
           // "zone_id", "zone.zone_name", 
         ]
-      }
+      },
+      false,
+      { company_id: true }
     );
 
     if (!record || record.status === 2) return res.error("NOT_FOUND");
@@ -140,8 +142,7 @@ exports.getAll = async (req, res) => {
           // [sequelize.col("state.state_name"), "state_name"],
         ]
       },
-      {},
-      false
+      { company_id: true }
     );
 
     return res.success("FETCH", data);
@@ -164,6 +165,8 @@ exports.dropdownList = async (req, res) => {
           ["branch_name", "ASC"]
         ]
       },
+      null,
+      { company_id: true }
     );
     return res.success("FETCH", record);
   } catch (err) {
@@ -192,7 +195,7 @@ exports.delete = async (req, res) => {
       return res.error("INVALID_idS_ARRAY");
     }
     
-    const deleted = await commonQuery.softDeleteById(BranchMaster, ids, transaction);
+    const deleted = await commonQuery.softDeleteById(BranchMaster, ids, transaction, { company_id: true });
     if (!deleted) {
       await transaction.rollback();
       return res.error("ALREADY_DELETED");
@@ -234,7 +237,9 @@ exports.updateStatus = async (req, res) => {
       BranchMaster,
       ids,
       { status },
-      transaction
+      transaction,
+      false,
+      { company_id: true }
     );
 
     if (!updated || updated.status === 2) {

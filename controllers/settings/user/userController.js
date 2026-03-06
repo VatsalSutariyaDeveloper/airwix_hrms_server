@@ -225,7 +225,7 @@ exports.create = async (req, res) => {
 
     // Generate Activation Code
     req.body.activation_code = crypto.randomBytes(20).toString("hex");
-    req.body.is_activated = false;
+    req.body.is_activated = true;
 
     const newUser = await commonQuery.createRecord(User, req.body, transaction, { company_id: true });
 

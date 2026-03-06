@@ -40,11 +40,14 @@ exports.getByEmployeeId = async (req, res) => {
             activeYear = end.year();
         }
 
+        const cycleType = employee?.leaveTemplate?.leave_policy_cycle || 'CALENDAR_YEAR';
+        const isMonthlyCycle = ['MONTHLY', 'QUARTERLY'].includes(cycleType);
+
         const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, { 
             employee_id: employeeId,
             status: 0, // Fetch active balances
             ...(activeYear ? { year: activeYear } : {}),
-            month: (employee && employee.leaveTemplate && employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') ? dayjs(cycle_info.end).month() + 1 : null
+            month: isMonthlyCycle ? dayjs(cycle_info.end).month() + 1 : null
         }, {
             order: [['id', 'ASC']]
         });

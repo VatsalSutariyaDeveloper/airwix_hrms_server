@@ -87,7 +87,7 @@ exports.create = async (req, res) => {
     };
 
     // 2. Create Main Template
-    const template = await commonQuery.createRecord(SalaryTemplate, templateData, transaction);
+    const template = await commonQuery.createRecord(SalaryTemplate, templateData, transaction, { company_id: true });
 
     // 3. Handle Template Transactions (Components)
     if (POST.components && Array.isArray(POST.components)) {
@@ -103,7 +103,7 @@ exports.create = async (req, res) => {
       }));
 
       // Bulk create uses commonQuery to ensure tenant IDs are injected
-      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction, { company_id: true });
     }
 
     await transaction.commit();
@@ -130,6 +130,8 @@ exports.getAll = async (req, res) => {
       SalaryTemplate,
       { ...req.body, status: 0 },
       fieldConfig,
+      null,
+      { company_id: true }
     );
 
     if (data.items && Array.isArray(data.items)) {
@@ -140,7 +142,11 @@ exports.getAll = async (req, res) => {
           {},
           false
         );
-        record.dataValues.employee_count = employeeCount;
+        if (record.dataValues) {
+          record.dataValues.employee_count = employeeCount;
+        } else {
+          record.employee_count = employeeCount;
+        }
       }
     }
 
@@ -156,6 +162,8 @@ exports.dropdownList = async (req, res) => {
       SalaryTemplate,
       { status: 0 },
       { attributes: ["id", "template_name"] },
+      null,
+      { company_id: true }
     );
     return res.ok(data);
   } catch (err) {
@@ -179,7 +187,7 @@ exports.getById = async (req, res) => {
           ]
         }
       ]
-    });
+    }, null, false, { company_id: true });
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
     return res.ok(record);
   } catch (err) {
@@ -216,7 +224,9 @@ exports.update = async (req, res) => {
       SalaryTemplate,
       id,
       {},
-      transaction
+      transaction,
+      false,
+      { company_id: true }
     );
 
     if (!salaryTemplate || salaryTemplate.status === 2) {
@@ -243,7 +253,7 @@ exports.update = async (req, res) => {
       ctc_yearly: calcMonthlyCTC * 12
     };
 
-    await commonQuery.updateRecordById(SalaryTemplate, id, templateData, transaction);
+    await commonQuery.updateRecordById(SalaryTemplate, id, templateData, transaction, false, { company_id: true });
 
     // 2. Update Transactions (Syncing Logic)
     if (POST.components && Array.isArray(POST.components)) {
@@ -266,11 +276,11 @@ exports.update = async (req, res) => {
         status: 0
       }));
 
-      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction, { company_id: true });
     }
 
     // Trigger sync for all employees using this template
-    const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
+    const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction, { company_id: true });
     if (employeesToSync.length > 0) {
         const employeeIds = employeesToSync.map(emp => emp.id);
         await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'salary_template_id', id, transaction);
@@ -288,7 +298,7 @@ exports.delete = async (req, res) => {
   try {
     const transaction = await sequelize.transaction();
     const { ids } = req.body;
-    const deleted = await commonQuery.softDeleteById(SalaryTemplate, ids, transaction);
+    const deleted = await commonQuery.softDeleteById(SalaryTemplate, ids, transaction, { company_id: true });
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -310,7 +320,7 @@ exports.updateStatus = async (req, res) => {
       return res.error(constants.INVALID_ID,);
     }
 
-    const count = await commonQuery.updateRecordById(SalaryTemplate, ids, { status }, transaction);
+    const count = await commonQuery.updateRecordById(SalaryTemplate, ids, { status }, transaction, false, { company_id: true });
 
     if (count === null) {
       await transaction.rollback();

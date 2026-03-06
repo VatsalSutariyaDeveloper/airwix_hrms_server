@@ -44,7 +44,7 @@ exports.getAll = async (req, res) => {
             req.body,
             fieldConfig,
             {
-                attributes: ['id', 'name', 'description', 'status']
+                attributes: ['id', 'name', 'description', 'status', "branch_id"]
             }
         );
 

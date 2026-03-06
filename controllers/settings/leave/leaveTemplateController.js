@@ -35,7 +35,7 @@ exports.create = async (req, res) => {
         }
 
         // 1. Create Template
-        const template = await commonQuery.createRecord(LeaveTemplate, { ...templateData, total_leaves }, transaction);
+        const template = await commonQuery.createRecord(LeaveTemplate, { ...templateData, total_leaves }, transaction, { company_id: true });
 
         // 2. Create Categories if provided
         const finalCategories = categories || [];
@@ -75,7 +75,7 @@ exports.create = async (req, res) => {
                 leave_template_id: template.id,
                 company_id: template.company_id
             }));
-            await commonQuery.bulkCreate(LeaveTemplateCategory, categoryData, {}, transaction);
+            await commonQuery.bulkCreate(LeaveTemplateCategory, categoryData, {}, transaction, { company_id: true });
         }
 
         await transaction.commit();
@@ -119,7 +119,7 @@ exports.update = async (req, res) => {
         }
 
         // 1. Update Template
-        const updatedTemplate = await commonQuery.updateRecordById(LeaveTemplate, id, { ...templateData, total_leaves }, transaction);
+        const updatedTemplate = await commonQuery.updateRecordById(LeaveTemplate, id, { ...templateData, total_leaves }, transaction, false, { company_id: true });
         if (!updatedTemplate) {
             await transaction.rollback();
             return res.error("NOT_FOUND");
@@ -130,7 +130,7 @@ exports.update = async (req, res) => {
             const finalCategories = [...categories];
 
             // Ensure Comp Off and Unpaid exist in finalCategories if not already in DB
-            const existingCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { leave_template_id: id }, {}, transaction);
+            const existingCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { leave_template_id: id }, {}, transaction, { company_id: true });
             
             if (!finalCategories.find(c => c.is_compoff) && !existingCategories.find(c => c.is_compoff)) {
                 finalCategories.push({
@@ -172,22 +172,22 @@ exports.update = async (req, res) => {
             });
             
             if (idsToDelete.length > 0) {
-                await commonQuery.softDeleteById(LeaveTemplateCategory, { id: { [Op.in]: idsToDelete } }, transaction);
+                await commonQuery.softDeleteById(LeaveTemplateCategory, { id: { [Op.in]: idsToDelete } }, transaction, { company_id: true });
             }
 
             // Update or Create
             for (const cat of finalCategories) {
                 const catData = { ...cat, leave_template_id: id, company_id: updatedTemplate.company_id };
                 if (cat.id) {
-                    await commonQuery.updateRecordById(LeaveTemplateCategory, cat.id, catData, transaction);
+                    await commonQuery.updateRecordById(LeaveTemplateCategory, cat.id, catData, transaction, false, { company_id: true });
                 } else {
-                    await commonQuery.createRecord(LeaveTemplateCategory, catData, transaction);
+                    await commonQuery.createRecord(LeaveTemplateCategory, catData, transaction, { company_id: true });
                 }
             }
         }
 
         // 3. Sync all employees assigned to this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { leave_template: id, status: 0 }, { attributes: ['id'] }, transaction);
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { leave_template: id, status: 0 }, { attributes: ['id'] }, transaction, { company_id: true });
         if (employeesToSync.length > 0) {
             const employeeIds = employeesToSync.map(emp => emp.id);
             await LeaveBalanceService.bulkSyncEmployeeBalances(employeeIds, id, transaction);
@@ -208,7 +208,7 @@ exports.getById = async (req, res) => {
             include: [
                 { model: LeaveTemplateCategory, as: "categories" }
             ]
-        });
+        }, null, false, { company_id: true });
 
         if (!record || record.status === 2) return res.error("NOT_FOUND");
         return res.ok(record);
@@ -231,7 +231,8 @@ exports.getAll = async (req, res) => {
             LeaveTemplate,
             req.body,
             fieldConfig,
-            {}
+            {},
+            { company_id: true }
         );
 
         // Add employee count to each record
@@ -241,9 +242,13 @@ exports.getAll = async (req, res) => {
                     Employee,
                     { leave_template: record.id, status: 0 },
                     {},
-                    false
+                    { company_id: true }
                 );
-                record.dataValues.employee_count = employeeCount;
+                if (record.dataValues) {
+                    record.dataValues.employee_count = employeeCount;
+                } else {
+                    record.employee_count = employeeCount;
+                }
             }
         }
 
@@ -262,7 +267,9 @@ exports.dropdownList = async (req, res) => {
             { status: 0 },
             {
                 attributes: ["id", "template_name"]
-            }
+            },
+            null,
+            { company_id: true }
         );
         return res.ok(data);
     } catch (err) {
@@ -280,10 +287,10 @@ exports.delete = async (req, res) => {
         }
 
         // Delete templates
-        await commonQuery.softDeleteById(LeaveTemplate, { id: { [Op.in]: ids } }, transaction);
+        await commonQuery.softDeleteById(LeaveTemplate, { id: { [Op.in]: ids } }, transaction, { company_id: true });
         
         // Delete associated categories
-        await commonQuery.softDeleteById(LeaveTemplateCategory, { leave_template_id: { [Op.in]: ids } }, transaction);
+        await commonQuery.softDeleteById(LeaveTemplateCategory, { leave_template_id: { [Op.in]: ids } }, transaction, { company_id: true });
 
         await transaction.commit();
         return res.ok(constants.DELETED);
@@ -319,14 +326,18 @@ exports.updateStatus = async (req, res) => {
             LeaveTemplate,
             ids,
             { status },
-            transaction
+            transaction,
+            false,
+            { company_id: true }
         );
 
         const updatedCategories = await commonQuery.updateRecordById(
             LeaveTemplateCategory,
             { leave_template_id: { [Op.in]: ids } },
             { status },
-            transaction
+            transaction,
+            fasle,
+            { company_id: true }
         );
 
         if (!updated || updated.status === 2 || !updatedCategories || updatedCategories.status === 2) {
@@ -353,6 +364,7 @@ exports.getAssignedLeavesByEmployee = async (req, res) => {
                     model: LeaveTemplate,
                     as: "leaveTemplate",
                     include: [
+
                         {
                             model: LeaveTemplateCategory,
                             as: "categories",
@@ -362,7 +374,7 @@ exports.getAssignedLeavesByEmployee = async (req, res) => {
                 }
             ],
             attributes: ["id", "first_name", "employee_code", "leave_template"]
-        });
+        }, transaction, false, { company_id: true });
 
         if (!employee) return res.error(constants.NOT_FOUND);
         if (!employee.leaveTemplate) return res.error("NO_POLICY_ASSIGNED", { message: "No leave template assigned to this employee" });
