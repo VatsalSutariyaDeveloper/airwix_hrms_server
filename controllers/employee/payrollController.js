@@ -208,7 +208,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     if (encashmentAmount > 0) {
         earnings.push({
             name: "Leave Encashment",
-            base_amount: encashmentAmount,
+            // base_amount: encashmentAmount,
             actual_amount: parseFloat(encashmentAmount.toFixed(2)),
             days: totalEncashedDays,
             is_encashment: true
@@ -365,6 +365,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     const netPayable = takeHomeEarnings - totalDeductions;
 
+    // Calculate totals for breakdown arrays
+    const totalEarningsBreakdown = earnings.reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+    const totalDeductionsBreakdown = deductions.reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+
     return {
         employee: {
             id: employee.id,
@@ -390,7 +394,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
         },
-        breakdown: { earnings, deductions, statutory, employer },
+        breakdown: { 
+            earnings, 
+            deductions, 
+            statutory, 
+            employer,
+            total_earnings: totalEarningsBreakdown.toFixed(2),
+            total_deductions: totalDeductionsBreakdown.toFixed(2)
+        },
         employee_advances_history: (employee.employeeAdvances || []).map(advance => advance.get({ plain: true })),
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
@@ -489,19 +500,38 @@ const formatPayslipToSummary = async (payslip) => {
             advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
             netPayable: payslip.net_salary || 0
         },
-        breakdown: payslip.break_down || { 
-            earnings: Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val, base_amount: 0 })),
-            deductions: Object.entries(deductionDetails)
-                .filter(([name]) => {
-                    // Filter out statutory items from deductions if they exist in statutory_details
-                    const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                    const normName = normalize(name);
-                    const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
-                    return !statutoryKeys.includes(normName);
-                })
-                .map(([name, val]) => ({ name, amount: val })),
+        breakdown: { 
+            earnings: (payslip.break_down?.earnings || Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val }))),
+            deductions: [
+                ...Object.entries(deductionDetails)
+                    .filter(([name]) => {
+                        // Filter out statutory items from deductions if they exist in statutory_details
+                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        const normName = normalize(name);
+                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                        return !statutoryKeys.includes(normName);
+                    })
+                    .map(([name, val]) => ({ name, amount: val })),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([name, amount]) => ({ name, amount, is_statutory: true }))
+            ],
             statutory: payslip.statutory_details || {},
-            employer: payslip.employer_details || {}
+            employer: payslip.break_down?.employer || payslip.employer_details || {},
+            total_earnings: (payslip.break_down?.total_earnings || Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0)).toFixed(2),
+            total_deductions: [
+                ...Object.entries(deductionDetails)
+                    .filter(([name]) => {
+                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        const normName = normalize(name);
+                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                        return !statutoryKeys.includes(normName);
+                    })
+                    .map(([, val]) => parseFloat(val || 0)),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([, amount]) => amount)
+            ].reduce((sum, val) => sum + val, 0).toFixed(2)
         }
     };
 };
@@ -1172,8 +1202,8 @@ exports.getSalaryOverview = async (req, res) => {
                     const daysInCalculation = summary.period.daysInCalculation || summary.period.daysInMonth;
 
 
-                    // Calculate total amount from employeeAdvances
-                    const totalAdvances = summary.employeeAdvances.reduce((sum, advance) => {
+                    // Calculate total amount from employee_advances_history
+                    const totalAdvances = summary.employee_advances_history.reduce((sum, advance) => {
                         return sum + parseFloat(advance.amount || 0);
                     }, 0);
 
@@ -1204,8 +1234,8 @@ exports.getSalaryOverview = async (req, res) => {
                     const fine = parseFloat(summary.salary.totalFine || 0);
 
                     // Include Employee Advances in deductions - single entry with total
-                    if (summary.employeeAdvances && summary.employeeAdvances.length > 0) {
-                        const totalAdvances = summary.employeeAdvances.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0);
+                    if (summary.employee_advances_history && summary.employee_advances_history.length > 0) {
+                        const totalAdvances = summary.employee_advances_history.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0);
                         if (totalAdvances > 0) {
                             dedList.push({ name: "Advance Repayment", amount: totalAdvances.toFixed(2), is_advance: true });
                         }
@@ -1226,8 +1256,8 @@ exports.getSalaryOverview = async (req, res) => {
 
                     // Include Employee Incentives in earnings - single entry with total
                     let totalIncentives = 0;
-                    if (summary.employeeIncentive && summary.employeeIncentive.length > 0) {
-                        totalIncentives = summary.employeeIncentive.reduce((sum, inc) => sum + parseFloat(inc.amount || 0), 0);
+                    if (summary.employee_incentive_history && summary.employee_incentive_history.length > 0) {
+                        totalIncentives = summary.employee_incentive_history.reduce((sum, inc) => sum + parseFloat(inc.amount || 0), 0);
                         if (totalIncentives > 0) {
                             earnList.push({ name: "Incentive", amount: totalIncentives.toFixed(2), is_incentive: true });
                         }
@@ -1249,7 +1279,7 @@ exports.getSalaryOverview = async (req, res) => {
                         lwp_days: summary.attendance.totalLWP,
                         lunch_count: summary.attendance.lunchCount || 0,
                         lunch_history: summary.attendance.lunchHistory || [],
-                        employee_advances_history: (summary.employeeAdvances || []).map(adv => ({
+                        employee_advances_history: (summary.employee_advances_history || []).map(adv => ({
                             type: "advance",
                             id: adv.id,
                             amount: adv.amount,
@@ -1257,17 +1287,17 @@ exports.getSalaryOverview = async (req, res) => {
                             payment_date: adv.payment_date,
                             payroll_month: adv.payroll_month
                         })),
-                        employee_incentive_history: (summary.employeeIncentive || []).map(inc => ({
+                        employee_incentive_history: (summary.employee_incentive_history || []).map(inc => ({
                             type: "incentive",
                             id: inc.id,
                             amount: inc.amount,
                             incentive_date: inc.incentive_date
                         })),
-                        earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
-                        deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                        // earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
+                        // deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
                         employer: summary.breakdown.employer || {},
-                        breakdown: summary.breakdown, // Keep full breakdown if needed
+                        breakdown: summary.breakdown, 
                         payments: "0.00", 
                         adjustments: "0.00",
                         ot_amount: ot.toFixed(2),
