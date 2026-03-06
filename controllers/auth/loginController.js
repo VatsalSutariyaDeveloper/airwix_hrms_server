@@ -52,7 +52,6 @@ exports.sendLoginOtp = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
     }
 
-    // 2. Check User Exists (Must find Active OR Inactive for first login/activation)
     const user = await User.findOne({ 
       where: { 
         mobile_no, 
@@ -64,6 +63,11 @@ exports.sendLoginOtp = async (req, res) => {
     if (!user) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+    }
+
+    if (user.status === 1) {
+      await transaction.rollback();
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
     // 3. Check OTP Rate Limit
@@ -123,7 +127,7 @@ exports.login = async (req, res) => {
         // CASE 1: Email & Password
         loginMethod = "PASSWORD";
         user = await User.findOne({ 
-          attributes: userAttributes, 
+          attributes: userAttributes.concat(['status']), 
           where: { 
             email, 
             status: { [Op.in]: [0, 1] } 
@@ -134,6 +138,11 @@ exports.login = async (req, res) => {
         if (!user) {
             await transaction.rollback();
             return res.error(constants.INVALID_CREDENTIALS);
+        }
+
+        if (user.status === 1) {
+            await transaction.rollback();
+            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
         }
 
         const isPasswordValid = await bcrypt.compare(password, user.password);
@@ -147,17 +156,22 @@ exports.login = async (req, res) => {
         loginMethod = "OTP";
         
         user = await User.findOne({ 
-          attributes: userAttributes,
+          attributes: userAttributes.concat(['status']),
           where: { 
             mobile_no, 
             status: { [Op.in]: [0, 1] } 
           }, 
           transaction 
         });
-
+        
         if (!user) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+        }
+
+        if (user.status === 1) {
+            await transaction.rollback();
+            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
         }
 
         // Verify OTP
@@ -438,54 +452,485 @@ exports.logout = async (req, res) => {
 };
 
 /**
+ * 3. Verify Mobile Number
+ * - Checks if PIN is already set for the user linked to the mobile number
+ */
+exports.verifyMobileNo = async (req, res) => {
+  try {
+    const { mobile_no } = req.body;
+    
+    if (!mobile_no) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
+    }
+
+    const user = await User.findOne({
+      where: { 
+        mobile_no, 
+        status: { [Op.in]: [0, 1] } 
+      }
+    });
+
+    if (!user) {
+      return res.error(constants.NOT_FOUND, "Mobile number not registered.");
+    }
+
+    if (user.status === 1) {
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!user.password) {
+      return res.success("SET PIN");
+    } else {
+      return res.success("ENTER PIN");
+    }
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * 4. Generate/Set PIN
+ * - Sets the PIN in the password field for the user and logs them in
+ */
+exports.generatePin = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { mobile_no, pin } = req.body;
+
+    if (!mobile_no || !pin) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
+    }
+
+    if (!/^[0-9]{4}$/.test(pin)) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
+    }
+
+    // Define strict attributes to fetch (Security & Performance)
+    const userAttributes = [
+      'id', 'user_name', 'email', 'mobile_no', 'password', 
+      'role_id', 'company_id', 'branch_id', 'employee_id', 
+      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+    ];
+
+    const user = await User.findOne({
+      attributes: userAttributes.concat(['status']),
+      where: { 
+        mobile_no, 
+        status: { [Op.in]: [0, 1] } 
+      },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+    }
+
+    if (user.status === 1) {
+      await transaction.rollback();
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (user.password) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN is already set. Use PIN login or forgot password." });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash(pin, salt);
+
+    await User.update(
+      { password: hashedPin },
+      { where: { id: user.id }, transaction }
+    );
+
+    // --- AUTOMATIC LOGIN LOGIC ---
+
+    // 0. Activation Logic
+    if(req.body.access_by === "application"){
+        if (!user.is_activated) {
+            await transaction.rollback();
+            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+        }
+    }
+
+    // 1. Enforce Platform Restriction (Employee = App Only)
+    const access_by = req.body.access_by === "application" ? "application" : "web login";
+    if (user.role_id === 5 && access_by !== "application") {
+        await transaction.rollback();
+        return res.error(403, { message: "Use the mobile application to access this account." });
+    }
+
+    // 2. Validate Company
+    if (!user.company_id) {
+        await transaction.rollback();
+        return res.error(401, "No company linked to your account.");
+    }
+
+    const company = await CompanyMaster.findOne({
+      where: { id: user.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      transaction
+    });
+
+    if (!company) {
+      await transaction.rollback();
+      return res.error(401, "Your assigned company account is suspended.");
+    }
+
+    user.organization_id = company.organization_id;
+
+    // 3. Validate Branch
+    if (!user.branch_id) {
+      await transaction.rollback();
+      return res.error(401, "No branch assigned to your profile.");
+    }
+
+    // --- C. GENERATE TOKEN & HISTORY ---
+    let companyId = company.company_id || company.id;
+    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+    
+    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
+    }
+
+    let whereCompany = {};
+    if (user.is_super_admin || user.role_id == 1){
+      whereCompany = {
+        [Op.or]: [{ id: companyId }, { company_id: companyId }],
+        status: { [Op.ne]: 2 }
+      };
+    } else {
+      whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
+    }
+  
+    const companyList = await CompanyMaster.findAll({
+        where: whereCompany,
+        attributes: ['id', 'is_default'],
+        raw: true,
+        transaction
+    });
+    
+    const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
+
+    let finalCompanyId = defaultCompanyId;
+    if (companyAccessList.length > 0) {
+      if (companyAccessList.includes(String(user.company_id))) {
+        finalCompanyId = user.company_id;
+      } else {
+        finalCompanyId = defaultCompanyId;
+      }
+    }
+
+    if(!user.is_super_admin && user.role_id != 1){
+      const employee = await Employee.findOne({
+          where: { id: user.employee_id },
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+          transaction
+      });
+
+      if (employee) {
+          user.is_attendance_supervisor = employee.is_attendance_supervisor;
+          user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const token = generateToken(user, finalCompanyId, access_by);
+
+    // Update login status
+    await User.update(
+        { is_login: 1 }, 
+        { where: { id: user.id }, transaction }
+    );
+
+    // Fetch User Permissions
+    const userPermission = await RolePermission.findOne({ 
+      where: {
+          id: user.role_id, 
+          company_id: {[Op.in]: [-1, user.company_id]}
+      },
+      attributes: ["role_name", "permissions"],
+      transaction 
+    });
+
+    const userData = {
+      id: user.id,
+      role_id: user.role_id,
+      is_super_admin: user.is_super_admin || user.role_id == 1,
+      user_name: user.user_name,
+      email: user.email,
+      mobile_no: user.mobile_no,
+      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
+      role_name: userPermission?.role_name,
+      permission: userPermission?.permissions,
+      is_login: 1,
+      user_id: user.user_id,
+      branch_id: user.branch_id,
+      company_id: finalCompanyId,
+      organization_id: user.organization_id,
+    };
+
+    clearUserCache(user.user_id);
+
+    await transaction.commit();
+    return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "PIN_GENERATED" });
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+
+/**
+ * 5. PIN Login
+ * - Login using Mobile Number and PIN
+ */
+exports.pinLogin = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { mobile_no, pin } = req.body;
+
+    if (!mobile_no || !pin) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
+    }
+
+    if (!/^[0-9]{4}$/.test(pin)) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
+    }
+
+    // Define strict attributes to fetch (Security & Performance)
+    const userAttributes = [
+        'id', 'user_name', 'email', 'mobile_no', 'password', 
+        'role_id', 'company_id', 'branch_id', 'employee_id', 
+        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+    ];
+
+    const user = await User.findOne({ 
+      attributes: userAttributes.concat(['status']),
+      where: { 
+        mobile_no, 
+        status: { [Op.in]: [0, 1] } 
+      }, 
+      transaction 
+    });
+
+    if (!user) {
+        await transaction.rollback();
+        return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+    }
+
+    if (user.status === 1) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!user.password) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
+    }
+
+    const isPinValid = await bcrypt.compare(pin, user.password);
+    if (!isPinValid) {
+        await transaction.rollback();
+        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid PIN." });
+    }
+
+    // --- FROM HERE, IT'S THE SAME AS THE STANDARD LOGIN LOGIC ---
+    // (Generating token, validating company, etc.)
+
+    // 0. Activation Logic
+    if(req.body.access_by === "application"){
+        if (!user.is_activated) {
+            await transaction.rollback();
+            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+        }
+    }
+
+    // 1. Enforce Platform Restriction (Employee = App Only)
+    const access_by = req.body.access_by === "application" ? "application" : "web login";
+    if (user.role_id === 5 && access_by !== "application") {
+        await transaction.rollback();
+        return res.error(403, { message: "Use the mobile application to access this account." });
+    }
+
+    // 2. Validate Company
+    if (!user.company_id) {
+        await transaction.rollback();
+        return res.error(401, "No company linked to your account.");
+    }
+
+    const company = await CompanyMaster.findOne({
+      where: { id: user.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      transaction
+    });
+
+    if (!company) {
+      await transaction.rollback();
+      return res.error(401, "Your assigned company account is suspended.");
+    }
+
+    user.organization_id = company.organization_id;
+
+    // 3. Validate Branch
+    if (!user.branch_id) {
+      await transaction.rollback();
+      return res.error(401, "No branch assigned to your profile.");
+    }
+
+    // --- C. GENERATE TOKEN & HISTORY ---
+    let companyId = company.company_id || company.id;
+    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+    
+    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
+    }
+
+    let whereCompany = {};
+    if (user.is_super_admin || user.role_id == 1){
+      whereCompany = {
+        [Op.or]: [{ id: companyId }, { company_id: companyId }],
+        status: { [Op.ne]: 2 }
+      };
+    } else {
+      whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
+    }
+  
+    const companyList = await CompanyMaster.findAll({
+        where: whereCompany,
+        attributes: ['id', 'is_default'],
+        raw: true,
+        transaction
+    });
+    
+    const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
+
+    let finalCompanyId = defaultCompanyId;
+    if (companyAccessList.length > 0) {
+      if (companyAccessList.includes(String(user.company_id))) {
+        finalCompanyId = user.company_id;
+      } else {
+        finalCompanyId = defaultCompanyId;
+      }
+    }
+
+    if(!user.is_super_admin && user.role_id != 1){
+      const employee = await Employee.findOne({
+          where: { id: user.employee_id },
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+          transaction
+      });
+
+      if (employee) {
+          user.is_attendance_supervisor = employee.is_attendance_supervisor;
+          user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const token = generateToken(user, finalCompanyId, access_by);
+
+    // Update login status
+    await User.update(
+        { is_login: 1 }, 
+        { where: { id: user.id }, transaction }
+    );
+
+    // Fetch User Permissions
+    const userPermission = await RolePermission.findOne({ 
+      where: {
+          id: user.role_id, 
+          company_id: {[Op.in]: [-1, user.company_id]}
+      },
+      attributes: ["role_name", "permissions"],
+      transaction 
+    });
+
+    const userData = {
+      id: user.id,
+      role_id: user.role_id,
+      is_super_admin: user.is_super_admin || user.role_id == 1,
+      user_name: user.user_name,
+      email: user.email,
+      mobile_no: user.mobile_no,
+      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
+      role_name: userPermission?.role_name,
+      permission: userPermission?.permissions,
+      is_login: 1,
+      user_id: user.user_id,
+      branch_id: user.branch_id,
+      company_id: finalCompanyId,
+      organization_id: user.organization_id,
+    };
+
+    clearUserCache(user.user_id);
+
+    await transaction.commit();
+    return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "PIN" });
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
  * Check OTP Rate Limit Status for a specific number
  */
 exports.checkOtpRateLimit = async (req, res) => {
-  try {
-    const { mobile_no } = req.params;
-
-    if (!mobile_no) {
-      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
+    try {
+      const { mobile_no } = req.params;
+  
+      if (!mobile_no) {
+        return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
+      }
+  
+      const info = await otpRateLimit.getBlockedNumberInfo(mobile_no);
+      return res.success(constants.OTP_LIMIT_INFO, info);
+  
+    } catch (err) {
+      return handleError(err, res, req);
     }
-
-    const info = await otpRateLimit.getBlockedNumberInfo(mobile_no);
-    return res.success(constants.OTP_LIMIT_INFO, info);
-
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-
-/**
- * Get All Blocked Numbers (Admin Only)
- */
-exports.getAllBlockedNumbers = async (req, res) => {
-  try {
-    const data = await otpRateLimit.getAllBlockedNumbers();
-    return res.success(constants.BLOCKED_NUMBERS_LIST, data);
-
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-
-/**
- * Manually Reset OTP Limit for a number (Admin Only)
- */
-exports.resetOtpLimit = async (req, res) => {
-  try {
-    const { mobile_no } = req.params;
-
-    if (!mobile_no) {
-      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
+  };
+  
+  /**
+   * Get All Blocked Numbers (Admin Only)
+   */
+  exports.getAllBlockedNumbers = async (req, res) => {
+    try {
+      const data = await otpRateLimit.getAllBlockedNumbers();
+      return res.success(constants.BLOCKED_NUMBERS_LIST, data);
+  
+    } catch (err) {
+      return handleError(err, res, req);
     }
+  };
+  
+  /**
+   * Manually Reset OTP Limit for a number (Admin Only)
+   */
+  exports.resetOtpLimit = async (req, res) => {
+    try {
+      const { mobile_no } = req.params;
+  
+      if (!mobile_no) {
+        return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
+      }
+  
+      await otpRateLimit.resetAttempts(mobile_no);
+      return res.success("OTP_LIMIT_RESET", {
+        message: `OTP limit reset successfully for ${mobile_no}`
+      });
+  
+    } catch (err) {
+      return handleError(err, res, req);
+    }
+  };
 
-    await otpRateLimit.resetAttempts(mobile_no);
-    return res.success("OTP_LIMIT_RESET", {
-      message: `OTP limit reset successfully for ${mobile_no}`
-    });
-
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
