@@ -213,11 +213,11 @@ exports.create = async (req, res) => {
                 settings_value: POST.number,
             };
 
-            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction, { company_id: true });
+            await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
         }
 
         // 3. Create Employee Record
-        const employee = await commonQuery.createRecord(Employee, POST, transaction, { company_id: true });
+        const employee = await commonQuery.createRecord(Employee, POST, transaction);
 
         if (!employee) {
             await transaction.rollback();
@@ -237,7 +237,7 @@ exports.create = async (req, res) => {
                 status: 0
             }));
 
-            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction, { company_id: true });
+            await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
         }
         await transaction.commit();
         return res.success(constants.EMPLOYEE_CREATED);
@@ -896,26 +896,26 @@ exports.assignTemplate = async (req, res) => {
         if (commonValue) {
             switch (field_name) {
                 case 'attendance_setting_template':
-                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction);
+                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction, false, { company_id: true });
                     break;
                 case 'holiday_template':
-                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction);
+                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction, { company_id: true });
                     break;
                 case 'weekly_off_template':
-                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction);
+                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction, { company_id: true });
                     break;
                 case 'leave_template':
                     masterData = await commonQuery.findOneRecord(LeaveTemplate, commonValue, {
                         include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-                    }, transaction);
+                    }, transaction, false, { company_id: true });
                     break;
                 case 'salary_template_id':
                     masterData = await commonQuery.findOneRecord(SalaryTemplate, commonValue, {
                         include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
-                    }, transaction);
+                    }, transaction, false, { company_id: true });
                     break;
                 case 'shift_template':
-                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction);
+                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction, false, { company_id: true });
                     break;
             }
         }
@@ -1464,7 +1464,10 @@ exports.getWages = async (req, res) => {
             },
             {
                 attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis']
-            }
+            },
+            null,
+            false,
+            { company_id: true }
         );
 
         // Only calculate wages if employeeSalaryTemplate exists
@@ -1490,7 +1493,10 @@ exports.getWages = async (req, res) => {
                     employee.weekly_off_template,
                     {
                         include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                    }
+                    },
+                    null,
+                    false,
+                    { company_id: true }
                 );
 
                 if (weeklyOffTemplate) {

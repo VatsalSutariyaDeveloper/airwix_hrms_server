@@ -113,7 +113,9 @@ const rejectPendingLeaveRequestsOnTemplateChange = async (employeeId, req, trans
                     status: 0
                 },
                 {},
-                transaction
+                transaction,
+                false,
+                { company_id: true }
             );
 
             if (balance) {
@@ -123,7 +125,7 @@ const rejectPendingLeaveRequestsOnTemplateChange = async (employeeId, req, trans
                 if (balance.is_paid) {
                     balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(request.total_days);
                 }
-                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction, false, { company_id: true });
             }
 
             // Update leave request status to rejected
@@ -232,13 +234,13 @@ class EmployeeTemplateService {
 
     static async syncAttendanceTemplate(employeeId, templateId, manualData, transaction, meta = {}) {
         if (!templateId && !manualData) {
-            await commonQuery.softDeleteById(EmployeeAttendanceTemplate, { employee_id: employeeId }, transaction);
+            await commonQuery.softDeleteById(EmployeeAttendanceTemplate, { employee_id: employeeId }, transaction, { company_id: true });
             return;
         }
 
         let data = manualData;
         if (!data && templateId) {
-            const master = meta.preFetchedMaster || await commonQuery.findOneRecord(AttendanceTemplate, templateId, {}, transaction);
+            const master = meta.preFetchedMaster || await commonQuery.findOneRecord(AttendanceTemplate, templateId, {}, transaction, false, { company_id: true });
             if (master) {
                 data = master.toJSON();
                 delete data.id; delete data.created_at; delete data.updated_at;
@@ -247,30 +249,30 @@ class EmployeeTemplateService {
 
         if (!data) return;
 
-        const existing = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { employee_id: employeeId }, {}, transaction);
+        const existing = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { employee_id: employeeId }, {}, transaction, false, { company_id: true });
         const payload = { ...data, employee_id: employeeId, template_id: templateId || (existing ? existing.template_id : null) };
 
         if (existing) {
-            await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction);
+            await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction, false, { company_id: true });
         } else {
-            await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
+            await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction, { company_id: true });
         }
     }
 
     static async bulkSyncAttendanceTemplate(employeeIds, templateId, transaction, meta = {}) {
         if (!templateId) {
-            await commonQuery.softDeleteById(EmployeeAttendanceTemplate, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            await commonQuery.softDeleteById(EmployeeAttendanceTemplate, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
             return;
         }
 
-        const master = meta.preFetchedMaster || await commonQuery.findOneRecord(AttendanceTemplate, templateId, {}, transaction);
+        const master = meta.preFetchedMaster || await commonQuery.findOneRecord(AttendanceTemplate, templateId, {}, transaction, false, { company_id: true });
         if (!master) return;
 
         const data = master.toJSON();
         delete data.id; delete data.created_at; delete data.updated_at;
 
         // 1. Fetch existing mappings for these employees
-        const existing = await commonQuery.findAllRecords(EmployeeAttendanceTemplate, { employee_id: { [Op.in]: employeeIds } }, {}, transaction);
+        const existing = await commonQuery.findAllRecords(EmployeeAttendanceTemplate, { employee_id: { [Op.in]: employeeIds } }, {}, transaction, { company_id: true });
         const existingMap = new Map(existing.map(e => [e.employee_id, e]));
 
         const toCreate = [];
@@ -288,22 +290,22 @@ class EmployeeTemplateService {
 
         // 2. Perform bulk updates/creates
         if (toCreate.length > 0) {
-            await commonQuery.bulkCreate(EmployeeAttendanceTemplate, toCreate, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeAttendanceTemplate, toCreate, {}, transaction, { company_id: true });
         }
         for (const item of toUpdate) {
-            await commonQuery.updateRecordById(EmployeeAttendanceTemplate, item.id, item.payload, transaction);
+            await commonQuery.updateRecordById(EmployeeAttendanceTemplate, item.id, item.payload, transaction, false, { company_id: true });
         }
     }
 
     static async syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false, meta = {}) {
         if (!templateId && !manualData) {
-            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction, { company_id: true });
             return;
         }
 
         let items = manualData;
         if (!items && templateId) {
-            items = meta.preFetchedMaster || await commonQuery.findAllRecords(HolidayTransaction, { template_id: templateId, status: 0 }, {}, transaction);
+            items = meta.preFetchedMaster || await commonQuery.findAllRecords(HolidayTransaction, { template_id: templateId, status: 0 }, {}, transaction, { company_id: true });
             items = items.map(i => {
                 const d = i.toJSON();
                 delete d.id; delete d.created_at; delete d.updated_at;
@@ -313,9 +315,9 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: employeeId }, transaction, { company_id: true });
         if (items.length > 0) {
-            await commonQuery.bulkCreate(EmployeeHoliday, items, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeHoliday, items, {}, transaction, { company_id: true });
         }
 
         // Trigger attendance rebuild for current month to reflect new holidays
@@ -328,7 +330,7 @@ class EmployeeTemplateService {
         // STYLE CHANGE: Transitioning to "Inherit by Default". 
         // We no longer duplicate HolidayTransaction rows into EmployeeHoliday for every employee.
         // Instead, we clear any previous individual mappings to ensure the employee follows the Master Template.
-        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
 
         // 3. Batch rebuild attendance to reflect the new template (Effective Logic remains same)
         if (!skipRebuild) {
@@ -338,13 +340,13 @@ class EmployeeTemplateService {
 
     static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false, meta = {}) {
         if (!templateId && !manualData) {
-            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction, { company_id: true });
             return;
         }
 
         let items = manualData;
         if (!items && templateId) {
-            items = meta.preFetchedMaster || await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: templateId, status: 0 }, {}, transaction);
+            items = meta.preFetchedMaster || await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: templateId, status: 0 }, {}, transaction, { company_id: true });
             items = items.map(i => {
                 const d = i.toJSON();
                 delete d.id; delete d.created_at; delete d.updated_at;
@@ -354,9 +356,9 @@ class EmployeeTemplateService {
 
         if (!items || !Array.isArray(items)) return;
 
-        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction, { company_id: true });
         if (items.length > 0) {
-            await commonQuery.bulkCreate(EmployeeWeeklyOff, items, {}, transaction);
+            await commonQuery.bulkCreate(EmployeeWeeklyOff, items, {}, transaction, { company_id: true });
         }
 
         // Trigger attendance rebuild for current month to reflect new off days
@@ -369,7 +371,7 @@ class EmployeeTemplateService {
         // STYLE CHANGE: Transitioning to "Inherit by Default".
         // Instead of creating multiple rows per employee in employee_weekly_offs, 
         // we wipe them so that AttendanceHelper correctly falls back to WeeklyOffTemplateDay.
-        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction, { company_id: true });
 
         if (!skipRebuild) {
             await this.rebuildCurrentMonthAttendance(employeeIds, transaction);
@@ -571,7 +573,7 @@ class EmployeeTemplateService {
             employee_id: employeeId,
             week_no: 0,
             is_off: true
-        }, {}, transaction);
+        }, {}, transaction, { company_id: true });
         const offDays = weeklyOffs.map(wo => wo.day_of_week);
 
         // 3. Create shift settings for all 7 days (0-6), skipping permanent week-offs
@@ -663,7 +665,7 @@ class EmployeeTemplateService {
         const allWeeklyOffs = weeklyOffTemplateIds.length > 0 ? await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
             template_id: { [Op.in]: weeklyOffTemplateIds },
             status: 0
-        }, {}, transaction) : [];
+        }, {}, transaction, { company_id: true }) : [];
         const weeklyOffMap = new Map(); // Key: templateId
         allWeeklyOffs.forEach(wo => {
             if (!weeklyOffMap.has(wo.template_id)) weeklyOffMap.set(wo.template_id, []);
@@ -674,7 +676,7 @@ class EmployeeTemplateService {
         const allEmpShifts = await commonQuery.findAllRecords(EmployeeShift, {
             employee_id: { [Op.in]: employeeIds },
             status: 0
-        }, {}, transaction);
+        }, {}, transaction, { company_id: true });
         const empShiftMap = new Map(); // Key: empId
         allEmpShifts.forEach(s => {
             if (!empShiftMap.has(s.employee_id)) empShiftMap.set(s.employee_id, []);
@@ -687,7 +689,7 @@ class EmployeeTemplateService {
         ])];
         const allShiftTemplates = shiftTemplateIds.length > 0 ? await commonQuery.findAllRecords(ShiftTemplate, {
             id: { [Op.in]: shiftTemplateIds }
-        }, { include: [{ model: ShiftBreak, as: "ShiftBreaks" }] }, transaction) : [];
+        }, { include: [{ model: ShiftBreak, as: "ShiftBreaks" }] }, transaction, { company_id: true }) : [];
         const shiftTemplateMap = new Map(allShiftTemplates.map(s => [s.id, s]));
 
         // --- Leaves ---
@@ -700,7 +702,7 @@ class EmployeeTemplateService {
                 { [Op.and]: [{ start_date: { [Op.lte]: startOfMonth } }, { end_date: { [Op.gte]: endOfMonth } }] }
             ],
             status: 0
-        }, {}, transaction);
+        }, {}, transaction, { company_id: true });
         
         const leaveMap = new Map(); // Key: empId_YYYY-MM-DD
         allApprovedLeaves.forEach(l => {

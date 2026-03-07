@@ -62,8 +62,13 @@ const calculateTDS = (annualGross, regime = 'new_regime') => {
 
     const effectivePercentage = taxableIncome > 0 ? (tax / taxableIncome) * 100 : 0;
 
-    // Return object with monthly tax and effective percentage
+    // Return object with full breakdown
     return {
+        annualGross,
+        standardDeduction,
+        taxableIncome,
+        regime,
+        annualTax: tax,
         monthlyTDS: Math.round(tax / 12),
         percentage: parseFloat(effectivePercentage.toFixed(2))
     };

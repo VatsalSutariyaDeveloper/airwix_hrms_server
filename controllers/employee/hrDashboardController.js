@@ -4,7 +4,6 @@ const {
     LeaveRequest,
     Holiday,
     Department,
-    EmployeeLeaveBalance,
     ShiftTemplate,
     sequelize,
     Payslip,

@@ -102,7 +102,7 @@ exports.create = async (req, res) => {
             year: cycleDates.end.year(),
             month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
-        }, {}, transaction);
+        }, {}, transaction, false, { company_id: true });
 
         if (!balance) {
             await transaction.rollback();
@@ -121,15 +121,21 @@ exports.create = async (req, res) => {
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 pending_leaves: parseFloat(balance.pending_leaves) - parseFloat(total_days),
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
-            }, transaction);
+            }, transaction, false, { company_id: true });
         } else {
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
-            }, transaction);
+            }, transaction, false, { company_id: true });
         }
 
         // Create Leave Request
-        const POST = { ...req.body, total_days };
+        const POST = { 
+            ...req.body, 
+            total_days,
+            branch_id: req.body.branch_id || employee.branch_id,
+            company_id: req.body.company_id || employee.company_id,
+            user_id: req.body.user_id || req.user.id
+        };
 
         // Handle File Upload
         if (req.files && Object.keys(req.files).length > 0) {
@@ -269,7 +275,7 @@ exports.getById = async (req, res) => {
         // Add approver name if available
         raw.approved_by = raw.approvedBy?.user_name || null;
 
-        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template);
+        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, null, false, { company_id: true });
         const totalLevels = template ? template.approval_levels : 1;
         const levelConfigs = template ? (template.levels || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
@@ -403,7 +409,7 @@ exports.updateStatus = async (req, res) => {
                 year: cycleDates.end.year(),
                 month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
                 status: 0
-            }, {}, transaction);
+            }, {}, transaction, false, { company_id: true });
 
             if (balance) {
                 const balanceUpdate = {
@@ -412,7 +418,7 @@ exports.updateStatus = async (req, res) => {
                 if (balance.is_paid) {
                     balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(leaveRequest.total_days);
                 }
-                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction, false, { company_id: true });
             }
 
             const history = leaveRequest.approval_history || [];
@@ -580,7 +586,6 @@ exports.cancelLeave = async (req, res) => {
 
         const template = employee?.leaveTemplate;
         const cycleType = template?.leave_policy_cycle || 'CALENDAR_YEAR';
-        const LeaveBalanceService = require("../../../services/leaveBalanceService");
         const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, cycleType, dayjs(leaveRequest.start_date));
 
         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
@@ -589,7 +594,7 @@ exports.cancelLeave = async (req, res) => {
             year: cycleDates.end.year(),
             month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
-        }, {}, transaction);
+        }, {}, transaction, false, { company_id: true });
 
         if (balance) {
             const balanceUpdate = {
@@ -598,7 +603,7 @@ exports.cancelLeave = async (req, res) => {
             if (balance.is_paid) {
                 balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves || 0) + parseFloat(leaveRequest.total_days);
             }
-            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction);
+            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction, false, { company_id: true });
         }
 
         // 5. Update Request Status immediately so rebuildAttendanceDay sees the change

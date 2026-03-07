@@ -83,7 +83,7 @@ exports.create = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    await commonQuery.createRecord(SalaryComponent, POST, transaction);
+    await commonQuery.createRecord(SalaryComponent, POST, transaction, { company_id: true });
 
     await transaction.commit();
     return res.success(constants.SALARY_COMPONENT_CREATED || "Salary component created successfully");
@@ -148,7 +148,7 @@ exports.dropdownList = async (req, res) => {
       { ...POST, status: 0 },
       fieldConfig,
       { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component"] },
-      false
+      { company_id: true }
     );
     return res.ok(data);
   } catch (err) {
@@ -159,7 +159,7 @@ exports.dropdownList = async (req, res) => {
 // 4. Get By ID
 exports.getById = async (req, res) => {
   try {
-    const record = await commonQuery.findOneRecord(SalaryComponent, req.params.id);
+    const record = await commonQuery.findOneRecord(SalaryComponent, req.params.id, {}, null, false, { company_id: true });
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
     return res.ok(record);
   } catch (err) {
@@ -193,7 +193,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, enumError);
     }
 
-    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction);
+    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction, false, { company_id: true });
 
     if (!updated) {
       await transaction.rollback();
@@ -213,7 +213,7 @@ exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { ids } = req.body;
-    const deleted = await commonQuery.softDeleteById(SalaryComponent, ids, transaction);
+    const deleted = await commonQuery.softDeleteById(SalaryComponent, ids, transaction, { company_id: true });
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -236,7 +236,7 @@ exports.updateStatus = async (req, res) => {
       return res.error(constants.INVALID_ID);
     }
 
-    const count = await commonQuery.updateRecordById(SalaryComponent, ids, { status }, transaction);
+    const count = await commonQuery.updateRecordById(SalaryComponent, ids, { status }, transaction, false, { company_id: true });
 
     if (count === null) {
       await transaction.rollback();

@@ -99,6 +99,7 @@ exports.getById = async (req, res) => {
           // "zone_id", "zone.zone_name", 
         ]
       },
+      null,
       false,
       { company_id: true }
     );
