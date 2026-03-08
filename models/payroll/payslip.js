@@ -29,6 +29,7 @@ module.exports = (sequelize, DataTypes) => {
 
     // JSON details for legacy or extra breakdown
     break_down: { type: DataTypes.JSON, allowNull: true },
+    tds_calculation_data: { type: DataTypes.JSON, allowNull: true },
     
     status: { 
         type: DataTypes.SMALLINT, 

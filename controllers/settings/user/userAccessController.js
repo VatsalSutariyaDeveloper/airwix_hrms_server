@@ -68,7 +68,7 @@ exports.sessionData = async (req, res) => {
     }
 
     let where = {};
-    if (userData.is_super_admin || userData.role_id == 1) {
+    if (userData.is_super_admin || userData.role_id == 1 || userData.role_id == 2) {
       where = {
         organization_id: orgId,
         status: { [Op.ne]: 2 }
@@ -131,7 +131,7 @@ exports.sessionData = async (req, res) => {
           where: { 
               company_id: record.id, 
               status: 0,
-              ...(!userData.is_super_admin && userData.role_id != 1 && normalizeBranchAccess(userData.branch_access).length > 0 ? {
+              ...(!userData.is_super_admin && userData.role_id != 1 && userData.role_id != 2 && normalizeBranchAccess(userData.branch_access).length > 0 ? {
                   id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
               } : {})
           },
@@ -339,7 +339,7 @@ exports.switchCompany = async (req, res) => {
 
     // 2. Validate Access
     const companyAccessList = normalizeCompanyAccess(user.company_access || "");
-    if (!user.is_super_admin && user.role_id !== 1 && !companyAccessList.includes(String(company_id))) {
+    if (!user.is_super_admin && user.role_id !== 1 && user.role_id !== 2 && !companyAccessList.includes(String(company_id))) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
     }
@@ -366,7 +366,7 @@ exports.switchCompany = async (req, res) => {
       where: { 
         company_id: company_id,
         status: { [Op.ne]: 2 },
-        ...(!user.is_super_admin && user.role_id !== 1 && branchAccessList.length > 0 ? {
+        ...(!user.is_super_admin && user.role_id !== 1 && user.role_id !== 2 && branchAccessList.length > 0 ? {
           id: { [Op.in]: branchAccessList }
         } : {})
       },
@@ -444,7 +444,7 @@ exports.switchBranch = async (req, res) => {
 
         // 2.1 Validate Branch Access for non-super admins
         const branchAccessList = normalizeBranchAccess(user.branch_access || "");
-        if (!user.is_super_admin && user.role_id != 1 && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
+        if (!user.is_super_admin && user.role_id != 1 && user.role_id != 2 && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
             await transaction.rollback();
             return res.error(constants.FORBIDDEN, { message: "You do not have access to this branch." });
         }

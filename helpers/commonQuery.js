@@ -114,7 +114,7 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
   }  
 
   // Temporary override if needed
-  settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
+  settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
   const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
 
@@ -587,7 +587,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         const dateFilter = {};
         if (reqBody?.startDate) dateFilter[Op.gte] = new Date(reqBody?.startDate);
         if (reqBody?.endDate) dateFilter[Op.lte] = new Date(reqBody?.endDate);
-        if (Object.keys(dateFilter).length > 0 || Object.getOwnPropertySymbols(dateFilter).length > 0) filters[dateField] = dateFilter;
+        if (Object.keys(dateFilter).length > 0) filters[dateField] = dateFilter;
       }
 
       // E. Search Logic

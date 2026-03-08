@@ -4,7 +4,8 @@ const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
 const { constants } = require("./constants");
-const LeaveBalanceService = require("../services/leaveBalanceService");
+// LeaveBalanceService is required lazily inside functions to avoid circular dependencies with attendanceHelper
+// const LeaveBalanceService = require("../services/leaveBalanceService");
 
 /**
  * Helper to parse time/datetime
@@ -1519,6 +1520,7 @@ async function getDayOffInfo(employee, date, transaction) {
  */
 async function syncCompOffCredit(employee, date, status, transaction) {
   if (!employee) return;
+  const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
   if (!template || template.holiday_policy !== "COMP_OFF") return;
 
@@ -1589,6 +1591,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
  * Comparison between OLD state and NEW state of the day.
  */
 async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction, employee = null) {
+  const LeaveBalanceService = require("../services/leaveBalanceService");
   const getDeduction = (status) => {
     if (Number(status) === 6) return 1.0; // LEAVE
     if (Number(status) === 1) return 0.5; // HALF_DAY

@@ -16,6 +16,11 @@ module.exports = (sequelize, DataTypes) => {
             allowNull: true
         },
         formula: { type: DataTypes.TEXT },
+        percentage_of: {
+            type: DataTypes.ENUM("BASIC", "GROSS", "CTC"),
+            allowNull: true
+        },
+        percentage_value: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

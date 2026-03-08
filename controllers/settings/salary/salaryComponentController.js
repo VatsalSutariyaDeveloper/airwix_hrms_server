@@ -118,7 +118,7 @@ exports.getAll = async (req, res) => {
       { ...POST, limit:"All" },
       fieldConfig,
       {},
-      {company_id: true}
+      false
     );
 
     return res.ok(data);
@@ -148,7 +148,7 @@ exports.dropdownList = async (req, res) => {
       { ...POST, status: 0 },
       fieldConfig,
       { attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "percentage_of", "percentage_value", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component"] },
-      { company_id: true }
+      false
     );
     return res.ok(data);
   } catch (err) {
@@ -159,7 +159,7 @@ exports.dropdownList = async (req, res) => {
 // 4. Get By ID
 exports.getById = async (req, res) => {
   try {
-    const record = await commonQuery.findOneRecord(SalaryComponent, req.params.id, {}, null, false, { company_id: true });
+    const record = await commonQuery.findOneRecord(SalaryComponent, req.params.id, {}, null, false, false);
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
     return res.ok(record);
   } catch (err) {

@@ -19,7 +19,8 @@ const generateToken = (user, companyId, access_by = "web login") => {
       branch_access: user.branch_access || "",
       is_attendance_supervisor: user.is_attendance_supervisor,
       is_reporting_manager: user.is_reporting_manager,
-      is_super_admin: user.is_super_admin || user.role_id == 1
+      is_super_admin: user.is_super_admin || user.role_id == 1,
+      is_admin: user.role_id == 2
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "30d" }
