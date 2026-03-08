@@ -7,6 +7,7 @@ const geoip = require("geoip-lite");
 const otpRateLimit = require("../../helpers/otpRateLimit");
 const { clearUserCache } = require("../../helpers/permissionCache");
 const { addToBlacklist } = require("../../middlewares/authMiddleware");
+const { generateToken } = require("../../helpers/tokenHelper");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -14,26 +15,7 @@ const normalizeCompanyAccess = (access) => {
   return [];
 };
 
-const generateToken = (user, companyId, access_by = "web login") => {
-  const branch_id = (user.branch_access && user.branch_access.split(',')[0]) ? parseInt(user.branch_access.split(',')[0]) : user.branch_id;
-  return jwt.sign(
-    {
-      id: user.id,
-      employee_id: user.employee_id,
-      role_id: user.role_id,
-      branch_id: branch_id,
-      company_id: companyId,
-      organization_id: user.organization_id || null,
-      access_by: access_by,
-      branch_access: user.branch_access,
-      is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager,
-      is_super_admin: user.is_super_admin || user.role_id == 1
-    },
-    process.env.JWT_SECRET || "your_jwt_secret",
-    { expiresIn: "1d" }
-  );
-};
+// Local function removed - replaced by global generateToken from tokenHelper
 
 /**
  * 1. Send OTP for Login
@@ -660,6 +642,7 @@ exports.generatePin = async (req, res) => {
     const userData = {
       id: user.id,
       role_id: user.role_id,
+      employee_id: user.employee_id,
       is_super_admin: user.is_super_admin || user.role_id == 1,
       user_name: user.user_name,
       email: user.email,
@@ -856,6 +839,7 @@ exports.pinLogin = async (req, res) => {
     const userData = {
       id: user.id,
       role_id: user.role_id,
+      employee_id: user.employee_id,
       is_super_admin: user.is_super_admin || user.role_id == 1,
       user_name: user.user_name,
       email: user.email,

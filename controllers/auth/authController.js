@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
 const moment = require("moment");
 const sendEmailHelper = require("../../services/mailer");
+const { generateToken } = require("../../helpers/tokenHelper");
 
 // Send OTP for Registration
 exports.sendOtp = async (req, res) => {
@@ -316,16 +317,8 @@ exports.register = async (req, res) => {
 
     await transaction.commit();
 
-    const token = jwt.sign(
-      {
-        id: newUser.id,
-        company_id: newUser.company_id,
-        organization_id: newOrg.id,
-        is_super_admin: true
-      },
-      process.env.JWT_SECRET || "your_jwt_secret",
-      { expiresIn: "1d" }
-    );
+    newUser.organization_id = newOrg.id;
+    const token = generateToken(newUser, newCompany.id, "web login");
 
     return res.ok({ token, user_id: newUser.id, company_id: newCompany.id, email: newUser.email });
 
