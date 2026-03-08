@@ -46,9 +46,10 @@ const {
 const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../../helpers/customFieldImageHandler");
 
 const {
-
     calculateWorkingAndOffDays
 } = require("../../helpers/functions/commonFunctions");
+
+const { punch } = require("../../helpers/attendanceHelper");
 
 
 const { getContext } = require("../../utils/requestContext");
@@ -61,7 +62,7 @@ const EmployeeTemplateService = require("../../services/employeeTemplateService"
 const dayjs = require("dayjs");
 const crypto = require("crypto");
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://192.168.1.7:8000';
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const FACE_MATCH_THRESHOLD = 0.40;
 
 const DEBUG_MODE = true;
@@ -1441,7 +1442,7 @@ exports.facePunch = async (req, res) => {
             status: 0,
             face_descriptor: { [Op.ne]: null }
         }, {
-            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor'], // Changed first_name to father_name based on your prev code
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
             raw: true
         });
 
@@ -1506,22 +1507,20 @@ exports.facePunch = async (req, res) => {
             const transaction = await sequelize.transaction();
 
             try {
-                const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER);
+                // Save image for attendance record
+                const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
                 savedFilename = savedFiles.image || savedFiles['image'];
 
-                const now = new Date();
-                const attendancePunch = await commonQuery.createRecord(AttendancePunch, {
-                    employee_id: bestMatch.id,
-                    punch_time: now,
-                    punch_type: "IN",
-                    image_name: savedFilename
-                }, transaction);
-
-                const today = now.toISOString().split('T')[0];
-
-                await commonQuery.createRecord(AttendanceDay, {
-                    employee_id: bestMatch.id,
-                    attendance_date: today,
+                // Use the robust punch helper from attendanceHelper
+                const punchResult = await punch(bestMatch.id, {
+                    punch_time: new Date(),
+                    image_name: savedFilename,
+                    user_id: req.user.id || bestMatch.user_id,
+                    company_id: req.user.company_id || bestMatch.company_id,
+                    branch_id: req.user.branch_id || bestMatch.branch_id,
+                    ip_address: req.ip,
+                    device_id: req.body.device_id || 'FACE_RECOGNITION',
+                    attendance_by: 'face'
                 }, transaction);
 
                 await transaction.commit();
@@ -1531,35 +1530,33 @@ exports.facePunch = async (req, res) => {
                     employee_code: bestMatch.employee_code,
                     confidence: matchPercentage + "%",
                     image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
-                    attendance_punch_id: attendancePunch.id
+                    ...punchResult
                 });
             } catch (error) {
-                await transaction.rollback();
+                if (!transaction.finished) await transaction.rollback();
                 console.error("Error creating attendance records:", error);
-                return res.error(constants.SERVER_ERROR, { message: "Failed to create attendance records" });
+                
+                // If it's a handled error from punch helper
+                if (error.handled) {
+                   return res.error(constants.VALIDATION_ERROR, error.message);
+                }
+                
+                return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
             }
         } else {
-            // Save to ATTENDANCE_LOG_FOLDER for failed face recognition with custom timestamp
+            // Save to ATTENDANCE_LOG_FOLDER for failed face recognition
             const now = new Date();
-            const day = String(now.getDate()).padStart(2, '0');
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const year = now.getFullYear();
-            let hours = now.getHours();
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            const ampm = hours >= 12 ? 'PM' : 'AM';
-            hours = hours % 12;
-            hours = hours ? hours : 12;
-            const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
-            const dateStr = `${day}-${month}-${year}`;
+            const dateStr = dayjs(now).format('DD-MM-YYYY');
+            const timeStr = dayjs(now).format('hh:mm A');
             const ext = path.extname(originalName);
             const customFilename = `${Date.now()}_punch_${dateStr}__${timeStr}${ext}`;
 
-            // Use uploadFile with custom filename
+            // Use uploadFile with custom filename for logging failed attempts
             const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
             savedFilename = savedFiles.image || savedFiles['image'];
-
+            console.log(`Failed Face Recognition: (Match: ${matchPercentage}%)`);
             return res.error(constants.FACE_NOT_RECOGNIZED, {
-                message: `Face Not Recognized (Match: ${matchPercentage}%)`
+                message: `Face Not Recognized`
             });
         }
 

@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -30,7 +30,7 @@ exports.attendancePunch = async (req, res) => {
       const savedFiles = await uploadFile(
         req, 
         res, 
-        constants.PUNCH_IMAGE_FOLDER, 
+        constants.ATTENDANCE_FOLDER, 
         t
       );
       punchImage = savedFiles.image || savedFiles['image'];
@@ -1054,7 +1054,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
         punchesWithImages = attendanceDayJson.attendancePunches.map(punch => {
           // Add full image URL if image_name exists
           if (punch.image_name) {
-            punch.image_url = `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${punch.image_name}`;
+            punch.image_url = `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${punch.image_name}`;
           } else {
             punch.image_url = null;
           }
@@ -1112,7 +1112,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1324,7 +1324,7 @@ exports.getMonthlyAttendance = async (req, res) => {
             date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
             type: p.punch_type,
             punch_by: p.user?.user_name || "System",
-            image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.PUNCH_IMAGE_FOLDER}${p.image_name}` : null,
+            image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}` : null,
             punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.ip_address || 'App'}`
           })).reverse()
         };
