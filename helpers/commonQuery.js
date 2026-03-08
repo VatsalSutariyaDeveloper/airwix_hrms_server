@@ -114,7 +114,7 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
   }  
 
   // Temporary override if needed
-  settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
+  settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
   const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
 

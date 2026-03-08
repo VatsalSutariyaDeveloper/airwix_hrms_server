@@ -1546,7 +1546,7 @@ exports.generatePayslipPdf = async (req, res) => {
         await pdfService.generatePdfFromTemplate(templatePath, data, outputPath);
 
         // Construct download link
-        const downloadLink = `${req.protocol}://${req.get('host')}/uploads/payslips/${filename}`;
+        const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
 
         return res.ok({
             download_link: downloadLink,

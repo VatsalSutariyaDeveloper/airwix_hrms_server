@@ -55,7 +55,7 @@ function authMiddleware(req, res, next) {
       is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
       is_admin: decoded.role_id == 2
     };
-
+console.log("req.user",req.user)
     requestContext.run(
       {
         userId: decoded.id,

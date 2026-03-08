@@ -2117,3 +2117,39 @@ exports.exportData = async (req, res) => {
         }
     }
 };
+
+/**
+ * Gets the list of employees for the branch corresponding to the logged-in device/user.
+ * Returns: { id, first_name, employee_code, has_face_descriptor }
+ */
+exports.getEmployeesByDeviceBranch = async (req, res) => {
+    try {
+        const { branch_id, company_id } = req.user;
+
+        if (!branch_id) {
+            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
+        }
+
+        const employees = await Employee.findAll({
+            where: {
+                branch_id,
+                company_id,
+                status: STATUS.ACTIVE
+            },
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor'],
+            order: [['first_name', 'ASC']]
+        });
+
+        const employeeList = employees.map(emp => ({
+            id: emp.id,
+            employee_name: emp.first_name,
+            employee_code: emp.employee_code,
+            has_face_descriptor: !!emp.face_descriptor
+        }));
+
+        return res.success("Employee list fetched successfully", { employees: employeeList });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
