@@ -1,11 +1,3 @@
-const { 
-    SalaryComponent, 
-    SalaryTemplate, 
-    SalaryTemplateTransaction,
-    EmployeeSalaryTemplate,
-    EmployeeSalaryTemplateTransaction
-} = require("../models");
-
 class PayrollEngine {
     /**
      * Calculates payroll for an employee for a specific period.

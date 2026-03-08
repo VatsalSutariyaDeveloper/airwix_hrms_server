@@ -1,10 +1,11 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
-const { Op, QueryTypes } = require("sequelize");
+const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
+const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 
 
 /**
@@ -73,8 +74,20 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             {
                 model: EmployeeAdvance,
                 as: "employeeAdvances",
-                attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payroll_month']
-            }
+                attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payroll_month'],
+                where: {
+                    payroll_month: { [Op.between]: [startDate, endDate] }
+                }
+            },
+            {
+                model: EmployeeIncentive,
+                as: "employeeIncentive",
+                attributes: ['id', 'amount', 'incentive_date', 'payroll_month'],
+                where: {
+                    payroll_month: { [Op.between]: [startDate, endDate] }
+                }
+            },
+
         ]
     }, transaction);
     
@@ -149,17 +162,18 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         daysInCalculation = daysInMonth - weeklyOffs;
     }
     
+    const payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
     // Step B.1: Calculate accurate Payable Days based on Basis
-    let payableDaysValue = 0;
+    let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
         // Exclude Weekly Offs from payable days
-        payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+        actualDaysValue = daysInMonth - weeklyOffs;
     } else if (template.lwp_calculation_basis === "FIXED_30_DAYS") {
         // Standard 30 days basis. Payable days = 30 - (Absent + Half Days)
-        payableDaysValue = 30 - totalLWP;
+        actualDaysValue = 30;
     } else {
         // Default: DAYS_IN_MONTH
-        payableDaysValue = daysInMonth - totalLWP;
+        actualDaysValue = daysInMonth;
     }
 
     const perDaySalary = monthlyGross / (daysInCalculation || 1);
@@ -167,23 +181,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const perHourSalary = perDaySalary / 8;
     const otAmount = (totalOTMins / 60) * perHourSalary * 1.5;
 
-    // Step E: Fetch Adjustments and Payments
-    const monthStr = `${year}-${month.toString().padStart(2, '0')}-01`;
-    const [incentives, advances] = await Promise.all([
-        commonQuery.findAllRecords(EmployeeIncentive, {
-            employee_id,
-            payroll_month: monthStr,
-            status: { [Op.ne]: 2 }
-        }, {
-            include: [{ model: IncentiveType, as: "incentiveType", attributes: ["name"] }]
-        }, transaction),
-        commonQuery.findAllRecords(EmployeeAdvance, {
-            employee_id,
-            payroll_month: monthStr,
-            status: { [Op.ne]: 2 }
-        }, {}, transaction)
-    ]);
-
+    // Step E: Use advances and incentives from employee include (already fetched)
+    const incentives = employee.employeeIncentive || [];
+    const advances = employee.employeeAdvances || [];
+    
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
 
@@ -207,7 +208,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     if (encashmentAmount > 0) {
         earnings.push({
             name: "Leave Encashment",
-            base_amount: encashmentAmount,
+            // base_amount: encashmentAmount,
             actual_amount: parseFloat(encashmentAmount.toFixed(2)),
             days: totalEncashedDays,
             is_encashment: true
@@ -234,7 +235,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         const comp = plain.component || plain.SalaryComponent || (isModel ? trans.get('component') : null);
         return { plain, comp };
     });
-console.log("processedComponents",processedComponents)
     // First pass to find Basic (many formulas depend on it)
     processedComponents.forEach(({ plain, comp }) => {
         if (comp && (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic'))) {
@@ -307,11 +307,18 @@ console.log("processedComponents",processedComponents)
         takeHomeEarnings += otAmount;
     }
 
-    incentives.forEach(inc => {
-        const amt = parseFloat(inc.amount || 0);
-        earnings.push({ name: inc.incentiveType?.name || "Incentive", base_amount: amt, actual_amount: amt, is_adjustment: true });
-        takeHomeEarnings += amt;
-    });
+    // Add single Incentive earning with total amount
+    if (totalIncentive > 0) {
+        earnings.push({ name: "Incentive", base_amount: totalIncentive, actual_amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        takeHomeEarnings += totalIncentive;
+    }
+
+    // Remove individual incentive additions from the loop below
+    // incentives.forEach(inc => {
+    //     const amt = parseFloat(inc.amount || 0);
+    //     earnings.push({ name: inc.incentiveType?.name || "Incentive", base_amount: amt, actual_amount: amt, is_adjustment: true });
+    //     takeHomeEarnings += amt;
+    // });
 
     if (totalFine > 0) {
         deductions.push({ name: "Fines", amount: parseFloat(totalFine.toFixed(2)), is_fine: true });
@@ -320,11 +327,47 @@ console.log("processedComponents",processedComponents)
 
     advances.forEach(adv => {
         const amt = parseFloat(adv.amount || 0);
-        deductions.push({ name: "Advance Repayment", amount: amt, is_advance: true });
-        totalDeductions += amt;
+        // Don't add individual advance deductions here - will be added as single total below
     });
 
+    // Add single Advance Repayment deduction with total amount
+    if (totalAdvance > 0) {
+        deductions.push({ name: "Advance Repayment", amount: parseFloat(totalAdvance.toFixed(2)), is_advance: true });
+        totalDeductions += totalAdvance;
+    }
+
+    // Step G: Calculate Statutory TDS (Tax Deducted at Source)
+    let tdsAmount = 0;
+    let tdsPercentage = 0;
+    if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
+        const tdsConfig = template.statutory_config.tds;
+        if (tdsConfig.calculation_type === 'Manual Amount') {
+            tdsAmount = parseFloat(tdsConfig.amount || 0);
+        } else if (tdsConfig.calculation_type !== 'None') {
+            const annualGross = monthlyGross * 12;
+            const regimeMap = {
+                'System Calculated': 'new_regime',
+                'New Regime': 'new_regime',
+                'Old Regime': 'old_regime'
+            };
+            const regime = regimeMap[tdsConfig.calculation_type] || 'new_regime';
+            const { monthlyTDS, percentage } = calculateTDS(annualGross, regime);
+            tdsAmount = monthlyTDS;
+            tdsPercentage = percentage;
+        }
+    }
+
+    if (tdsAmount > 0) {
+        statutory["Income Tax (TDS)"] = tdsAmount;
+        statutory["Income Tax (TDS) %"] = tdsPercentage;
+        totalDeductions += tdsAmount;
+    }
+
     const netPayable = takeHomeEarnings - totalDeductions;
+
+    // Calculate totals for breakdown arrays
+    const totalEarningsBreakdown = earnings.reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+    const totalDeductionsBreakdown = deductions.reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
 
     return {
         employee: {
@@ -336,7 +379,7 @@ console.log("processedComponents",processedComponents)
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2) },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -346,12 +389,21 @@ console.log("processedComponents",processedComponents)
             incentiveAmount: totalIncentive.toFixed(2),
             advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount.toFixed(2),
+            tdsPercentage: tdsPercentage.toFixed(2),
             netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
         },
-        breakdown: { earnings, deductions, statutory, employer },
-        employeeAdvances: (employee.employeeAdvances || []).map(advance => advance.get({ plain: true })),
+        breakdown: { 
+            earnings, 
+            deductions, 
+            statutory, 
+            employer,
+            total_earnings: totalEarningsBreakdown.toFixed(2),
+            total_deductions: totalDeductionsBreakdown.toFixed(2)
+        },
+        employee_advances_history: (employee.employeeAdvances || []).map(advance => advance.get({ plain: true })),
+        employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
@@ -448,19 +500,38 @@ const formatPayslipToSummary = async (payslip) => {
             advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
             netPayable: payslip.net_salary || 0
         },
-        breakdown: payslip.break_down || { 
-            earnings: Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val, base_amount: 0 })),
-            deductions: Object.entries(deductionDetails)
-                .filter(([name]) => {
-                    // Filter out statutory items from deductions if they exist in statutory_details
-                    const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                    const normName = normalize(name);
-                    const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
-                    return !statutoryKeys.includes(normName);
-                })
-                .map(([name, val]) => ({ name, amount: val })),
+        breakdown: { 
+            earnings: (payslip.break_down?.earnings || Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val }))),
+            deductions: [
+                ...Object.entries(deductionDetails)
+                    .filter(([name]) => {
+                        // Filter out statutory items from deductions if they exist in statutory_details
+                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        const normName = normalize(name);
+                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                        return !statutoryKeys.includes(normName);
+                    })
+                    .map(([name, val]) => ({ name, amount: val })),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([name, amount]) => ({ name, amount, is_statutory: true }))
+            ],
             statutory: payslip.statutory_details || {},
-            employer: payslip.employer_details || {}
+            employer: payslip.break_down?.employer || payslip.employer_details || {},
+            total_earnings: (payslip.break_down?.total_earnings || Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0)).toFixed(2),
+            total_deductions: [
+                ...Object.entries(deductionDetails)
+                    .filter(([name]) => {
+                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        const normName = normalize(name);
+                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                        return !statutoryKeys.includes(normName);
+                    })
+                    .map(([, val]) => parseFloat(val || 0)),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([, amount]) => amount)
+            ].reduce((sum, val) => sum + val, 0).toFixed(2)
         }
     };
 };
@@ -1028,7 +1099,7 @@ exports.getSalaryOverview = async (req, res) => {
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
             });
-            if (payslip) {
+            if (payslip) {                
                 const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
                 const fine = parseFloat(payslip.total_fine || 0);
@@ -1048,10 +1119,16 @@ exports.getSalaryOverview = async (req, res) => {
 
                 // Include Statutory Employee Deductions in list
                 const statDetails = payslip.statutory_details || {};
+                const tdsPercent = statDetails["Income Tax (TDS) %"];
                 Object.entries(statDetails).forEach(([name, amount]) => {
                     const amt = parseFloat(amount || 0);
-                    if (amt > 0) {
-                        dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                    if (amt > 0 && name !== "Income Tax (TDS) %") {
+                        dedList.push({ 
+                            name, 
+                            amount: amt.toFixed(2), 
+                            is_statutory: true,
+                            percentage: name === "Income Tax (TDS)" ? tdsPercent : null
+                        });
                     }
                 });
 
@@ -1069,7 +1146,6 @@ exports.getSalaryOverview = async (req, res) => {
                 const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
                 const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
                 const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
-console.log("basis",basis)
                 let payableDays = 0;
                 if (basis === "WORKING_DAYS") {
                     payableDays = presentDays + (halfDays * 0.5) + leaveDays + holidays;
@@ -1125,6 +1201,12 @@ console.log("basis",basis)
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     const daysInCalculation = summary.period.daysInCalculation || summary.period.daysInMonth;
 
+
+                    // Calculate total amount from employee_advances_history
+                    const totalAdvances = summary.employee_advances_history.reduce((sum, advance) => {
+                        return sum + parseFloat(advance.amount || 0);
+                    }, 0);
+
                     let earnList = [];
                     let dedList = summary.breakdown.deductions.map(d => ({ 
                         name: d.name, 
@@ -1135,24 +1217,28 @@ console.log("basis",basis)
                     }));
 
                     // Include Statutory Employee Deductions in dynamic list
+                    const tdsPercent = (summary.breakdown.statutory || {})["Income Tax (TDS) %"];
                     Object.entries(summary.breakdown.statutory || {}).forEach(([name, amount]) => {
                         const amt = parseFloat(amount || 0);
-                        if (amt > 0) {
-                            dedList.push({ name, amount: amt.toFixed(2), is_statutory: true });
+                        if (amt > 0 && name !== "Income Tax (TDS) %") {
+                            dedList.push({ 
+                                name, 
+                                amount: amt.toFixed(2), 
+                                is_statutory: true,
+                                percentage: name === "Income Tax (TDS)" ? tdsPercent : null
+                            });
                         }
                     });
 
                     const ot = parseFloat(summary.salary.overtimeAmount || 0);
                     const fine = parseFloat(summary.salary.totalFine || 0);
 
-                    // Include Employee Advances in deductions
-                    if (summary.employeeAdvances && summary.employeeAdvances.length > 0) {
-                        summary.employeeAdvances.forEach(adv => {
-                            const amt = parseFloat(adv.amount || 0);
-                            if (amt > 0) {
-                                dedList.push({ name: "Advance Repayment", amount: amt.toFixed(2), is_advance: true, advance_id: adv.id, payment_mode: adv.payment_mode });
-                            }
-                        });
+                    // Include Employee Advances in deductions - single entry with total
+                    if (summary.employee_advances_history && summary.employee_advances_history.length > 0) {
+                        const totalAdvances = summary.employee_advances_history.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0);
+                        if (totalAdvances > 0) {
+                            dedList.push({ name: "Advance Repayment", amount: totalAdvances.toFixed(2), is_advance: true });
+                        }
                     }
 
                     if (isCurrentMonth) {
@@ -1168,6 +1254,15 @@ console.log("basis",basis)
                         earnList = summary.breakdown.earnings.map(e => ({ name: e.name, amount: parseFloat(e.actual_amount || 0).toFixed(2), is_employer: e.is_employer }));
                     }
 
+                    // Include Employee Incentives in earnings - single entry with total
+                    let totalIncentives = 0;
+                    if (summary.employee_incentive_history && summary.employee_incentive_history.length > 0) {
+                        totalIncentives = summary.employee_incentive_history.reduce((sum, inc) => sum + parseFloat(inc.amount || 0), 0);
+                        if (totalIncentives > 0) {
+                            earnList.push({ name: "Incentive", amount: totalIncentives.toFixed(2), is_incentive: true });
+                        }
+                    }
+
                     const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
                     const netPayable = totalEarn - totalDed;
@@ -1180,19 +1275,35 @@ console.log("basis",basis)
                         date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
                         net_receivable: netPayable.toFixed(2),
                         payable_days: payableDays.toFixed(1),
+                        actualDaysValue: summary.attendance.actualDaysValue || 0,
                         lwp_days: summary.attendance.totalLWP,
                         lunch_count: summary.attendance.lunchCount || 0,
                         lunch_history: summary.attendance.lunchHistory || [],
-                        earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
-                        deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                        employee_advances_history: (summary.employee_advances_history || []).map(adv => ({
+                            type: "advance",
+                            id: adv.id,
+                            amount: adv.amount,
+                            payment_mode: adv.payment_mode,
+                            payment_date: adv.payment_date,
+                            payroll_month: adv.payroll_month
+                        })),
+                        employee_incentive_history: (summary.employee_incentive_history || []).map(inc => ({
+                            type: "incentive",
+                            id: inc.id,
+                            amount: inc.amount,
+                            incentive_date: inc.incentive_date
+                        })),
+                        // earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
+                        // deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
                         employer: summary.breakdown.employer || {},
-                        breakdown: summary.breakdown, // Keep full breakdown if needed
+                        breakdown: summary.breakdown, 
                         payments: "0.00", 
                         adjustments: "0.00",
                         ot_amount: ot.toFixed(2),
                         fine_amount: fine.toFixed(2),
                         ctc_monthly: summary.salary.ctc_monthly,
+                        total_advances: totalAdvances.toFixed(2),
                         is_loaded: true,
                         is_finalized: false
                     });

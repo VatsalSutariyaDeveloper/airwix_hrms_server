@@ -2,6 +2,7 @@ const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, Le
 const { commonQuery, Op } = require("../helpers");
 const { constants } = require("../helpers/constants");
 const dayjs = require("dayjs");
+const { getDayOffInfo } = require("../helpers/attendanceHelper");
 
 /**
  * Service to manage employee-specific leave balances, including pro-rata calculations,
@@ -98,7 +99,7 @@ class LeaveBalanceService {
 
             const template = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, templateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t, true);
+            }, t, true, { company_id: true });
 
             if (!template) throw new Error("Leave template not found or inactive");
 
@@ -163,7 +164,7 @@ class LeaveBalanceService {
                     employee_id: employeeId,
                     leave_category_id: category.id,
                     status: 0
-                }, {}, t);
+                }, {}, t, false, { company_id: true });
 
                 let balance;
                 // Calculate pending leaves (considering existing usage if applicable)
@@ -184,7 +185,7 @@ class LeaveBalanceService {
                         leave_template_id: templateId,
                         year: end.year(),
                         month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null
-                    }, t);
+                    }, t, false, { company_id: true });
                 } else {
                     balance = await commonQuery.createRecord(EmployeeLeaveBalance, {
                         ...metaFields,
@@ -196,7 +197,7 @@ class LeaveBalanceService {
                         total_allocated: allocated,
                         pending_leaves: pending,
                         company_id: employee.company_id
-                    }, t);
+                    }, t, false, { company_id: true });
                 }
                 results.push(balance);
             }
@@ -222,7 +223,7 @@ class LeaveBalanceService {
                 await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     status: 0
-                }, { status: 2 }, t);
+                }, { status: 2 }, t, false, { company_id: true });
                 
                 if (!transaction) await t.commit();
                 return [];
@@ -230,7 +231,7 @@ class LeaveBalanceService {
 
             const newTemplate = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t);
+            }, t, false, { company_id: true });
 
             if (!newTemplate) throw new Error("New leave template not found");
 
@@ -242,7 +243,7 @@ class LeaveBalanceService {
                 employee_id: employeeId,
                 status: 0,
                 leave_category_id: { [Op.notIn]: newCategoryIds }
-            }, { status: 2 }, t);
+            }, { status: 2 }, t, false, { company_id: true });
 
             // 2. Run standard initialization
             const results = await this.initializeBalance(employeeId, newTemplateId, t, employee, newTemplate);
@@ -267,14 +268,14 @@ class LeaveBalanceService {
                 await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                     employee_id: { [Op.in]: employeeIds },
                     status: 0
-                }, { status: 2 }, t);
+                }, { status: 2 }, t, false, { company_id: true });
                 if (!transaction) await t.commit();
                 return;
             }
 
             const template = meta.preFetchedMaster || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t);
+            }, t, false, { company_id: true });
             if (!template) throw new Error("Leave template not found");
 
             const categoryIds = template.categories.map(c => c.id);
@@ -284,7 +285,7 @@ class LeaveBalanceService {
                 employee_id: { [Op.in]: employeeIds },
                 status: 0,
                 leave_category_id: { [Op.notIn]: categoryIds }
-            }, { status: 2 }, t);
+            }, { status: 2 }, t, false, { company_id: true });
 
             // 2. Perform bulk initialization - process in chunks to avoid memory issues
             const chunkSize = 50;
@@ -315,7 +316,7 @@ class LeaveBalanceService {
                 status: 0
             }, {
                 include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }]
-            }, transaction);
+            }, transaction, { company_id: true });
 
             for (const template of templates) {
                 const employees = await commonQuery.findAllRecords(Employee, {
@@ -340,7 +341,7 @@ class LeaveBalanceService {
                             year: end.year(),
                             month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
                             status: 0
-                        }, {}, transaction);
+                        }, {}, transaction, false, { company_id: true });
 
                         if (balance) {
                             const newTotal = parseFloat(balance.total_allocated || 0) + monthlyRate;
@@ -349,7 +350,7 @@ class LeaveBalanceService {
                             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                                 total_allocated: Math.round(newTotal * 10) / 10,
                                 pending_leaves: Math.round(newPending * 10) / 10
-                            }, transaction);
+                            }, transaction, false, { company_id: true });
                         }
                     }
                 }
@@ -398,7 +399,7 @@ class LeaveBalanceService {
                         year: lastYear,
                         month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
                         status: 0
-                    }, {}, transaction);
+                    }, {}, transaction, false, { company_id: true });
 
                     if (!lastBalance) continue;
 
@@ -419,7 +420,7 @@ class LeaveBalanceService {
                     }
 
                     // 1. Mark OLD balance as processed (optional: status=2 or archived)
-                    await commonQuery.updateRecordById(EmployeeLeaveBalance, lastBalance.id, { status: 1 }, transaction);
+                    await commonQuery.updateRecordById(EmployeeLeaveBalance, lastBalance.id, { status: 1 }, transaction, false, { company_id: true });
 
                     // 2. Initialize NEW balance for the next cycle
                     await this.initializeBalance(employee.id, template.id, transaction);
@@ -432,13 +433,13 @@ class LeaveBalanceService {
                         year: newYear,
                         month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
                         status: 0
-                    }, {}, transaction);
+                    }, {}, transaction, false, { company_id: true });
 
                     if (newBalance) {
                         await commonQuery.updateRecordById(EmployeeLeaveBalance, newBalance.id, {
                             carry_forward_leaves: carryForwardAmount,
                             pending_leaves: parseFloat(newBalance.pending_leaves || 0) + carryForwardAmount
-                        }, transaction);
+                        }, transaction, false, { company_id: true });
                     }
                 }
             }
@@ -472,7 +473,7 @@ class LeaveBalanceService {
 
             // Determine the correct cycle/year
             // Attempt to use templates from emp if they were included
-            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
+            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t, false, { company_id: true });
             const { end } = this.getCycleDates(emp.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', date);
             const year = end.year();
 
@@ -482,7 +483,7 @@ class LeaveBalanceService {
                 year: year,
                 month: (template && (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY')) ? end.month() + 1 : null,
                 status: 0
-            }, {}, t);
+            }, {}, t, false, { company_id: true });
 
             if (!balance) {
                 console.warn(`[LeaveBalanceService] No balance found for emp ${employeeId}, category ${categoryId}, year ${year}. Skipping adjustment.`);
@@ -505,7 +506,7 @@ class LeaveBalanceService {
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                 used_leaves: used,
                 pending_leaves: pending
-            }, t);
+            }, t, false, { company_id: true });
 
             if (!transaction) await t.commit();
         } catch (error) {
@@ -633,7 +634,6 @@ class LeaveBalanceService {
      * Calculates total leave days for a range, respecting sandwich policy.
      */
     static async calculateWorkingDays(employeeId, startDate, endDate, transaction = null) {
-        const { getDayOffInfo } = require("../helpers/attendanceHelper");
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         }, transaction);

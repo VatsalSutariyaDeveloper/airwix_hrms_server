@@ -5,7 +5,8 @@ const {
     ShiftTemplate,
     WeeklyOffTemplate,
     WeeklyOffTemplateDay,
-    sequelize 
+    sequelize, 
+    EmployeeAttendanceTemplate
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const attendanceHelper = require("../../helpers/attendanceHelper");
@@ -35,13 +36,13 @@ const employeeAttendanceController = {
             let settings = await commonQuery.findAllRecords(EmployeeShift, { 
                 employee_id: employeeId,
                 status: 0
-            });
+            }, {}, null, { company_id: true });
 
             // Fallback to Master Template if no individual setting exists
             if (settings.length === 0) {
                 const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['shift_template'] });
                 if (employee && employee.shift_template) {
-                    const masterShifts = await commonQuery.findAllRecords(ShiftTemplate, employee.shift_template);
+                    const masterShifts = await commonQuery.findAllRecords(ShiftTemplate, employee.shift_template, {}, null, { company_id: true });
                     // Map master to match the expected format if needed, 
                     // though shift_template itself has the columns.
                     // Usually ShiftTemplate is a single row, but maybe there's logic for multiple?
@@ -75,7 +76,7 @@ const employeeAttendanceController = {
             // Remove existing day-wise shift settings
             await commonQuery.hardDeleteRecords(EmployeeShift, { 
                 employee_id: employeeId 
-            }, transaction);
+            }, transaction, { company_id: true });
 
             if (shifts.length > 0) {
                 const payloads = shifts.map(shift => {
@@ -87,7 +88,7 @@ const employeeAttendanceController = {
                    };
                 });
 
-                await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
+                await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction, { company_id: true });
             }
 
             await rebuildRecentAttendance(employeeId, transaction);
@@ -108,7 +109,7 @@ const employeeAttendanceController = {
             let weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
                 employee_id: employeeId,
                 status: 0
-            });
+            }, {}, null, { company_id: true });
 
             // Fallback to Master Template
             if (weeklyOffs.length === 0) {
@@ -117,7 +118,7 @@ const employeeAttendanceController = {
                     weeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
                         template_id: employee.weekly_off_template,
                         status: 0
-                    });
+                    }, {}, null, false, { company_id: true });
                     weeklyOffs = weeklyOffs.map(wo => ({ ...wo.toJSON(), is_template: true }));
                 }
             }
@@ -156,7 +157,7 @@ const employeeAttendanceController = {
                     company_id: req.user?.company_id || 0,
                 }));
 
-                await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction);
+                await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction, { company_id: true });
             }
 
             await rebuildRecentAttendance(employeeId, transaction);
@@ -174,10 +175,9 @@ const employeeAttendanceController = {
     getAttendanceTemplate: async (req, res) => {
         try {
             const { employeeId } = req.params;
-            const { EmployeeAttendanceTemplate } = require("../../models");
             const setting = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { 
                 employee_id: employeeId 
-            });
+            }, {}, null, false, { company_id: true });
 
             return res.success("Employee attendance template fetched successfully", setting);
         } catch (error) {
@@ -193,11 +193,10 @@ const employeeAttendanceController = {
         try {
             const { employeeId } = req.params;
             const data = req.body;
-            const { EmployeeAttendanceTemplate } = require("../../models");
 
             let existing = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { 
                 employee_id: employeeId 
-            }, {}, transaction);
+            }, {}, transaction, false, { company_id: true });
 
             const payload = {
                 ...data,
@@ -206,9 +205,9 @@ const employeeAttendanceController = {
             };
 
             if (existing) {
-                await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction);
+                await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction, false, { company_id: true });
             } else {
-                await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
+                await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction, { company_id: true });
             }
 
             await rebuildRecentAttendance(employeeId, transaction);

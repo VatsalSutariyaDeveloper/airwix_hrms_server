@@ -263,7 +263,7 @@ exports.create = async (req, res) => {
  */
 exports.getAll = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(CompanyMaster, {status: 0}, { order: [["company_name", "ASC"]] }, null, false);
+    const result = await commonQuery.findAllRecords(CompanyMaster, {status: 0}, { order: [["company_name", "ASC"]] }, null, {});
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
@@ -281,7 +281,7 @@ exports.getCompanies = async (req, res) => {
         { attributes: ['id', 'company_id'] },
         null,
         false,
-        false
+        {}
     );
     if (!record) {
         return res.error(constants.NOT_FOUND);
@@ -307,7 +307,7 @@ exports.getCompanies = async (req, res) => {
         { company_id: companyId },
       ],
       status: 0,
-    }, { include: includeOptions },null, false);
+    }, { include: includeOptions },null, {});
 
     // Construct full URL for logo_image and admin_signature_img
 
@@ -353,7 +353,7 @@ exports.getById = async (req, res) => {
       { include: includeOptions },
       null,
       false,
-      false
+      {}
     );
 
     // Ensure the company is active
@@ -408,7 +408,7 @@ exports.update = async (req, res) => {
       {},
       transaction,
       false,
-      false
+      {}
     );
 
     if (!existing || existing.status === 2) {
@@ -417,6 +417,7 @@ exports.update = async (req, res) => {
     }
 
     delete POST.company_id;
+    delete POST.logo_image;
     
     if (req.files?.logo_image) {
       const singleLogoReq = {file: Array.isArray(req.files.logo_image) ? req.files.logo_image[0] : req.files.logo_image,};
@@ -436,7 +437,7 @@ exports.update = async (req, res) => {
       POST,
       transaction,
       false,
-      false
+      {}
     );
 
     if (!updated || updated.status === 2) {
@@ -472,7 +473,7 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const deleted = await commonQuery.softDeleteById(CompanyMaster, req.params.id,  transaction, false);
+    const deleted = await commonQuery.softDeleteById(CompanyMaster, req.params.id,  transaction, {});
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);

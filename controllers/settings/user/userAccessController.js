@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const { getContext } = require("../../../utils/requestContext.js");
 const { clearUserCache } = require("../../../helpers/permissionCache.js");
+const { generateToken } = require("../../../helpers/tokenHelper");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -376,19 +377,9 @@ exports.switchCompany = async (req, res) => {
     const newBranchId = defaultBranch ? defaultBranch.id : 0;
 
     // 4. Generate New Token
-    const newToken = jwt.sign(
-      {
-        id: user.id,
-        role_id: user.role_id,
-        branch_id: newBranchId,
-        company_id: parseInt(company_id, 10),
-        organization_id: company.organization_id || null,
-        branch_access: user.branch_access || "",
-        is_super_admin: user.is_super_admin || user.role_id == 1
-      },
-      process.env.JWT_SECRET || "your_jwt_secret",
-      { expiresIn: "1d" }
-    );
+    user.branch_id = newBranchId;
+    user.organization_id = company.organization_id || null;
+    const newToken = generateToken(user, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 
@@ -461,19 +452,9 @@ exports.switchBranch = async (req, res) => {
     }
 
     // 3. Generate New Token
-    const newToken = jwt.sign(
-      {
-        id: user.id,
-        role_id: user.role_id,
-        branch_id: finalBranchId,
-        company_id: parseInt(company_id, 10),
-        organization_id: organization_id || null,
-        branch_access: user.branch_access || "",
-        is_super_admin: user.is_super_admin || user.role_id == 1
-      },
-      process.env.JWT_SECRET || "your_jwt_secret",
-      { expiresIn: "1d" }
-    );
+    user.branch_id = finalBranchId;
+    user.organization_id = organization_id || null;
+    const newToken = generateToken(user, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 

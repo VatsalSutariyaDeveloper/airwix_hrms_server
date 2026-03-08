@@ -3,6 +3,7 @@ const router = express.Router();
 const payrollController = require("../controllers/employee/payrollController");
 const employeeIncentiveController = require("../controllers/employee/employeeIncentiveController");
 const employeeAdvanceController = require("../controllers/employee/EmployeeAdvanceController");
+const cashVoucherController = require("../controllers/employee/cashVoucherController");
 
 router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
@@ -13,6 +14,11 @@ router.post("/get-available-months", payrollController.getAvailableMonthsForCalc
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
+
+// Cash Voucher
+router.post("/cash-voucher/get-employees-by-month-year", cashVoucherController.getEmployeesByMonthYear);
+router.post("/cash-voucher/calculate", cashVoucherController.calculateCashVoucher);
+router.post("/cash-voucher/get-voucher-details", cashVoucherController.getCashVoucherById);
 
 
 // ==========================

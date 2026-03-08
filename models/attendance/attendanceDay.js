@@ -42,6 +42,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "leaveCategory" });
     AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "attendancePunches" });
+    AttendanceDay.hasMany(models.CashVoucher, { foreignKey: "attendance_day_id", as: "cashVouchers" });
   };
 
   return AttendanceDay;

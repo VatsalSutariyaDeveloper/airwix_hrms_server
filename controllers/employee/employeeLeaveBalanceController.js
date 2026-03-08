@@ -50,7 +50,7 @@ exports.getByEmployeeId = async (req, res) => {
             month: isMonthlyCycle ? dayjs(cycle_info.end).month() + 1 : null
         }, {
             order: [['id', 'ASC']]
-        });
+        }, null, { company_id: true });
 
         if (!leaveBalances || leaveBalances.length === 0) {
             return res.error(constants.NOT_FOUND, { message: "No leave balances found for this employee" });
@@ -100,7 +100,7 @@ exports.updateByEmployeeId = async (req, res) => {
                 ? { id: bal.id } 
                 : { employee_id: employeeId, leave_category_id: bal.leave_category_id };
 
-            const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, searchCriteria, {}, transaction);
+            const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, searchCriteria, {}, transaction, false, { company_id: true });
 
             if (existingBalance) {
                 let newTotal = parseFloat(bal.leave_count !== undefined ? bal.leave_count : bal.total_allocated || 0);
@@ -129,14 +129,14 @@ exports.updateByEmployeeId = async (req, res) => {
                     automation_rules: bal.automation_rules !== undefined ? bal.automation_rules : existingBalance.automation_rules,
                 };
 
-                await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, updateData, transaction);
+                await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, updateData, transaction, false, { company_id: true });
             } else if (bal.leave_category_id && employee.leave_template) {
                 // Create if it doesn't exist (e.g. manually adding a category that was missed)
                 let newTotal = parseFloat(bal.leave_count || bal.total_allocated || 0);
                 newTotal = Math.round(newTotal * 2) / 2;
                 
                 // Get cycle year
-                const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
+                const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction, false, { company_id: true });
                 const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
 
                 await commonQuery.createRecord(EmployeeLeaveBalance, {
@@ -155,7 +155,7 @@ exports.updateByEmployeeId = async (req, res) => {
                     automation_rules: bal.automation_rules || null,
                     company_id: employee.company_id,
                     status: 0
-                }, transaction);
+                }, transaction, { company_id: true });
             }
         }
 

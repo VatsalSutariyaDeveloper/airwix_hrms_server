@@ -10,6 +10,7 @@ const importEmployeeController = require("../controllers/settings/import/importE
 
 // const { bufferImage } = require("../helpers/fileUpload");
 
+router.get("/me", employeeController.getProfile);
 router.post("/", bufferFile(), employeeController.create);
 router.post("/get-transactions", employeeController.getAll);
 router.post("/check-employee-code", employeeController.checkEmployeeCode);

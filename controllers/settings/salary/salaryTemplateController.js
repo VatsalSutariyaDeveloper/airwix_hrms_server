@@ -259,11 +259,8 @@ exports.update = async (req, res) => {
     if (POST.components && Array.isArray(POST.components)) {
       // Delete old transactions first (Soft Delete or Hard delete since we are replacing)
       // Here we use status: 2 for soft delete
-      await SalaryTemplateTransaction.destroy({
-        where: { salary_template_id: id },
-        transaction
-      });
-
+      await commonQuery.hardDeleteRecords(SalaryTemplateTransaction, { salary_template_id: id }, transaction, { company_id: true });
+    
       // Insert new transactions
       const componentData = POST.components.map(comp => ({
         salary_template_id: id,

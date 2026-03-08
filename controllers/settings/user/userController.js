@@ -278,9 +278,9 @@ exports.verifySetupToken = async (req, res) => {
     }, {
       include: [
         {
-          model: RolePermission, 
-          as: "role", 
-          attributes: ["role_name", "permissions"] 
+          model: RolePermission,
+          as: "role",
+          attributes: ["role_name", "permissions"]
         }
       ]
     }, null, false, false);
@@ -354,7 +354,7 @@ exports.assignRole = async (req, res) => {
       newRoleId = 3;
     }
 
-    const userData = await commonQuery.updateRecordById(User, id, { 
+    const userData = await commonQuery.updateRecordById(User, id, {
       role_id: newRoleId,
       branch_access: branch_access
     }, transaction);
@@ -459,34 +459,34 @@ exports.update = async (req, res) => {
     //   };
     //   validateOptions = {};
     // } else {
-      // Normal user update
-      requiredFields = {
-        user_name: "User Name",
-        // role_id: "Role",
-      };
+    // Normal user update
+    requiredFields = {
+      user_name: "User Name",
+      // role_id: "Role",
+    };
 
-      // Conditionally add required fields based on login_type
-      const loginType = parseInt(req.body.login_type) || 1;
+    // Conditionally add required fields based on login_type
+    const loginType = parseInt(req.body.login_type) || 1;
 
-      if (loginType === 1) {
-        requiredFields.mobile_no = "Mobile No";
-      } else if (loginType === 2) {
-        requiredFields.email = "Email";
-        requiredFields.password = "Password";
-      }
+    if (loginType === 1) {
+      requiredFields.mobile_no = "Mobile No";
+    } else if (loginType === 2) {
+      requiredFields.email = "Email";
+      requiredFields.password = "Password";
+    }
 
-      // Determine unique check fields based on what's being provided
-      const uniqueCheckFields = [];
-      if (req.body.email) uniqueCheckFields.push("email");
-      if (req.body.mobile_no) uniqueCheckFields.push("mobile_no");
+    // Determine unique check fields based on what's being provided
+    const uniqueCheckFields = [];
+    if (req.body.email) uniqueCheckFields.push("email");
+    if (req.body.mobile_no) uniqueCheckFields.push("mobile_no");
 
-      validateOptions = {
-        uniqueCheck: uniqueCheckFields.length > 0 ? {
-          model: User,
-          fields: uniqueCheckFields,
-          excludeId: req.params.id,
-        } : undefined,
-      };
+    validateOptions = {
+      uniqueCheck: uniqueCheckFields.length > 0 ? {
+        model: User,
+        fields: uniqueCheckFields,
+        excludeId: req.params.id,
+      } : undefined,
+    };
     // }
 
     // ✅ Validate request
@@ -626,7 +626,7 @@ exports.update = async (req, res) => {
     //   );
 
     //   const permissions = req.body.permission.join(",");
-      
+
     //   if (userCompanyRole) {
     //     await commonQuery.updateRecordById(
     //       UserCompanyRoles,
@@ -684,10 +684,12 @@ exports.getAll = async (req, res) => {
 
     if (req.body.filter?.role === "business-admin") {
       if (organization_id) {
-        const orgCompanies = await CompanyMaster.findAll({
-          where: { organization_id, status: 0 },
-          attributes: ["id"]
-        });
+        const orgCompanies = await commonQuery.findAllRecords(
+          CompanyMaster,
+          { organization_id, status: 0 },
+          { attributes: ["id"] }
+        );
+
         const organizationCompanyIds = orgCompanies.map(c => c.id);
 
         extraFilters = {
@@ -701,98 +703,65 @@ exports.getAll = async (req, res) => {
 
     if (req.body.filter) delete req.body.filter.role;
 
-    const { page = 1, pageSize = 10, search, filter, orderBy = 'createdAt', orderDir = "DESC" } = req.body;
-    const limit = parseInt(pageSize, 10);
-    const offset = (parseInt(page, 10) - 1) * limit;
-
     const where = { ...extraFilters };
 
     // --- Branch Access Logic ---
-    if (!req.user.is_super_admin) {
-      if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
-        if (where.branch_id === undefined) where.branch_id = req.user.branch_id;
-      } else if (req.user.branch_access) {
-        const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-        if (branches.length > 0) {
-          where.branch_id = { [Op.in]: branches };
-        }
+    // if (!req.user.is_super_admin) {
+    //   if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
+    //     if (where.branch_id === undefined) where.branch_id = req.user.branch_id;
+    //   } else if (req.user.branch_access) {
+    //     const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    //     if (branches.length > 0) {
+    //       where.branch_id = { [Op.in]: branches };
+    //     }
+    //   }
+    // }
+
+    const data = await commonQuery.fetchPaginatedData(
+      User,
+      {where, ...req.body},
+      [],
+      {
+        include: [
+          {
+            model: RolePermission,
+            as: "RolePermission",
+            attributes: [],
+            required: false,
+          },
+          {
+            model: Employee,
+            as: "Employee",
+            attributes: [],
+            required: false,
+          },
+          {
+            model: BranchMaster,
+            as: "Branch",
+            attributes: [],
+            required: false,
+          },
+        ],
+        attributes: [
+          "id",
+          "role_id",
+          "user_name",
+          "email",
+          "mobile_no",
+          "status",
+          "profile_image",
+          "authorized_signature",
+          "branch_id",
+          "createdAt",
+          [sequelize.col("RolePermission.role_name"), "role_name"],
+          [sequelize.col("Branch.branch_name"), "branch_name"],
+          [sequelize.col("Employee.first_name"), "first_name"],
+          [sequelize.col("Employee.employee_code"), "employee_code"],
+        ],
       }
-    }
+    );
 
-    // --- Search Logic ---
-    if (search) {
-      const searchCondition = { [Op.iLike]: `%${search}%` };
-      where[Op.and] = where[Op.and] || [];
-      where[Op.and].push({
-        [Op.or]: [
-          { user_name: searchCondition },
-          { email: searchCondition },
-          { mobile_no: searchCondition },
-          sequelize.where(sequelize.col("RolePermission.role_name"), searchCondition)
-        ]
-      });
-    }
-
-    // --- Filter Logic ---
-    if (filter) {
-      Object.keys(filter).forEach((key) => {
-        if (filter[key] !== undefined && filter[key] !== null && filter[key] !== "") {
-          where[key] = filter[key];
-        }
-      });
-    }
-
-    const { count, rows } = await User.findAndCountAll({
-      where,
-      include: [
-        {
-          model: RolePermission,
-          as: "RolePermission",
-          attributes: [],
-          required: false,
-        },
-        {
-          model: Employee,
-          as: "Employee",
-          attributes: [],
-          required: false,
-        },
-        {
-          model: BranchMaster,
-          as: "Branch",
-          attributes: [],
-          required: false,
-        },
-      ],
-      attributes: [
-        "id",
-        "role_id",
-        "user_name",
-        "email",
-        "mobile_no",
-        "status",
-        "profile_image",
-        "authorized_signature",
-        "branch_id",
-        "createdAt",
-        [sequelize.col("RolePermission.role_name"), "role_name"],
-        [sequelize.col("Branch.branch_name"), "branch_name"],
-        [sequelize.col("Employee.first_name"), "first_name"],
-        [sequelize.col("Employee.employee_code"), "employee_code"],
-      ],
-      order: [[orderBy, orderDir]],
-      limit,
-      offset,
-      distinct: true,
-      subQuery: false,
-    });
-
-    return res.ok({
-      items: rows,
-      count,
-      totalPages: Math.ceil(count / limit),
-      currentPage: parseInt(page, 10),
-    });
+    return res.ok(data);
   } catch (err) {
     return handleError(err, res, req);
   }

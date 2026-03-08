@@ -587,7 +587,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         const dateFilter = {};
         if (reqBody?.startDate) dateFilter[Op.gte] = new Date(reqBody?.startDate);
         if (reqBody?.endDate) dateFilter[Op.lte] = new Date(reqBody?.endDate);
-        if (Object.keys(dateFilter).length > 0) filters[dateField] = dateFilter;
+        if (Object.keys(dateFilter).length > 0 || Object.getOwnPropertySymbols(dateFilter).length > 0) filters[dateField] = dateFilter;
       }
 
       // E. Search Logic

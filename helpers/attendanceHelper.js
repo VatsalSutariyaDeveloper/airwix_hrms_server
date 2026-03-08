@@ -92,7 +92,7 @@ async function punch(employeeId, meta, transaction = null) {
         template_id: employee.holiday_template,
         date: today,
         status: 0,
-      }, {}, transaction);
+      }, {}, transaction, false, { company_id: true });
       if (isHoliday) {
         isNonWorking = true;
         nonWorkingType = "holiday";
@@ -111,7 +111,7 @@ async function punch(employeeId, meta, transaction = null) {
          [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
          is_off: true,
          status: 0,
-       }, {}, transaction);
+       }, {}, transaction, false, { company_id: true });
        if (weeklyOff) {
          isNonWorking = true;
          nonWorkingType = "weekly off";
@@ -129,13 +129,13 @@ async function punch(employeeId, meta, transaction = null) {
     employee_id: employeeId,
     day_of_week: dayOfWeek,
     status: 0,
-  }, {}, transaction);
+  }, {}, transaction, false, { company_id: true });
 
   let shift = null;
   if (empShift) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction, false, { company_id: true });
   } else if (employee.shift_template) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, { company_id: true });
   }
 
   // 🛑 BLOCK PUNCH if no shift is assigned
@@ -283,7 +283,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     },
     { attributes: ['ctc_monthly', 'lwp_calculation_basis'] },
     transaction,
-    false
+    false,
+    { company_id: true }
   );
 
   if (employeeSalaryTemplate) {
@@ -422,7 +423,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       template_id: employee.holiday_template,
       date: date,
       status: 0,
-    }, {}, transaction);
+    }, {}, transaction, false, { company_id: true });
   }
   if (holidayDetails) isHoliday = true;
 
@@ -446,7 +447,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
       is_off: true,
       status: 0,
-    }, {}, transaction);
+    }, {}, transaction, false, { company_id: true });
     if (weeklyOff) isWeeklyOff = true;
   }
 
@@ -457,7 +458,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         employee_id: employeeId,
         day_of_week: dayOfWeek,
         status: 0,
-      }, {}, transaction);
+      }, {}, transaction, false, { company_id: true });
 
   const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
   let shift = null;
@@ -467,7 +468,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
         return meta.preFetchedShiftTemplates.get(sId);
     }
-    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction);
+    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, { company_id: true });
   };
 
   // 1. Try provided shift_id from meta
@@ -1486,7 +1487,7 @@ async function getDayOffInfo(employee, date, transaction) {
       template_id: employee.holiday_template,
       date: date,
       status: 0,
-    }, {}, transaction);
+    }, {}, transaction, false, { company_id: true });
     if (holiday) {
       res.isHoliday = true;
       res.holidayDetails = holiday;
@@ -1506,7 +1507,7 @@ async function getDayOffInfo(employee, date, transaction) {
       [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
       is_off: true,
       status: 0
-    }, {}, transaction);
+    }, {}, transaction, false, { company_id: true });
     if (weeklyOff) res.isWeeklyOff = true;
   }
 
@@ -1528,7 +1529,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
     is_compoff: true,
     leave_template_id: employee.leave_template,
     status: 0
-  }, {}, transaction);
+  }, {}, transaction, false, { company_id: true });
 
   if (!compOffCategory) return;
 
@@ -1692,7 +1693,9 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         day_of_week: dayjs(date).day(),
         status: 0
       },
-      { transaction }
+      {},
+      transaction,
+      { company_id: true }
     )
   ]);
 
@@ -1707,7 +1710,9 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         date,
         status: 0
       },
-      { transaction }
+      {},
+      transaction,
+      { company_id: true }
     ),
     commonQuery.findAllRecords(
       EmployeeWeeklyOff,
@@ -1718,7 +1723,9 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         is_off: true,
         [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
       },
-      { transaction }
+      {},
+      transaction,
+      { company_id: true }
     ),
     commonQuery.findAllRecords(
       LeaveRequest,
@@ -1729,7 +1736,8 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
         status: 0
       },
-      { transaction }
+      {},
+      transaction
     )
   ]);
 

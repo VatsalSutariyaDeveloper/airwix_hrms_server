@@ -106,6 +106,7 @@ const IncentiveType = require("./settings/incentiveType")(sequelize, DataTypes);
 const EmployeeIncentive = require("./payroll/employeeIncentive")(sequelize, DataTypes);
 const EmployeeAdvance = require("./payroll/employeeAdvance")(sequelize, DataTypes);
 const PaymentHistory = require("./payroll/paymentHistory")(sequelize, DataTypes);
+const CashVoucher = require("./payroll/cashVoucher")(sequelize, DataTypes);
 
 const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(sequelize, DataTypes);
 
@@ -216,6 +217,7 @@ const db = {
   EmployeeIncentive,
   EmployeeAdvance,
   PaymentHistory,
+  CashVoucher,
 
   // Canteen Attendance
   CanteenAttendance,

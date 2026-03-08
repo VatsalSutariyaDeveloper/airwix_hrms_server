@@ -178,6 +178,8 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.EmployeePrintTemplate, { foreignKey: "employee_id", as: "employeePrintTemplates" });
         Employee.hasMany(models.CanteenAttendance, { foreignKey: "employee_id", as: "canteenAttendances" });
         Employee.hasMany(models.EmployeeAdvance, { foreignKey: "employee_id", as: "employeeAdvances" });
+        Employee.hasMany(models.EmployeeIncentive, { foreignKey: "employee_id", as: "employeeIncentive" });
+        Employee.hasMany(models.CashVoucher, { foreignKey: "employee_id", as: "cashVouchers" });
     };
 
     return Employee;

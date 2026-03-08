@@ -80,7 +80,7 @@ exports.getAll = async (req, res) => {
       fieldConfig,
       {
         include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
-      }, null, { company_id: true }
+      }, { company_id: true }
     );
 
     if (records.items && Array.isArray(records.items)) {
@@ -294,7 +294,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(ShiftTemplate, { status: 0 }, { company_id: true });
+    const result = await commonQuery.findAllRecords(ShiftTemplate, { status: 0 }, {}, null, { company_id: true });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

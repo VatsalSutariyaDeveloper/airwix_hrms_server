@@ -180,14 +180,14 @@ exports.getAttendanceSummary = async (req, res) => {
           employee_id: { [Op.in]: itemIds }, 
           date: targetDate, 
           status: 0 
-        }),
+        }, {}, null, { company_id: true }),
         commonQuery.findAllRecords(EmployeeWeeklyOff, { 
           employee_id: { [Op.in]: itemIds }, 
           day_of_week: dayOfWeek, 
           status: 0, 
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
-        })
+        }, {}, null, { company_id: true })
       ]);
 
       const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
@@ -520,7 +520,9 @@ exports.updateAttendanceDay = async (req, res) => {
             status: 0
           },
           {},
-          t
+          t,
+          false,
+          { company_id: true }
         );
         isTodayHoliday = !!holidayRecord;
       }
@@ -684,7 +686,7 @@ exports.updateAttendanceDay = async (req, res) => {
                         employee_id: employee_id,
                         leave_category_id: shortLeaveCategory.id,
                         status: 0
-                    }, {}, t);
+                    }, {}, t, false, { company_id: true });
 
 
                     if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
@@ -1017,14 +1019,14 @@ exports.getAttendanceDayDetails = async (req, res) => {
           employee_id, 
           date: attendance_date, 
           status: 0 
-        }),
+        }, {}, null, false, { company_id: true }),
         commonQuery.findOneRecord(EmployeeWeeklyOff, { 
           employee_id, 
           day_of_week: dayOfWeek, 
           status: 0, 
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
-        })
+        }, {}, null, false, { company_id: true })
       ]);
 
       // Fallback to Master Templates
@@ -1033,7 +1035,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
               template_id: attendanceDay.employee.holiday_template,
               date: attendance_date,
               status: 0
-          });
+          }, {}, null, false, { company_id: true });
       }
       if (!isWeeklyOff && attendanceDay?.employee?.weekly_off_template) {
           isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
@@ -1042,7 +1044,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
               [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
               is_off: true,
               status: 0
-          });
+          }, {}, null, false, { company_id: true });
       }
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
@@ -1147,14 +1149,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       employee_id,
       date: { [Op.between]: [startDate, endDate] },
       status: 0
-    });
+    }, {}, null, { company_id: true });
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
         employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
             template_id: employee.holiday_template,
             date: { [Op.between]: [startDate, endDate] },
             status: 0
-        });
+        }, {}, null, { company_id: true });
     }
 
     // 2.2 Fetch Weekly Offs for the employee
@@ -1162,14 +1164,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       employee_id,
       status: 0,
       is_off: true
-    });
+    }, {}, null, { company_id: true });
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
         employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
             template_id: employee.weekly_off_template,
             is_off: true,
             status: 0
-        });
+        }, {}, null, { company_id: true });
     }
 
     // 3. Fetch all raw punches for the month with User info
@@ -1400,7 +1402,7 @@ exports.getLeaveSummary = async (req, res) => {
       }
     }
 
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria, {}, null, { company_id: true });
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {

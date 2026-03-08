@@ -145,7 +145,6 @@ exports.getById = async (req, res) => {
           as: 'holidayTransactions',
           required: false,
           attributes: ['id', 'template_id', 'name', 'date', 'holiday_type', 'color', 'status'],
-
         }
       ]
     }, null, false, { company_id: true });

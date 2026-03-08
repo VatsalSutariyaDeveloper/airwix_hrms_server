@@ -31,7 +31,10 @@ const employeeSalaryTemplateController = {
                             attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component","formula"]
                         }]
                     }]
-                }
+                },
+                null,
+                false,
+                { company_id: true }
             );
 
             if (!template) {
@@ -68,7 +71,7 @@ const employeeSalaryTemplateController = {
             // 1. Get current template for history comparison
             let employeeTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, {
                 employee_id: employeeId
-            }, {}, transaction);
+            }, {}, transaction, false, { company_id: true });
 
             const oldCTC = employeeTemplate ? parseFloat(employeeTemplate.ctc_monthly) || 0 : 0;
             const newCTC = parseFloat(ctc_monthly) || 0;
@@ -89,9 +92,9 @@ const employeeSalaryTemplateController = {
             };
 
             if (employeeTemplate) {
-                await commonQuery.updateRecordById(EmployeeSalaryTemplate, employeeTemplate.id, templatePayload, transaction);
+                await commonQuery.updateRecordById(EmployeeSalaryTemplate, employeeTemplate.id, templatePayload, transaction, false, { company_id: true });
             } else {
-                employeeTemplate = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
+                employeeTemplate = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction, { company_id: true });
             }
 
             // 2. History Recording
@@ -128,7 +131,7 @@ const employeeSalaryTemplateController = {
             if (Array.isArray(components)) {
                 await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, {
                     employee_id: employeeId
-                }, transaction);
+                }, transaction, { company_id: true });
 
                 const componentPayloads = components.map(comp => ({
                     employee_id: employeeId,
@@ -145,7 +148,7 @@ const employeeSalaryTemplateController = {
                     user_id: req.user?.id || 0
                 }));
 
-                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction);
+                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction, { company_id: true });
             }
 
             await transaction.commit();
