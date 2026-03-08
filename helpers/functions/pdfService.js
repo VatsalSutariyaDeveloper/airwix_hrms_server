@@ -36,6 +36,7 @@ const formatCurrency = (amount) => {
  * @param {string} outputPath - Absolute path where the PDF should be saved
  */
 exports.generatePdfFromTemplate = async (templatePath, data, outputPath) => {
+    let browser;
     try {
         // Render EJS to HTML
         const html = await ejs.renderFile(templatePath, {
@@ -47,15 +48,21 @@ exports.generatePdfFromTemplate = async (templatePath, data, outputPath) => {
         });
 
         // Launch puppeteer
-        const browser = await puppeteer.launch({
+        browser = await puppeteer.launch({
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const page = await browser.newPage();
         
-        // Set content
-        await page.setContent(html, { waitUntil: 'networkidle0' });
+        // Increase navigation timeout to 60 seconds and use 'load'
+        await page.setDefaultNavigationTimeout(60000);
+        
+        // Set content - 'load' is faster and safer for self-contained HTML
+        await page.setContent(html, { 
+            waitUntil: 'load',
+            timeout: 60000 
+        });
 
         // Generate PDF
         await page.pdf({
@@ -70,10 +77,13 @@ exports.generatePdfFromTemplate = async (templatePath, data, outputPath) => {
             }
         });
 
-        await browser.close();
         return true;
     } catch (err) {
         console.error('Error in generatePdfFromTemplate:', err);
         throw err;
+    } finally {
+        if (browser) {
+            await browser.close().catch(e => console.error("Error closing browser:", e.message));
+        }
     }
 };

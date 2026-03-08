@@ -7,6 +7,11 @@ const {
     AttendancePunch,
     AttendanceDay,
     EmployeeSalaryTemplate,
+    EmployeeAttendanceTemplate,
+    EmployeeHoliday,
+    EmployeeWeeklyOff,
+    EmployeeLeaveBalance,
+    EmployeeShift,
     WeeklyOffTemplate,
     WeeklyOffTemplateDay,
     EmployeeSettings,
@@ -16,7 +21,10 @@ const {
     LeaveTemplateCategory,
     SalaryTemplate,
     SalaryTemplateTransaction,
-    ShiftTemplate
+    ShiftTemplate,
+    DesignationMaster,
+    Department,
+    HolidayTemplate
 } = require("../../models");
 
 const {
@@ -495,6 +503,153 @@ exports.getById = async (req, res) => {
         }
 
         return res.ok(plainRecord);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Gets the profile of the currently logged-in user (Employee context).
+ */
+exports.getProfile = async (req, res) => {
+    try {
+        const employeeId = req.user.employee_id;
+
+        const record = await commonQuery.findOneRecord(Employee, { id: employeeId }, {
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] },
+                { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
+                
+                // Joins with Employee-specific Templates/Data
+                { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
+                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate', attributes: ['mode', 'holiday_policy', 'late_entry_limit', 'early_exit_limit'] },
+                
+                // Master Template Joins (kept for names if not in employee-specific tables)
+                { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
+                { model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"] },
+                { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
+                { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] }
+            ]
+        });
+
+        if (!record) return res.error(constants.EMPLOYEE_NOT_FOUND);
+
+        const plainRecord = record.get({ plain: true });
+
+        // Helper to generate full file URLs
+        const getFileUrl = (fileName) => {
+            if (!fileName) return null;
+            const exists = fileExists(constants.EMPLOYEE_DOC_FOLDER, fileName);
+            return exists ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${fileName}` : null;
+        };
+
+        const profileData = {
+            header: {
+                id: plainRecord.id,
+                employee_code: plainRecord.employee_code,
+                full_name: plainRecord.first_name?.trim() || 'N/A',
+                profile_image_url: getFileUrl(plainRecord.profile_image),
+                designation: plainRecord.designation?.designation_name || 'N/A',
+                department: plainRecord.department?.name || 'N/A',
+            },
+            account_settings: {
+                user_name: plainRecord.linked_user?.user_name || 'N/A',
+                email: plainRecord.email || plainRecord.linked_user?.email || 'N/A',
+                mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
+            },
+            bank_details: {
+                name_as_per_bank: plainRecord.name_as_per_bank || 'N/A',
+                bank_name: plainRecord.bank_name || 'N/A',
+                account_no: plainRecord.bank_account_number || 'N/A',
+                ifsc: plainRecord.bank_ifsc_code || 'N/A',
+                holder_name: plainRecord.bank_account_holder_name || 'N/A',
+                upi_id: plainRecord.upi_id || 'N/A'
+            },
+            personal_info: {
+                first_name: plainRecord.first_name,
+                gender: plainRecord.gender === 1 ? 'Male' : (plainRecord.gender === 2 ? 'Female' : (plainRecord.gender === 3 ? 'Others' : 'N/A')),
+                dob: plainRecord.dob || 'N/A',
+                marital_status: plainRecord.marital_status === 1 ? 'Married' : 'Unmarried',
+                blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plainRecord.blood_group - 1] || 'N/A',
+                physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
+                religion: plainRecord.religion || 'N/A',
+                caste: plainRecord.caste || 'N/A',
+                hobby: plainRecord.hobby || 'N/A',
+                father_name: plainRecord.father_name || 'N/A',
+                mother_name: plainRecord.mother_name || 'N/A',
+                spouse_name: plainRecord.spouse_name || 'N/A',
+                marriage_date: plainRecord.marriage_date || 'N/A',
+                nationality: plainRecord.nationality || 'Indian',
+                place_of_birth: plainRecord.place_of_birth || 'N/A',
+                height: plainRecord.height ? `${plainRecord.height} cm` : 'N/A',
+                weight: plainRecord.weight ? `${plainRecord.weight} kg` : 'N/A',
+                identification_mark: plainRecord.identification_mark || 'N/A'
+            },
+            general_info: {
+                salary_cycle: plainRecord.salary_type || 'N/A',
+                weekly_off: plainRecord.weeklyOffTemplate?.name || 'N/A',
+                holiday: plainRecord.holidayTemplate?.name || 'N/A',
+                leave: plainRecord.leaveTemplate?.template_name || 'N/A',
+                shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
+                salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
+                lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis || 'N/A',
+                attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
+                salary_access: plainRecord.salary_access ? 'Yes' : 'No',
+                attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
+                reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
+            },
+            employment_info: {
+                joining_date: plainRecord.joining_date || 'N/A',
+                confirmation_date: plainRecord.confirmation_date || 'N/A',
+                employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
+                worker_type: ["On-Role", "Off-Role"][plainRecord.worker_type - 1] || 'N/A',
+                employee_grade: plainRecord.employee_grade || 'N/A',
+                uan: plainRecord.uan_number || 'N/A',
+                pan: plainRecord.pan_number || 'N/A',
+                aadhaar: plainRecord.aadhaar_number || 'N/A',
+                pf_eligible: plainRecord.pf_eligible ? 'Yes' : 'No',
+                esi_eligible: plainRecord.esi_eligible ? 'Yes' : 'No',
+                pt_eligible: plainRecord.pt_eligible ? 'Yes' : 'No',
+                lwf_eligible: plainRecord.lwf_eligible ? 'Yes' : 'No',
+                eps_eligible: plainRecord.eps_eligible ? 'Yes' : 'No',
+                probation_period: plainRecord.probation_period_days ? `${plainRecord.probation_period_days} Days` : 'N/A',
+                notice_period: plainRecord.notice_period_days ? `${plainRecord.notice_period_days} Days` : 'N/A',
+                referred_by: plainRecord.referred_by || 'N/A'
+            },
+            address_info: {
+                present: {
+                    address: `${plainRecord.present_address1 || ''} ${plainRecord.present_address2 || ''}`.trim() || 'N/A',
+                    city: plainRecord.present_city || 'N/A',
+                    pincode: plainRecord.present_pincode || 'N/A'
+                },
+                permanent: {
+                    address: `${plainRecord.permanent_address1 || ''} ${plainRecord.permanent_address2 || ''}`.trim() || 'N/A',
+                    city: plainRecord.permanent_city || 'N/A',
+                    pincode: plainRecord.permanent_pincode || 'N/A'
+                }
+            },
+            emergency_contact: {
+                name: plainRecord.emergency_contact_name || 'N/A',
+                mobile: plainRecord.emergency_contact_mobile || 'N/A',
+                relation: ["Brother", "Sister", "Father", "Mother", "Spouse", "Son", "Daughter", "Other"][plainRecord.emergency_contact_relation - 1] || 'N/A'
+            },
+            document_center: {
+                aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc),
+                pan_doc: getFileUrl(plainRecord.pan_doc),
+                bank_proof_doc: getFileUrl(plainRecord.bank_proof_doc),
+                driving_license_doc: getFileUrl(plainRecord.driving_license_doc),
+                voter_id_doc: getFileUrl(plainRecord.voter_id_doc),
+                uan_doc: getFileUrl(plainRecord.uan_doc),
+                passport_doc: getFileUrl(plainRecord.passport_doc),
+                permanent_address_proof: getFileUrl(plainRecord.permanent_address_proof_doc),
+                present_address_proof: getFileUrl(plainRecord.present_address_proof_doc)
+            },
+            education: plainRecord.education_details || [],
+            custom_fields: plainRecord.custom_fields || {}
+        };
+
+        return res.ok(profileData);
     } catch (err) {
         return handleError(err, res, req);
     }
