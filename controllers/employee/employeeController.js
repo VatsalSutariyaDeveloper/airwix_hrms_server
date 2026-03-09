@@ -49,8 +49,7 @@ const {
     calculateWorkingAndOffDays
 } = require("../../helpers/functions/commonFunctions");
 
-const { punch } = require("../../helpers/attendanceHelper");
-
+const { punch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 
 const { getContext } = require("../../utils/requestContext");
 const axios = require('axios');
@@ -62,14 +61,9 @@ const EmployeeTemplateService = require("../../services/employeeTemplateService"
 const dayjs = require("dayjs");
 const crypto = require("crypto");
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
-const FACE_MATCH_THRESHOLD = 0.40;
-
-const DEBUG_MODE = true;
-
 // Helper for conditional logging
 const debugLog = (tag, message, data = "") => {
-    if (DEBUG_MODE) {
+    if (process.env.DEBUG_MODE) {
         console.log(`[DEBUG] 🔍 ${tag}:`, message, data ? JSON.stringify(data).substring(0, 200) + "..." : "");
     }
 };
@@ -99,7 +93,6 @@ const FILE_COLUMNS = [
     'present_address_proof_doc',
     'bank_proof_doc',
     'pan_doc',
-    'aadhaar_doc',
     'aadhaar_doc',
     'passport_doc',
     'profile_image',
@@ -466,9 +459,19 @@ exports.getById = async (req, res) => {
 
         FILE_COLUMNS.forEach(field => {
             if (plainRecord[field]) {
-                const exists = fileExists(constants.EMPLOYEE_DOC_FOLDER, plainRecord[field]);
-                if (exists) {
-                    plainRecord[field + '_url'] = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${plainRecord[field]}`;
+                const isProfileImg = field === 'profile_image';
+                const folder = isProfileImg ? constants.EMPLOYEE_IMG_FOLDER : constants.EMPLOYEE_DOC_FOLDER;
+                const fallback = isProfileImg ? constants.EMPLOYEE_DOC_FOLDER : constants.EMPLOYEE_IMG_FOLDER;
+
+                let actualFolder = null;
+                if (fileExists(folder, plainRecord[field])) {
+                    actualFolder = folder;
+                } else if (fileExists(fallback, plainRecord[field])) {
+                    actualFolder = fallback;
+                }
+
+                if (actualFolder) {
+                    plainRecord[field + '_url'] = `${process.env.FILE_SERVER_URL}${actualFolder}${plainRecord[field]}`;
                 } else {
                     plainRecord[field + '_url'] = null;
                 }
@@ -539,10 +542,21 @@ exports.getProfile = async (req, res) => {
         const plainRecord = record.get({ plain: true });
 
         // Helper to generate full file URLs
-        const getFileUrl = (fileName) => {
+        const getFileUrl = (fileName, folder = constants.EMPLOYEE_IMG_FOLDER) => {
             if (!fileName) return null;
-            const exists = fileExists(constants.EMPLOYEE_DOC_FOLDER, fileName);
-            return exists ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${fileName}` : null;
+            
+            // Check provided (preferred) folder first
+            if (fileExists(folder, fileName)) {
+                return `${process.env.FILE_SERVER_URL}${folder}${fileName}`;
+            }
+            
+            // Fallback for files that might be in the other folder
+            const fallback = folder === constants.EMPLOYEE_IMG_FOLDER ? constants.EMPLOYEE_DOC_FOLDER : constants.EMPLOYEE_IMG_FOLDER;
+            if (fileExists(fallback, fileName)) {
+                return `${process.env.FILE_SERVER_URL}${fallback}${fileName}`;
+            }
+            
+            return null;
         };
 
         const profileData = {
@@ -636,15 +650,15 @@ exports.getProfile = async (req, res) => {
                 relation: ["Brother", "Sister", "Father", "Mother", "Spouse", "Son", "Daughter", "Other"][plainRecord.emergency_contact_relation - 1] || 'N/A'
             },
             document_center: {
-                aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc),
-                pan_doc: getFileUrl(plainRecord.pan_doc),
-                bank_proof_doc: getFileUrl(plainRecord.bank_proof_doc),
-                driving_license_doc: getFileUrl(plainRecord.driving_license_doc),
-                voter_id_doc: getFileUrl(plainRecord.voter_id_doc),
-                uan_doc: getFileUrl(plainRecord.uan_doc),
-                passport_doc: getFileUrl(plainRecord.passport_doc),
-                permanent_address_proof: getFileUrl(plainRecord.permanent_address_proof_doc),
-                present_address_proof: getFileUrl(plainRecord.present_address_proof_doc)
+                aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc, constants.EMPLOYEE_DOC_FOLDER),
+                pan_doc: getFileUrl(plainRecord.pan_doc, constants.EMPLOYEE_DOC_FOLDER),
+                bank_proof_doc: getFileUrl(plainRecord.bank_proof_doc, constants.EMPLOYEE_DOC_FOLDER),
+                driving_license_doc: getFileUrl(plainRecord.driving_license_doc, constants.EMPLOYEE_DOC_FOLDER),
+                voter_id_doc: getFileUrl(plainRecord.voter_id_doc, constants.EMPLOYEE_DOC_FOLDER),
+                uan_doc: getFileUrl(plainRecord.uan_doc, constants.EMPLOYEE_DOC_FOLDER),
+                passport_doc: getFileUrl(plainRecord.passport_doc, constants.EMPLOYEE_DOC_FOLDER),
+                permanent_address_proof: getFileUrl(plainRecord.permanent_address_proof_doc, constants.EMPLOYEE_DOC_FOLDER),
+                present_address_proof: getFileUrl(plainRecord.present_address_proof_doc, constants.EMPLOYEE_DOC_FOLDER)
             },
             education: plainRecord.education_details || [],
             custom_fields: plainRecord.custom_fields || {}
@@ -753,7 +767,7 @@ exports.getAll = async (req, res) => {
         data.items = data.items.map(item => {
             const plain = item.get ? item.get({ plain: true }) : item;
             if (plain.profile_image) {
-                plain.profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${plain.profile_image}`;
+                plain.profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plain.profile_image}`;
             } else {
                 plain.profile_image_url = null;
             }
@@ -1276,12 +1290,12 @@ exports.getEmployeesByTemplate = async (req, res) => {
 const calculateCosineDistance = (descriptor1, descriptor2) => {
     // 1. Safety Check
     if (!descriptor1 || !descriptor2) {
-        if (DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
+        if (process.env.DEBUG_MODE) console.log("❌ [Math] One of the vectors is null/undefined");
         return 1.0;
     }
 
     if (descriptor1.length !== descriptor2.length) {
-        if (DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
+        if (process.env.DEBUG_MODE) console.log(`❌ [Math] Length Mismatch: Live=${descriptor1.length}, Stored=${descriptor2.length}`);
         return 1.0;
     }
 
@@ -1297,7 +1311,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 
     // 2. Avoid division by zero
     if (normA === 0 || normB === 0) {
-        if (DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
+        if (process.env.DEBUG_MODE) console.log("❌ [Math] Zero Norm detected (vector contains all zeros)");
         return 1.0;
     }
 
@@ -1309,7 +1323,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
     const distance = 1 - similarity;
 
     // Log first few calculations to check if numbers are valid
-    // if(DEBUG_MODE && Math.random() < 0.05) console.log(`🧮 [Math] Dist: ${distance.toFixed(4)} | Sim: ${similarity.toFixed(4)}`);
+    // if(process.env.DEBUG_MODE && Math.random() < 0.05) console.log(`🧮 [Math] Dist: ${distance.toFixed(4)} | Sim: ${similarity.toFixed(4)}`);
 
     return distance;
 };
@@ -1339,14 +1353,13 @@ exports.registerFace = async (req, res) => {
         }
 
         // 1. Save File to Disk (Permanent Profile Image)
-        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/users/images/'
-        // We pass 'employee.profile_image' as the last argument so 'uploadFile' automatically deletes the OLD photo.
+        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/employee/images/'
         const savedFiles = await uploadFile(
             req,
             res,
             constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
             transaction,
-            employee.profile_image     // ✅ Delete old image if exists
+            employee.profile_image     // ✅ Delete old image if exists in IMG_FOLDER
         );
 
         const filename = savedFiles.image;
@@ -1354,6 +1367,12 @@ exports.registerFace = async (req, res) => {
         if (!filename) {
             await transaction.rollback();
             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+        }
+
+        // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
+        // In case it was previously uploaded via the general update API.
+        if (employee.profile_image) {
+            await deleteFile(req, res, constants.EMPLOYEE_DOC_FOLDER, employee.profile_image);
         }
 
         // 2. Send to Python to get Face Embedding
@@ -1366,8 +1385,7 @@ exports.registerFace = async (req, res) => {
 
             const formData = new FormData();
             formData.append('image', fileBuffer, filename);
-
-            const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
                 headers: { ...formData.getHeaders() }
             });
 
@@ -1429,7 +1447,7 @@ exports.facePunch = async (req, res) => {
 
             try {
                 debugLog("AI-Call", "Sending to Python...");
-                const aiResponse = await axios.post(`${AI_SERVICE_URL}/generate-embedding`, formData, {
+                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
                     headers: { ...formData.getHeaders() }
                 });
 
@@ -1449,9 +1467,11 @@ exports.facePunch = async (req, res) => {
 
         // 🚀 PARALLEL TASK 2: Fetch Employees
         // NOTE: Make sure attributes match your DB Column names exactly
+        const companyId = req.user?.company_id;
         const getEmployeesTask = commonQuery.findAllRecords(Employee, {
             status: 0,
-            face_descriptor: { [Op.ne]: null }
+            face_descriptor: { [Op.ne]: null },
+            ...(companyId ? { company_id: companyId } : {})
         }, {
             attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
             raw: true
@@ -1483,21 +1503,21 @@ exports.facePunch = async (req, res) => {
                 try {
                     storedVector = JSON.parse(storedVector);
                 } catch (e) {
-                    if (DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
+                    if (process.env.DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
                     continue;
                 }
             }
 
             // Double check it's an array
             if (!Array.isArray(storedVector)) {
-                if (DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
+                if (process.env.DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
                 continue;
             }
 
             const dist = calculateCosineDistance(liveVector, storedVector);
 
             // Log the first 3 comparisons to see what's happening
-            if (DEBUG_MODE && logCounter < 3) {
+            if (process.env.DEBUG_MODE && logCounter < 3) {
                 console.log(`👤 [Compare] ID: ${emp.id} | Name: ${emp.first_name} | Dist: ${dist.toFixed(4)}`);
                 logCounter++;
             }
@@ -1514,7 +1534,7 @@ exports.facePunch = async (req, res) => {
 
         // --- VALIDATION & CONDITIONAL FILE SAVING ---
         let savedFilename;
-        if (bestMatch && minDistance < FACE_MATCH_THRESHOLD) {
+        if (bestMatch && minDistance < process.env.FACE_MATCH_THRESHOLD) {
             const transaction = await sequelize.transaction();
 
             try {
@@ -1531,17 +1551,30 @@ exports.facePunch = async (req, res) => {
                     branch_id: req.user.branch_id || bestMatch.branch_id,
                     ip_address: req.ip,
                     device_id: req.body.device_id || 'FACE_RECOGNITION',
-                    attendance_by: 'face'
+                    attendance_by: 'face',
+                    skipRebuild: true // 🚀 SKIP SYNC REBUILD FOR SPEED
                 }, transaction);
 
                 await transaction.commit();
 
-                return res.success("Punch Successful", {
-                    employee: bestMatch.first_name,
-                    employee_code: bestMatch.employee_code,
-                    confidence: matchPercentage + "%",
-                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
-                    ...punchResult
+                // ⚡ RUN REBUILD IN BACKGROUND (So user doesn't wait)
+                setImmediate(() => {
+                    const today = dayjs().format("YYYY-MM-DD");
+                    rebuildAttendanceDay(bestMatch.id, today, {
+                        user_id: req.user.id || bestMatch.user_id,
+                        company_id: req.user.company_id || bestMatch.company_id,
+                        branch_id: req.user.branch_id || bestMatch.branch_id
+                    }).catch(err => console.error("Background Rebuild Error:", err));
+                });
+
+                return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
+                    employee: {
+                        id: bestMatch.id,
+                        name: bestMatch.first_name,
+                        code: bestMatch.employee_code
+                    },
+                    punch: punchResult,
+                    match_score: matchPercentage
                 });
             } catch (error) {
                 if (!transaction.finished) await transaction.rollback();
@@ -2160,7 +2193,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             employee_name: emp.first_name,
             employee_code: emp.employee_code,
             has_face_descriptor: !!emp.face_descriptor,
-            profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${emp.profile_image}` : null
+            profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` : null
         }));
 
         return res.success("Employee list fetched successfully", { employees: employeeList });

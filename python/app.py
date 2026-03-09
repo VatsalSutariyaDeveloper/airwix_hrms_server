@@ -82,7 +82,8 @@ def debug_print(tag, message):
 # Settings
 MODEL_NAME = "ArcFace" 
 DETECTOR_BACKEND = "ssd" 
-TARGET_WIDTH = 320  # Keeping your requested 320px limit
+# TARGET_WIDTH = 320 
+TARGET_WIDTH = 160  # Reduced for speed (DeepFace aligns to 112x112 anyway)
 
 # Load Model
 try:
