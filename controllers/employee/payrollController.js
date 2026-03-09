@@ -107,7 +107,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const baseSalaryTemplate = employee.salaryTemplate;
 
     if (!employeeSalaryTemplate && !baseSalaryTemplate) {
-        return fail("Employee or Salary Template not found. Please map the employee first.");
+        return fail("Employee or Salary Details not Added. Please add Salary Details to the employee first.");
     }
 
     // Determine which template to use (Override vs Base)
@@ -272,7 +272,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             // Apply Attendance/LWP Impact to Basic immediately in Pass 1
             let actualAmount = amount;
-            if (calcType === 'SYSTEM') {
+            if (calcType === 'ATTENDANCE_BASED') {
                 const presentDaysValue = presentDays + (halfDays * 0.5);
                 actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
             } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
@@ -308,7 +308,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         // Calculate actual pro-rated amount (Attendance/LWP Impact)
         let actualAmount = amount;
-        if (calcType === 'SYSTEM') {
+        if (calcType === 'ATTENDANCE_BASED') {
             const presentDaysValue = presentDays + (halfDays * 0.5);
             actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
         } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
@@ -1321,8 +1321,9 @@ exports.getSalaryOverview = async (req, res) => {
                     payments: "0.00", // Will be filled below
                     adjustments: "0.00", // Will be filled below
                     ot_amount: ot.toFixed(2),
-                    fine_amount: fine.toFixed(2),
+                    total_fine: fine.toFixed(2),
                     ctc_monthly: payslip.ctc_monthly,
+                    tds_calculation_data: payslip.tds_calculation_data,
                     is_loaded: true,
                     is_finalized: true
                 });
@@ -1355,7 +1356,8 @@ exports.getSalaryOverview = async (req, res) => {
                         is_food: d.is_food,
                         meal_count: d.meal_count,
                         rate: d.rate,
-                        is_statutory: d.is_statutory
+                        is_statutory: d.is_statutory,
+                        percentage: d.name === "Income Tax (TDS)" ? summary.salary.tdsPercentage : null
                     }));
 
                     const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
@@ -1388,17 +1390,19 @@ exports.getSalaryOverview = async (req, res) => {
                             amount: inc.amount,
                             incentive_date: inc.incentive_date
                         })),
-                        // earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
-                        // deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                        earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
+                        deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
                         employer: summary.breakdown.employer || {},
                         breakdown: summary.breakdown, 
                         payments: "0.00", 
                         adjustments: "0.00",
                         ot_amount: summary.salary.overtimeAmount,
+                        total_fine: summary.salary.totalFine,
                         fine_amount: summary.salary.totalFine,
                         ctc_monthly: summary.salary.ctc_monthly,
                         total_advances: totalAdvances.toFixed(2),
+                        tds_calculation_data: summary.tds_calculation_data,
                         is_loaded: true,
                         is_finalized: false
                     });

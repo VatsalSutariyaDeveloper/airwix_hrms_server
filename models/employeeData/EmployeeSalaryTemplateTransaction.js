@@ -12,7 +12,7 @@ module.exports = (sequelize, DataTypes) => {
         included_in_ctc: { type: DataTypes.BOOLEAN, defaultValue: true },
         is_employer_contribution: { type: DataTypes.BOOLEAN, defaultValue: false },
         calculation_type: {
-            type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM", "CANTEEN_BASED"),
+            type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "ATTENDANCE_BASED", "CANTEEN_BASED"),
             allowNull: true
         },
         formula: { type: DataTypes.TEXT },

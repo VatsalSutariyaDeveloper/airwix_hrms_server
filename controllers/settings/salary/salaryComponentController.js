@@ -1,5 +1,5 @@
 const { sequelize, SalaryComponent } = require("../../../models");
-const { validateRequest, commonQuery, handleError } = require("../../../helpers");
+const { validateRequest, commonQuery, handleError, Op } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
 const COMPONENT_TYPE = {
@@ -21,7 +21,7 @@ const CALCULATION_TYPE = {
   FIXED: "FIXED",
   PERCENTAGE: "PERCENTAGE",
   FORMULA: "FORMULA",
-  SYSTEM: "SYSTEM"
+  ATTENDANCE_BASED: "ATTENDANCE_BASED"
 };
 
 const PERCENTAGE_OF = {
@@ -115,10 +115,12 @@ exports.getAll = async (req, res) => {
 
     const data = await commonQuery.fetchPaginatedData(
       SalaryComponent,
-      { ...POST, limit:"All" },
+      { ...POST, limit: "All" },
       fieldConfig,
       {},
-      false
+      {},
+      "created_at",
+      { company_id: { [Op.in]: [req.user.company_id, -1] } }
     );
 
     return res.ok(data);
