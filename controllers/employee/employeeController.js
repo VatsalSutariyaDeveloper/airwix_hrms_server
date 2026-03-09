@@ -742,12 +742,23 @@ exports.getAll = async (req, res) => {
                     "mobile_no",
                     "joining_date",
                     "branch_id",
+                    "profile_image",
                     "created_at",
                 ]
             },
             true,
             "joining_date"
         );
+
+        data.items = data.items.map(item => {
+            const plain = item.get ? item.get({ plain: true }) : item;
+            if (plain.profile_image) {
+                plain.profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${plain.profile_image}`;
+            } else {
+                plain.profile_image_url = null;
+            }
+            return plain;
+        });
 
         return res.ok(data);
     } catch (err) {
@@ -1719,6 +1730,11 @@ exports.inviteUser = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
+        if (!employee.mobile_no) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile number is required to invite this employee." });
+        }
+
         // Check if user already exists
         let user = await commonQuery.findOneRecord(User, { employee_id }, {}, transaction);
 
@@ -2135,7 +2151,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 company_id,
                 status: STATUS.ACTIVE
             },
-            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor'],
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image'],
             order: [['first_name', 'ASC']]
         });
 
@@ -2143,7 +2159,8 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             id: emp.id,
             employee_name: emp.first_name,
             employee_code: emp.employee_code,
-            has_face_descriptor: !!emp.face_descriptor
+            has_face_descriptor: !!emp.face_descriptor,
+            profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${emp.profile_image}` : null
         }));
 
         return res.success("Employee list fetched successfully", { employees: employeeList });

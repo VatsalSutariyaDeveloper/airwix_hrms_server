@@ -660,16 +660,17 @@ exports.generatePin = async (req, res) => {
       }
     }
 
-    if(!isDevice && !entity.is_super_admin && entity.role_id != 1){
+    if(!isDevice && entity.employee_id){
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image'],
           transaction
       });
 
       if (employee) {
           entity.is_attendance_supervisor = employee.is_attendance_supervisor;
           entity.is_reporting_manager = employee.is_reporting_manager;
+          entity.employee_profile_image = employee.profile_image;
       }
     }
 
@@ -708,7 +709,11 @@ exports.generatePin = async (req, res) => {
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
-      profile_image: (!isDevice && entity.profile_image) ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` : null,
+      profile_image: (!isDevice && entity.profile_image) 
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
+        : (!isDevice && entity.employee_profile_image) 
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${entity.employee_profile_image}` 
+          : null,
       role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
       permission: userPermission?.permissions || [],
       is_login: 1,
@@ -882,16 +887,17 @@ exports.pinLogin = async (req, res) => {
       }
     }
 
-    if(!isDevice && !entity.is_super_admin && entity.role_id != 1){
+    if(!isDevice && entity.employee_id){
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image'],
           transaction
       });
 
       if (employee) {
           entity.is_attendance_supervisor = employee.is_attendance_supervisor;
           entity.is_reporting_manager = employee.is_reporting_manager;
+          entity.employee_profile_image = employee.profile_image;
       }
     }
 
@@ -930,7 +936,11 @@ exports.pinLogin = async (req, res) => {
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
-      profile_image: (!isDevice && entity.profile_image) ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` : null,
+      profile_image: (!isDevice && entity.profile_image) 
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
+        : (!isDevice && entity.employee_profile_image) 
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${entity.employee_profile_image}` 
+          : null,
       role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
       permission: userPermission?.permissions || [],
       is_login: 1,
