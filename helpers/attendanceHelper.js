@@ -225,7 +225,9 @@ async function punch(employeeId, meta, transaction = null) {
   }, transaction);
 
   // 5️⃣ Recalculate day attendance
-  await rebuildAttendanceDay(employeeId, targetDayDate, { ...meta, shift_id: shift ? shift.id : null }, transaction);
+  if (!meta.skipRebuild) {
+    await rebuildAttendanceDay(employeeId, targetDayDate, { ...meta, shift_id: shift ? shift.id : null }, transaction);
+  }
 
   return { punchType, punchTime: now, punchId: newPunch.id };
 }

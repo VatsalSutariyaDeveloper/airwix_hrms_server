@@ -49,7 +49,7 @@ const {
     calculateWorkingAndOffDays
 } = require("../../helpers/functions/commonFunctions");
 
-const { punch } = require("../../helpers/attendanceHelper");
+const { punch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 
 const { getContext } = require("../../utils/requestContext");
 const axios = require('axios');
@@ -1467,9 +1467,11 @@ exports.facePunch = async (req, res) => {
 
         // 🚀 PARALLEL TASK 2: Fetch Employees
         // NOTE: Make sure attributes match your DB Column names exactly
+        const companyId = req.user?.company_id;
         const getEmployeesTask = commonQuery.findAllRecords(Employee, {
             status: 0,
-            face_descriptor: { [Op.ne]: null }
+            face_descriptor: { [Op.ne]: null },
+            ...(companyId ? { company_id: companyId } : {})
         }, {
             attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
             raw: true
@@ -1549,17 +1551,30 @@ exports.facePunch = async (req, res) => {
                     branch_id: req.user.branch_id || bestMatch.branch_id,
                     ip_address: req.ip,
                     device_id: req.body.device_id || 'FACE_RECOGNITION',
-                    attendance_by: 'face'
+                    attendance_by: 'face',
+                    skipRebuild: true // 🚀 SKIP SYNC REBUILD FOR SPEED
                 }, transaction);
 
                 await transaction.commit();
 
-                return res.success("Punch Successful", {
-                    employee: bestMatch.first_name,
-                    employee_code: bestMatch.employee_code,
-                    confidence: matchPercentage + "%",
-                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
-                    ...punchResult
+                // ⚡ RUN REBUILD IN BACKGROUND (So user doesn't wait)
+                setImmediate(() => {
+                    const today = dayjs().format("YYYY-MM-DD");
+                    rebuildAttendanceDay(bestMatch.id, today, {
+                        user_id: req.user.id || bestMatch.user_id,
+                        company_id: req.user.company_id || bestMatch.company_id,
+                        branch_id: req.user.branch_id || bestMatch.branch_id
+                    }).catch(err => console.error("Background Rebuild Error:", err));
+                });
+
+                return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
+                    employee: {
+                        id: bestMatch.id,
+                        name: bestMatch.first_name,
+                        code: bestMatch.employee_code
+                    },
+                    punch: punchResult,
+                    match_score: matchPercentage
                 });
             } catch (error) {
                 if (!transaction.finished) await transaction.rollback();
