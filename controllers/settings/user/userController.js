@@ -357,7 +357,10 @@ exports.assignRole = async (req, res) => {
 
     const userData = await commonQuery.updateRecordById(User, user_id, {
       role_id: role_id,
-      permissions: permission.permissions
+      permissions: permission.permissions,
+      branch_access: req.body.branch_access,
+      mobile_no: req.body.mobile_no,
+      email: req.body.email
     }, transaction);
 
     if(userData.employee_id){
