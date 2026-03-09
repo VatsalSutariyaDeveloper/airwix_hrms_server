@@ -769,11 +769,16 @@ exports.getAll = async (req, res) => {
     // }
 
     if (req.body.filter) delete req.body.filter.role;
-
+    const fieldConfig = [
+      ["user_name", true, false],
+      ["Employee.employee_code", true, false],
+      ["User.email", true, false],
+      ["User.mobile_no", true, false],
+    ];
     const data = await commonQuery.fetchPaginatedData(
       User,
       req.body,
-      [],
+      fieldConfig,
       {
         include: [
           {

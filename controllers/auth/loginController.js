@@ -606,7 +606,7 @@ exports.generatePin = async (req, res) => {
 
     const company = await CompanyMaster.findOne({
       where: { id: entity.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
       transaction
     });
 
@@ -715,6 +715,7 @@ exports.generatePin = async (req, res) => {
       user_id: isDevice ? null : entity.user_id,
       branch_id: entity.branch_id,
       company_id: isDevice ? entity.company_id : finalCompanyId,
+      company_name: company.company_name,
       organization_id: company.organization_id,
       access: isDevice ? "attendance device" : "employee"
     };
@@ -827,7 +828,7 @@ exports.pinLogin = async (req, res) => {
 
     const company = await CompanyMaster.findOne({
       where: { id: entity.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
       transaction
     });
 
@@ -936,6 +937,7 @@ exports.pinLogin = async (req, res) => {
       user_id: isDevice ? null : entity.user_id,
       branch_id: entity.branch_id,
       company_id: isDevice ? entity.company_id : finalCompanyId,
+      company_name: company.company_name,
       organization_id: company.organization_id,
       access: isDevice ? "attendance device" : "employee"
     };

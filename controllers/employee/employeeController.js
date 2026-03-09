@@ -1758,17 +1758,19 @@ exports.inviteUser = async (req, res) => {
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${activation_code}`;
+        // const setupLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${activation_code}`;
 
         // Send WhatsApp Notification (Async)
-        const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
+        // const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
 
-        return res.success("Invitation generated successfully", {
-            setup_link: setupLink,
-            user_id: user.id,
-            email: user.email,
-            whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
-        });
+        // return res.success("Invitation generated successfully", {
+        //     setup_link: setupLink,
+        //     user_id: user.id,
+        //     email: user.email,
+        //     whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
+        // });
+
+        return res.success(constants.SUCCESS, "Employee Invited Successfully");
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
