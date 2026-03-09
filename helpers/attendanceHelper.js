@@ -4,7 +4,8 @@ const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
 const { constants } = require("./constants");
-const LeaveBalanceService = require("../services/leaveBalanceService");
+// LeaveBalanceService is required lazily inside functions to avoid circular dependencies with attendanceHelper
+// const LeaveBalanceService = require("../services/leaveBalanceService");
 
 /**
  * Helper to parse time/datetime
@@ -13,11 +14,10 @@ const LeaveBalanceService = require("../services/leaveBalanceService");
  */
 const parseDateTime = (timeStr, baseDate) => {
   if (!timeStr) return null;
+  if (timeStr instanceof Date) return timeStr;
+  
   // Check if it's already a full date-time string (contains '-' or 'T')
-  if (timeStr.includes("-") || timeStr.includes("T")) {
-    return dayjs(timeStr).toDate();
-  }
-  if (timeStr.includes("-") || timeStr.includes("T") || timeStr.includes("/")) {
+  if (typeof timeStr === 'string' && (timeStr.includes("-") || timeStr.includes("T") || timeStr.includes("/"))) {
     return dayjs(timeStr).toDate();
   }
   return dayjs(`${baseDate} ${timeStr}`).toDate();
@@ -57,21 +57,39 @@ async function punch(employeeId, meta, transaction = null) {
   const now = meta.punch_time ? parseDateTime(meta.punch_time, baseDate) : new Date();
   const today = dayjs(now).format("YYYY-MM-DD");
 
-  // 0️⃣ Ensure AttendanceDay Exists (Required for day_id)
-  const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
+  // 0️⃣ Get Last Global Punch (Crucial for night shifts and 24h rules)
+  const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
     employee_id: employeeId,
-    attendance_date: today,
-  }, {}, transaction);
+    status: 0,
+  }, {
+    order: [["punch_time", "DESC"]],
+  }, transaction);
 
-  if (!attendanceDay) {
-    throw {
-      handled: true,
-      message: { message: "Attendance Day record not found." }
-    };
+  let hoursSinceLast = 999;
+  if (lastPunchGlobal) {
+    hoursSinceLast = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "hour", true));
   }
+
+  // Determine punch type (IN / OUT) 
+  let punchType = meta.punch_type || "IN";
+  if (!meta.punch_type) {
+    if (lastPunchGlobal && lastPunchGlobal.punch_type === "IN" && hoursSinceLast < 24) {
+      punchType = "OUT";
+    }
+  }
+
+  // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
+  let targetDayDate = today;
+  if (punchType === "OUT" && lastPunchGlobal && hoursSinceLast < 24) {
+      const lastInDay = await commonQuery.findOneRecord(AttendanceDay, lastPunchGlobal.day_id, {}, transaction);
+      if (lastInDay) targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
+  }
+
+  // 0️⃣.B Ensure AttendanceDay Exists (Required for day_id)
+  const attendanceDay = await getOrCreateAttendanceDay(employeeId, targetDayDate, meta, transaction);
   const dayId = attendanceDay.id;
 
-  // 0️⃣ Fetch Employee with Attendance Template (Specific or Master)
+  // 0️⃣.C Fetch Employee with Attendance Template
   const employee = await commonQuery.findOneRecord(Employee, employeeId, {
     include: [
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
@@ -81,50 +99,40 @@ async function punch(employeeId, meta, transaction = null) {
 
   if (!employee) throw new Error("Employee not found");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+
   // 1️⃣ Check Holiday & Weekly Off Policy
-  if (template) {
-    let isNonWorking = false;
-    let nonWorkingType = "";
-
-    // Check Holiday
-    if (employee.holiday_template) {
-      const isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
-        template_id: employee.holiday_template,
-        date: today,
-        status: 0,
-      }, {}, transaction, false, { company_id: true });
-      if (isHoliday) {
-        isNonWorking = true;
-        nonWorkingType = "holiday";
-      }
-    }
-
-    // Check Weekly Off
-    if (!isNonWorking && employee.weekly_off_template) {
-       const dayOfWeek = dayjs(now).day();
-       const dayOfMonth = dayjs(now).date();
-       const weekNo = Math.ceil(dayOfMonth / 7);
-
-       const weeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
-         template_id: employee.weekly_off_template,
-         day_of_week: dayOfWeek,
-         [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
-         is_off: true,
-         status: 0,
-       }, {}, transaction, false, { company_id: true });
-       if (weeklyOff) {
-         isNonWorking = true;
-         nonWorkingType = "weekly off";
-       }
-    }
-
-    if (isNonWorking && template.holiday_policy === "BLOCK_ATTENDANCE") {
-      throw new Error(`Attendance is blocked on ${nonWorkingType}s`);
+  const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, targetDayDate, transaction);
+  if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
+    if (isHoliday || isWeeklyOff) {
+      throw new Err(`Attendance is blocked on ${isHoliday ? 'Holidays' : 'Weekly Offs'} (Strict Policy)`);
     }
   }
 
-  // 1️⃣.5️⃣ Fetch Shift & Validate Punch Restrictions
-  const dayOfWeek = dayjs(now).day();
+  // 1️⃣.2️⃣ MULTIPLE PUNCH RESTRICTION
+  if (punchType === "IN" && template && !template.allow_multiple_punches) {
+      // Find the last IN (Globally)
+      const lastIn = (lastPunchGlobal?.punch_type === "IN") 
+          ? lastPunchGlobal 
+          : await commonQuery.findOneRecord(AttendancePunch, {
+              employee_id: employeeId, punch_type: "IN", status: 0
+            }, { order: [["punch_time", "DESC"]] }, transaction);
+
+      if (lastIn) {
+          const hoursSinceLastIn = Math.abs(dayjs(now).diff(dayjs(lastIn.punch_time), "hour", true));
+          if (hoursSinceLastIn < 24) {
+              const hasOut = await commonQuery.findOneRecord(AttendancePunch, {
+                  employee_id: employeeId, punch_type: "OUT", day_id: lastIn.day_id, status: 0
+              }, {}, transaction);
+              if (hasOut) {
+                  throw new Err("Multiple punches are disabled. You have already completed your punch session for this cycle.");
+              }
+          }
+      }
+  }
+
+  // 1️⃣.5️⃣ Fetch Shift
+  const dayOfWeek = dayjs(targetDayDate).day();
+  
   const empShift = await commonQuery.findOneRecord(EmployeeShift, {
     employee_id: employeeId,
     day_of_week: dayOfWeek,
@@ -138,29 +146,8 @@ async function punch(employeeId, meta, transaction = null) {
     shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, { company_id: true });
   }
 
-  // 🛑 BLOCK PUNCH if no shift is assigned
-  if (!shift) {
-    throw new Err("Operation failed: Employee has no assigned shift. Punches cannot be recorded without a shift schedule.");
-  }
+  // 🛑 Removed BLOCK PUNCH check to allow punches without assigned shift (Treat as Overtime)
 
-  // Determine punch type (IN / OUT)
-  // We need this to validate restrictions
-  const lastPunch = await commonQuery.findOneRecord(AttendancePunch, {
-    employee_id: employeeId,
-    status: 0,
-  }, {
-    order: [["punch_time", "DESC"]],
-  }, transaction);
-
-  let punchType = meta.punch_type || "IN";
-  if (!meta.punch_type) {
-    if (lastPunch && lastPunch.punch_type === "IN") {
-      const hoursSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "hour", true);
-      if (hoursSinceLastPunch < 24) {
-        punchType = "OUT";
-      }
-    }
-  }
 
   if (shift) {
     const todayStr = dayjs(now).format("YYYY-MM-DD");
@@ -220,30 +207,11 @@ async function punch(employeeId, meta, transaction = null) {
   // 2️⃣ Determine punch type logic was already handled above to facilitate restriction check
   // So we skip the redundant search for lastPunch here
 
-  // 3️⃣ Validation: Every 'OUT' must have a preceding 'IN' within 24 hours
-  if (punchType === "OUT") {
-    if (!lastPunch || lastPunch.punch_type !== "IN") {
-      throw new Err("Please punch IN first");
-    }
-    const hoursSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "hour", true);
-    if (hoursSinceLastPunch > 24) {
-      throw new Err("Last punch IN was more than 24 hours ago. Please punch IN again.");
-    }
-  }
-
-  // 4️⃣ Validation: Do not allow double IN
-  if (punchType === "IN" && lastPunch && lastPunch.punch_type === "IN") {
-    const hoursSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "hour", true);
-    if (hoursSinceLastPunch < 24) {
-      throw new Err("You are already punched IN");
-    }
-  }
-
   // 5️⃣ Validation: Minimum 2 minutes gap between any consecutive punches
-  // if (lastPunch) {
-  //   const minutesSinceLastPunch = dayjs(now).diff(dayjs(lastPunch.punch_time), "minute", true);
+  // if (lastPunchGlobal) {
+  //   const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
   //   if (minutesSinceLastPunch < 2) {
-  //     throw new Err("Please wait at least 2 minutes between punches");
+  //     throw new Err("Please wait at least 2 minutes between scans");
   //   }
   // }
 
@@ -257,18 +225,13 @@ async function punch(employeeId, meta, transaction = null) {
   }, transaction);
 
   // 5️⃣ Recalculate day attendance
-  // Use the date from the punch itself for rebuild
-  let dateToRebuild = dayjs(now).format("YYYY-MM-DD");
-  if (punchType === "OUT" && lastPunch) {
-    dateToRebuild = dayjs(lastPunch.punch_time).format("YYYY-MM-DD");
-  }
-
-  await rebuildAttendanceDay(employeeId, dateToRebuild, { ...meta, shift_id: shift ? shift.id : null }, transaction);
+  await rebuildAttendanceDay(employeeId, targetDayDate, { ...meta, shift_id: shift ? shift.id : null }, transaction);
 
   return { punchType, punchTime: now, punchId: newPunch.id };
 }
 
 async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = null) {
+  const LeaveBalanceService = require("../services/leaveBalanceService");
   // --- Fetch Wages for Rate Calculation (At function start for global scope) ---
   let hourlyWage = 0;
   let dailyWage = 0;
@@ -1242,6 +1205,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (meta.isHoliday && overtimeMinutes > 0) {
       status = 4; // HOLIDAY
       autoAbsentReason = `Worked on Holiday: ${overtimeMinutes}m overtime`;
+    } else if (!shift && overtimeMinutes > 0) {
+      // ✅ Handle "No Shift" case: If employee works without shift, mark as PRESENT
+      status = 0; 
+      autoAbsentReason = `Worked without shift: ${overtimeMinutes}m overtime`;
     } else if (finalWorkedMinutes >= minFullDay) {
       status = 0; // PRESENT
     } else if (finalWorkedMinutes >= minHalfDay) {
@@ -1519,6 +1486,7 @@ async function getDayOffInfo(employee, date, transaction) {
  */
 async function syncCompOffCredit(employee, date, status, transaction) {
   if (!employee) return;
+  const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
   if (!template || template.holiday_policy !== "COMP_OFF") return;
 
@@ -1589,6 +1557,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
  * Comparison between OLD state and NEW state of the day.
  */
 async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction, employee = null) {
+  const LeaveBalanceService = require("../services/leaveBalanceService");
   const getDeduction = (status) => {
     if (Number(status) === 6) return 1.0; // LEAVE
     if (Number(status) === 1) return 0.5; // HALF_DAY

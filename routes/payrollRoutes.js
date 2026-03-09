@@ -10,6 +10,7 @@ router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
 router.post("/finalize", payrollController.finalizeMonthlySalary);
 router.post("/get-employee-payslip-list", payrollController.getEmployeePayslipList);
 router.post("/get-calculation-history", payrollController.getCalculationHistory);
+router.post("/get-tds-report", payrollController.getTDSDeductionReport);
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
@@ -19,6 +20,10 @@ router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
 router.post("/cash-voucher/get-employees-by-month-year", cashVoucherController.getEmployeesByMonthYear);
 router.post("/cash-voucher/calculate", cashVoucherController.calculateCashVoucher);
 router.post("/cash-voucher/get-voucher-details", cashVoucherController.getCashVoucherById);
+// Enterprise Standard Listing & Bulk Operations
+router.post("/listing", payrollController.getMonthlyPayrollListing);
+router.post("/bulk-finalize", payrollController.bulkFinalizePayroll);
+router.post("/bulk-pay", payrollController.bulkPayPayroll);
 
 
 // ==========================

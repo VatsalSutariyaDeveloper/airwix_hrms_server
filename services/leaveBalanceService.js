@@ -2,7 +2,7 @@ const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, Le
 const { commonQuery, Op } = require("../helpers");
 const { constants } = require("../helpers/constants");
 const dayjs = require("dayjs");
-const { getDayOffInfo } = require("../helpers/attendanceHelper");
+// const { getDayOffInfo } = require("../helpers/attendanceHelper");
 
 /**
  * Service to manage employee-specific leave balances, including pro-rata calculations,
@@ -653,6 +653,7 @@ class LeaveBalanceService {
             if (countSandwich) {
                 workingDays += 1;
             } else {
+                const { getDayOffInfo } = require("../helpers/attendanceHelper");
                 const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, cur, transaction);
                 if (!isHoliday && !isWeeklyOff) {
                     workingDays += 1;

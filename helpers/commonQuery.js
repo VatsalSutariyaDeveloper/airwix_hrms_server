@@ -587,7 +587,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         const dateFilter = {};
         if (reqBody?.startDate) dateFilter[Op.gte] = new Date(reqBody?.startDate);
         if (reqBody?.endDate) dateFilter[Op.lte] = new Date(reqBody?.endDate);
-        if (Object.keys(dateFilter).length > 0 || Object.getOwnPropertySymbols(dateFilter).length > 0) filters[dateField] = dateFilter;
+        if (Object.keys(dateFilter).length > 0) filters[dateField] = dateFilter;
       }
 
       // E. Search Logic
@@ -607,7 +607,46 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         const orConditions = searchFields.map((key) => {
             const config = standardizedConfig.find(f => f.key === key);
             if (!config) return null;
-            let dbCol = attributeMap.has(config.key) ? attributeMap.get(config.key) : config.key;
+            
+            let dbCol;
+            
+            // 1. Check if the key exists directly in attributeMap (handled aliases)
+            if (attributeMap.has(config.key)) {
+                dbCol = attributeMap.get(config.key);
+            } 
+            // 2. Handle dotted notation
+            else if (typeof config.key === 'string' && config.key.includes('.')) {
+                const parts = config.key.split('.');
+                const prefix = parts[0].toLowerCase();
+                const field = parts.slice(1).join('.');
+                
+                // If prefix refers to the main model (e.g. "user.email" -> "User.email")
+                if (prefix === 'user' || prefix === model.name.toLowerCase()) {
+                    const mapped = attributeMap.get(field);
+                    // Force prefix even if found in attributeMap (if the mapping is simple)
+                    dbCol = (mapped && typeof mapped === 'string' && mapped.includes('.')) 
+                            ? mapped 
+                            : `${model.name}.${field}`;
+                } 
+                // If the suffix exists in attributeMap (common for aliases like employee_code)
+                else if (attributeMap.has(field)) {
+                    dbCol = attributeMap.get(field);
+                }
+                // Dotted notation for associations
+                else {
+                    const associations = options.include || [];
+                    const match = associations.find(inc => inc.as?.toLowerCase() === prefix);
+                    if (match) {
+                        dbCol = `${match.as}.${field}`;
+                    } else {
+                        dbCol = config.key; // Fallback
+                    }
+                }
+            } 
+            // 3. Simple field name - prefix with main model name to prevent ambiguity
+            else {
+                dbCol = `${model.name}.${config.key}`;
+            }
             
             const likeVal = `%${reqBody?.search}%`;
             if (typeof dbCol === 'string') {

@@ -24,8 +24,8 @@ module.exports = (sequelize, DataTypes) => {
 
   SalaryRevisionHistory.associate = models => {
     SalaryRevisionHistory.belongsTo(models.Employee, { foreignKey: "employee_id" });
-    SalaryRevisionHistory.belongsTo(models.SalaryTemplate, { foreignKey: "new_template_id", as: "newTemplate" });
-    SalaryRevisionHistory.belongsTo(models.SalaryTemplate, { foreignKey: "previous_template_id", as: "previousTemplate" });
+    SalaryRevisionHistory.belongsTo(models.EmployeeSalaryTemplate, { foreignKey: "new_template_id", as: "newTemplate" });
+    SalaryRevisionHistory.belongsTo(models.EmployeeSalaryTemplate, { foreignKey: "previous_template_id", as: "previousTemplate" });
   };
 
   return SalaryRevisionHistory;

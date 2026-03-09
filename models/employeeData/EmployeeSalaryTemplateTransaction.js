@@ -12,10 +12,15 @@ module.exports = (sequelize, DataTypes) => {
         included_in_ctc: { type: DataTypes.BOOLEAN, defaultValue: true },
         is_employer_contribution: { type: DataTypes.BOOLEAN, defaultValue: false },
         calculation_type: {
-            type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "SYSTEM", "CANTEEN_BASED"),
+            type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "ATTENDANCE_BASED", "CANTEEN_BASED"),
             allowNull: true
         },
         formula: { type: DataTypes.TEXT },
+        percentage_of: {
+            type: DataTypes.ENUM("BASIC", "GROSS", "CTC"),
+            allowNull: true
+        },
+        percentage_value: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

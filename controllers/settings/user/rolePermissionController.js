@@ -58,39 +58,18 @@ exports.getAll = async (req, res) => {
     req.body,
     fieldConfig,
     {
-      include: [
-        {
-          model: User,
-          as: "users",
-          attributes: [],
-          required: false,
-        }
-      ],
       attributes: [
         "id",
         "role_name",
         "permissions",
-        sequelize.fn(
-          "STRING_AGG",
-          sequelize.col("users.user_name"),
-          ", "
-        ),
         "is_system",
         "status",
         "created_at",
         "updated_at",
       ],
-      group: [
-        'rolePermission.id',
-        'rolePermission.role_name',
-        'rolePermission.permissions',
-        'rolePermission.status',
-        'rolePermission.created_at',
-        'rolePermission.updated_at'
-      ],
     },
     false,
-    'createdAt',
+    'created_at',
     // extraFilters
   );
   return res.ok(data);
@@ -104,12 +83,15 @@ exports.dropdownList = async (req, res) => {
     const record = await commonQuery.findAllRecords(
       RolePermission,
       { 
-        status: 0
+        status: 0,
+        id: { [Op.notIn]: [1, 2] }
       },
       { 
         attributes: ["id", "role_name"], 
         order: [["role_name", "ASC"]] 
       },
+      null,
+      false
     );
     return res.ok(record);
   } catch (err) {

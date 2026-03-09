@@ -1,4 +1,4 @@
-const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission, Employee } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService } = require("../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -105,15 +105,23 @@ exports.login = async (req, res) => {
 
     // --- A. DETERMINE LOGIN METHOD ---
     
-    if (email && password) {
-        // CASE 1: Email & Password
-        loginMethod = "PASSWORD";
+    if ((email || mobile_no) && password) {
+        // CASE 1: Email/Mobile & Password/PIN
+        loginMethod = email ? "PASSWORD" : "PIN";
+        
+        const whereClause = {
+            status: { [Op.in]: [0, 1] }
+        };
+
+        if (email) {
+            whereClause.email = email;
+        } else {
+            whereClause.mobile_no = mobile_no;
+        }
+
         user = await User.findOne({ 
           attributes: userAttributes.concat(['status']), 
-          where: { 
-            email, 
-            status: { [Op.in]: [0, 1] } 
-          }, 
+          where: whereClause, 
           transaction 
         });
         
@@ -172,7 +180,7 @@ exports.login = async (req, res) => {
 
     } else {
         await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Password OR Mobile/OTP." });
+        return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Mobile and Password/PIN OR Mobile and OTP." });
     }
 
     const verify_code = req.body.verify_code; 
@@ -445,22 +453,33 @@ exports.verifyMobileNo = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
     }
 
-    const user = await User.findOne({
+    let user = await User.findOne({
       where: { 
         mobile_no, 
         status: { [Op.in]: [0, 1] } 
       }
     });
 
+    let entity = user;
     if (!user) {
-      return res.error(constants.NOT_FOUND, "Mobile number not registered.");
+      const device = await DeviceMaster.findOne({
+        where: { 
+          mobile_no, 
+          status: { [Op.in]: [0, 1] } 
+        }
+      });
+      entity = device;
+    }
+    
+    if (!entity) {
+      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
     }
 
-    if (user.status === 1) {
+    if (entity.status === 1) {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (!user.password) {
+    if (!entity.password) {
       return res.success("SET PIN");
     } else {
       return res.success("ENTER PIN");
@@ -497,7 +516,7 @@ exports.generatePin = async (req, res) => {
       'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    const user = await User.findOne({
+    let user = await User.findOne({
       attributes: userAttributes.concat(['status']),
       where: { 
         mobile_no, 
@@ -506,17 +525,31 @@ exports.generatePin = async (req, res) => {
       transaction
     });
 
+    let entity = user;
+    let isDevice = false;
     if (!user) {
+      const device = await DeviceMaster.findOne({
+        where: { 
+          mobile_no, 
+          status: { [Op.in]: [0, 1] } 
+        },
+        transaction
+      });
+      entity = device;
+      isDevice = true;
+    }
+
+    if (!entity) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
     }
 
-    if (user.status === 1) {
+    if (entity.status === 1) {
       await transaction.rollback();
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (user.password) {
+    if (entity.password) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, { message: "PIN is already set. Use PIN login or forgot password." });
     }
@@ -524,16 +557,35 @@ exports.generatePin = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPin = await bcrypt.hash(pin, salt);
 
-    await User.update(
-      { password: hashedPin },
-      { where: { id: user.id }, transaction }
-    );
+    if (!isDevice) {
+      await User.update(
+        { password: hashedPin },
+        { where: { id: entity.id }, transaction }
+      );
+    } else {
+      await DeviceMaster.update(
+        { password: hashedPin },
+        { where: { id: entity.id }, transaction }
+      );
+    }
+
+    // Refresh entity data after update
+    if (!isDevice) {
+      user = await User.findOne({ 
+        attributes: userAttributes.concat(['status']),
+        where: { id: entity.id }, transaction 
+      });
+      entity = user;
+    } else {
+      const device = await DeviceMaster.findOne({ where: { id: entity.id }, transaction });
+      entity = device;
+    }
 
     // --- AUTOMATIC LOGIN LOGIC ---
 
-    // 0. Activation Logic
-    if(req.body.access_by === "application"){
-        if (!user.is_activated) {
+    // 0. Activation Logic (Only for Users/Application)
+    if(req.body.access_by === "application" && !isDevice){
+        if (!entity.is_activated) {
             await transaction.rollback();
             return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
         }
@@ -541,47 +593,47 @@ exports.generatePin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (user.role_id === 5 && access_by !== "application") {
+    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
         await transaction.rollback();
         return res.error(403, { message: "Use the mobile application to access this account." });
     }
 
     // 2. Validate Company
-    if (!user.company_id) {
+    if (!entity.company_id) {
         await transaction.rollback();
-        return res.error(401, "No company linked to your account.");
+        return res.error(401, { message: "No company linked to your account." });
     }
 
     const company = await CompanyMaster.findOne({
-      where: { id: user.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      where: { id: entity.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
       transaction
     });
 
     if (!company) {
       await transaction.rollback();
-      return res.error(401, "Your assigned company account is suspended.");
+      return res.error(401, { message: "Your assigned company account is suspended." });
     }
 
-    user.organization_id = company.organization_id;
+    if (!isDevice) entity.organization_id = company.organization_id;
 
     // 3. Validate Branch
-    if (!user.branch_id) {
+    if (!entity.branch_id) {
       await transaction.rollback();
-      return res.error(401, "No branch assigned to your profile.");
+      return res.error(401, { message: "No branch assigned to your profile." });
     }
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
-    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
     
-    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
+    if (!isDevice && !entity.is_super_admin && entity.role_id != 1 && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (user.is_super_admin || user.role_id == 1){
+    if (isDevice || entity.is_super_admin || entity.role_id == 1){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -601,63 +653,74 @@ exports.generatePin = async (req, res) => {
 
     let finalCompanyId = defaultCompanyId;
     if (companyAccessList.length > 0) {
-      if (companyAccessList.includes(String(user.company_id))) {
-        finalCompanyId = user.company_id;
+      if (companyAccessList.includes(String(entity.company_id))) {
+        finalCompanyId = entity.company_id;
       } else {
         finalCompanyId = defaultCompanyId;
       }
     }
 
-    if(!user.is_super_admin && user.role_id != 1){
+    if(!isDevice && !entity.is_super_admin && entity.role_id != 1){
       const employee = await Employee.findOne({
-          where: { id: user.employee_id },
+          where: { id: entity.employee_id },
           attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
           transaction
       });
 
       if (employee) {
-          user.is_attendance_supervisor = employee.is_attendance_supervisor;
-          user.is_reporting_manager = employee.is_reporting_manager;
+          entity.is_attendance_supervisor = employee.is_attendance_supervisor;
+          entity.is_reporting_manager = employee.is_reporting_manager;
       }
     }
 
-    const token = generateToken(user, finalCompanyId, access_by);
+    const token = generateToken({
+      ...entity.get({ plain: true }),
+      organization_id: company.organization_id,
+      access: isDevice ? "attendance device" : "employee"
+    }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
-    // Update login status
-    await User.update(
-        { is_login: 1 }, 
-        { where: { id: user.id }, transaction }
-    );
+    // Update login status (only for Users)
+    if (!isDevice) {
+      await User.update(
+          { is_login: 1 }, 
+          { where: { id: entity.id }, transaction }
+      );
+    }
 
-    // Fetch User Permissions
-    const userPermission = await RolePermission.findOne({ 
-      where: {
-          id: user.role_id, 
-          company_id: {[Op.in]: [-1, user.company_id]}
-      },
-      attributes: ["role_name", "permissions"],
-      transaction 
-    });
+    // Fetch User Permissions (Mock for Device)
+    let userPermission = null;
+    if (!isDevice) {
+      userPermission = await RolePermission.findOne({ 
+        where: {
+            id: entity.role_id, 
+            company_id: {[Op.in]: [-1, entity.company_id]}
+        },
+        attributes: ["role_name", "permissions"],
+        transaction 
+      });
+    }
 
     const userData = {
-      id: user.id,
-      role_id: user.role_id,
-      employee_id: user.employee_id,
-      is_super_admin: user.is_super_admin || user.role_id == 1,
-      user_name: user.user_name,
-      email: user.email,
-      mobile_no: user.mobile_no,
-      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
-      role_name: userPermission?.role_name,
-      permission: userPermission?.permissions,
+      id: entity.id,
+      role_id: isDevice ? null : entity.role_id,
+      employee_id: isDevice ? null : entity.employee_id,
+      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
+      user_name: isDevice ? entity.device_name : entity.user_name,
+      email: isDevice ? null : entity.email,
+      mobile_no: entity.mobile_no,
+      profile_image: (!isDevice && entity.profile_image) ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` : null,
+      role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
+      permission: userPermission?.permissions || [],
       is_login: 1,
-      user_id: user.user_id,
-      branch_id: user.branch_id,
-      company_id: finalCompanyId,
-      organization_id: user.organization_id,
+      user_id: isDevice ? null : entity.user_id,
+      branch_id: entity.branch_id,
+      company_id: isDevice ? entity.company_id : finalCompanyId,
+      company_name: company.company_name,
+      organization_id: company.organization_id,
+      access: isDevice ? "attendance device" : "employee"
     };
 
-    clearUserCache(user.user_id);
+    if (!isDevice) clearUserCache(entity.user_id);
 
     await transaction.commit();
     return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "PIN_GENERATED" });
@@ -695,7 +758,7 @@ exports.pinLogin = async (req, res) => {
         'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    const user = await User.findOne({ 
+    let user = await User.findOne({ 
       attributes: userAttributes.concat(['status']),
       where: { 
         mobile_no, 
@@ -704,22 +767,36 @@ exports.pinLogin = async (req, res) => {
       transaction 
     });
 
+    let entity = user;
+    let isDevice = false;
     if (!user) {
+      const device = await DeviceMaster.findOne({
+        where: { 
+          mobile_no, 
+          status: { [Op.in]: [0, 1] } 
+        }, 
+        transaction 
+      });
+      entity = device;
+      isDevice = true;
+    }
+
+    if (!entity) {
         await transaction.rollback();
         return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
     }
 
-    if (user.status === 1) {
+    if (entity.status === 1) {
         await transaction.rollback();
         return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (!user.password) {
+    if (!entity.password) {
         await transaction.rollback();
         return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
     }
 
-    const isPinValid = await bcrypt.compare(pin, user.password);
+    const isPinValid = await bcrypt.compare(pin, entity.password);
     if (!isPinValid) {
         await transaction.rollback();
         return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid PIN." });
@@ -728,9 +805,9 @@ exports.pinLogin = async (req, res) => {
     // --- FROM HERE, IT'S THE SAME AS THE STANDARD LOGIN LOGIC ---
     // (Generating token, validating company, etc.)
 
-    // 0. Activation Logic
-    if(req.body.access_by === "application"){
-        if (!user.is_activated) {
+    // 0. Activation Logic (Only for Users/Application)
+    if(req.body.access_by === "application" && !isDevice){
+        if (!entity.is_activated) {
             await transaction.rollback();
             return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
         }
@@ -738,47 +815,47 @@ exports.pinLogin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (user.role_id === 5 && access_by !== "application") {
+    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
         await transaction.rollback();
         return res.error(403, { message: "Use the mobile application to access this account." });
     }
 
     // 2. Validate Company
-    if (!user.company_id) {
+    if (!entity.company_id) {
         await transaction.rollback();
-        return res.error(401, "No company linked to your account.");
+        return res.error(401, { message: "No company linked to your account." });
     }
 
     const company = await CompanyMaster.findOne({
-      where: { id: user.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id'],
+      where: { id: entity.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
       transaction
     });
 
     if (!company) {
       await transaction.rollback();
-      return res.error(401, "Your assigned company account is suspended.");
+      return res.error(401, { message: "Your assigned company account is suspended." });
     }
 
-    user.organization_id = company.organization_id;
+    if (!isDevice) entity.organization_id = company.organization_id;
 
     // 3. Validate Branch
-    if (!user.branch_id) {
+    if (!entity.branch_id) {
       await transaction.rollback();
-      return res.error(401, "No branch assigned to your profile.");
+      return res.error(401, { message: "No branch assigned to your profile." });
     }
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
-    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
     
-    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
+    if (!isDevice && !entity.is_super_admin && entity.role_id != 1 && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (user.is_super_admin || user.role_id == 1){
+    if (isDevice || entity.is_super_admin || entity.role_id == 1){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -798,63 +875,74 @@ exports.pinLogin = async (req, res) => {
 
     let finalCompanyId = defaultCompanyId;
     if (companyAccessList.length > 0) {
-      if (companyAccessList.includes(String(user.company_id))) {
-        finalCompanyId = user.company_id;
+      if (companyAccessList.includes(String(entity.company_id))) {
+        finalCompanyId = entity.company_id;
       } else {
         finalCompanyId = defaultCompanyId;
       }
     }
 
-    if(!user.is_super_admin && user.role_id != 1){
+    if(!isDevice && !entity.is_super_admin && entity.role_id != 1){
       const employee = await Employee.findOne({
-          where: { id: user.employee_id },
+          where: { id: entity.employee_id },
           attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
           transaction
       });
 
       if (employee) {
-          user.is_attendance_supervisor = employee.is_attendance_supervisor;
-          user.is_reporting_manager = employee.is_reporting_manager;
+          entity.is_attendance_supervisor = employee.is_attendance_supervisor;
+          entity.is_reporting_manager = employee.is_reporting_manager;
       }
     }
 
-    const token = generateToken(user, finalCompanyId, access_by);
+    const token = generateToken({
+      ...entity.get({ plain: true }),
+      organization_id: company.organization_id,
+      access: isDevice ? "attendance device" : "employee"
+    }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
-    // Update login status
-    await User.update(
-        { is_login: 1 }, 
-        { where: { id: user.id }, transaction }
-    );
+    // Update login status (only for Users)
+    if (!isDevice) {
+      await User.update(
+          { is_login: 1 }, 
+          { where: { id: entity.id }, transaction }
+      );
+    }
 
-    // Fetch User Permissions
-    const userPermission = await RolePermission.findOne({ 
-      where: {
-          id: user.role_id, 
-          company_id: {[Op.in]: [-1, user.company_id]}
-      },
-      attributes: ["role_name", "permissions"],
-      transaction 
-    });
+    // Fetch User Permissions (Mock for Device)
+    let userPermission = null;
+    if (!isDevice) {
+      userPermission = await RolePermission.findOne({ 
+        where: {
+            id: entity.role_id, 
+            company_id: {[Op.in]: [-1, entity.company_id]}
+        },
+        attributes: ["role_name", "permissions"],
+        transaction 
+      });
+    }
 
     const userData = {
-      id: user.id,
-      role_id: user.role_id,
-      employee_id: user.employee_id,
-      is_super_admin: user.is_super_admin || user.role_id == 1,
-      user_name: user.user_name,
-      email: user.email,
-      mobile_no: user.mobile_no,
-      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
-      role_name: userPermission?.role_name,
-      permission: userPermission?.permissions,
+      id: entity.id,
+      role_id: isDevice ? null : entity.role_id,
+      employee_id: isDevice ? null : entity.employee_id,
+      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
+      user_name: isDevice ? entity.device_name : entity.user_name,
+      email: isDevice ? null : entity.email,
+      mobile_no: entity.mobile_no,
+      profile_image: (!isDevice && entity.profile_image) ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` : null,
+      role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
+      permission: userPermission?.permissions || [],
       is_login: 1,
-      user_id: user.user_id,
-      branch_id: user.branch_id,
-      company_id: finalCompanyId,
-      organization_id: user.organization_id,
+      user_id: isDevice ? null : entity.user_id,
+      branch_id: entity.branch_id,
+      company_id: isDevice ? entity.company_id : finalCompanyId,
+      company_name: company.company_name,
+      organization_id: company.organization_id,
+      access: isDevice ? "attendance device" : "employee"
     };
 
-    clearUserCache(user.user_id);
+    if (!isDevice) clearUserCache(entity.user_id);
 
     await transaction.commit();
     return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "PIN" });

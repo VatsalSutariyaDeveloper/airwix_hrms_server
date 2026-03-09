@@ -227,7 +227,7 @@ exports.create = async (req, res) => {
     req.body.activation_code = crypto.randomBytes(20).toString("hex");
     req.body.is_activated = true;
 
-    const newUser = await commonQuery.createRecord(User, req.body, transaction, { company_id: true });
+    const newUser = await commonQuery.createRecord(User, req.body, transaction);
 
     // await commonQuery.createRecord(UserCompanyRoles, {
     //   user_id: newUser.id,
@@ -332,12 +332,11 @@ exports.verifySetupToken = async (req, res) => {
 exports.assignRole = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { id, field_name, branch_access } = req.body;
+    const { user_id, role_id, field_name } = req.body;
 
     const requiredFields = {
-      id: "User ID",
-      field_name: "Field Name",
-      branch_access: "Branch Access",
+      user_id: "User ID",
+      role_id: "Role ID",
     };
 
     const errors = await validateRequest(req.body, requiredFields, {}, null);
@@ -347,17 +346,34 @@ exports.assignRole = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    let newRoleId;
-    if (field_name === 'is_reporting_manager') {
-      newRoleId = 4;
-    } else if (field_name === 'is_attendance_supervisor') {
-      newRoleId = 3;
+    const permission = await commonQuery.findOneRecord(
+      RolePermission,
+      { id: role_id },
+      {},
+      transaction,
+      false,
+      {}
+    );
+
+    const userData = await commonQuery.updateRecordById(User, user_id, {
+      role_id: role_id,
+      permissions: permission.permissions
+    }, transaction);
+
+    if(userData.employee_id){
+      await commonQuery.updateRecordById(
+        Employee,
+        userData.employee_id,
+        { 
+          ...(field_name === 'is_attendance_supervisor' && { is_attendance_supervisor: false }),
+          ...(field_name === 'is_reporting_manager' && { is_reporting_manager: false }),  
+        },
+        transaction,
+        true,
+        { company_id: true }
+      );
     }
 
-    const userData = await commonQuery.updateRecordById(User, id, {
-      role_id: newRoleId,
-      branch_access: branch_access
-    }, transaction);
     if (!userData) {
       await transaction.rollback();
       return res.error("USER_NOT_UPDATED");
@@ -462,7 +478,7 @@ exports.update = async (req, res) => {
     // Normal user update
     requiredFields = {
       user_name: "User Name",
-      // role_id: "Role",
+      role_id: "Role",
     };
 
     // Conditionally add required fields based on login_type
@@ -606,11 +622,28 @@ exports.update = async (req, res) => {
     const updated = await commonQuery.updateRecordById(
       User,
       req.params.id,
-      { ...req.body, employee_id: req.body.employee_id || existing.employee_id },
+      { 
+        ...req.body, 
+        employee_id: req.body.employee_id || existing.employee_id,
+      },
       transaction,
       true,
       { company_id: true }
     );
+
+    if(updated.employee_id){
+      await commonQuery.updateRecordById(
+        Employee,
+        updated.employee_id,
+        { 
+          ...(req.body.role_id == 3 && { is_attendance_supervisor: true }),
+          ...(req.body.role_id == 4 && { is_reporting_manager: true }),
+        },
+        transaction,
+        true,
+        { company_id: true }
+      );
+    }
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
     // if (req.body.permission) {
@@ -673,12 +706,16 @@ exports.getAll = async (req, res) => {
     const organization_id = req.user.organization_id;
 
     let extraFilters = {
-      [Op.or]: [
-        { company_id: company_id },
-        sequelize.where(
-          sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
-          true
-        )
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { company_id: company_id },
+            sequelize.where(
+              sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+              true
+            )
+          ]
+        }
       ]
     };
 
@@ -687,40 +724,61 @@ exports.getAll = async (req, res) => {
         const orgCompanies = await commonQuery.findAllRecords(
           CompanyMaster,
           { organization_id, status: 0 },
-          { attributes: ["id"] }
+          { attributes: ["id"] },
+          null,
+          {}
         );
 
         const organizationCompanyIds = orgCompanies.map(c => c.id);
 
-        extraFilters = {
+        extraFilters[Op.and].push({
           [Op.or]: [
             { is_super_admin: true, company_id: { [Op.in]: organizationCompanyIds } },
-            { role_id: 2, company_id: company_id }
+            { role_id: 2, company_id: company_id, branch_id: req.user.branch_id }
           ]
-        };
+        });
+      } else {
+        extraFilters[Op.and].push({
+          role_id: 2,
+          company_id: company_id,
+          branch_id: req.user.branch_id
+        });
       }
+    } else if (req.body.filter?.role === "employee") {
+      extraFilters[Op.and].push({
+        role_id: { [Op.notIn]: [1, 2, 3, 4] },
+        company_id: company_id,
+        branch_id: req.user.branch_id
+      });
+    } else {
+      extraFilters[Op.and].push({
+        company_id: company_id,
+        branch_id: req.user.branch_id
+      });
     }
-
-    if (req.body.filter) delete req.body.filter.role;
-
-    const where = { ...extraFilters };
-
-    // --- Branch Access Logic ---
-    // if (!req.user.is_super_admin) {
+    // else if (!req.user.is_super_admin) {
+    //   // Apply basic branch/company restriction for other views
+    //   const security = { company_id: company_id };
     //   if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
-    //     if (where.branch_id === undefined) where.branch_id = req.user.branch_id;
+    //     security.branch_id = req.user.branch_id;
     //   } else if (req.user.branch_access) {
     //     const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-    //     if (branches.length > 0) {
-    //       where.branch_id = { [Op.in]: branches };
-    //     }
+    //     if (branches.length > 0) security.branch_id = { [Op.in]: branches };
     //   }
+    //   extraFilters[Op.and].push(security);
     // }
 
+    if (req.body.filter) delete req.body.filter.role;
+    const fieldConfig = [
+      ["user_name", true, false],
+      ["Employee.employee_code", true, false],
+      ["User.email", true, false],
+      ["User.mobile_no", true, false],
+    ];
     const data = await commonQuery.fetchPaginatedData(
       User,
-      {where, ...req.body},
-      [],
+      req.body,
+      fieldConfig,
       {
         include: [
           {
@@ -750,6 +808,7 @@ exports.getAll = async (req, res) => {
           "mobile_no",
           "status",
           "profile_image",
+          "is_super_admin",
           "authorized_signature",
           "branch_id",
           "createdAt",
@@ -758,7 +817,10 @@ exports.getAll = async (req, res) => {
           [sequelize.col("Employee.first_name"), "first_name"],
           [sequelize.col("Employee.employee_code"), "employee_code"],
         ],
-      }
+      },
+      {},
+      "createdAt",
+      extraFilters
     );
 
     return res.ok(data);
@@ -780,6 +842,11 @@ exports.dropdownList = async (req, res) => {
           sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
           true
         )
+      ],
+      [Op.and]: [
+        { role_id: { [Op.notIn]: [1, 2, 3, 4] } },
+        { company_id: company_id },
+        { branch_id: req.user.branch_id }
       ]
     };
     const record = await commonQuery.findAllRecords(

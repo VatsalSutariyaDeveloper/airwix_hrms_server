@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -20,14 +20,22 @@ const evaluateComponentFormula = (formula, valuesMap) => {
     if (!formula) return 0;
     try {
         let evalStr = formula.toUpperCase();
-        // Replace placeholders like {BASIC}, {GROSS} with actual values
-        Object.keys(valuesMap).forEach(key => {
-            const regex = new RegExp(`{${key}}`, 'g');
-            evalStr = evalStr.replace(regex, valuesMap[key] || 0);
+        
+        // Use a more robust regex to find all placeholders like {BASIC}, {BASIC SALARY}, {BASIC_SALARY}
+        // This is better than iterating all keys of valuesMap
+        evalStr = evalStr.replace(/{([^{}]+)}/g, (match, key) => {
+            const cleanKey = key.trim().toUpperCase();
+            const normalizedKey = cleanKey.replace(/\s+/g, '_');
+            
+            // Check for normalized key first, then exact key, then default to 0
+            if (valuesMap.hasOwnProperty(normalizedKey)) return valuesMap[normalizedKey];
+            if (valuesMap.hasOwnProperty(cleanKey)) return valuesMap[cleanKey];
+            return 0;
         });
 
         // Clean up any remaining non-math characters for safety
-        evalStr = evalStr.replace(/[^0-9+\-*/().]/g, '');
+        // Allow digits, basic operators, parentheses, and dot
+        evalStr = evalStr.replace(/[^0-9+\-*/(). ]/g, '');
 
         // Simple evaluation - using Function as a safe alternative to eval
         return new Function(`return ${evalStr}`)() || 0;
@@ -99,7 +107,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const baseSalaryTemplate = employee.salaryTemplate;
 
     if (!employeeSalaryTemplate && !baseSalaryTemplate) {
-        return fail("Employee or Salary Template not found. Please map the employee first.");
+        return fail("Employee or Salary Details not Added. Please add Salary Details to the employee first.");
     }
 
     // Determine which template to use (Override vs Base)
@@ -216,7 +224,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         takeHomeEarnings += encashmentAmount;
     }
 
-    // Values map for formula evaluation
+    // Values map for formula evaluation - initialize with globals
     const valuesMap = {
         BASIC: 0,
         GROSS: monthlyGross,
@@ -228,30 +236,94 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         PAYABLE_DAYS: daysInMonth - totalLWP
     };
 
-    // Pre-process components to resolve association issues
+    // Pre-process components and pre-populate valuesMap with nominal amounts
     const processedComponents = rawComponents.map(trans => {
         const isModel = typeof trans.get === 'function';
         const plain = isModel ? trans.get({ plain: true }) : trans;
         const comp = plain.component || plain.SalaryComponent || (isModel ? trans.get('component') : null);
+
+        if (comp) {
+            const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
+            const cleanKey = comp.component_name.toUpperCase().trim();
+            const amount = parseFloat(plain.monthly_amount || 0);
+            
+            // Add both normalized and original name keys to valuesMap as initial nominal amounts
+            if (valuesMap[nameKey] === undefined) valuesMap[nameKey] = amount;
+            if (valuesMap[cleanKey] === undefined) valuesMap[cleanKey] = amount;
+        }
+
         return { plain, comp };
     });
     // First pass to find Basic (many formulas depend on it)
     processedComponents.forEach(({ plain, comp }) => {
         if (comp && (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic'))) {
-            valuesMap.BASIC = parseFloat(plain.monthly_amount || 0);
+            const calcType = (plain.calculation_type || comp.calculation_type || 'FIXED').toUpperCase();
+            const formula = plain.formula || comp.formula;
+            const percentageOf = (plain.percentage_of || comp.percentage_of || 'GROSS').toUpperCase();
+            const percentageVal = parseFloat(plain.percentage_value || comp.percentage_value || 0);
+
+            let amount = parseFloat(plain.monthly_amount || 0);
+            if (calcType === 'FORMULA' && formula) {
+                amount = evaluateComponentFormula(formula, valuesMap);
+            } else if (calcType === 'PERCENTAGE' && percentageVal > 0) {
+                const baseValue = valuesMap[percentageOf] || valuesMap.GROSS || 0;
+                amount = (baseValue * percentageVal) / 100;
+            }
+
+            // Apply Attendance/LWP Impact to Basic immediately in Pass 1
+            let actualAmount = amount;
+            if (calcType === 'ATTENDANCE_BASED') {
+                const presentDaysValue = presentDays + (halfDays * 0.5);
+                actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
+            } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
+                actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+            }
+
+            valuesMap.BASIC = actualAmount;
+            
+            // Also update by component name in valuesMap
+            const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
+            const cleanKey = comp.component_name.toUpperCase().trim();
+            valuesMap[nameKey] = actualAmount;
+            valuesMap[cleanKey] = actualAmount;
         }
     });
 
     processedComponents.forEach(({ plain, comp }) => {
         if (!comp) return;
 
+        const calcType = (plain.calculation_type || comp.calculation_type || 'FIXED').toUpperCase();
+        const formula = plain.formula || comp.formula;
+        const percentageOf = (plain.percentage_of || comp.percentage_of || 'BASIC').toUpperCase();
+        const percentageVal = parseFloat(plain.percentage_value || comp.percentage_value || 0);
+
         let amount = parseFloat(plain.monthly_amount || 0);
-        if (comp.calculation_type === 'FORMULA' && comp.formula) {
-            amount = evaluateComponentFormula(comp.formula, valuesMap);
+
+        if (calcType === 'FORMULA' && formula) {
+            amount = evaluateComponentFormula(formula, valuesMap);
+        } else if (calcType === 'PERCENTAGE' && percentageVal > 0) {
+            const baseValue = valuesMap[percentageOf] || valuesMap.BASIC || 0;
+            amount = (baseValue * percentageVal) / 100;
+        }
+
+        // Calculate actual pro-rated amount (Attendance/LWP Impact)
+        let actualAmount = amount;
+        if (calcType === 'ATTENDANCE_BASED') {
+            const presentDaysValue = presentDays + (halfDays * 0.5);
+            actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
+        } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
+            actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
         }
 
         const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
-        valuesMap[nameKey] = amount;
+        const cleanKey = comp.component_name.toUpperCase().trim();
+        valuesMap[nameKey] = actualAmount;
+        valuesMap[cleanKey] = actualAmount;
+
+        // Ensure BASIC is always up to date if it's encountered here
+        if (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic')) {
+            valuesMap.BASIC = actualAmount;
+        }
 
         const isEmployer = plain.is_employer_contribution === true || plain.is_employer_contribution === 'true' || comp.component_type === 'EMPLOYER_CONTRIBUTION';
 
@@ -264,16 +336,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
             if (comp.component_type === "DEDUCTION") {
                 totalDeductions += amount;
+                deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
+                earnings.push({ name: comp.component_name, base_amount: amount, actual_amount: amount, is_statutory: true });
             }
             return;
         }
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
-            const actualAmount = comp.is_lwp_impacted 
-                ? parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2)) 
-                : amount;
-            
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
@@ -285,17 +355,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
             deductions.push({
                 name: comp.component_name,
-                amount: amount,
+                amount: actualAmount,
                 is_food: isFoodComp,
                 meal_count: lunchCount,
-                rate: amount
+                rate: actualAmount
             });
-            totalDeductions += amount;
+            totalDeductions += actualAmount;
         } else if (comp.component_type === "BENEFIT") {
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
-                actual_amount: amount,
+                actual_amount: actualAmount,
                 is_benefit: true
             });
         }
@@ -339,10 +409,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Step G: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
     let tdsPercentage = 0;
+    let tdsCalculationData = null;
     if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
         const tdsConfig = template.statutory_config.tds;
         if (tdsConfig.calculation_type === 'Manual Amount') {
             tdsAmount = parseFloat(tdsConfig.amount || 0);
+            tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount };
         } else if (tdsConfig.calculation_type !== 'None') {
             const annualGross = monthlyGross * 12;
             const regimeMap = {
@@ -351,15 +423,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 'Old Regime': 'old_regime'
             };
             const regime = regimeMap[tdsConfig.calculation_type] || 'new_regime';
-            const { monthlyTDS, percentage } = calculateTDS(annualGross, regime);
-            tdsAmount = monthlyTDS;
-            tdsPercentage = percentage;
+            const tdsResult = calculateTDS(annualGross, regime);
+            tdsAmount = tdsResult.monthlyTDS;
+            tdsPercentage = tdsResult.percentage;
+            tdsCalculationData = tdsResult;
         }
     }
 
     if (tdsAmount > 0) {
         statutory["Income Tax (TDS)"] = tdsAmount;
         statutory["Income Tax (TDS) %"] = tdsPercentage;
+        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
         totalDeductions += tdsAmount;
     }
 
@@ -375,6 +449,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             name: employee.first_name,
             code: employee.employee_code,
             template: template.template_name,
+            template_id: template.id,
             designation: employee.designation?.designation_name,
             joining_date: employee.joining_date
         },
@@ -404,6 +479,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         },
         employee_advances_history: (employee.employeeAdvances || []).map(advance => advance.get({ plain: true })),
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
+        tds_calculation_data: tdsCalculationData,
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
@@ -518,7 +594,7 @@ const formatPayslipToSummary = async (payslip) => {
             ],
             statutory: payslip.statutory_details || {},
             employer: payslip.break_down?.employer || payslip.employer_details || {},
-            total_earnings: (payslip.break_down?.total_earnings || Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0)).toFixed(2),
+            total_earnings: parseFloat(payslip.break_down?.total_earnings || Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0)).toFixed(2),
             total_deductions: [
                 ...Object.entries(deductionDetails)
                     .filter(([name]) => {
@@ -605,10 +681,12 @@ exports.finalizeMonthlySalary = async (req, res) => {
             wp_days: summary.attendance.totalLWP, // Using wp_days for LWP
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
+            total_days: summary.period.daysInMonth,
             leave_details: { "Leave": summary.attendance.leaveDays },
             lunch_count: summary.attendance.lunchCount || 0,
             
             // Dynamic JSON Components
+            salary_template_id: summary.employee.template_id,
             earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => {
                 acc[e.name] = e.actual_amount;
                 return acc;
@@ -627,6 +705,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             net_salary: summary.salary.netPayable,
 
             break_down: summary.breakdown,
+            tds_calculation_data: summary.tds_calculation_data,
             status: 1, // Finalized
             user_id: req.user.id || 0,
             branch_id: summary.meta.branch_id,
@@ -793,15 +872,70 @@ exports.getCalculationHistory = async (req, res) => {
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
         let { employee_id } = req.body;
+        const company_id = req.user.company_id;
+
+        // If no employee_id provided, we assume we want the overall company-wide payroll cycles
         if (!employee_id) {
-            employee_id = req.user.employee_id;
-        }
-        if (!employee_id) {
-            return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
+            // 1. Get unique months/years from AttendanceDay for the entire company
+            const attendanceMonths = await sequelize.query(`
+                SELECT DISTINCT 
+                    EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
+                    EXTRACT(YEAR FROM attendance_date)::INTEGER as year
+                FROM attendance_day ad
+                JOIN employees e ON ad.employee_id = e.id
+                WHERE e.company_id = :company_id AND ad.status != 2
+                ORDER BY year DESC, month DESC
+                LIMIT 24
+            `, {
+                replacements: { company_id },
+                type: sequelize.QueryTypes.SELECT
+            });
+
+            // 2. Get existing payslip summaries by month/year
+            const payslipSummaries = await Payslip.findAll({
+                where: { company_id },
+                attributes: [
+                    'month', 'year',
+                    [sequelize.fn('SUM', sequelize.col('fixed_gross')), 'total_ctc'],
+                    [sequelize.fn('SUM', sequelize.col('net_salary')), 'total_net_payable'],
+                    [sequelize.fn('COUNT', sequelize.col('id')), 'employee_count'],
+                    [sequelize.fn('MAX', sequelize.col('status')), 'status']
+                ],
+                group: ['month', 'year']
+            });
+
+            // 3. Combine and Format
+            const monthSet = new Set();
+            attendanceMonths.forEach(am => monthSet.add(`${am.month}-${am.year}`));
+            payslipSummaries.forEach(ps => monthSet.add(`${ps.month}-${ps.year}`));
+
+            const sortedPeriods = Array.from(monthSet).map(key => {
+                const [month, year] = key.split('-').map(Number);
+                return { month, year };
+            }).sort((a, b) => b.year - a.year || b.month - a.month);
+
+            const result = sortedPeriods.map(period => {
+                const summary = payslipSummaries.find(ps => parseInt(ps.month) === period.month && parseInt(ps.year) === period.year);
+                const monthName = dayjs().month(period.month - 1).format('MMM');
+                
+                const statusValue = summary ? parseInt(summary.getDataValue('status')) : 0;
+
+                return {
+                    month: period.month,
+                    year: period.year,
+                    label: `${monthName} ${period.year}`,
+                    ctc: summary ? parseFloat(summary.getDataValue('total_ctc') || 0).toFixed(2) : "0.00",
+                    net_payable: summary ? parseFloat(summary.getDataValue('total_net_payable') || 0).toFixed(2) : "0.00",
+                    employee_count: summary ? summary.getDataValue('employee_count') : 0,
+                    status: statusValue === 0 ? "Draft" : (statusValue === 1 ? "Finalized" : (statusValue === 2 ? "Paid" : "Running"))
+                };
+            });
+
+            return res.ok(result);
         }
 
+        // If employee_id is provided, maintain original logic for individual employee history
         // 1. Get unique months/years from AttendanceDay
-        // Using raw query for efficiency on large attendance tables
         const attendanceMonths = await sequelize.query(`
             SELECT DISTINCT 
                 EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
@@ -814,12 +948,12 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             type: sequelize.QueryTypes.SELECT
         });
 
-        // 2. Get existing payslips to skip already finalized ones
+        // 2. Get existing payslips
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
             employee_id,
         });
 
-        // 3. Combine unique months from attendance and existing payslips
+        // 3. Combine unique months
         const allPeriodKeys = new Set();
         attendanceMonths.forEach(am => allPeriodKeys.add(`${am.month}-${am.year}`));
         existingPayslips.forEach(ep => allPeriodKeys.add(`${ep.month}-${ep.year}`));
@@ -840,20 +974,17 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             let payslip_id = null;
 
             if (existing) {
-                // Use values from existing payslip (Draft/Finalized/Paid)
                 ctc = existing.fixed_gross || existing.ctc_monthly || 0;
                 net_payable = existing.net_salary || existing.net_payable || 0;
                 payslip_id = existing.id;
             } else {
                 try {
-                    // Dynamically calculate for months without a payslip record
                     const summary = await performSalaryCalculation(employee_id, am.month, am.year);
                     if (summary && summary.salary) {
                         ctc = summary.salary.ctc_monthly;
                         net_payable = summary.salary.netPayable;
                     }
                 } catch (e) {
-                    // If calculation fails (e.g. template not mapped), fall back to 0
                     console.error(`Calculation failed for ${monthName} ${am.year}:`, e.message);
                 }
             }
@@ -1022,6 +1153,7 @@ exports.getPayslipById = async (req, res) => {
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
             breakdown: breakdown,
+            tds_calculation_data: payslip.tds_calculation_data,
             status: payslip.status,
             status_text: payslip.status === 0 ? "Draft" : (payslip.status === 1 ? "Finalized" : "Paid")
         };
@@ -1189,8 +1321,9 @@ exports.getSalaryOverview = async (req, res) => {
                     payments: "0.00", // Will be filled below
                     adjustments: "0.00", // Will be filled below
                     ot_amount: ot.toFixed(2),
-                    fine_amount: fine.toFixed(2),
+                    total_fine: fine.toFixed(2),
                     ctc_monthly: payslip.ctc_monthly,
+                    tds_calculation_data: payslip.tds_calculation_data,
                     is_loaded: true,
                     is_finalized: true
                 });
@@ -1207,61 +1340,25 @@ exports.getSalaryOverview = async (req, res) => {
                         return sum + parseFloat(advance.amount || 0);
                     }, 0);
 
-                    let earnList = [];
-                    let dedList = summary.breakdown.deductions.map(d => ({ 
+                    // Cleanly map the breakdown from the pre-calculated summary
+                    const earnList = summary.breakdown.earnings.map(e => ({ 
+                        name: e.name, 
+                        // Map both possible internal names to consistently use amount/actual_amount
+                        amount: parseFloat(e.actual_amount || 0).toFixed(2), 
+                        actual_amount: parseFloat(e.actual_amount || 0).toFixed(2),
+                        is_employer: e.is_employer || false 
+                    }));
+                    
+                    const dedList = summary.breakdown.deductions.map(d => ({ 
                         name: d.name, 
                         amount: parseFloat(d.amount || 0).toFixed(2),
+                        actual_amount: parseFloat(d.amount || 0).toFixed(2),
                         is_food: d.is_food,
                         meal_count: d.meal_count,
-                        rate: d.rate
+                        rate: d.rate,
+                        is_statutory: d.is_statutory,
+                        percentage: d.name === "Income Tax (TDS)" ? summary.salary.tdsPercentage : null
                     }));
-
-                    // Include Statutory Employee Deductions in dynamic list
-                    const tdsPercent = (summary.breakdown.statutory || {})["Income Tax (TDS) %"];
-                    Object.entries(summary.breakdown.statutory || {}).forEach(([name, amount]) => {
-                        const amt = parseFloat(amount || 0);
-                        if (amt > 0 && name !== "Income Tax (TDS) %") {
-                            dedList.push({ 
-                                name, 
-                                amount: amt.toFixed(2), 
-                                is_statutory: true,
-                                percentage: name === "Income Tax (TDS)" ? tdsPercent : null
-                            });
-                        }
-                    });
-
-                    const ot = parseFloat(summary.salary.overtimeAmount || 0);
-                    const fine = parseFloat(summary.salary.totalFine || 0);
-
-                    // Include Employee Advances in deductions - single entry with total
-                    if (summary.employee_advances_history && summary.employee_advances_history.length > 0) {
-                        const totalAdvances = summary.employee_advances_history.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0);
-                        if (totalAdvances > 0) {
-                            dedList.push({ name: "Advance Repayment", amount: totalAdvances.toFixed(2), is_advance: true });
-                        }
-                    }
-
-                    if (isCurrentMonth) {
-                        summary.breakdown.earnings.forEach(e => {
-                            if (e.is_adjustment || e.is_ot || e.is_encashment) {
-                                earnList.push({ name: e.name, amount: parseFloat(e.actual_amount || 0).toFixed(2), is_employer: e.is_employer });
-                            } else {
-                                const compPerDay = e.base_amount / daysInCalculation;
-                                earnList.push({ name: e.name, amount: (compPerDay * payableDays).toFixed(2), is_employer: e.is_employer });
-                            }
-                        });
-                    } else {
-                        earnList = summary.breakdown.earnings.map(e => ({ name: e.name, amount: parseFloat(e.actual_amount || 0).toFixed(2), is_employer: e.is_employer }));
-                    }
-
-                    // Include Employee Incentives in earnings - single entry with total
-                    let totalIncentives = 0;
-                    if (summary.employee_incentive_history && summary.employee_incentive_history.length > 0) {
-                        totalIncentives = summary.employee_incentive_history.reduce((sum, inc) => sum + parseFloat(inc.amount || 0), 0);
-                        if (totalIncentives > 0) {
-                            earnList.push({ name: "Incentive", amount: totalIncentives.toFixed(2), is_incentive: true });
-                        }
-                    }
 
                     const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
@@ -1293,17 +1390,19 @@ exports.getSalaryOverview = async (req, res) => {
                             amount: inc.amount,
                             incentive_date: inc.incentive_date
                         })),
-                        // earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
-                        // deductions: { total: totalDed.toFixed(2), breakdown: dedList },
+                        earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
+                        deductions: { total: totalDed.toFixed(2), breakdown: dedList },
                         statutory: summary.breakdown.statutory || {}, 
                         employer: summary.breakdown.employer || {},
                         breakdown: summary.breakdown, 
                         payments: "0.00", 
                         adjustments: "0.00",
-                        ot_amount: ot.toFixed(2),
-                        fine_amount: fine.toFixed(2),
+                        ot_amount: summary.salary.overtimeAmount,
+                        total_fine: summary.salary.totalFine,
+                        fine_amount: summary.salary.totalFine,
                         ctc_monthly: summary.salary.ctc_monthly,
                         total_advances: totalAdvances.toFixed(2),
+                        tds_calculation_data: summary.tds_calculation_data,
                         is_loaded: true,
                         is_finalized: false
                     });
@@ -1451,13 +1550,326 @@ exports.generatePayslipPdf = async (req, res) => {
         await pdfService.generatePdfFromTemplate(templatePath, data, outputPath);
 
         // Construct download link
-        const downloadLink = `${req.protocol}://${req.get('host')}/uploads/payslips/${filename}`;
+        const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
 
         return res.ok({
             download_link: downloadLink,
             filename: filename
         });
     } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+/**
+ * Get detailed TDS Deduction report across employees for a specific period
+ */
+exports.getTDSDeductionReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        const where = {
+            month: parseInt(month),
+            year: parseInt(year),
+            status: { [Op.in]: [1, 2] } // Finalized or Paid
+        };
+
+        if (branch_id) {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [{
+                model: Employee,
+                as: "employee",
+                attributes: ['id', 'first_name', 'employee_code', 'pan_number']
+            }],
+            order: [['employee_id', 'ASC']]
+        });
+
+        const reportData = [];
+        
+        payslips.forEach(payslip => {
+            const tdsData = payslip.tds_calculation_data || {};
+            
+            // Extract the actual TDS deducted (from statutory or breakdown)
+            const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
+
+            // Only include in report if TDS was actually deducted
+            if (actualTds > 0) {
+                reportData.push({
+                    id: payslip.id,
+                    employee_id: payslip.employee_id,
+                    employee_name: payslip.employee?.first_name,
+                    employee_code: payslip.employee?.employee_code,
+                    pan_number: payslip.employee?.pan_number,
+                    
+                    // Detailed tax data from stored snapshot
+                    annual_gross: tdsData.annualGross || 0,
+                    standard_deduction: tdsData.standardDeduction || 0,
+                    taxable_income: tdsData.taxableIncome || 0,
+                    regime: tdsData.regime || 'new_regime',
+                    annual_tax: tdsData.annualTax || 0,
+                    monthly_tds: tdsData.monthlyTDS || 0,
+                    percentage: tdsData.percentage || 0,
+                    
+                    // What was actually deducted in the finalized payslip
+                    actual_tds_deducted: actualTds,
+                    status: payslip.status
+                });
+            }
+        });
+
+        return res.ok(reportData);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Enterprise Listing for "Run Payroll" View
+ * Optimized for displaying many employees with real-time simulations
+ */
+exports.getMonthlyPayrollListing = async (req, res) => {
+    try {
+        const { month, year, branch_id, department_id, search, staff_type, show_inactive } = req.body;
+        const company_id = req.user.company_id;
+
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        const startOfMonth = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+        // 1. Fetch All Applicable Employees
+        const employeeWhere = { company_id, status: 1 };
+        if (branch_id) employeeWhere.branch_id = branch_id;
+        if (department_id) employeeWhere.department_id = department_id;
+        if (staff_type) employeeWhere.staff_type = staff_type;
+        if (show_inactive === true || show_inactive === 'true') delete employeeWhere.status;
+
+        if (search) {
+            employeeWhere[Op.or] = [
+                { first_name: { [Op.iLike]: `%${search}%` } },
+                { employee_code: { [Op.iLike]: `%${search}%` } }
+            ];
+        }
+
+        const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+            attributes: ['id', 'first_name', 'employee_code', 'joining_date'],
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { 
+                    model: EmployeeSalaryTemplate, 
+                    as: 'employeeSalaryTemplate',
+                    attributes: ['ctc_monthly', 'salary_type']
+                }
+            ],
+            order: [['first_name', 'ASC']]
+        });
+
+        // 2. Fetch Existing Payslips (Finalized/Paid)
+        const payslips = await commonQuery.findAllRecords(Payslip, {
+            month, year, company_id,
+            status: { [Op.in]: [1, 2] }
+        });
+        const payslipMap = new Map(payslips.map(p => [p.employee_id, p]));
+
+        // 3. Fetch Payment History (Sum by Employee)
+        const payments = await PaymentHistory.findAll({
+            where: {
+                company_id,
+                payment_type: 'Salary',
+                payment_date: { [Op.between]: [startOfMonth, endOfMonth] }
+            },
+            attributes: [
+                'employee_id',
+                [sequelize.fn('SUM', sequelize.col('amount')), 'total_paid']
+            ],
+            group: ['employee_id']
+        });
+        const paymentMap = new Map(payments.map(p => [p.employee_id, parseFloat(p.getDataValue('total_paid') || 0)]));
+
+        // 4. Build Result Set
+        const report = [];
+        for (const emp of employees) {
+            const existing = payslipMap.get(emp.id);
+            const paidAmount = paymentMap.get(emp.id) || 0;
+
+            let row = {
+                id: emp.id,
+                name: emp.first_name,
+                employee_code: emp.employee_code,
+                job_title: emp.designation?.designation_name || "N/A",
+                joining_date: emp.joining_date,
+                finalized: !!existing,
+                status: existing ? (existing.status === 2 ? 'Paid' : 'Finalized') : 'No',
+                ctc: emp.employeeSalaryTemplate?.ctc_monthly || 0,
+                salary_type: emp.employeeSalaryTemplate?.salary_type || "Monthly",
+                payslip_id: existing?.id || null,
+                bank_verified: true, // Mock logic - could be from KYC
+                slip_shared: false,   // Mock logic - could be from email logs
+            };
+
+            if (existing) {
+                row.total_salary = parseFloat(existing.net_salary || 0).toFixed(2);
+                row.payable_days = parseFloat(existing.pd_days || 0).toFixed(1);
+            } else {
+                // RUN SIMULATION
+                try {
+                    const sim = await performSalaryCalculation(emp.id, month, year);
+                    row.total_salary = parseFloat(sim.salary.netPayable || 0).toFixed(2);
+                    row.payable_days = parseFloat(sim.attendance.payableDays || 0).toFixed(1);
+                } catch (e) {
+                    row.total_salary = "0.00";
+                    row.payable_days = "0";
+                    row.error = e.message;
+                }
+            }
+
+            row.paid = paidAmount.toFixed(2);
+            row.pending = (parseFloat(row.total_salary) - paidAmount).toFixed(2);
+            report.push(row);
+        }
+
+        return res.ok({
+            month,
+            year,
+            total_count: report.length,
+            grand_totals: {
+                ctc: report.reduce((sum, r) => sum + parseFloat(r.ctc || 0), 0).toFixed(2),
+                salary: report.reduce((sum, r) => sum + parseFloat(r.total_salary || 0), 0).toFixed(2),
+                paid: report.reduce((sum, r) => sum + parseFloat(r.paid || 0), 0).toFixed(2),
+                pending: report.reduce((sum, r) => sum + parseFloat(r.pending || 0), 0).toFixed(2)
+            },
+            data: report
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Bulk Finalize Payroll for multiple employees
+ */
+exports.bulkFinalizePayroll = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { employee_ids, month, year } = req.body;
+        if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
+            return res.error("VALIDATION_ERROR", { message: "List of employee IDs is required" });
+        }
+
+        const results = [];
+        for (const emp_id of employee_ids) {
+            try {
+                // Individual finalizing logic (re-using existing logic)
+                const summary = await performSalaryCalculation(emp_id, month, year, transaction);
+                
+                const payslipPayload = {
+                    employee_id: emp_id,
+                    month, year,
+                    present_days: summary.attendance.presentDays,
+                    absent_days: summary.attendance.absentDays,
+                    pd_days: summary.attendance.payableDays,
+                    wp_days: summary.attendance.totalLWP,
+                    wo_days: summary.attendance.weeklyOffs,
+                    ph_days: summary.attendance.holidays,
+                    total_days: summary.period.daysInMonth,
+                    salary_template_id: summary.employee.template_id,
+                    earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => { acc[e.name] = e.actual_amount; return acc; }, {}),
+                    deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => { acc[d.name] = d.amount; return acc; }, {}),
+                    statutory_details: summary.breakdown.statutory || {},
+                    employer_details: summary.breakdown.employer || {},
+                    fixed_gross: summary.salary.ctc_monthly,
+                    paid_gross: summary.salary.takeHomeEarnings,
+                    total_deduction: summary.salary.totalDeductions,
+                    net_salary: summary.salary.netPayable,
+                    break_down: summary.breakdown,
+                    tds_calculation_data: summary.tds_calculation_data,
+                    status: 1, // Finalized
+                    user_id: req.user.id || 0,
+                    company_id: req.user.company_id
+                };
+
+                // Check for existing to override
+                const existing = await commonQuery.findOneRecord(Payslip, { employee_id: emp_id, month, year, status: { [Op.in]: [1, 2] } }, {}, transaction);
+                if (!existing) {
+                    await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+                    results.push({ id: emp_id, success: true });
+                } else {
+                    results.push({ id: emp_id, success: false, message: "Already finalized" });
+                }
+            } catch (e) {
+                results.push({ id: emp_id, success: false, message: e.message });
+            }
+        }
+
+        await transaction.commit();
+        return res.success(`${results.filter(r => r.success).length} payroll records finalized successfully`, results);
+    } catch (err) {
+        if (transaction) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Bulk Pay Payroll (Bulk Payment Entry)
+ */
+exports.bulkPayPayroll = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { payments, month, year } = req.body; // Array of {employee_id, amount, payment_mode}
+        if (!Array.isArray(payments) || payments.length === 0) {
+            return res.error("VALIDATION_ERROR", { message: "Payment list is required" });
+        }
+
+        const stats = { success: 0, failed: 0 };
+        for (const p of payments) {
+            const payslip = await commonQuery.findOneRecord(Payslip, { 
+                employee_id: p.employee_id, month, year, status: 1 
+            }, {}, transaction);
+
+            if (payslip) {
+                // Record history
+                await commonQuery.createRecord(PaymentHistory, {
+                    employee_id: p.employee_id,
+                    ref_id: payslip.id,
+                    payment_date: dayjs().format('YYYY-MM-DD'),
+                    amount: p.amount,
+                    payment_type: 'Salary',
+                    payment_mode: p.payment_mode || 'Bank',
+                    status: 1,
+                    user_id: req.user.id,
+                    company_id: req.user.company_id,
+                    branch_id: payslip.branch_id
+                }, transaction);
+
+                // Check if fully paid
+                const totalPaidRes = await PaymentHistory.findOne({
+                    where: { employee_id: p.employee_id, ref_id: payslip.id, payment_type: 'Salary' },
+                    attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'paid']],
+                    transaction
+                });
+                const totalPaid = parseFloat(totalPaidRes.getDataValue('paid') || 0);
+
+                if (totalPaid >= parseFloat(payslip.net_salary)) {
+                    await commonQuery.updateRecordById(Payslip, payslip.id, { status: 2 }, transaction);
+                }
+                stats.success++;
+            } else {
+                stats.failed++;
+            }
+        }
+
+        await transaction.commit();
+        return res.success(`Generated ${stats.success} payment entries.`, stats);
+    } catch (err) {
+        if (transaction) await transaction.rollback();
         return handleError(err, res, req);
     }
 };

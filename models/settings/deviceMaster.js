@@ -9,6 +9,7 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0: Active, 1: Inactive, 2: Deleted, 3: Pending"
             },
+            password: { type: DataTypes.STRING, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
