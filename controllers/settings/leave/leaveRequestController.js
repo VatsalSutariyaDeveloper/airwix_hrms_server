@@ -209,6 +209,7 @@ exports.getAll = async (req, res) => {
                     { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
                     { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
                 ],
+                attributes: { exclude: ['reason'] },
                 where: whereClause,
                 order: [['created_at', 'DESC']]
             }
@@ -482,6 +483,12 @@ exports.getPendingApprovals = async (req, res) => {
                     attributes: ["leave_category_name"]
                 },
                 {
+                    model: User,
+                    as: "approvedBy",
+                    attributes: ["id", "user_name"],
+                    required: false
+                },
+                {
                     model: BranchMaster,
                     as: "branch",
                     attributes: []
@@ -538,6 +545,7 @@ exports.getPendingApprovals = async (req, res) => {
                 } else {
                     raw.document_url = null;
                 }
+                raw.approved_by_name = raw.approvedBy?.user_name || null;
                 pendingForUser.push(raw);
             }
         }

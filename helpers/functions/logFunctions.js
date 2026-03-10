@@ -218,6 +218,22 @@ exports.logError = async (logData, transaction = null) => {
   }
 };
 
+// 4. Log to Physical File
+exports.writeLogToFile = (filename, message) => {
+    try {
+        const logDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        const filePath = path.join(logDir, filename);
+        const timestamp = new Date().toLocaleString();
+        const logMessage = `[${timestamp}] ${message}\n`;
+        fs.appendFileSync(filePath, logMessage);
+    } catch (err) {
+        console.error("Failed to write to log file:", err.message);
+    }
+};
+
 // Archive Function (Updated for new table names)
 exports.archiveAndCleanupLogs = async (daysToKeep = 90) => {
     const thresholdDate = new Date();

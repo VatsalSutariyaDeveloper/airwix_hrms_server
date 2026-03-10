@@ -15,6 +15,7 @@ router.post("/login", loginController.login);
 router.post("/pin-login", loginController.pinLogin);
 router.post("/login/send-otp", loginController.sendLoginOtp);
 router.post("/verify-mobile", loginController.verifyMobileNo);
+router.post("/verify-pin", loginController.verifyPin);
 router.post("/generate-pin", loginController.generatePin);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 

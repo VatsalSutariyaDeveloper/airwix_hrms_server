@@ -1305,7 +1305,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     user_id: meta.user_id || 0,
     company_id: meta.company_id || 0,
     branch_id: meta.branch_id || 0,
-    device_id: "MANUAL",
+    device_id: meta.device_id,
   };
 
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {

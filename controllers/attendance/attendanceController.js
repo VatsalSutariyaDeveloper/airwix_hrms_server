@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -45,10 +45,11 @@ exports.attendancePunch = async (req, res) => {
       req.body.employee_id, 
       {
       ...req.body,
-      user_id: req.user.id,
+      user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
       company_id: req.user.company_id,
       branch_id: req.user.branch_id,
       ip_address: req.ip,
+      device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
       image_name: punchImage
     }, t);
     
@@ -1186,6 +1187,11 @@ exports.getMonthlyAttendance = async (req, res) => {
         model: User,
         as: 'user',
         attributes: ['id', 'user_name']
+      },
+      {
+        model: DeviceMaster,
+        as: 'device',
+        attributes: ['id', 'device_name']
       }],
       order: [["punch_time", "ASC"]]
     });
@@ -1325,7 +1331,7 @@ exports.getMonthlyAttendance = async (req, res) => {
             type: p.punch_type,
             punch_by: p.user?.user_name || "System",
             image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}` : null,
-            punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.ip_address || 'App'}`
+            punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
           })).reverse()
         };
       } else {
