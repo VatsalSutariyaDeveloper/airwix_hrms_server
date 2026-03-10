@@ -936,6 +936,9 @@ exports.getCalculationHistory = async (req, res) => {
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
         let { employee_id } = req.body;
+        if (!employee_id){
+            employee_id = req.user.employee_id;
+        }
         const company_id = req.user.company_id;
 
         // If no employee_id provided, we assume we want the overall company-wide payroll cycles
