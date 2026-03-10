@@ -1,6 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const RolePermission = sequelize.define("rolePermission", {
     role_name: { type: DataTypes.STRING(100), allowNull: false },
+    description: { type: DataTypes.TEXT, allowNull: true },
     permissions: { type: DataTypes.TEXT, allowNull: false },
     is_system: { type: DataTypes.BOOLEAN, defaultValue: false },
     status: {

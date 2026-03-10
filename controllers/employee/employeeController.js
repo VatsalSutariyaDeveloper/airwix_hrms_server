@@ -1624,36 +1624,32 @@ exports.facePunch = async (req, res) => {
 exports.getWages = async (req, res) => {
     try {
         const { employee_id: employeeId, attendance_date: attendanceDate } = req.body;
+        const dayjs = require("dayjs");
 
         if (!employeeId) {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
 
-        // Get current date and format it as YYYY-MM-DD for database query
-        const currentDate = new Date().toISOString().split('T')[0];
+        const targetDate = attendanceDate || dayjs().format("YYYY-MM-DD");
 
-        // Fetch attendance day record for employeeId and current date
+        // Fetch attendance day record for employeeId and specified date
         const attendanceDay = await commonQuery.findOneRecord(
             AttendanceDay,
             {
                 employee_id: employeeId,
-                attendance_date: attendanceDate
+                attendance_date: targetDate
             },
             {
                 attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
             }
-        )
+        );
 
         if (!attendanceDay) {
-            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
+            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for the selected date" });
         }
 
-        // if(attendanceDay.first_in == null){
-        //     return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
-        // }
-
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template']
+            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template', 'shift_template']
         });
 
         if (!employee) {
@@ -1668,7 +1664,7 @@ exports.getWages = async (req, res) => {
                 status: 0
             },
             {
-                attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis']
+                attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate']
             },
             null,
             false,
@@ -1685,54 +1681,89 @@ exports.getWages = async (req, res) => {
             return res.success(constants.SUCCESS, responseData);
         }
 
+        // --- FETCH SHIFT INFO FOR UNIT WORKING HOURS ---
+        const dateObj = dayjs(targetDate);
+        const dayOfWeek = dateObj.day();
+
+        const empShift = await commonQuery.findOneRecord(EmployeeShift, {
+            employee_id: employeeId,
+            day_of_week: dayOfWeek,
+            status: 0,
+        }, {}, null, false, { company_id: true });
+
+        let shift = null;
+        if (empShift && empShift.shift_id) {
+            shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, null, false, { company_id: true });
+        } else if (!empShift && employee.shift_template) {
+            shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+        } else if (empShift && !empShift.shift_id) {
+            shift = empShift; // Manual shift configuration
+        }
+
+        let unitWorkingHours = 8;
+        if (shift) {
+            if (parseFloat(shift.total_payable_hours) > 0) {
+                unitWorkingHours = parseFloat(shift.total_payable_hours) / 60;
+            } else if (shift.min_full_day_minutes > 0) {
+                unitWorkingHours = shift.min_full_day_minutes / 60;
+            }
+        }
+        // -------------------------------------------
+
         let dailyWage = null;
+        let hourlyWage = null;
         let monthDays = null;
         let workingDays = null;
-        const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
+        const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
+        const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
 
-        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+        if (salaryType === "Daily") {
+            dailyWage = parseFloat(employeeSalaryTemplate.daily_rate || 0);
+            hourlyWage = dailyWage / unitWorkingHours;
+        } else if (salaryType === "Hourly") {
+            hourlyWage = parseFloat(employeeSalaryTemplate.hourly_rate || 0);
+            dailyWage = hourlyWage * unitWorkingHours;
+        } else {
+            // Monthly calculation
+            if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+                if (employee && employee.weekly_off_template) {
+                    const weeklyOffTemplate = await commonQuery.findOneRecord(
+                        WeeklyOffTemplate,
+                        employee.weekly_off_template,
+                        {
+                            include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                        },
+                        null,
+                        false,
+                        { company_id: true }
+                    );
 
-            if (employee && employee.weekly_off_template) {
-                const weeklyOffTemplate = await commonQuery.findOneRecord(
-                    WeeklyOffTemplate,
-                    employee.weekly_off_template,
-                    {
-                        include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                    },
-                    null,
-                    false,
-                    { company_id: true }
-                );
+                    if (weeklyOffTemplate) {
+                        const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, dateObj.toDate());
+                        workingDays = result.working_days;
+                        monthDays = result.total_days_in_month;
 
-                if (weeklyOffTemplate) {
-                    const currentDate = new Date();
-                    const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, currentDate);
-                    workingDays = result.working_days;
-                    monthDays = result.total_days_in_month;
-
-                    if (workingDays && workingDays > 0) {
-                        dailyWage = ctcMonthly / workingDays;
+                        if (workingDays && workingDays > 0) {
+                            dailyWage = ctcMonthly / workingDays;
+                        }
                     }
                 }
-            }
 
-            if (!workingDays) {
-                workingDays = 30;
+                if (!workingDays) {
+                    workingDays = 30;
+                    monthDays = 30;
+                    dailyWage = ctcMonthly / 30;
+                }
+            } else if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
+                monthDays = dateObj.daysInMonth();
+                dailyWage = ctcMonthly / monthDays;
+            } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
                 monthDays = 30;
                 dailyWage = ctcMonthly / 30;
             }
-        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
-            const currentDate = new Date();
-            const year = currentDate.getFullYear();
-            const month = currentDate.getMonth();
-            monthDays = new Date(year, month + 1, 0).getDate();
-            dailyWage = ctcMonthly / monthDays;
-        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
-            monthDays = 30;
-            dailyWage = ctcMonthly / 30;
+            console.log("workingDays", workingDays, "dailyWage", dailyWage, "unitWorkingHours", unitWorkingHours)
+            hourlyWage = dailyWage ? dailyWage / unitWorkingHours : null;
         }
-
-        const hourlyWage = dailyWage ? dailyWage / 8 : null;
 
         const responseData = {
             ...employeeSalaryTemplate.toJSON(),
@@ -1741,9 +1772,12 @@ exports.getWages = async (req, res) => {
             calculation_basis: employeeSalaryTemplate.lwp_calculation_basis,
             month_days: monthDays,
             working_days: workingDays,
+            unit_working_hours: unitWorkingHours,
             last_out: attendanceDay.last_out || null,
             overtime_data: attendanceDay?.overtime_data || null,
+            overtime_amount: attendanceDay?.overtime_amount || 0,
             fine_data: attendanceDay?.fine_data || null,
+            fine_amount: attendanceDay?.fine_amount || 0,
         };
 
         return res.success(constants.SUCCESS, responseData);
@@ -1751,7 +1785,7 @@ exports.getWages = async (req, res) => {
     } catch (err) {
         return handleError(err, res, req);
     }
-}
+};
 
 /**
  * Generates a user account for an existing employee and provides a setup link.

@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -95,7 +95,21 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     payroll_month: { [Op.between]: [startDate, endDate] }
                 }
             },
-
+            {
+                model: EmployeeWeeklyOff,
+                as: "employeeWeeklyOffs",
+                where: { is_off: true, status: 0 },
+                required: false
+            },
+            {
+                model: EmployeeHoliday,
+                as: "employeeHolidays",
+                where: { 
+                    date: { [Op.between]: [startDate, endDate] },
+                    status: 0 
+                },
+                required: false
+            }
         ]
     }, transaction);
 
@@ -119,25 +133,44 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         : (baseSalaryTemplate.salaryTemplateTransactions || []);
 
     // Step A: Aggregate Counts
-    let presentDays = 0, halfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0;
+    let presentDays = 0, halfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
+
+    // A.1 Calculate Weekly Offs from EmployeeWeeklyOff
+    const empWeeklyOffs = employee.employeeWeeklyOffs || [];
+    const monthDaysCount = dayjs(startDate).daysInMonth();
+    for (let d = 1; d <= monthDaysCount; d++) {
+        const dateObj = dayjs(startDate).date(d);
+        const dayOfWeek = dateObj.day();
+        const weekNo = Math.ceil(d / 7);
+
+        const isOff = empWeeklyOffs.find(wo => 
+            wo.day_of_week === dayOfWeek && 
+            (wo.week_no === 0 || wo.week_no === weekNo)
+        );
+        if (isOff) weeklyOffs++;
+    }
+
+    // A.2 Calculate Holidays from EmployeeHoliday
+    holidays = (employee.employeeHolidays || []).length;
 
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
         employee_id,
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
     }, {}, transaction);
-
     attendanceRecords.forEach(day => {
+console.log("attendanceRecords" , day.overtime_data);
+
         switch (parseInt(day.status)) {
             case 0: case 12: presentDays++; break;
             case 1: case 13: halfDays++; break;
-            case 3: weeklyOffs++; break;
-            case 4: holidays++; break;
             case 5: absentDays++; break;
             case 6: leaveDays++; break;
         }
         totalFine += parseFloat(day.fine_amount || 0);
+        totalOTAmount += parseFloat(day.overtime_amount || 0);
         totalOTMins += parseInt(day.overtime_minutes || 0);
+        totalWorkedMins += parseInt(day.worked_minutes || 0);
     });
 
     // Step A.1: Calculate Canteen/Lunch Counts
@@ -160,7 +193,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const totalLWP = absentDays + (halfDays * 0.5);
 
     // Step B: Calculate Gross
-    const monthlyGross = parseFloat(template.ctc_monthly || 0);
+    let monthlyGross = parseFloat(template.ctc_monthly || 0);
+    const dailyRate = parseFloat(template.daily_rate || 0);
+    const hourlyRate = parseFloat(template.hourly_rate || 0);
+    const salaryType = template.salary_type || "Monthly";
+
     const daysInMonth = dayjs(startDate).daysInMonth();
     let daysInCalculation = daysInMonth;
 
@@ -171,23 +208,50 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-    // Step B.1: Calculate accurate Payable Days based on Basis
+    
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
-        // Exclude Weekly Offs from payable days
         actualDaysValue = daysInMonth - weeklyOffs;
     } else if (template.lwp_calculation_basis === "FIXED_30_DAYS") {
-        // Standard 30 days basis. Payable days = 30 - (Absent + Half Days)
         actualDaysValue = 30;
     } else {
-        // Default: DAYS_IN_MONTH
         actualDaysValue = daysInMonth;
     }
 
-    const perDaySalary = monthlyGross / (daysInCalculation || 1);
-    const lwpDeductionTotal = totalLWP * perDaySalary;
-    const perHourSalary = perDaySalary / 8;
-    const otAmount = (totalOTMins / 60) * perHourSalary * 1.5;
+    // [MOD] Determine unitWorkingHours from shift template (similar to attendanceHelper)
+    let unitWorkingHours = 8;
+    const { ShiftTemplate } = require("../../models");
+    let shift = null;
+    if (employee.shift_template) {
+        shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, { company_id: true });
+    }
+    if (shift) {
+        if (parseFloat(shift.total_payable_hours) > 0) {
+            unitWorkingHours = parseFloat(shift.total_payable_hours) / 60;
+        } else if (shift.min_full_day_minutes > 0) {
+            unitWorkingHours = shift.min_full_day_minutes / 60;
+        }
+    }
+
+    let perDaySalary = monthlyGross / (daysInCalculation || 1);
+    let perHourSalary = perDaySalary / unitWorkingHours;
+
+    if (salaryType === "Daily") {
+        // For Daily: Gross is based on worked days + paid off days
+        perDaySalary = dailyRate;
+        perHourSalary = dailyRate / unitWorkingHours;
+        // Total earnings for the month based on daily rate
+        const totalPayableDays = presentDays + (halfDays * 0.5) + leaveDays + holidays + weeklyOffs;
+        monthlyGross = dailyRate * totalPayableDays;
+    } else if (salaryType === "Hourly") {
+        // For Hourly: Gross is based on total worked minutes
+        perHourSalary = hourlyRate;
+        perDaySalary = hourlyRate * unitWorkingHours;
+        monthlyGross = hourlyRate * (totalWorkedMins / 60);
+    }
+
+    const lwpDeductionTotal = salaryType === "Monthly" ? (totalLWP * perDaySalary) : 0;
+    const otAmount = totalOTAmount;
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];

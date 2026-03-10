@@ -19,6 +19,7 @@ module.exports = (sequelize, DataTypes) => {
             comment: "0: PRESENT, 1: HALF_DAY, 3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE, 7: OVERTIME, 8: FINE, 9: INCOMPLETE, 12: OD, 13: HALF_OD",
         },
         overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
+        overtime_amount: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
         fine_amount: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
         leave_category_id: { type: DataTypes.INTEGER, allowNull: true },
         leave_session: { type: DataTypes.SMALLINT, allowNull: true, comment: "1: Session 1, 2: Session 2" },

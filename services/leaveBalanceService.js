@@ -488,7 +488,7 @@ class LeaveBalanceService {
      * @param {Object} transaction
      * @param {string} date - Reference date for the adjustment (default today)
      */
-    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null, date = dayjs(), employee = null) {
+    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null, date = dayjs(), employee = null, isAllocation = false) {
         if (!employeeId || !categoryId || amount === 0) return;
         
         // Round amount to nearest 0.5
@@ -519,7 +519,15 @@ class LeaveBalanceService {
                 return;
             }
 
-            const used = Math.round((parseFloat(balance.used_leaves || 0) + roundedAmount) * 10) / 10;
+            let used = parseFloat(balance.used_leaves || 0);
+            let allocated = parseFloat(balance.total_allocated || 0);
+            
+            if (isAllocation) {
+                allocated = Math.round((allocated - roundedAmount) * 10) / 10;
+            } else {
+                used = Math.round((used + roundedAmount) * 10) / 10;
+            }
+
             let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 10) / 10;
 
             // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
@@ -533,6 +541,7 @@ class LeaveBalanceService {
             }
 
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
+                total_allocated: allocated,
                 used_leaves: used,
                 pending_leaves: pending
             }, t, false, { company_id: true });

@@ -109,23 +109,12 @@ exports.create = async (req, res) => {
             return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category. Please check employee's leave balance." });
         }
 
-        const isPaid = balance.is_paid;
-        const isCompOff = balance.is_compoff;
-
-        if (isPaid || isCompOff) {
-            if (parseFloat(balance.pending_leaves) < parseFloat(total_days)) {
-                await transaction.rollback();
-                return res.error("INSUFFICIENT_BALANCE", { message: `Insufficient balance. Available: ${balance.pending_leaves}. ${isCompOff ? 'Compensatory Off requires earned credit.' : ''}` });
-            }
-
-            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
-                pending_leaves: parseFloat(balance.pending_leaves) - parseFloat(total_days),
-                used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
-            }, transaction, false, { company_id: true });
-        } else {
-            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
-                used_leaves: parseFloat(balance.used_leaves) + parseFloat(total_days)
-            }, transaction, false, { company_id: true });
+        // 2. Adjust Balance via Service
+        try {
+            await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, start_date, employee);
+        } catch (error) {
+            await transaction.rollback();
+            return res.error("INSUFFICIENT_BALANCE", { message: error.message });
         }
 
         // Create Leave Request
@@ -413,13 +402,7 @@ exports.updateStatus = async (req, res) => {
             }, {}, transaction, false, { company_id: true });
 
             if (balance) {
-                const balanceUpdate = {
-                    used_leaves: parseFloat(balance.used_leaves) - parseFloat(leaveRequest.total_days)
-                };
-                if (balance.is_paid) {
-                    balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves) + parseFloat(leaveRequest.total_days);
-                }
-                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction, false, { company_id: true });
+                await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
             }
 
             const history = leaveRequest.approval_history || [];
@@ -605,13 +588,7 @@ exports.cancelLeave = async (req, res) => {
         }, {}, transaction, false, { company_id: true });
 
         if (balance) {
-            const balanceUpdate = {
-                used_leaves: parseFloat(balance.used_leaves || 0) - parseFloat(leaveRequest.total_days)
-            };
-            if (balance.is_paid) {
-                balanceUpdate.pending_leaves = parseFloat(balance.pending_leaves || 0) + parseFloat(leaveRequest.total_days);
-            }
-            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, balanceUpdate, transaction, false, { company_id: true });
+            await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
         }
 
         // 5. Update Request Status immediately so rebuildAttendanceDay sees the change
