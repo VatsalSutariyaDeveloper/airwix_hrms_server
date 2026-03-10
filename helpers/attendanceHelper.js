@@ -1,9 +1,10 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
 const { constants } = require("./constants");
+const { calculateWorkingAndOffDays } = require("./functions/commonFunctions");
 // LeaveBalanceService is required lazily inside functions to avoid circular dependencies with attendanceHelper
 // const LeaveBalanceService = require("../services/leaveBalanceService");
 
@@ -234,7 +235,65 @@ async function punch(employeeId, meta, transaction = null) {
 
 async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = null) {
   const LeaveBalanceService = require("../services/leaveBalanceService");
-  // --- Fetch Wages for Rate Calculation (At function start for global scope) ---
+
+  // 1. Fetch Employee and Templates early for configuration
+  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
+    include: [
+      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+    ],
+  }, transaction);
+  if (!employee) return;
+  const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+
+  const dayOfWeek = meta.dayOfWeek !== undefined ? meta.dayOfWeek : dayjs(date).day();
+  const dayOfMonth = dayjs(date).date();
+  const weekNo = meta.weekNo !== undefined ? meta.weekNo : Math.ceil(dayOfMonth / 7);
+
+  // 2. Fetch assigned Shift early to determine unit wage divisors
+  const empShift = (meta.preFetchedEmpShifts) 
+    ? meta.preFetchedEmpShifts.find(s => s.day_of_week === dayOfWeek)
+    : await commonQuery.findOneRecord(EmployeeShift, {
+        employee_id: employeeId,
+        day_of_week: dayOfWeek,
+        status: 0,
+      }, {}, transaction, false, { company_id: true });
+
+  const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
+  let shift = null;
+
+  const getShift = async (sId) => {
+    if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
+        return meta.preFetchedShiftTemplates.get(sId);
+    }
+    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, { company_id: true });
+  };
+
+  if (meta.shift_id) {
+    shift = await getShift(meta.shift_id);
+  }
+  if (!shift && empShift) {
+    if (empShift.shift_id) {
+      shift = await getShift(empShift.shift_id);
+    } else {
+      shift = empShift; // Manual shift in EmployeeShift
+    }
+  }
+  if (!shift && employee.shift_template) {
+    shift = await getShift(employee.shift_template);
+  }
+
+  // Determine working hours divisor (from Shift or default 8)
+  let unitWorkingHours = 8;
+  if (shift) {
+    if (parseFloat(shift.total_payable_hours) > 0) {
+      unitWorkingHours = parseFloat(shift.total_payable_hours) / 60;
+    } else if (shift.min_full_day_minutes > 0) {
+      unitWorkingHours = shift.min_full_day_minutes / 60;
+    }
+  }
+
+  // 3. --- Fetch Wages for Rate Calculation (OT, Fines, etc.) ---
   let hourlyWage = 0;
   let dailyWage = 0;
   let ctcMonthly = 0;
@@ -246,23 +305,51 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       employee_id: employeeId,
       status: 0,
     },
-    { attributes: ['ctc_monthly', 'lwp_calculation_basis'] },
+    { attributes: ['ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate'] },
     transaction,
     false,
     { company_id: true }
   );
 
   if (employeeSalaryTemplate) {
+    const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
     ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
-    if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
-      const d = dayjs(date);
-      monthDays = d.daysInMonth();
-    } else if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
-      monthDays = 26;
-    }
-    if (monthDays > 0) {
-      dailyWage = ctcMonthly / monthDays;
-      hourlyWage = dailyWage / 8; 
+
+    if (salaryType === "Daily") {
+      dailyWage = parseFloat(employeeSalaryTemplate.daily_rate || 0);
+      hourlyWage = dailyWage / unitWorkingHours;
+    } else if (salaryType === "Hourly") {
+      hourlyWage = parseFloat(employeeSalaryTemplate.hourly_rate || 0);
+      dailyWage = hourlyWage * unitWorkingHours;
+    } else {
+      // Monthly (Default)
+      if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
+        const d = dayjs(date);
+        monthDays = d.daysInMonth();
+      } else if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+        // [MOD] Calculate real working days using the same logic as employeeController
+        if (employee.weekly_off_template) {
+            const weeklyOffTemplate = await commonQuery.findOneRecord(
+                WeeklyOffTemplate,
+                employee.weekly_off_template,
+                { include: [{ model: WeeklyOffTemplateDay, as: "days" }] },
+                transaction, false, { company_id: true }
+            );
+
+            if (weeklyOffTemplate) {
+                const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, new Date(date));
+                monthDays = result.working_days;
+            }
+        }
+        if (!monthDays || monthDays <= 0) monthDays = 26;
+      } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
+        monthDays = 30;
+      }
+      
+      if (monthDays > 0) {
+        dailyWage = ctcMonthly / monthDays;
+        hourlyWage = dailyWage / unitWorkingHours;
+      }
     }
   }
 
@@ -281,19 +368,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     return { rateId, amount };
   };
 
+  // 4. --- Attendance Processing Logic ---
   if (meta.onlyCreateNonWorking && meta.skipIfPunchesExist) {
     const exists = await AttendanceDay.count({ where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction });
     if (exists > 0) return;
   }
-  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
-    include: [
-      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
-      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
-    ],
-  }, transaction);
-
-  if (!employee) return;
-  const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
 
   // 0️⃣.A Check if record is locked
   const existingDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
@@ -306,14 +385,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     return;
   }
 
-  // Find all punches on the target date (including night shift crossover check if needed)
+  // Find all punches
   const allDayPunches = meta.preFetchedPunches || await commonQuery.findAllRecords(AttendancePunch, {
     employee_id: employeeId,
-    // [MOD] Search by day_id if available, otherwise by time range
     [Op.or]: [
       existingDay ? { day_id: existingDay.id } : null,
       { 
-        day_id: null, // Only pick up 'unassigned' punches from the calendar date range
+        day_id: null, 
         punch_time: {
           [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
         }
@@ -336,13 +414,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     status: 0
   }, {}, transaction);
 
-  // IF PUNCHES EXIST: Cancel any overlapping Leave
   if (hasPunches && approvedLeave) {
     if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
-      // Single day leave - Cancel it
       await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
     } else {
-      // Multi-day leave - Refund balance for THIS day and mark as cancelled (simplest way to fulfill user request)
       await LeaveBalanceService.adjustLeaveBalance(employeeId, approvedLeave.leave_category_id, -1, transaction);
       await commonQuery.updateRecordById(LeaveRequest, approvedLeave.id, {
         approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
@@ -351,7 +426,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
 
-  // IF NO PUNCHES and APPROVED LEAVE: Apply Leave and Return
   if (!hasPunches && approvedLeave) {
     const leavePayload = {
       employee_id: employeeId,
@@ -394,10 +468,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // 2️⃣ Check if it's a Weekly Off
   let isWeeklyOff = false;
-  const dayOfWeek = meta.dayOfWeek !== undefined ? meta.dayOfWeek : dayjs(date).day();
-  const dayOfMonth = dayjs(date).date();
-  const weekNo = meta.weekNo !== undefined ? meta.weekNo : Math.ceil(dayOfMonth / 7);
-
   if (meta.preFetchedWeeklyOffs) {
     const weeklyOff = meta.preFetchedWeeklyOffs.find(wo => 
       wo.day_of_week === dayOfWeek && 
@@ -414,46 +484,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status: 0,
     }, {}, transaction, false, { company_id: true });
     if (weeklyOff) isWeeklyOff = true;
-  }
-
-  // 3️⃣ Fetch assigned Shift for this employee and date
-  const empShift = (meta.preFetchedEmpShifts) 
-    ? meta.preFetchedEmpShifts.find(s => s.day_of_week === dayOfWeek)
-    : await commonQuery.findOneRecord(EmployeeShift, {
-        employee_id: employeeId,
-        day_of_week: dayOfWeek,
-        status: 0,
-      }, {}, transaction, false, { company_id: true });
-
-  const shiftInclude = [{ model: ShiftBreak, as: "ShiftBreaks" }];
-  let shift = null;
-
-  // Function to get shift from pre-fetched map or query
-  const getShift = async (sId) => {
-    if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
-        return meta.preFetchedShiftTemplates.get(sId);
-    }
-    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, { company_id: true });
-  };
-
-  // 1. Try provided shift_id from meta
-  if (meta.shift_id) {
-    shift = await getShift(meta.shift_id);
-  }
-
-  // 2. Fallback to specific EmployeeShift assignment for that date
-  if (!shift && empShift) {
-    if (empShift.shift_id) {
-      shift = await getShift(empShift.shift_id);
-    } else {
-      // Manual shift defined in EmployeeShift
-      shift = empShift;
-    }
-  }
-
-  // 3. Fallback to employee's default shift template
-  if (!shift && employee.shift_template) {
-    shift = await getShift(employee.shift_template);
   }
 
   let punches = [];
@@ -571,6 +601,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       early_out_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.early_out_minutes || 0) : 0,
       early_overtime_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.early_overtime_minutes || 0) : 0,
       total_break_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.total_break_minutes || 0) : 0,
+      overtime_amount: (existingDay && existingDay.status === emptyStatus) ? (existingDay.overtime_amount || 0) : 0,
       overtime_data: (existingDay && existingDay.status === emptyStatus) ? (existingDay.overtime_data || null) : null,
       fine_data: (existingDay && existingDay.status === emptyStatus) ? (existingDay.fine_data || null) : null,
       leave_category_id: null,
@@ -626,8 +657,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       const pE = dayjs(punches[i + 1].punch_time);
 
       if (shift) {
-        if (meta.isHoliday) {
-          // When it's a holiday, all work time should be treated as overtime
+        if (meta.isHoliday || meta.isWeeklyOff) {
+          // When it's a holiday or weekly off, all work time should be treated as overtime
           const sessionMinutes = pE.diff(pS, "minute");
           lateOTMins += sessionMinutes;
         } else {
@@ -656,10 +687,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           }
         }
       } else {
-        // No Shift or Holiday - All work time should be stored as overtime
+        // No Shift or Holiday/Weekly Off - All work time should be stored as overtime
         const sessionMinutes = pE.diff(pS, "minute");
-        if (meta.isHoliday) {
-          // When it's a holiday, all work time goes to overtime
+        if (meta.isHoliday || meta.isWeeklyOff) {
+          // When it's a holiday or weekly off, all work time goes to overtime
           lateOTMins += sessionMinutes;
         } else {
           // No shift assigned on regular day - treat as overtime
@@ -738,8 +769,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes);
   
-  // When no shift is assigned OR it's a holiday, set worked minutes to 0 so all time goes to overtime
-  if (!shift || meta.isHoliday) {
+  // When no shift is assigned OR it's a holiday/weekly off, set worked minutes to 0 so all time goes to overtime
+  if (!shift || meta.isHoliday || meta.isWeeklyOff) {
     finalWorkedMinutes = 0;
   }
   
@@ -749,8 +780,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   // --- REFACTORED OVERTIME LOGIC ---
   let rawEarlyOT = earlyOTMins;
   let rawLateOT = lateOTMins;
+  
+  const isNonWorkingDay = meta.isHoliday || meta.isWeeklyOff;
 
-  if (template && shift && !meta.isHoliday) {
+  if (template && shift && !isNonWorkingDay) {
     // 1. Honor individual OT toggles (only when shift exists and not holiday)
     if (!template.early_overtime_allowed) rawEarlyOT = 0;
     if (!template.overtime_allowed) rawLateOT = 0;
@@ -1151,7 +1184,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Generate default overtime data when no shift is assigned but overtime exists
   if (!shift && overtimeMinutes > 0) {
-    const calculatedHourlyWage = dailyWage / 8; // Ensure hourly wage is calculated as daily/8
+    const calculatedHourlyWage = dailyWage / unitWorkingHours; // Ensure hourly wage is calculated using dynamic divisor
     const result = getRateIdAndAmount(overtimeMinutes, calculatedHourlyWage, 1);
     lateOtData = {
       rate: result.rateId,
@@ -1260,6 +1293,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     early_overtime_minutes: earlyOvertimeMinutes,
     total_break_minutes: totalBreakMinutes,
     overtime_minutes: overtimeMinutes,
+    overtime_amount: parseFloat((parseFloat(lateOtData.amount || 0) + parseFloat(earlyOtData.amount || 0)).toFixed(2)),
     overtime_data: (
       (lateOtData.minutes === 0 && lateOtData.amount === 0 && lateOtData.rate === 0) &&
       (earlyOtData.minutes === 0 && earlyOtData.amount === 0 && earlyOtData.rate === 0)
@@ -1275,7 +1309,26 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     user_id: meta.user_id || 0,
     branch_id: meta.branch_id || 0,
     company_id: meta.company_id || 0,
-    note: autoAbsentReason || (meta.note || existingDay2?.note || null)
+    note: (function() {
+      let effectiveAutoReason = autoAbsentReason;
+      // If we are now PRESENT/HALF_DAY, ignore negative auto reasons (e.g. from downgrade prevention)
+      if ([0, 1, 12, 13].includes(status) && effectiveAutoReason) {
+        if (typeof effectiveAutoReason === 'string' && (effectiveAutoReason.startsWith("Auto Absent:") || effectiveAutoReason.startsWith("Incomplete:"))) {
+          effectiveAutoReason = null;
+        }
+      }
+
+      if (effectiveAutoReason) return effectiveAutoReason;
+      if (meta.note) return meta.note;
+      
+      const existingNote = existingDay2?.note || null;
+      if ([0, 1, 12, 13].includes(status) && existingNote && typeof existingNote === 'string') {
+        if (existingNote.startsWith("Auto Absent:") || existingNote.startsWith("Incomplete:")) {
+          return null;
+        }
+      }
+      return existingNote;
+    })()
   };
 
   // If status is 1 (HALF_DAY) or 6 (LEAVE), we need category from meta or existing record
@@ -1305,7 +1358,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     user_id: meta.user_id || 0,
     company_id: meta.company_id || 0,
     branch_id: meta.branch_id || 0,
-    device_id: "MANUAL",
+    device_id: meta.device_id,
   };
 
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
@@ -1522,13 +1575,13 @@ async function syncCompOffCredit(employee, date, status, transaction) {
       // Handle Correction (e.g. Full Day vs Half Day change)
       if (parseFloat(existingCompOff.total_days) !== creditAmount) {
         const diff = creditAmount - parseFloat(existingCompOff.total_days);
-        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction);
+        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
         if (error) return error;
         await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount }, transaction);
       }
     } else {
       // New Credit
-      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction);
+      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction, date, employee, true);
       if (error) return error;
       
       await commonQuery.createRecord(LeaveRequest, {
@@ -1548,7 +1601,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
     }
   } else if (existingCompOff) {
     // Remove Credit if status changed to non-working (e.g. Absent)
-    const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction);
+    const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
     if (error) return error;
     await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction);
   }

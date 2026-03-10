@@ -39,7 +39,8 @@ const {
     whatsappService,
     fileExists,
     handleExport,
-    streamExport
+    streamExport,
+    writeLogToFile
 } = require("../../helpers");
 
 // helper for dealing with image uploads inside custom field arrays
@@ -517,9 +518,12 @@ exports.getById = async (req, res) => {
  */
 exports.getProfile = async (req, res) => {
     try {
+        const userId = req.user.id;
         const employeeId = req.user.employee_id;
 
-        const record = await commonQuery.findOneRecord(Employee, { id: employeeId }, {
+        const where = employeeId ? { id: employeeId } : { user_id: userId };
+
+        const record = await commonQuery.findOneRecord(Employee, where, {
             include: [
                 { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                 { model: Department, as: 'department', attributes: ['name'] },
@@ -1383,10 +1387,9 @@ exports.registerFace = async (req, res) => {
         try {
             const fileBuffer = fs.readFileSync(fullFilePath);
 
-            const formData = new FormData();
-            formData.append('image', fileBuffer, filename);
-            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-                headers: { ...formData.getHeaders() }
+            // 🚀 OPTIMIZATION: Send raw binary buffer (Matches the Python side expectation)
+            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
+                headers: { 'Content-Type': 'application/octet-stream' }
             });
 
             if (aiResponse.data.status) {
@@ -1400,7 +1403,10 @@ exports.registerFace = async (req, res) => {
             try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
             console.error("AI Service Error:", aiError.message);
-            return res.error(constants.SERVER_ERROR, { message: "AI Processing Failed: " + aiError.message });
+            writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
+            
+            const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
+            return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
         }
 
         // 3. Update Employee Record
@@ -1412,6 +1418,8 @@ exports.registerFace = async (req, res) => {
         }, { transaction });
 
         await transaction.commit();
+
+        writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS] ID: ${id}, Filename: ${filename}`);
 
         return res.success("Face Registered & Profile Picture Updated", {
             image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
@@ -1429,7 +1437,14 @@ exports.registerFace = async (req, res) => {
  */
 exports.facePunch = async (req, res) => {
     try {
-        debugLog("Punch", "Request received");
+        const startTime = Date.now();
+        const timings = { 
+            ai: 0, 
+            db: 0, 
+            matching: 0, 
+            upload: 0, 
+            total: 0 
+        };
 
         const files = req.files.image || req.files['image'];
         if (!files || files.length === 0) {
@@ -1440,42 +1455,45 @@ exports.facePunch = async (req, res) => {
         const originalName = files[0].originalname;
         debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
 
-        // 🚀 PARALLEL TASK 1: Call AI Service
+        // 🚀 PARALLEL TASK 1: Call AI Service (Optimized with Raw Buffer)
         const getEmbeddingTask = (async () => {
-            const formData = new FormData();
-            formData.append('image', imageBuffer, originalName);
-
+            const aiStart = Date.now();
             try {
-                debugLog("AI-Call", "Sending to Python...");
-                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-                    headers: { ...formData.getHeaders() }
+                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
+                    headers: { 'Content-Type': 'application/octet-stream' }
                 });
 
+                timings.ai = Date.now() - aiStart;
                 if (aiResponse.data.status) {
-                    const vec = aiResponse.data.embedding;
-                    debugLog("AI-Res", `Got Vector. Length: ${vec.length}, First 3 vals: [${vec[0]}, ${vec[1]}, ${vec[2]}]`);
-                    return vec;
+                    return aiResponse.data.embedding;
                 } else {
                     throw new Error(aiResponse.data.message);
                 }
             } catch (error) {
-                const pyError = error.response?.data?.message || error.message;
-                console.error("❌ AI Service Failed:", pyError);
-                throw new Error(pyError);
+                const rawError = error.response?.data?.message || error.message;
+                console.error("❌ AI Service Failed:", rawError);
+                writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
+                
+                const friendlyMsg = error.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
+                throw new Error(friendlyMsg);
             }
         })();
 
         // 🚀 PARALLEL TASK 2: Fetch Employees
-        // NOTE: Make sure attributes match your DB Column names exactly
-        const companyId = req.user?.company_id;
-        const getEmployeesTask = commonQuery.findAllRecords(Employee, {
-            status: 0,
-            face_descriptor: { [Op.ne]: null },
-            ...(companyId ? { company_id: companyId } : {})
-        }, {
-            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
-            raw: true
-        });
+        const getEmployeesTask = (async () => {
+            const dbStart = Date.now();
+            const companyId = req.user?.company_id;
+            const res = await commonQuery.findAllRecords(Employee, {
+                status: 0,
+                face_descriptor: { [Op.ne]: null },
+                ...(companyId ? { company_id: companyId } : {})
+            }, {
+                attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
+                raw: true
+            });
+            timings.db = Date.now() - dbStart;
+            return res;
+        })();
 
         // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
         const [liveVector, employees] = await Promise.all([
@@ -1486,126 +1504,117 @@ exports.facePunch = async (req, res) => {
         debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
 
         // --- MATCHING LOGIC ---
+        const matchStart = Date.now();
         let bestMatch = null;
         let minDistance = 1.0;
-
-        // Loop Counter to limit debug logs
-        let logCounter = 0;
 
         for (const emp of employees) {
             let storedVector = emp.face_descriptor;
 
-            // 🔍 DEBUGGING DATA TYPES
-            // Often DB returns JSONB as Object, but sometimes Text as String.
-            const typeBefore = typeof storedVector;
-
             if (typeof storedVector === 'string') {
                 try {
                     storedVector = JSON.parse(storedVector);
-                } catch (e) {
-                    if (process.env.DEBUG_MODE) console.log(`❌ [Parse Error] Emp ID ${emp.id}: Could not parse JSON string`);
-                    continue;
-                }
+                } catch (e) { continue; }
             }
 
-            // Double check it's an array
-            if (!Array.isArray(storedVector)) {
-                if (process.env.DEBUG_MODE && logCounter < 3) console.log(`❌ [Type Error] Emp ID ${emp.id}: Vector is ${typeof storedVector}, not Array`);
-                continue;
-            }
+            if (!Array.isArray(storedVector)) continue;
 
             const dist = calculateCosineDistance(liveVector, storedVector);
-
-            // Log the first 3 comparisons to see what's happening
-            if (process.env.DEBUG_MODE && logCounter < 3) {
-                console.log(`👤 [Compare] ID: ${emp.id} | Name: ${emp.first_name} | Dist: ${dist.toFixed(4)}`);
-                logCounter++;
-            }
 
             if (dist < minDistance) {
                 minDistance = dist;
                 bestMatch = emp;
-                debugLog("Match-Update", `New Best Match: ${emp.first_name} (Dist: ${dist})`);
             }
         }
 
+        timings.matching = Date.now() - matchStart;
         const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
         debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
 
         // --- VALIDATION & CONDITIONAL FILE SAVING ---
-        let savedFilename;
-        if (bestMatch && minDistance < process.env.FACE_MATCH_THRESHOLD) {
+        if (bestMatch && minDistance < (process.env.FACE_MATCH_THRESHOLD || 0.4)) {
             const transaction = await sequelize.transaction();
-
             try {
-                // Save image for attendance record
+                // 1. Save image for attendance record
+                const uploadStart = Date.now();
                 const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
-                savedFilename = savedFiles.image || savedFiles['image'];
+                timings.upload = Date.now() - uploadStart;
 
-                // Use the robust punch helper from attendanceHelper
+                const savedFilename = savedFiles.image || savedFiles['image'];
+
+                // 2. Use the robust punch helper
                 const punchResult = await punch(bestMatch.id, {
                     punch_time: new Date(),
                     image_name: savedFilename,
-                    user_id: req.user.id || bestMatch.user_id,
-                    company_id: req.user.company_id || bestMatch.company_id,
-                    branch_id: req.user.branch_id || bestMatch.branch_id,
+                    user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
+                    company_id: req.user?.company_id || bestMatch.company_id,
+                    branch_id: req.user?.branch_id || bestMatch.branch_id,
                     ip_address: req.ip,
-                    device_id: req.body.device_id || 'FACE_RECOGNITION',
+                    device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
                     attendance_by: 'face',
-                    skipRebuild: true // 🚀 SKIP SYNC REBUILD FOR SPEED
+                    skipRebuild: true 
                 }, transaction);
 
                 await transaction.commit();
 
-                // ⚡ RUN REBUILD IN BACKGROUND (So user doesn't wait)
+                // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
                 setImmediate(() => {
                     const today = dayjs().format("YYYY-MM-DD");
                     rebuildAttendanceDay(bestMatch.id, today, {
-                        user_id: req.user.id || bestMatch.user_id,
-                        company_id: req.user.company_id || bestMatch.company_id,
-                        branch_id: req.user.branch_id || bestMatch.branch_id
+                        user_id: req.user?.id || bestMatch.user_id,
+                        company_id: req.user?.company_id || bestMatch.company_id,
+                        branch_id: req.user?.branch_id || bestMatch.branch_id
                     }).catch(err => console.error("Background Rebuild Error:", err));
                 });
 
+                timings.total = Date.now() - startTime;
+                const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
+                console.log(successMsg);
+                writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
+
                 return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
-                    employee: {
-                        id: bestMatch.id,
-                        name: bestMatch.first_name,
-                        code: bestMatch.employee_code
-                    },
-                    punch: punchResult,
-                    match_score: matchPercentage
+                    employee_name: bestMatch.first_name,
+                    employee_code: bestMatch.employee_code,
+                    // punch: punchResult,
+                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
+                    // match_score: matchPercentage,
+                    // timings: timings
                 });
             } catch (error) {
-                if (!transaction.finished) await transaction.rollback();
+                if (transaction && !transaction.finished) await transaction.rollback();
                 console.error("Error creating attendance records:", error);
-                
-                // If it's a handled error from punch helper
-                if (error.handled) {
-                   return res.error(constants.VALIDATION_ERROR, error.message);
-                }
-                
+                writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
                 return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
             }
         } else {
-            // Save to ATTENDANCE_LOG_FOLDER for failed face recognition
-            const now = new Date();
-            const dateStr = dayjs(now).format('DD-MM-YYYY');
-            const timeStr = dayjs(now).format('hh:mm A');
-            const ext = path.extname(originalName);
-            const customFilename = `${Date.now()}_punch_${dateStr}__${timeStr}${ext}`;
+            // 🚀 FAST FAIL: Return error immediately, log in background
+            timings.total = Date.now() - startTime;
+            const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
+            console.log(failMsg);
+            writeLogToFile('face_recognition.log', failMsg);
 
-            // Use uploadFile with custom filename for logging failed attempts
-            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
-            savedFilename = savedFiles.image || savedFiles['image'];
-            console.log(`Failed Face Recognition: (Match: ${matchPercentage}%)`);
+            // Save to ATTENDANCE_LOG_FOLDER in background
+            setImmediate(async () => {
+                try {
+                    const now = new Date();
+                    const dateStr = dayjs(now).format('DD-MM-YYYY');
+                    const timeStr = dayjs(now).format('hh:mm A');
+                    const ext = path.extname(originalName);
+                    const customFilename = `${Date.now()}_failed_${matchPercentage}%_${dateStr}__${timeStr}${ext}`;
+                    await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
+                } catch (e) { console.error("Failed to save recognition log:", e); }
+            });
+
             return res.error(constants.FACE_NOT_RECOGNIZED, {
-                message: `Face Not Recognized`
+                message: `Face Not Recognized`,
+                match_score: matchPercentage,
+                timings: timings
             });
         }
 
     } catch (err) {
         console.error("💥 Server Error:", err);
+        writeLogToFile('face_recognition.log', `💥 [CRITICAL] Server Error: ${err.message}`);
         const errorMsg = err.message || "Server Error";
         const statusCode = errorMsg.includes("Face") ? constants.VALIDATION_ERROR : constants.SERVER_ERROR;
         return res.error(statusCode, { message: errorMsg });
@@ -1615,36 +1624,32 @@ exports.facePunch = async (req, res) => {
 exports.getWages = async (req, res) => {
     try {
         const { employee_id: employeeId, attendance_date: attendanceDate } = req.body;
+        const dayjs = require("dayjs");
 
         if (!employeeId) {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
 
-        // Get current date and format it as YYYY-MM-DD for database query
-        const currentDate = new Date().toISOString().split('T')[0];
+        const targetDate = attendanceDate || dayjs().format("YYYY-MM-DD");
 
-        // Fetch attendance day record for employeeId and current date
+        // Fetch attendance day record for employeeId and specified date
         const attendanceDay = await commonQuery.findOneRecord(
             AttendanceDay,
             {
                 employee_id: employeeId,
-                attendance_date: attendanceDate
+                attendance_date: targetDate
             },
             {
                 attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
             }
-        )
+        );
 
         if (!attendanceDay) {
-            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for today" });
+            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for the selected date" });
         }
 
-        // if(attendanceDay.first_in == null){
-        //     return res.error(constants.NOT_FOUND, { message: "First punch-in not recorded for today" });
-        // }
-
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
-            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template']
+            attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template', 'shift_template']
         });
 
         if (!employee) {
@@ -1659,7 +1664,7 @@ exports.getWages = async (req, res) => {
                 status: 0
             },
             {
-                attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis']
+                attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate']
             },
             null,
             false,
@@ -1676,54 +1681,89 @@ exports.getWages = async (req, res) => {
             return res.success(constants.SUCCESS, responseData);
         }
 
+        // --- FETCH SHIFT INFO FOR UNIT WORKING HOURS ---
+        const dateObj = dayjs(targetDate);
+        const dayOfWeek = dateObj.day();
+
+        const empShift = await commonQuery.findOneRecord(EmployeeShift, {
+            employee_id: employeeId,
+            day_of_week: dayOfWeek,
+            status: 0,
+        }, {}, null, false, { company_id: true });
+
+        let shift = null;
+        if (empShift && empShift.shift_id) {
+            shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, null, false, { company_id: true });
+        } else if (!empShift && employee.shift_template) {
+            shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+        } else if (empShift && !empShift.shift_id) {
+            shift = empShift; // Manual shift configuration
+        }
+
+        let unitWorkingHours = 8;
+        if (shift) {
+            if (parseFloat(shift.total_payable_hours) > 0) {
+                unitWorkingHours = parseFloat(shift.total_payable_hours) / 60;
+            } else if (shift.min_full_day_minutes > 0) {
+                unitWorkingHours = shift.min_full_day_minutes / 60;
+            }
+        }
+        // -------------------------------------------
+
         let dailyWage = null;
+        let hourlyWage = null;
         let monthDays = null;
         let workingDays = null;
-        const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly);
+        const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
+        const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
 
-        if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+        if (salaryType === "Daily") {
+            dailyWage = parseFloat(employeeSalaryTemplate.daily_rate || 0);
+            hourlyWage = dailyWage / unitWorkingHours;
+        } else if (salaryType === "Hourly") {
+            hourlyWage = parseFloat(employeeSalaryTemplate.hourly_rate || 0);
+            dailyWage = hourlyWage * unitWorkingHours;
+        } else {
+            // Monthly calculation
+            if (employeeSalaryTemplate.lwp_calculation_basis === 'WORKING_DAYS') {
+                if (employee && employee.weekly_off_template) {
+                    const weeklyOffTemplate = await commonQuery.findOneRecord(
+                        WeeklyOffTemplate,
+                        employee.weekly_off_template,
+                        {
+                            include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                        },
+                        null,
+                        false,
+                        { company_id: true }
+                    );
 
-            if (employee && employee.weekly_off_template) {
-                const weeklyOffTemplate = await commonQuery.findOneRecord(
-                    WeeklyOffTemplate,
-                    employee.weekly_off_template,
-                    {
-                        include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                    },
-                    null,
-                    false,
-                    { company_id: true }
-                );
+                    if (weeklyOffTemplate) {
+                        const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, dateObj.toDate());
+                        workingDays = result.working_days;
+                        monthDays = result.total_days_in_month;
 
-                if (weeklyOffTemplate) {
-                    const currentDate = new Date();
-                    const result = calculateWorkingAndOffDays(weeklyOffTemplate.days, currentDate);
-                    workingDays = result.working_days;
-                    monthDays = result.total_days_in_month;
-
-                    if (workingDays && workingDays > 0) {
-                        dailyWage = ctcMonthly / workingDays;
+                        if (workingDays && workingDays > 0) {
+                            dailyWage = ctcMonthly / workingDays;
+                        }
                     }
                 }
-            }
 
-            if (!workingDays) {
-                workingDays = 30;
+                if (!workingDays) {
+                    workingDays = 30;
+                    monthDays = 30;
+                    dailyWage = ctcMonthly / 30;
+                }
+            } else if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
+                monthDays = dateObj.daysInMonth();
+                dailyWage = ctcMonthly / monthDays;
+            } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
                 monthDays = 30;
                 dailyWage = ctcMonthly / 30;
             }
-        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'DAYS_IN_MONTH') {
-            const currentDate = new Date();
-            const year = currentDate.getFullYear();
-            const month = currentDate.getMonth();
-            monthDays = new Date(year, month + 1, 0).getDate();
-            dailyWage = ctcMonthly / monthDays;
-        } else if (employeeSalaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS') {
-            monthDays = 30;
-            dailyWage = ctcMonthly / 30;
+            console.log("workingDays", workingDays, "dailyWage", dailyWage, "unitWorkingHours", unitWorkingHours)
+            hourlyWage = dailyWage ? dailyWage / unitWorkingHours : null;
         }
-
-        const hourlyWage = dailyWage ? dailyWage / 8 : null;
 
         const responseData = {
             ...employeeSalaryTemplate.toJSON(),
@@ -1732,9 +1772,12 @@ exports.getWages = async (req, res) => {
             calculation_basis: employeeSalaryTemplate.lwp_calculation_basis,
             month_days: monthDays,
             working_days: workingDays,
+            unit_working_hours: unitWorkingHours,
             last_out: attendanceDay.last_out || null,
             overtime_data: attendanceDay?.overtime_data || null,
+            overtime_amount: attendanceDay?.overtime_amount || 0,
             fine_data: attendanceDay?.fine_data || null,
+            fine_amount: attendanceDay?.fine_amount || 0,
         };
 
         return res.success(constants.SUCCESS, responseData);
@@ -1742,7 +1785,7 @@ exports.getWages = async (req, res) => {
     } catch (err) {
         return handleError(err, res, req);
     }
-}
+};
 
 /**
  * Generates a user account for an existing employee and provides a setup link.
@@ -2173,17 +2216,27 @@ exports.exportData = async (req, res) => {
 exports.getEmployeesByDeviceBranch = async (req, res) => {
     try {
         const { branch_id, company_id } = req.user;
+        const { search } = req.query || req.body;
 
         if (!branch_id) {
             return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
         }
 
+        const where = {
+            branch_id,
+            company_id,
+            status: STATUS.ACTIVE
+        };
+
+        if (search) {
+            where[Op.or] = [
+                { first_name: { [Op.iLike]: `%${search}%` } },
+                { employee_code: { [Op.iLike]: `%${search}%` } }
+            ];
+        }
+
         const employees = await Employee.findAll({
-            where: {
-                branch_id,
-                company_id,
-                status: STATUS.ACTIVE
-            },
+            where,
             attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image'],
             order: [['first_name', 'ASC']]
         });

@@ -10,8 +10,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM("Monthly", "Daily", "Hourly"),
       defaultValue: "Monthly"
     },
-    ctc_monthly: { type: DataTypes.DECIMAL(12,2), allowNull: false },
-    ctc_yearly: { type: DataTypes.DECIMAL(12,2), allowNull: false },
+    ctc_monthly: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+    ctc_yearly: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+    daily_rate: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
+    hourly_rate: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
     currency: { type: DataTypes.STRING(10), defaultValue: "INR" },
     lwp_calculation_basis: {
       type: DataTypes.ENUM("DAYS_IN_MONTH", "FIXED_30_DAYS", "WORKING_DAYS"),

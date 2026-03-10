@@ -65,7 +65,9 @@ const employeeSalaryTemplateController = {
                 statutory_config,
                 components,
                 effective_date,
-                revision_remarks
+                revision_remarks,
+                daily_rate,
+                hourly_rate
             } = req.body;
 
             // 1. Get current template for history comparison
@@ -86,6 +88,8 @@ const employeeSalaryTemplateController = {
                 ctc_yearly: parseFloat(ctc_yearly) || (newCTC * 12),
                 lwp_calculation_basis,
                 statutory_config,
+                daily_rate: parseFloat(daily_rate) || 0,
+                hourly_rate: parseFloat(hourly_rate) || 0,
                 company_id: req.user?.company_id || 0,
                 branch_id: req.user?.branch_id || 0,
                 user_id: req.user?.id || 0

@@ -123,6 +123,8 @@ exports.getAll = async (req, res) => {
       ["staff_type", true, false],
       ["salary_type", true, false],
       ["ctc_monthly", true, false],
+      ["daily_rate", true, false],
+      ["hourly_rate", true, false],
       ["lwp_calculation_basis", true, false],
     ];
 

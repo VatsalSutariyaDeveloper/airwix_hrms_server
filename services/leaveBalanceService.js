@@ -311,18 +311,27 @@ class LeaveBalanceService {
     static async processMonthlyAccruals() {
         const transaction = await sequelize.transaction();
         try {
-            const templates = await commonQuery.findAllRecords(LeaveTemplate, {
-                accrual_type: 'MONTHLY',
-                status: 0
-            }, {
-                include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }]
-            }, transaction, { company_id: true });
+            const templates = await LeaveTemplate.findAll({
+                where: {
+                    accrual_type: 'MONTHLY',
+                    status: 0
+                },
+                include: [{ 
+                    model: LeaveTemplateCategory, 
+                    as: 'categories', 
+                    where: { status: 0 } 
+                }],
+                transaction
+            });
 
             for (const template of templates) {
-                const employees = await commonQuery.findAllRecords(Employee, {
-                    leave_template: template.id,
-                    status: 0
-                }, {}, transaction);
+                const employees = await Employee.findAll({
+                    where: {
+                        leave_template: template.id,
+                        status: 0
+                    },
+                    transaction
+                });
 
                 for (const employee of employees) {
                     const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
@@ -335,22 +344,28 @@ class LeaveBalanceService {
                             monthlyRate = category.leave_count / 3;
                         }
 
-                        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                            employee_id: employee.id,
-                            leave_category_id: category.id,
-                            year: end.year(),
-                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
-                            status: 0
-                        }, {}, transaction, false, { company_id: true });
+                        const balance = await EmployeeLeaveBalance.findOne({
+                            where: {
+                                employee_id: employee.id,
+                                leave_category_id: category.id,
+                                year: end.year(),
+                                month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
+                                status: 0
+                            },
+                            transaction
+                        });
 
                         if (balance) {
                             const newTotal = parseFloat(balance.total_allocated || 0) + monthlyRate;
                             const newPending = parseFloat(balance.pending_leaves || 0) + monthlyRate;
                             
-                            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
+                            await EmployeeLeaveBalance.update({
                                 total_allocated: Math.round(newTotal * 10) / 10,
                                 pending_leaves: Math.round(newPending * 10) / 10
-                            }, transaction, false, { company_id: true });
+                            }, {
+                                where: { id: balance.id },
+                                transaction
+                            });
                         }
                     }
                 }
@@ -370,16 +385,22 @@ class LeaveBalanceService {
         const transaction = await sequelize.transaction();
         try {
             const today = dayjs();
-            const employees = await commonQuery.findAllRecords(Employee, {
-                status: 0,
-                leave_template: { [Op.ne]: null }
-            }, {
+            const employees = await Employee.findAll({
+                where: {
+                    status: 0,
+                    leave_template: { [Op.ne]: null }
+                },
                 include: [{
                     model: LeaveTemplate,
                     as: 'leaveTemplate',
-                    include: [{ model: LeaveTemplateCategory, as: 'categories', where: { status: 0 } }]
-                }]
-            }, transaction);
+                    include: [{ 
+                        model: LeaveTemplateCategory, 
+                        as: 'categories', 
+                        where: { status: 0 } 
+                    }]
+                }],
+                transaction
+            });
 
             for (const employee of employees) {
                 const template = employee.leaveTemplate;
@@ -393,13 +414,16 @@ class LeaveBalanceService {
                 const lastYear = lastCycleEnd.year();
                 
                 for (const category of template.categories) {
-                    const lastBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                        employee_id: employee.id,
-                        leave_category_id: category.id,
-                        year: lastYear,
-                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
-                        status: 0
-                    }, {}, transaction, false, { company_id: true });
+                    const lastBalance = await EmployeeLeaveBalance.findOne({
+                        where: {
+                            employee_id: employee.id,
+                            leave_category_id: category.id,
+                            year: lastYear,
+                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
+                            status: 0
+                        },
+                        transaction
+                    });
 
                     if (!lastBalance) continue;
 
@@ -410,36 +434,41 @@ class LeaveBalanceService {
                         const limit = parseFloat(category.carry_forward_limit || 0);
                         carryForwardAmount = Math.min(remaining, limit);
                     } else if (category.unused_leave_rule === 'ENCASH') {
-                        // Logic for encashment (e.g., mark for payroll)
-                        // For now, we just don't carry it forward. 
-                        // You might want to create an Encashment record here.
                         carryForwardAmount = 0;
                     } else {
-                        // LAPSE
                         carryForwardAmount = 0;
                     }
 
-                    // 1. Mark OLD balance as processed (optional: status=2 or archived)
-                    await commonQuery.updateRecordById(EmployeeLeaveBalance, lastBalance.id, { status: 1 }, transaction, false, { company_id: true });
+                    // 1. Mark OLD balance as processed
+                    await EmployeeLeaveBalance.update({ status: 1 }, {
+                        where: { id: lastBalance.id },
+                        transaction
+                    });
 
                     // 2. Initialize NEW balance for the next cycle
                     await this.initializeBalance(employee.id, template.id, transaction);
 
                     const { end: newCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle);
                     const newYear = newCycleEnd.year();
-                    const newBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                        employee_id: employee.id,
-                        leave_category_id: category.id,
-                        year: newYear,
-                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
-                        status: 0
-                    }, {}, transaction, false, { company_id: true });
+                    const newBalance = await EmployeeLeaveBalance.findOne({
+                        where: {
+                            employee_id: employee.id,
+                            leave_category_id: category.id,
+                            year: newYear,
+                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
+                            status: 0
+                        },
+                        transaction
+                    });
 
                     if (newBalance) {
-                        await commonQuery.updateRecordById(EmployeeLeaveBalance, newBalance.id, {
+                        await EmployeeLeaveBalance.update({
                             carry_forward_leaves: carryForwardAmount,
                             pending_leaves: parseFloat(newBalance.pending_leaves || 0) + carryForwardAmount
-                        }, transaction, false, { company_id: true });
+                        }, {
+                            where: { id: newBalance.id },
+                            transaction
+                        });
                     }
                 }
             }
@@ -459,7 +488,7 @@ class LeaveBalanceService {
      * @param {Object} transaction
      * @param {string} date - Reference date for the adjustment (default today)
      */
-    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null, date = dayjs(), employee = null) {
+    static async adjustLeaveBalance(employeeId, categoryId, amount, transaction = null, date = dayjs(), employee = null, isAllocation = false) {
         if (!employeeId || !categoryId || amount === 0) return;
         
         // Round amount to nearest 0.5
@@ -490,7 +519,15 @@ class LeaveBalanceService {
                 return;
             }
 
-            const used = Math.round((parseFloat(balance.used_leaves || 0) + roundedAmount) * 10) / 10;
+            let used = parseFloat(balance.used_leaves || 0);
+            let allocated = parseFloat(balance.total_allocated || 0);
+            
+            if (isAllocation) {
+                allocated = Math.round((allocated - roundedAmount) * 10) / 10;
+            } else {
+                used = Math.round((used + roundedAmount) * 10) / 10;
+            }
+
             let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 10) / 10;
 
             // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
@@ -504,6 +541,7 @@ class LeaveBalanceService {
             }
 
             await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
+                total_allocated: allocated,
                 used_leaves: used,
                 pending_leaves: pending
             }, t, false, { company_id: true });

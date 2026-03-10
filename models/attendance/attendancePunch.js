@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
       punch_time: { type: DataTypes.DATE, allowNull: false },
       punch_type: { type: DataTypes.ENUM("IN", "OUT"), allowNull: false },
       image_name: DataTypes.STRING,
-      device_id: DataTypes.STRING,
+      device_id: DataTypes.INTEGER,
       latitude: DataTypes.DECIMAL(10, 7),
       longitude: DataTypes.DECIMAL(10, 7),
       ip_address: DataTypes.STRING,
@@ -32,6 +32,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendancePunch.belongsTo(models.AttendanceDay, { foreignKey: "day_id", as: "attendanceDay" });
     AttendancePunch.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendancePunch.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
+    AttendancePunch.belongsTo(models.DeviceMaster, { foreignKey: "device_id", as: "device" });
   };
 
   return AttendancePunch;

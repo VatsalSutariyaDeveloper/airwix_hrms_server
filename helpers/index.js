@@ -10,7 +10,7 @@ const { fixDecimals, fixNum, fixQty, parseDate, initializeCompanySettings } = re
 const { constants, ENTITIES } = require("./constants");
 const { getCompanySetting,clearCompanyCache, getCompanySubscription, clearCompanySubscriptionCache, clearAllCompanySubscriptionCache, reloadCompanyCache, reloadRoutePermissions, getRoutePermissionId, updateSubscriptionCache, reloadCompanySubscriptionCache, reloadCompanySettingsCache } = require("./cache");
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
-const { logActivity, logQuery, archiveAndCleanupLogs } = require("./functions/logFunctions");
+const { logActivity, logQuery, logError, writeLogToFile, archiveAndCleanupLogs } = require("./functions/logFunctions");
 const  otpService = require("./otpService");
 const { Err, fail } = require("./Err");
 const { getContext } = require("../utils/requestContext");
@@ -37,7 +37,9 @@ const { getContext } = require("../utils/requestContext");
     handleExport,
     streamExport,
     logActivity,
-    logQuery, 
+    logQuery,
+    logError,
+    writeLogToFile,
     archiveAndCleanupLogs,
     updateItemCurrentStock,
     initializeCompanySettings,

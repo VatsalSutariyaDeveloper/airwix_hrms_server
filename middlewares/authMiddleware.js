@@ -53,7 +53,8 @@ function authMiddleware(req, res, next) {
       is_attendance_supervisor: decoded.is_attendance_supervisor,
       is_reporting_manager: decoded.is_reporting_manager,
       is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
-      is_admin: decoded.role_id == 2
+      is_admin: decoded.role_id == 2,
+      access: decoded.access || (decoded.role_id ? "employee" : "attendance device")
     };
 console.log("req.user",req.user)
     requestContext.run(
@@ -69,6 +70,7 @@ console.log("req.user",req.user)
         is_reporting_manager: decoded.is_reporting_manager,
         is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
         is_admin: decoded.role_id == 2,
+        access: decoded.access || (decoded.role_id ? "employee" : "attendance device"),
         ip: req.ip
       },
       () => next()

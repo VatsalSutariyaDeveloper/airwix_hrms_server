@@ -4,6 +4,8 @@ module.exports = (sequelize, DataTypes) => {
     {
       employee_id: { type: DataTypes.INTEGER, allowNull: false },
       ref_id: { type: DataTypes.INTEGER, allowNull: false },
+      month: { type: DataTypes.INTEGER, allowNull: false },
+      year: { type: DataTypes.INTEGER, allowNull: false },      
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       payment_type: { type: DataTypes.ENUM("Advance", "Salary"),defaultValue: "Advance", allowNull: false },
@@ -35,10 +37,23 @@ module.exports = (sequelize, DataTypes) => {
       as: "employee",
     });
     
-    PaymentHistory.belongsTo(models.EmployeeAdvance, {
-      foreignKey: "ref_id",
-      as: "employee-advance",
-    });
+   PaymentHistory.belongsTo(models.EmployeeAdvance, {
+    foreignKey: "ref_id",
+    constraints: false,
+    scope: {
+      payment_type: "Advance" 
+    },
+    as: "advance",
+  });
+
+  PaymentHistory.belongsTo(models.Payslip, {
+    foreignKey: "ref_id",
+    constraints: false,
+    scope: {
+      payment_type: "Salary"
+    },
+    as: "payslip",
+  });
   };
 
   return PaymentHistory;

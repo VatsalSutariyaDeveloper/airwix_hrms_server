@@ -4,6 +4,7 @@ const payrollController = require("../controllers/employee/payrollController");
 const employeeIncentiveController = require("../controllers/employee/employeeIncentiveController");
 const employeeAdvanceController = require("../controllers/employee/EmployeeAdvanceController");
 const cashVoucherController = require("../controllers/employee/cashVoucherController");
+const paymentHistoryController = require("../controllers/employee/paymentHistoryController");
 
 router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
@@ -12,12 +13,14 @@ router.post("/get-employee-payslip-list", payrollController.getEmployeePayslipLi
 router.post("/get-calculation-history", payrollController.getCalculationHistory);
 router.post("/get-tds-report", payrollController.getTDSDeductionReport);
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);
+router.post("/get-payrollEmployee", payrollController.getEmployeesByMonthYear);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
+router.post("/payment-history", payrollController.getPaymentHistory);
 
 // Cash Voucher
-router.post("/cash-voucher/get-employees-by-month-year", cashVoucherController.getEmployeesByMonthYear);
+router.post("/cash-voucher/get-cashVoucher-employee", cashVoucherController.getEmployeesByMonthYear);
 router.post("/cash-voucher/calculate", cashVoucherController.calculateCashVoucher);
 router.post("/cash-voucher/get-voucher-details", cashVoucherController.getCashVoucherById);
 // Enterprise Standard Listing & Bulk Operations
@@ -51,7 +54,8 @@ router.delete("/employee-advance", employeeAdvanceController.delete);
 router.patch("/employee-advance/status", employeeAdvanceController.updateStatus);
 router.post("/employee-advance/view", employeeAdvanceController.advanceView);
 
-router.post("/payment-history/get-transactions", employeeAdvanceController.getAllPaymentHistory);
-router.post("/payment-history/view", employeeAdvanceController.paymentHistoryView);
+router.post("/payment-history/create", paymentHistoryController.create);
+router.post("/payment-history/get-transactions", paymentHistoryController.getAllPaymentHistory);
+router.post("/payment-history/view", paymentHistoryController.paymentHistoryView);
 
 module.exports = router;

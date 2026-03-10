@@ -302,7 +302,10 @@ exports.login = async (req, res) => {
       }
     }
 
-    const token = generateToken(user, finalCompanyId, access_by);
+    const token = generateToken({
+      ...user.get({ plain: true }),
+      access: "employee"
+    }, finalCompanyId, access_by);
 
     // Parse User Agent
     const parser = new UAParser(req.headers["user-agent"]);
@@ -472,7 +475,7 @@ exports.verifyMobileNo = async (req, res) => {
     }
     
     if (!entity) {
-      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+      return res.error(constants.NOT_FOUND, "Mobile number not registered.");
     }
 
     if (entity.status === 1) {
@@ -1015,4 +1018,60 @@ exports.checkOtpRateLimit = async (req, res) => {
       return handleError(err, res, req);
     }
   };
+
+/**
+ * 6. Verify PIN
+ * - Verify if the provided PIN is correct for the mobile number
+ */
+exports.verifyPin = async (req, res) => {
+    try {
+        const { mobile_no, pin } = req.body;
+
+        if (!mobile_no || !pin) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
+        }
+
+        if (!/^[0-9]{4}$/.test(pin)) {
+            return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
+        }
+
+        const user = await User.findOne({ 
+            where: { 
+                mobile_no, 
+                status: { [Op.in]: [0, 1] } 
+            }
+        });
+
+        let entity = user;
+        if (!user) {
+            entity = await DeviceMaster.findOne({
+                where: { 
+                    mobile_no, 
+                    status: { [Op.in]: [0, 1] } 
+                }
+            });
+        }
+
+        if (!entity) {
+            return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+        }
+
+        if (entity.status === 1) {
+            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+        }
+
+        if (!entity.password) {
+            return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
+        }
+
+        const isPinValid = await bcrypt.compare(pin, entity.password);
+        if (!isPinValid) {
+            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid PIN." });
+        }
+
+        return res.success("PIN Verified Successfully");
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
 
