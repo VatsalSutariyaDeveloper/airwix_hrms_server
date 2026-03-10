@@ -26,7 +26,6 @@ module.exports = (sequelize, DataTypes) => {
     paid_gross: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     total_deduction: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     net_salary: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
-
     // JSON details for legacy or extra breakdown
     break_down: { type: DataTypes.JSON, allowNull: true },
     tds_calculation_data: { type: DataTypes.JSON, allowNull: true },
@@ -34,7 +33,7 @@ module.exports = (sequelize, DataTypes) => {
     status: { 
         type: DataTypes.SMALLINT, 
         defaultValue: 0, 
-        comment: "0: Draft, 1: Finalized, 2: Paid, 99: Cancelled" 
+        comment: "0: Draft, 1: Finalized, 2: Delete, 3: Paid, 99: Cancelled" 
     },
     
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -45,7 +44,7 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true,
     underscored: true,
     indexes: [
-        { unique: true, fields: ['employee_id', 'month', 'year', 'status'], where: { status: [0, 1, 2] } }
+        { unique: true, fields: ['employee_id', 'month', 'year', 'status'], where: { status: [0, 1, 2, 3] } }
     ]
   });
 
