@@ -123,12 +123,12 @@ exports.paymentHistoryView = async (req, res) => {
 
     const paymentHistory = await commonQuery.findOneRecord(
         PaymentHistory, 
-        payment_history_id,
+        {id: payment_history_id,payment_type: 'Advance'},
         {
             include: [
                 {
                     model: EmployeeAdvance,
-                    as: 'employee-advance',
+                    as: 'advance',
                     attributes: ['id', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
                 }
             ]

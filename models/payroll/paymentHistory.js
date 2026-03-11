@@ -40,9 +40,6 @@ module.exports = (sequelize, DataTypes) => {
    PaymentHistory.belongsTo(models.EmployeeAdvance, {
     foreignKey: "ref_id",
     constraints: false,
-    scope: {
-      payment_type: "Advance" 
-    },
     as: "advance",
   });
 

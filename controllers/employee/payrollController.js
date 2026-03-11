@@ -290,7 +290,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         earnings.push({
             name: "Leave Encashment",
             // base_amount: encashmentAmount,
-            actual_amount: parseFloat(encashmentAmount.toFixed(2)),
+            amount: parseFloat(encashmentAmount.toFixed(2)),
             days: totalEncashedDays,
             is_encashment: true
         });
@@ -412,7 +412,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, base_amount: amount, actual_amount: amount, is_statutory: true });
+                earnings.push({ name: comp.component_name, base_amount: amount, amount: amount, is_statutory: true });
             }
             return;
         }
@@ -420,7 +420,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
-                actual_amount: actualAmount
+                amount: actualAmount
             });
 
             takeHomeEarnings += actualAmount;
@@ -438,7 +438,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             earnings.push({
                 name: comp.component_name,
                 base_amount: amount,
-                actual_amount: actualAmount,
+                amount: actualAmount,
                 is_benefit: true
             });
         }
@@ -446,13 +446,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", base_amount: 0, actual_amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
+        earnings.push({ name: "Overtime", base_amount: 0, amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", base_amount: totalIncentive, actual_amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        earnings.push({ name: "Incentive", base_amount: totalIncentive, amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
@@ -502,7 +502,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const netPayable = takeHomeEarnings - totalDeductions;
 
     // Calculate totals for breakdown arrays
-    const totalEarningsBreakdown = earnings.reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+    const totalEarningsBreakdown = earnings.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
     const totalDeductionsBreakdown = deductions.reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
 
     return {
@@ -899,6 +899,36 @@ exports.getEmployeePayslipList = async (req, res) => {
     }
 };
 
+exports.getPayslipEmpList = async (req, res) => {
+    try {
+        const { month, year } = req.body;
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+       const data = await commonQuery.fetchPaginatedData(
+        Payslip,
+        {month,year},
+        [
+        
+        ],
+        {
+            include:[
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['id', 'employee_code', 'first_name'],
+                }
+            ]
+        }
+       )
+
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
 exports.getCalculationHistory = async (req, res) => {
     try {
         // Configuration for searchable and sortable fields
@@ -1179,17 +1209,36 @@ exports.getPayslipById = async (req, res) => {
 
             breakdown = {
                 earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
-                deductions: Object.entries(deduction_details)
-                    .filter(([name]) => {
-                        // Filter out statutory items from deductions if they exist in statutory_details
-                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                        const normName = normalize(name);
-                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
-                        return !statutoryKeys.includes(normName);
-                    })
-                    .map(([name, val]) => ({ name, amount: val })),
+                deductions: [
+                    ...Object.entries(deduction_details)
+                        .filter(([name]) => {
+                            // Filter out statutory items from deductions if they exist in statutory_details
+                            const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                            const normName = normalize(name);
+                            const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                            return !statutoryKeys.includes(normName);
+                        })
+                        .map(([name, val]) => ({ name, amount: val })),
+                    ...Object.entries(payslip.statutory_details || {})
+                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                        .map(([name, amount]) => ({ name, amount, is_statutory: true }))
+                ],
                 statutory: payslip.statutory_details || {},
-                employer: payslip.employer_details || {}
+                employer: payslip.employer_details || {},
+                total_earnings: Object.values(earning_details || {}).reduce((sum, val) => sum + parseFloat(val || 0), 0).toFixed(2),
+                total_deductions: [
+                    ...Object.entries(deduction_details)
+                        .filter(([name]) => {
+                            const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                            const normName = normalize(name);
+                            const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
+                            return !statutoryKeys.includes(normName);
+                        })
+                        .map(([, val]) => parseFloat(val || 0)),
+                    ...Object.entries(payslip.statutory_details || {})
+                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                        .map(([, amount]) => amount)
+                ].reduce((sum, val) => sum + val, 0).toFixed(2)
             };
         }
 
@@ -1345,8 +1394,7 @@ exports.getSalaryOverview = async (req, res) => {
                         dedList.push({
                             name,
                             amount: amt.toFixed(2),
-                            is_statutory: true,
-                            percentage: name === "Income Tax (TDS)" ? tdsPercent : null
+                            is_statutory: true
                         });
                     }
                 });
@@ -1400,13 +1448,14 @@ exports.getSalaryOverview = async (req, res) => {
                     lwp_days: lwpDays || 0,
                     lunch_count: payslip.lunch_count || 0,
                     lunch_history: lunchHistory,
-                    earnings: { total: totalEarn.toFixed(2), breakdown: earnList },
-                    deductions: { total: totalDed.toFixed(2), breakdown: dedList },
-                    statutory: payslip.statutory_details || {},
-                    employer: payslip.employer_details || {},
-                    breakdown: payslip.break_down || { earnings: [], deductions: [] },
-                    payments: "0.00", // Will be filled below
-                    adjustments: "0.00", // Will be filled below
+                    breakdown: {
+                        earnings: earnList,
+                        deductions: dedList,
+                        statutory: payslip.statutory_details || {},
+                        employer: payslip.employer_details || {},
+                        total_earnings: totalEarn.toFixed(2),
+                        total_deductions: totalDed.toFixed(2)
+                    },
                     ot_amount: ot.toFixed(2),
                     total_fine: fine.toFixed(2),
                     ctc_monthly: payslip.ctc_monthly,
@@ -1437,8 +1486,7 @@ exports.getSalaryOverview = async (req, res) => {
                         is_food: d.is_food,
                         meal_count: d.meal_count,
                         rate: d.rate,
-                        is_statutory: d.is_statutory,
-                        percentage: d.name === "Income Tax (TDS)" ? summary.salary.tdsPercentage : null
+                        is_statutory: d.is_statutory
                     }));
 
                     const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
@@ -1551,16 +1599,29 @@ exports.generatePayslipPdf = async (req, res) => {
 
             breakdown = {
                 earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
-                deductions: Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
+                deductions: [
+                    ...Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
+                    ...Object.entries(payslip.statutory_details || {})
+                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                        .map(([name, amount]) => ({ name, amount, is_statutory: true }))
+                ],
                 statutory: payslip.statutory_details || {},
-                employer: payslip.employer_details || {}
+                employer: payslip.employer_details || {},
+                total_earnings: Object.values(earning_details || {}).reduce((sum, val) => sum + parseFloat(val || 0), 0).toFixed(2),
+                total_deductions: [
+                    ...Object.entries(deduction_details).map(([, val]) => parseFloat(val || 0)),
+                    ...Object.entries(payslip.statutory_details || {})
+                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                        .map(([, amount]) => amount)
+                ].reduce((sum, val) => sum + val, 0).toFixed(2)
             };
         }
 
         // Add Statutory deductions into the deductions list for the PDF display
         const statutoryDeductions = Object.entries(breakdown.statutory || {}).map(([name, amount]) => ({
             name,
-            amount: parseFloat(amount || 0)
+            amount: parseFloat(amount || 0),
+            is_statutory: true
         })).filter(d => d.amount > 0);
 
         const fullDeductionList = [
@@ -1595,7 +1656,9 @@ exports.generatePayslipPdf = async (req, res) => {
                 },
                 breakdown: {
                     earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount })),
-                    deductions: fullDeductionList
+                    deductions: fullDeductionList,
+                    total_earnings: totalEarnings.toFixed(2),
+                    total_deductions: totalDeductions.toFixed(2)
                 }
             },
             companyData: {
