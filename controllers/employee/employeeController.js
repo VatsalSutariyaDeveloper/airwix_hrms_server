@@ -578,7 +578,7 @@ exports.getProfile = async (req, res) => {
                 mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
             },
             bank_details: {
-                name_as_per_bank: plainRecord.name_as_per_bank || 'N/A',
+                // name_as_per_bank: plainRecord.name_as_per_bank || 'N/A',
                 bank_name: plainRecord.bank_name || 'N/A',
                 account_no: plainRecord.bank_account_number || 'N/A',
                 ifsc: plainRecord.bank_ifsc_code || 'N/A',

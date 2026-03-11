@@ -6,6 +6,7 @@ const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
 const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
+const { handleExport } = require("../../helpers/functions/excelService");
 
 
 /**
@@ -865,7 +866,7 @@ exports.calculateBatchMonthlySalary = async (req, res) => {
     }
 };
 
-exports.getEmployeePayslipList = async (req, res) => {
+exports.getEmployeePayslip = async (req, res) => {
     try {
         const { employee_id } = req.body;
         if (!employee_id) {
@@ -899,19 +900,62 @@ exports.getEmployeePayslipList = async (req, res) => {
     }
 };
 
-exports.getPayslipEmpList = async (req, res) => {
+/**
+ * Helper function to process payslip data with calculated sums
+ */
+const processPayslipData = (payslips) => {
+    return payslips.map(payslip => {
+        // Calculate earnings sum from break_down.earnings
+        const earningsSum = (payslip.break_down?.earnings || [])
+            .reduce((sum, earning) => sum + parseFloat(earning.actual_amount || earning.amount || 0), 0);
+
+        // Calculate deductions sum from break_down.deductions
+        const regularDeductionsSum = (payslip.break_down?.deductions || [])
+            .reduce((sum, deduction) => sum + parseFloat(deduction.amount || 0), 0);
+
+        // Calculate statutory deductions sum from statutory_details
+        const statutoryDeductionsSum = Object.values(payslip.statutory_details || {})
+            .filter(value => typeof value === 'number' && !String(value).includes('%'))
+            .reduce((sum, amount) => sum + parseFloat(amount || 0), 0);
+
+        // Total deductions including statutory
+        const totalDeductionsSum = regularDeductionsSum + statutoryDeductionsSum;
+
+        return {
+            id: payslip.id,
+            employee_id: payslip.employee_id,
+            employee_name: payslip.employee?.first_name || "",
+            employee_code: payslip.employee?.employee_code || "",
+            month: payslip.month,
+            year: payslip.year,
+            pd_days: payslip.pd_days,
+            ph_days: payslip.ph_days,
+            wo_days: payslip.wo_days,
+            wp_days: payslip.wp_days,
+            present_days: payslip.present_days,
+            absent_days: payslip.absent_days,
+            total_days: payslip.total_days,
+            lunch_count: payslip.lunch_count,
+            paid_gross: payslip.paid_gross,
+            total_deduction: payslip.total_deduction,
+            net_salary: payslip.net_salary,
+            earnings_sum: parseFloat(earningsSum.toFixed(2)),
+            deductions_sum: parseFloat(totalDeductionsSum.toFixed(2))
+        };
+    });
+};
+
+exports.getPayslipEmployeeList = async (req, res) => {
     try {
-        const { month, year } = req.body;
-        if (!month || !year) {
-            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        const { year } = req.body;
+        if (!year) {
+            return res.error("VALIDATION_ERROR", { message: "Year is required" });
         }
 
        const data = await commonQuery.fetchPaginatedData(
         Payslip,
-        {month,year},
-        [
-        
-        ],
+        {filter: {year}},
+        [],
         {
             include:[
                 {
@@ -923,7 +967,128 @@ exports.getPayslipEmpList = async (req, res) => {
         }
        )
 
+       // Process each payslip to add calculated sums
+       data.items = processPayslipData(data.items);
+
         return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getPayslipView = async (req, res) => {
+    try {
+        const { employee_id, year } = req.body;
+        if (!employee_id || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Employee ID and Year are required" });
+        }
+
+       const data = await commonQuery.findAllRecords(
+        Payslip,
+        {employee_id, year},
+        {
+            include:[
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['id', 'employee_code', 'first_name'],
+                }
+            ]
+        }
+       )
+
+       // Process each payslip to add calculated sums
+       const processedData = processPayslipData(data);
+
+        return res.ok({items: processedData});
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.exportPayrollView = async (req, res) => {
+    try {
+        const { employee_id, year } = req.body;
+        if (!employee_id || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Employee ID and Year are required" });
+        }
+
+        // Get payslip data (same logic as getPayslipView)
+        const data = await commonQuery.findAllRecords(
+            Payslip,
+            {employee_id, year},
+            {
+                include:[
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['id', 'employee_code', 'first_name'],
+                    }
+                ]
+            }
+        );
+
+        // Process each payslip to add calculated sums
+        const processedData = processPayslipData(data);
+
+        if (processedData.length === 0) {
+            return res.error("NO_DATA", { message: "No payslip data found for this employee and year" });
+        }
+
+        // Define Excel column mappers
+        const mappers = [
+            { header: "ID", key: "id" },
+            { header: "Employee ID", key: "employee_id" },
+            { header: "Employee Name", key: "employee_name" },
+            { header: "Employee Code", key: "employee_code" },
+            { header: "Month", key: "month" },
+            { header: "Year", key: "year" },
+            { header: "Present Days", key: "pd_days" },
+            { header: "Half Days", key: "ph_days" },
+            { header: "Weekly Offs", key: "wo_days" },
+            { header: "Without Pay Days", key: "wp_days" },
+            { header: "Present Days Count", key: "present_days" },
+            { header: "Absent Days", key: "absent_days" },
+            { header: "Total Days", key: "total_days" },
+            { header: "Lunch Count", key: "lunch_count" },
+            { header: "Paid Gross", key: "paid_gross" },
+            { header: "Total Deduction", key: "total_deduction" },
+            { header: "Net Salary", key: "net_salary" },
+            { header: "Earnings Sum", key: "earnings_sum" },
+            { header: "Deductions Sum", key: "deductions_sum" }
+        ];
+
+        // Generate Excel file
+        const { excelBuffer, jsonData } = await handleExport({
+            model: Payslip,
+            queryOptions: { where: { employee_id, year } },
+            mappers,
+            commonData: {}
+        });
+
+        // Map processed data to match the export structure
+        const exportData = processedData.map(item => {
+            const row = {};
+            mappers.forEach(mapper => {
+                row[mapper.header] = item[mapper.key] || '';
+            });
+            return row;
+        });
+
+        // Create Excel from processed data
+        const xlsx = require('xlsx');
+        const worksheet = xlsx.utils.json_to_sheet(exportData);
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, worksheet, `Payroll_${employee_id}_${year}`);
+        const excelBufferFinal = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+
+        // Set response headers for file download
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=payroll_${employee_id}_${year}.xlsx`);
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
+        return res.send(excelBufferFinal);
+
     } catch (err) {
         return handleError(err, res, req);
     }
