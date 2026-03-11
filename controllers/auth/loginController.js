@@ -715,7 +715,7 @@ exports.generatePin = async (req, res) => {
       profile_image: (!isDevice && entity.profile_image) 
         ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
         : (!isDevice && entity.employee_profile_image) 
-          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${entity.employee_profile_image}` 
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
           : null,
       role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
       permission: userPermission?.permissions || [],
@@ -942,7 +942,7 @@ exports.pinLogin = async (req, res) => {
       profile_image: (!isDevice && entity.profile_image) 
         ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
         : (!isDevice && entity.employee_profile_image) 
-          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${entity.employee_profile_image}` 
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
           : null,
       role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
       permission: userPermission?.permissions || [],
