@@ -218,20 +218,38 @@ exports.logError = async (logData, transaction = null) => {
   }
 };
 
-// 4. Log to Physical File
+// 4. Log to Physical File (Improved with better error handling)
 exports.writeLogToFile = (filename, message) => {
-    try {
-        const logDir = path.join(process.cwd(), 'logs');
-        if (!fs.existsSync(logDir)) {
-            fs.mkdirSync(logDir, { recursive: true });
+    // Fire-and-forget approach with background error handling
+    setImmediate(async () => {
+        try {
+            const logDir = path.join(process.cwd(), 'uploads', 'logs');
+            
+            // Ensure logs directory exists with proper error handling
+            if (!fs.existsSync(logDir)) {
+                try {
+                    fs.mkdirSync(logDir, { recursive: true, mode: 0o755 });
+                } catch (mkErr) {
+                    console.error(`[LOGS] Failed to create logs directory: ${logDir}`, mkErr.message);
+                    return;
+                }
+            }
+            
+            const filePath = path.join(logDir, filename);
+            const timestamp = new Date().toLocaleString();
+            const logMessage = `[${timestamp}] ${message}\n`;
+            
+            // Use async file write to avoid blocking
+            await fs.promises.appendFile(filePath, logMessage, { encoding: 'utf8' });
+            
+        } catch (err) {
+            console.error(`[LOGS] Error writing to ${filename}:`, {
+                message: err.message,
+                code: err.code,
+                path: err.path
+            });
         }
-        const filePath = path.join(logDir, filename);
-        const timestamp = new Date().toLocaleString();
-        const logMessage = `[${timestamp}] ${message}\n`;
-        fs.appendFileSync(filePath, logMessage);
-    } catch (err) {
-        console.error("Failed to write to log file:", err.message);
-    }
+    });
 };
 
 // Archive Function (Updated for new table names)
