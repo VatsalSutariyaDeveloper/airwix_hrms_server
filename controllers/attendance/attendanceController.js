@@ -809,21 +809,22 @@ exports.deleteAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Employee ID and Date are required");
     }
 
-    // 1. Fetch the day to get ID
-    const day = await commonQuery.findOneRecord(AttendanceDay, { 
+    // 1. Fetch the day(s) to get ID
+    const days = await commonQuery.findAllRecords(AttendanceDay, { 
       employee_id, 
       attendance_date,
-    }, {}, t);
+    }, {}, t, { company_id: true });
 
-    if (day) {
+    console.log("dayily",days)
+    for (const day of days) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
       const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
       if (balanceError) {
         await t.rollback();
-        return res.error(balanceError);
+        return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
       }
 
-      // 2. Delete punches by day_id
+      // 2. Delete punches by day_id specifically
       await commonQuery.softDeleteById(AttendancePunch, {
         day_id: day.id
       }, t);
@@ -832,17 +833,20 @@ exports.deleteAttendanceDay = async (req, res) => {
       await commonQuery.softDeleteById(AttendanceDay, { 
         id: day.id
       }, t);
-    } else {
-       // Fallback: Delete punches and also clear any leave record for this date
-       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
-
-       await commonQuery.softDeleteById(AttendancePunch, {
-        employee_id,
-        punch_time: {
-           [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
-        }
-       }, t);
     }
+
+    // If no AttendanceDay record was found, we still clear any auto-generated leaves
+    if (days.length === 0) {
+      await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
+    }
+
+    // 4. ALWAYS delete all punches for this employee on this date (handles unassigned punches)
+    await commonQuery.softDeleteById(AttendancePunch, {
+      employee_id,
+      punch_time: {
+        [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
+      }
+    }, t);
 
     await t.commit();
     return res.success(constants.DELETED);

@@ -1716,7 +1716,7 @@ exports.getWages = async (req, res) => {
         let workingDays = null;
         const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
         const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
-
+console.log("salaryType",salaryType, "unitWorkingHours", unitWorkingHours,"employeeSalaryTemplate.daily_rate",employeeSalaryTemplate.daily_rate,"employeeSalaryTemplate.hourly_rate",employeeSalaryTemplate.hourly_rate)
         if (salaryType === "Daily") {
             dailyWage = parseFloat(employeeSalaryTemplate.daily_rate || 0);
             hourlyWage = dailyWage / unitWorkingHours;
