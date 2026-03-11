@@ -1376,7 +1376,7 @@ exports.registerFace = async (req, res) => {
         // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
         // In case it was previously uploaded via the general update API.
         if (employee.profile_image) {
-            await deleteFile(req, res, constants.EMPLOYEE_DOC_FOLDER, employee.profile_image);
+            await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
         }
 
         // 2. Send to Python to get Face Embedding
