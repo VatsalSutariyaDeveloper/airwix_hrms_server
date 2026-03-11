@@ -3,7 +3,8 @@ module.exports = (sequelize, DataTypes) => {
     "EmployeeAdvance",
     {
       employee_id: { type: DataTypes.INTEGER, allowNull: false },
-      payroll_month: { type: DataTypes.DATEONLY, allowNull: false, comment: "Month for which advance is applicable" },
+      month: { type: DataTypes.INTEGER, allowNull: false },
+      year: { type: DataTypes.INTEGER, allowNull: false },  
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
       notes: { type: DataTypes.TEXT, allowNull: true },
@@ -34,16 +35,6 @@ module.exports = (sequelize, DataTypes) => {
     EmployeeAdvance.belongsTo(models.Employee, {
       foreignKey: "employee_id",
       as: "employee",
-    });
-
-    EmployeeAdvance.belongsTo(models.CompanyMaster, {
-      foreignKey: "company_id",
-      as: "company",
-    });
-
-    EmployeeAdvance.belongsTo(models.BranchMaster, {
-      foreignKey: "branch_id",
-      as: "branch",
     });
 
     EmployeeAdvance.hasMany(models.PaymentHistory, {

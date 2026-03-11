@@ -9,7 +9,8 @@ exports.create = async (req, res) => {
         const requiredFields = {
             employee_id: "Employee",
             incentive_type_id: "Incentive Type Id",
-            payroll_month: "Payroll Month",
+            month: "Month",
+            year: "Year",
             amount: "Amount",
             incentive_date: "Incentive Date",
         };
@@ -35,7 +36,8 @@ exports.create = async (req, res) => {
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["payroll_month", true, true],
+            ["month", true, true],
+            ["year", true, true],
             ["incentive_date", true, true],
             ["employee_name", true, true],
             ["incentive_type_name", true, true],
@@ -66,7 +68,8 @@ exports.getAll = async (req, res) => {
                     "id",
                     "employee_id",
                     "incentive_type_id",
-                    "payroll_month",
+                    "month",
+                    "year",
                     "amount",
                     "incentive_date",
                     "notes",
@@ -104,7 +107,8 @@ exports.update = async (req, res) => {
         const requiredFields = {
             employee_id: "Employee Id",
             incentive_type_id: "incentive_type_id",
-            payroll_month: "Payroll Month",
+            month: "Month",
+            year: "Year",
             amount: "Amount",
             incentive_date: "Incentive Date",
         };
@@ -216,7 +220,8 @@ exports.updateStatus = async (req, res) => {
 // exports.dropdownList = async (req, res) => {
 //     try {
 //         const fieldConfig = [
-//             ["payroll_month", true, true],
+//             ["month", true, true],
+//             ["year", true, true],
 //             ["incentive_date", true, true],
 //         ];
 //         const result = await commonQuery.fetchPaginatedData(
@@ -224,7 +229,7 @@ exports.updateStatus = async (req, res) => {
 //             { ...req.body, status: 0 },
 //             fieldConfig,
 //             {
-//                 attributes: ['id', 'employee_id', 'incentive_type_id', 'payroll_month', 'amount', 'incentive_date']
+//                 attributes: ['id', 'employee_id', 'incentive_type_id', 'month', 'year', 'amount', 'incentive_date']
 //             }
 //         );
 

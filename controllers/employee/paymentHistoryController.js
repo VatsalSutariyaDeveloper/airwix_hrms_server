@@ -80,10 +80,12 @@ exports.create = async (req, res) => {
 
         }
         await transaction.commit();
-        return res.success(constants.CREATED, payment_history);
+        return res.success(constants.CREATED);
 
     } catch (err) {
-        await transaction.rollback();
+        if(err){
+            await transaction.rollback();
+        }
         return handleError(err, res, req);
     }
 };
@@ -91,7 +93,6 @@ exports.create = async (req, res) => {
 exports.getAllPaymentHistory = async (req, res) => {
     try {
         const fieldConfig = [
-            ["payroll_month", true, true],
             ["payment_date", true, true],
             ["amount", true, true]
         ];
@@ -122,13 +123,13 @@ exports.paymentHistoryView = async (req, res) => {
 
     const paymentHistory = await commonQuery.findOneRecord(
         PaymentHistory, 
-        payment_history_id,
+        {id: payment_history_id,payment_type: 'Advance'},
         {
             include: [
                 {
                     model: EmployeeAdvance,
-                    as: 'employee-advance',
-                    attributes: ['id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
+                    as: 'advance',
+                    attributes: ['id', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
                 }
             ]
         }

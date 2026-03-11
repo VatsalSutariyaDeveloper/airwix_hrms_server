@@ -10,6 +10,7 @@ router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
 router.post("/finalize", payrollController.finalizeMonthlySalary);
 router.post("/get-employee-payslip-list", payrollController.getEmployeePayslipList);
+router.post("/get-payslip-emplist", payrollController.getPayslipEmpList);
 router.post("/get-calculation-history", payrollController.getCalculationHistory);
 router.post("/get-tds-report", payrollController.getTDSDeductionReport);
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);

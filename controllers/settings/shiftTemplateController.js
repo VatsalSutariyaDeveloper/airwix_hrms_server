@@ -8,7 +8,7 @@ exports.create = async (req, res) => {
     try {
         const requiredFields = {
             shift_name: "Shift Name",
-            shift_type: "Shift Type",
+            // shift_type: "Shift Type",
             // shift_code: "Shift Code",
             start_time: "Start Time",
             end_time: "End Time",
@@ -125,7 +125,7 @@ exports.update = async (req, res) => {
     try {
         const requiredFields = {
             shift_name: "Shift Name",
-            shift_type: "Shift Type",
+            // shift_type: "Shift Type",
             // shift_code: "Shift Code",
             start_time: "Start Time",
             end_time: "End Time",

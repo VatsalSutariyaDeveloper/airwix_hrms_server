@@ -906,22 +906,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (template.late_entry_rules.length > 0) {
         const rule = getMatchingRule(lateMinutes, template.late_entry_rules);
         if (rule) {
-          if (rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
+          if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
             const amount = parseFloat(rule.value || 0);
             fineAmount += amount;
             fineData.late_entry = { minutes: lateMinutes, amount, rate: 2 };
-          } else if (rule.type === 'FIXED_PER_HOUR') {
+          } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
             const amount = parseFloat(((lateMinutes / 60) * (parseFloat(rule.value) || 0)).toFixed(2));
             fineAmount += amount;
             fineData.late_entry = { minutes: lateMinutes, amount, rate: 2 };
-          } else if (rule.type === 'HALF_DAY') {
+          } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
             const amount = parseFloat((dailyWage * 0.5).toFixed(2));
             fineAmount += amount;
             fineData.late_entry = { minutes: lateMinutes, amount, rate: 2 };
-          } else if (rule.type === 'FULL_DAY') {
+          } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
             const amount = parseFloat(dailyWage.toFixed(2));
             fineAmount += amount;
             fineData.late_entry = { minutes: lateMinutes, amount, rate: 2 };
+          } else if (rule.type === '5') {
+            const res = getRateIdAndAmount(lateMinutes, hourlyWage, 1);
+            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '6') {
+            const res = getRateIdAndAmount(lateMinutes, hourlyWage, 1.5);
+            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '7') {
+            const res = getRateIdAndAmount(lateMinutes, hourlyWage, 2);
+            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '8') {
+            const res = getRateIdAndAmount(lateMinutes, hourlyWage, 3);
+            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
           } else if (rule.type === 'PERCENTAGE') {
             const amount = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
             fineAmount += amount;
@@ -969,22 +985,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       if (template.early_exit_rules.length > 0) {
         const rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
         if (rule) {
-          if (rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
+          if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
             const amount = parseFloat(rule.value || 0);
             fineAmount += amount;
             fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: 2 };
-          } else if (rule.type === 'FIXED_PER_HOUR') {
+          } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
             const amount = parseFloat(((earlyOutMinutes / 60) * (parseFloat(rule.value) || 0)).toFixed(2));
             fineAmount += amount;
             fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: 2 };
-          } else if (rule.type === 'HALF_DAY') {
+          } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
             const amount = parseFloat((dailyWage * 0.5).toFixed(2));
             fineAmount += amount;
             fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: 2 };
-          } else if (rule.type === 'FULL_DAY') {
+          } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
             const amount = parseFloat(dailyWage.toFixed(2));
             fineAmount += amount;
             fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: 2 };
+          } else if (rule.type === '5') {
+            const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 1);
+            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '6') {
+            const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 1.5);
+            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '7') {
+            const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 2);
+            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '8') {
+            const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 3);
+            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
           } else if (rule.type === 'PERCENTAGE') {
             const amount = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
             fineAmount += amount;
@@ -1033,22 +1065,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         const excessMins = totalBreakMinutes - (template.paid_break_duration_mins || 0);
         const rule = getMatchingRule(excessMins, template.break_rules);
         if (rule) {
-          if (rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
+          if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
             const amount = parseFloat(rule.value || 0);
             fineAmount += amount;
             fineData.excess_breaks = { minutes: excessMins, amount, rate: 2 };
-          } else if (rule.type === 'FIXED_PER_HOUR') {
+          } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
             const amount = parseFloat(((excessMins / 60) * (parseFloat(rule.value) || 0)).toFixed(2));
             fineAmount += amount;
             fineData.excess_breaks = { minutes: excessMins, amount, rate: 2 };
-          } else if (rule.type === 'HALF_DAY') {
+          } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
             const amount = parseFloat((dailyWage * 0.5).toFixed(2));
             fineAmount += amount;
             fineData.excess_breaks = { minutes: excessMins, amount, rate: 2 };
-          } else if (rule.type === 'FULL_DAY') {
+          } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
             const amount = parseFloat(dailyWage.toFixed(2));
             fineAmount += amount;
             fineData.excess_breaks = { minutes: excessMins, amount, rate: 2 };
+          } else if (rule.type === '5') {
+            const res = getRateIdAndAmount(excessMins, hourlyWage, 1);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '6') {
+            const res = getRateIdAndAmount(excessMins, hourlyWage, 1.5);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '7') {
+            const res = getRateIdAndAmount(excessMins, hourlyWage, 2);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === '8') {
+            const res = getRateIdAndAmount(excessMins, hourlyWage, 3);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
+            fineAmount += res.amount;
           } else if (rule.type === 'PERCENTAGE') {
             const amount = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
             fineAmount += amount;
@@ -1080,21 +1128,41 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (lateOvertimeMinutesRaw > 0) {
       const otRule = template ? getMatchingRule(lateOvertimeMinutesRaw, template.overtime_rules) : null;
       if (otRule) {
-        if (otRule.type === 'FIXED_AMOUNT' || otRule.type === 'FIXED') {
+        if (otRule.type === '1' || otRule.type === 'FIXED_AMOUNT' || otRule.type === 'FIXED') {
           lateOtData.amount = parseFloat(otRule.value || 0);
           lateOtData.rate = 2;
           lateOtData.minutes = lateOvertimeMinutesRaw;
-        } else if (otRule.type === 'FIXED_PER_HOUR') {
+        } else if (otRule.type === '2' || otRule.type === 'FIXED_PER_HOUR') {
           lateOtData.amount = parseFloat(((lateOvertimeMinutesRaw / 60) * (parseFloat(otRule.value) || 0)).toFixed(2));
           lateOtData.rate = 2;
           lateOtData.minutes = lateOvertimeMinutesRaw;
-        } else if (otRule.type === 'HALF_DAY') {
+        } else if (otRule.type === '3' || otRule.type === 'HALF_DAY') {
           lateOtData.amount = parseFloat((dailyWage * 0.5).toFixed(2));
           lateOtData.rate = 2;
           lateOtData.minutes = lateOvertimeMinutesRaw;
-        } else if (otRule.type === 'FULL_DAY') {
+        } else if (otRule.type === '4' || otRule.type === 'FULL_DAY') {
           lateOtData.amount = parseFloat(dailyWage.toFixed(2));
           lateOtData.rate = 2;
+          lateOtData.minutes = lateOvertimeMinutesRaw;
+        } else if (otRule.type === '5') {
+          const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 1);
+          lateOtData.rate = result.rateId;
+          lateOtData.amount = result.amount;
+          lateOtData.minutes = lateOvertimeMinutesRaw;
+        } else if (otRule.type === '6') {
+          const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 1.5);
+          lateOtData.rate = result.rateId;
+          lateOtData.amount = result.amount;
+          lateOtData.minutes = lateOvertimeMinutesRaw;
+        } else if (otRule.type === '7') {
+          const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 2);
+          lateOtData.rate = result.rateId;
+          lateOtData.amount = result.amount;
+          lateOtData.minutes = lateOvertimeMinutesRaw;
+        } else if (otRule.type === '8') {
+          const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 3);
+          lateOtData.rate = result.rateId;
+          lateOtData.amount = result.amount;
           lateOtData.minutes = lateOvertimeMinutesRaw;
         } else if (otRule.type === 'MINUTE_ADDITION') {
           const addMins = parseFloat(otRule.value || 0);
@@ -1121,21 +1189,41 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (earlyOvertimeMinutes > 0) {
       const earlyOtRule = template ? getMatchingRule(earlyOvertimeMinutes, template.early_overtime_rules) : null;
       if (earlyOtRule) {
-        if (earlyOtRule.type === 'FIXED_AMOUNT' || earlyOtRule.type === 'FIXED') {
+        if (earlyOtRule.type === '1' || earlyOtRule.type === 'FIXED_AMOUNT' || earlyOtRule.type === 'FIXED') {
           earlyOtData.amount = parseFloat(earlyOtRule.value || 0);
           earlyOtData.rate = 2;
           earlyOtData.minutes = earlyOvertimeMinutes;
-        } else if (earlyOtRule.type === 'FIXED_PER_HOUR') {
+        } else if (earlyOtRule.type === '2' || earlyOtRule.type === 'FIXED_PER_HOUR') {
           earlyOtData.amount = parseFloat(((earlyOvertimeMinutes / 60) * (parseFloat(earlyOtRule.value) || 0)).toFixed(2));
           earlyOtData.rate = 2;
           earlyOtData.minutes = earlyOvertimeMinutes;
-        } else if (earlyOtRule.type === 'HALF_DAY') {
+        } else if (earlyOtRule.type === '3' || earlyOtRule.type === 'HALF_DAY') {
           earlyOtData.amount = parseFloat((dailyWage * 0.5).toFixed(2));
           earlyOtData.rate = 2;
           earlyOtData.minutes = earlyOvertimeMinutes;
-        } else if (earlyOtRule.type === 'FULL_DAY') {
+        } else if (earlyOtRule.type === '4' || earlyOtRule.type === 'FULL_DAY') {
           earlyOtData.amount = parseFloat(dailyWage.toFixed(2));
           earlyOtData.rate = 2;
+          earlyOtData.minutes = earlyOvertimeMinutes;
+        } else if (earlyOtRule.type === '5') {
+          const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 1);
+          earlyOtData.rate = result.rateId;
+          earlyOtData.amount = result.amount;
+          earlyOtData.minutes = earlyOvertimeMinutes;
+        } else if (earlyOtRule.type === '6') {
+          const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 1.5);
+          earlyOtData.rate = result.rateId;
+          earlyOtData.amount = result.amount;
+          earlyOtData.minutes = earlyOvertimeMinutes;
+        } else if (earlyOtRule.type === '7') {
+          const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 2);
+          earlyOtData.rate = result.rateId;
+          earlyOtData.amount = result.amount;
+          earlyOtData.minutes = earlyOvertimeMinutes;
+        } else if (earlyOtRule.type === '8') {
+          const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 3);
+          earlyOtData.rate = result.rateId;
+          earlyOtData.amount = result.amount;
           earlyOtData.minutes = earlyOvertimeMinutes;
         } else if (earlyOtRule.type === 'MINUTE_ADDITION') {
           const addMins = parseFloat(earlyOtRule.value || 0);

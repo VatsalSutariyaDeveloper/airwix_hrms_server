@@ -91,7 +91,7 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction, { company_id: true });
             }
 
-            await rebuildRecentAttendance(employeeId, transaction);
+            // await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee shift settings updated successfully");
         } catch (error) {
@@ -160,7 +160,7 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction, { company_id: true });
             }
 
-            await rebuildRecentAttendance(employeeId, transaction);
+            // await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee weekly offs updated successfully");
         } catch (error) {
@@ -210,7 +210,7 @@ const employeeAttendanceController = {
                 await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction, { company_id: true });
             }
 
-            await rebuildRecentAttendance(employeeId, transaction);
+            // await rebuildRecentAttendance(employeeId, transaction);
             await transaction.commit();
             return res.success("Employee attendance template updated successfully");
         } catch (error) {

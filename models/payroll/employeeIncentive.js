@@ -4,7 +4,8 @@ module.exports = (sequelize, DataTypes) => {
     {
       employee_id: { type: DataTypes.BIGINT, allowNull: false },
       incentive_type_id: { type: DataTypes.BIGINT, allowNull: false, comment: "Reference to incentive master" },
-      payroll_month: { type: DataTypes.DATEONLY, allowNull: false, comment: "Month in which incentive is applied" },
+      month: { type: DataTypes.INTEGER, allowNull: false },
+      year: { type: DataTypes.INTEGER, allowNull: false }, 
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       incentive_date: { type: DataTypes.DATEONLY, allowNull: false },
       notes: { type: DataTypes.TEXT, allowNull: true },
@@ -24,10 +25,6 @@ module.exports = (sequelize, DataTypes) => {
     EmployeeIncentive.belongsTo(models.Employee, {
       foreignKey: "employee_id",
       as: "employee",
-    });
-    EmployeeIncentive.belongsTo(models.CompanyMaster, {
-      foreignKey: "company_id",
-      as: "company",
     });
 
     EmployeeIncentive.belongsTo(models.IncentiveType, {
