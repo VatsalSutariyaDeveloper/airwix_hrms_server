@@ -8,7 +8,8 @@ exports.create = async (req, res) => {
     try {
         const requiredFields = {
             employee_id: "Employee",
-            payroll_month: "Payroll Month",
+            month: "Month",
+            year: "Year",
             amount: "Amount",
             payment_date: "Payment Date",
             payment_mode: "Payment Mode",
@@ -29,6 +30,8 @@ exports.create = async (req, res) => {
             payment_date: POST.payment_date,
             amount: POST.amount,
             payment_mode: POST.payment_mode,
+            month: POST.month,
+            year: POST.year
         };
 
         await commonQuery.createRecord(PaymentHistory, paymentHistoryData, transaction);
@@ -44,7 +47,8 @@ exports.create = async (req, res) => {
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["payroll_month", true, true],
+            ["month", true, true],
+            ["year", true, true],
             ["payment_date", true, true],
             ["amount", true, true],
             ["employee_name", true, true]
@@ -67,7 +71,8 @@ exports.getAll = async (req, res) => {
                 attributes: [
                     "id", 
                     "employee_id", 
-                    "payroll_month", 
+                    "month", 
+                    "year",
                     "payment_date", 
                     "amount", 
                     "payment_mode",
@@ -80,21 +85,26 @@ exports.getAll = async (req, res) => {
         );
 
         // Get monthly totals
-        const monthlyTotals = await EmployeeAdvance.findAll({
-            attributes: [
-                "payroll_month",
-                [sequelize.fn('SUM', sequelize.col('amount')), 'total_amount'],
-                [sequelize.fn('COUNT', sequelize.col('id')), 'count']
-            ],
-            where: { status: { [Op.ne]: 2 } }, // Exclude cancelled records
-            group: ['payroll_month'],
-            order: [['payroll_month', 'DESC']]
-        });
+        const monthlyTotals = await commonQuery.findAllRecords(
+            EmployeeAdvance,
+            { status: { [Op.ne]: 2 } }, // Exclude cancelled records
+            {
+                attributes: [
+                    "month",
+                    "year",
+                    [sequelize.fn('SUM', sequelize.col('amount')), 'total_amount'],
+                    [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+                ],
+                group: ['month', 'year'],
+                order: [['year', 'DESC'], ['month', 'DESC']]
+            }
+        );
 
-        // Create a map of payroll_month to totals
+        // Create a map of month-year to totals
         const totalsMap = {};
         monthlyTotals.forEach(total => {
-            totalsMap[total.payroll_month] = {
+            const key = `${total.year}-${total.month.toString().padStart(2, '0')}`;
+            totalsMap[key] = {
                 total_amount: total.dataValues.total_amount,
                 count: total.dataValues.count
             };
@@ -103,11 +113,14 @@ exports.getAll = async (req, res) => {
         // Attach monthly totals to each record
         if (data.items && Array.isArray(data.items)) {
             data.items.forEach(record => {
-                if (record.payroll_month && totalsMap[record.payroll_month]) {
-                    if (record.dataValues) {
-                        record.dataValues.monthly_total = totalsMap[record.payroll_month];
-                    } else {
-                        record.monthly_total = totalsMap[record.payroll_month];
+                if (record.month && record.year) {
+                    const key = `${record.year}-${record.month.toString().padStart(2, '0')}`;
+                    if (totalsMap[key]) {
+                        if (record.dataValues) {
+                            record.dataValues.monthly_total = totalsMap[key];
+                        } else {
+                            record.monthly_total = totalsMap[key];
+                        }
                     }
                 }
             });
@@ -136,7 +149,8 @@ exports.update = async (req, res) => {
     try {
         const requiredFields = {
             employee_id: "Employee",
-            payroll_month: "Payroll Month",
+            month: "Month",
+            year: "Year",
             amount: "Amount",
             payment_date: "Payment Date",
             payment_mode: "Payment Mode",
@@ -163,6 +177,8 @@ exports.update = async (req, res) => {
             payment_date: POST.payment_date,
             amount: POST.amount,
             payment_mode: POST.payment_mode,
+            month: POST.month,
+            year: POST.year
         };
 
         const paymentHistory = await commonQuery.updateRecordById(PaymentHistory, {ref_id: updated.id}, paymentHistoryData, transaction);
@@ -277,7 +293,6 @@ exports.updateStatus = async (req, res) => {
 // exports.dropdownList = async (req, res) => {
 //     try {
 //         const fieldConfig = [
-//             ["payroll_month", true, true],
 //             ["payment_date", true, true],
 //             ["amount", true, true]
 //         ];
@@ -286,7 +301,7 @@ exports.updateStatus = async (req, res) => {
 //             { ...req.body, status: 0 },
 //             fieldConfig,
 //             {
-//                 attributes: ['id', 'employee_id', 'payroll_month', 'amount', 'payment_date']
+//                 attributes: ['id', 'employee_id', 'amount', 'payment_date']
 //             }
 //         );
 
@@ -298,22 +313,19 @@ exports.updateStatus = async (req, res) => {
 
 exports.advanceView = async (req, res) => {
     try {
-        const { employee_id, payroll_month } = req.body;
+        const { employee_id, month, year } = req.body;
         
         if (!employee_id) {
             return res.error(constants.INVALID_ID);
         }
         
         let whereCondition = { employee_id };
-        if (payroll_month) {
-            const yearMonth = payroll_month.substring(0, 7);
+        if (month && year) {
             whereCondition = {
                 [Op.and]: [
                     { employee_id },
-                    sequelize.where(
-                        sequelize.fn('TO_CHAR', sequelize.col('payroll_month'), 'YYYY-MM'),
-                        yearMonth
-                    )
+                    { month },
+                    { year }
                 ]
             };
         }
@@ -327,7 +339,7 @@ exports.advanceView = async (req, res) => {
                     { model: Employee, as: 'employee', attributes: [] },
                     { model: PaymentHistory, as: 'paymentHistory', attributes: [] }
                 ],
-                attributes: ['id', 'employee_id', 'payroll_month', 'amount', 'payment_date', 'payment_mode', 'notes', 'status']
+                attributes: ['id', 'employee_id', 'month', 'year', 'amount', 'payment_date', 'payment_mode', 'notes', 'status']
             },
             true,
             'createdAt',
