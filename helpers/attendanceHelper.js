@@ -209,12 +209,12 @@ async function punch(employeeId, meta, transaction = null) {
   // So we skip the redundant search for lastPunch here
 
   // 5️⃣ Validation: Minimum 2 minutes gap between any consecutive punches
-  // if (lastPunchGlobal) {
-  //   const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
-  //   if (minutesSinceLastPunch < 2) {
-  //     throw new Err("Please wait at least 2 minutes between scans");
-  //   }
-  // }
+  if (lastPunchGlobal) {
+    const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
+    if (minutesSinceLastPunch < 2) {
+      throw new Err("Please wait at least 2 minutes between scans");
+    }
+  }
 
   // 4️⃣ Save raw punch
   const newPunch = await commonQuery.createRecord(AttendancePunch, {
