@@ -13,12 +13,12 @@ module.exports = (sequelize, DataTypes) => {
 
         // --- LATE ENTRY & EARLY EXIT RULES ---
         late_entry_limit: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Allowed late entries per month before fine' },
-        late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
+        late_entry_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION', 'HALF_DAY', 'FULL_DAY'), defaultValue: 'NONE' },
         late_entry_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
         late_entry_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for late entry' },
 
         early_exit_limit: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Allowed early exits per month before fine' },
-        early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION'), defaultValue: 'NONE' },
+        early_exit_fine_type: { type: DataTypes.ENUM('NONE', 'FIXED', 'PERCENTAGE', 'DEDUCTION', 'MINUTE_DEDUCTION', 'HALF_DAY', 'FULL_DAY'), defaultValue: 'NONE' },
         early_exit_fine_value: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
         early_exit_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for early exit' },
 

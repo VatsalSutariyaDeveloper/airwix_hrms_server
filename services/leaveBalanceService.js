@@ -85,7 +85,7 @@ class LeaveBalanceService {
         }
 
         let total = (diffMonths * monthlyRate) + joinMonthCredit;
-        return Math.round(total * 10) / 10;
+        return Math.ceil(total * 2) / 2;
     }
 
     /**
@@ -147,7 +147,7 @@ class LeaveBalanceService {
                 }
 
                 // Apply Rounding to Allocation
-                allocated = Math.round(allocated * 10) / 10;
+                allocated = Math.ceil(allocated * 2) / 2;
 
                 // Metadata to store from template category
                 const metaFields = {
@@ -170,7 +170,7 @@ class LeaveBalanceService {
                 // Calculate pending leaves (considering existing usage if applicable)
                 const carryForward = existingBalance ? parseFloat(existingBalance.carry_forward_leaves || 0) : 0;
                 const used = existingBalance ? parseFloat(existingBalance.used_leaves || 0) : 0;
-                let pending = Math.round((allocated + carryForward - used) * 10) / 10;
+                let pending = Math.ceil((allocated + carryForward - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
                 if ((!category.is_paid && !category.is_compoff) || pending < 0) {
@@ -612,10 +612,17 @@ class LeaveBalanceService {
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 } else if (manualRequest) {
-                    // If it's a single day manual request, cancel it
-                    if (manualRequest.start_date === date && manualRequest.end_date === date) {
-                        await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
-                        await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
+                    // [MOD] Check if category has an automation rule marking day as 'Present' (Status 0)
+                    const category = await commonQuery.findOneRecord(LeaveTemplateCategory, manualRequest.leave_category_id, {}, t);
+                    const rules = category?.automation_rules ? JSON.parse(category.automation_rules) : {};
+                    const isForcedPresent = rules.auto_attendance_status === "0"; 
+
+                    if (!isForcedPresent) {
+                        // If it's a single day manual request, cancel it
+                        if (manualRequest.start_date === date && manualRequest.end_date === date) {
+                            await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
+                            await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
+                        }
                     }
                 }
             }

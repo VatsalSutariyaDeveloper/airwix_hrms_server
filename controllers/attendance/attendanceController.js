@@ -685,71 +685,71 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
-    if (emp.leave_template) {
-        // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
-        const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+    // if (emp.leave_template) {
+    //     // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
+    //     const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
         
-        const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
-            leave_template_id: emp.leave_template,
-            leave_category_name: "Short Leave",
-            status: 0
-        }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
+    //     const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+    //         leave_template_id: emp.leave_template,
+    //         leave_category_name: "Short Leave",
+    //         status: 0
+    //     }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
 
-        if (shortLeaveCategory && currentDay) {
-            const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
-            const currentLateMinutes = currentDay.late_minutes || 0;
-            const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
-            const currentLastOut = currentDay.last_out;
+    //     if (shortLeaveCategory && currentDay) {
+    //         const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
+    //         const currentLateMinutes = currentDay.late_minutes || 0;
+    //         const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
+    //         const currentLastOut = currentDay.last_out;
             
-            const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
-            const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+    //         const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
+    //         const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
 
-            const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
-                employee_id: employee_id,
-                start_date: attendance_date,
-                leave_category_id: shortLeaveCategory.id,
-                reason: AUTO_REASON_LATE,
-                status: 0
-            }, {}, t);
+    //         const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
+    //             employee_id: employee_id,
+    //             start_date: attendance_date,
+    //             leave_category_id: shortLeaveCategory.id,
+    //             reason: AUTO_REASON_LATE,
+    //             status: 0
+    //         }, {}, t);
 
-            if (isLateForShortLeave) {
-                if (!existingShortLeave) {
-                    // Check balance before deducting
-                    const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                        employee_id: employee_id,
-                        leave_category_id: shortLeaveCategory.id,
-                        status: 0
-                    }, {}, t, false, { company_id: true });
+    //         if (isLateForShortLeave) {
+    //             if (!existingShortLeave) {
+    //                 // Check balance before deducting
+    //                 const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+    //                     employee_id: employee_id,
+    //                     leave_category_id: shortLeaveCategory.id,
+    //                     status: 0
+    //                 }, {}, t, false, { company_id: true });
 
 
-                    if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
-                        const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
-                        if (leaveError) {
-                            console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
-                            await t.rollback();
-                            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-                        }
-                        await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
-                            where: { 
-                                employee_id: employee_id, 
-                                start_date: attendance_date, 
-                                leave_category_id: shortLeaveCategory.id,
-                                reason: "Auto-generated from Attendance"
-                            },
-                            transaction: t 
-                        });
-                    } 
-                }
-            } else if (existingShortLeave) {
-                // Reverse deduction if conditions are no longer met
-                const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
-                if (leaveError) {
-                    await t.rollback();
-                    return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-                }
-            }
-        }
-    }
+    //                 if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
+    //                     const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
+    //                     if (leaveError) {
+    //                         console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
+    //                         await t.rollback();
+    //                         return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+    //                     }
+    //                     await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
+    //                         where: { 
+    //                             employee_id: employee_id, 
+    //                             start_date: attendance_date, 
+    //                             leave_category_id: shortLeaveCategory.id,
+    //                             reason: "Auto-generated from Attendance"
+    //                         },
+    //                         transaction: t 
+    //                     });
+    //                 } 
+    //             }
+    //         } else if (existingShortLeave) {
+    //             // Reverse deduction if conditions are no longer met
+    //             const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
+    //             if (leaveError) {
+    //                 await t.rollback();
+    //                 return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+    //             }
+    //         }
+    //     }
+    // }
 
     await t.commit();
     return res.success(constants.ATTENDANCE_UPDATED, result);
@@ -1491,7 +1491,7 @@ exports.getLeaveSummary = async (req, res) => {
         id: b.id,
         leave_name: b.leave_category_name,
         balance: `${left.toFixed(1)} Left`,
-        to_be_accrued: 0 // Following design
+        to_be_accrued: `${used.toFixed(1)} Left` // Following design
       };
     });
 

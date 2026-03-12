@@ -1,4 +1,4 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -90,6 +90,85 @@ exports.create = async (req, res) => {
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction, false, { company_id: true });
+        if (!category) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
+        }
+
+        // --- Automation Rules Validation ---
+        const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+
+        // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
+        if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
+            const refDate = dayjs(start_date);
+            let startDateRange, endDateRange;
+
+            if (rules.limit_window === 'monthly') {
+                startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+            } else if (rules.limit_window === 'quarterly') {
+                startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
+            } else if (rules.limit_window === 'yearly') {
+                startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
+            }
+
+            if (startDateRange && endDateRange) {
+                const totalUsed = await LeaveRequest.sum('total_days', {
+                    where: {
+                        employee_id,
+                        leave_category_id,
+                        approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
+                        status: 0,
+                        start_date: { [Op.between]: [startDateRange, endDateRange] }
+                    },
+                    transaction
+                }) || 0;
+
+                if ((totalUsed + total_days) > rules.max_total_days) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${rules.max_total_days} days allowed per ${rules.limit_window}. Already used: ${totalUsed} days.` });
+                }
+            }
+        }
+console.log("rules", rules);
+console.log("start_date", start_date);
+console.log("end_date", end_date);
+        // 3. Min Working Time & Late/Early Exit (Check Attendance)
+        if (rules.min_working_time_mins || rules.max_late_early_mins) {
+            const attDate = dayjs(start_date).format('YYYY-MM-DD');
+            const isToday = attDate === dayjs().format('YYYY-MM-DD');
+            const isPast = dayjs(attDate).isBefore(dayjs().startOf('day'));
+
+            const attendance = await commonQuery.findOneRecord(AttendanceDay, {
+                employee_id,
+                attendance_date: attDate,
+                status: { [Op.ne]: 2 }
+            }, {}, transaction);
+
+            if (attendance) {
+                if (rules.min_working_time_mins && (attendance.worked_minutes || 0) < rules.min_working_time_mins) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: `Insufficient working time. Required: ${rules.min_working_time_mins} mins. Current: ${attendance.worked_minutes || 0} mins.` });
+                }
+
+                if (rules.max_late_early_mins) {
+                    const lateMins = attendance.late_minutes || 0;
+                    const earlyMins = attendance.early_out_minutes || 0;
+                    if (lateMins > rules.max_late_early_mins || earlyMins > rules.max_late_early_mins) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins.` });
+                    }
+                }
+            } else if (isToday || isPast) {
+                // If no attendance record exists for today or a past date, the rule is violated
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: `This leave requires a valid attendance record for the day (Minimum working time or Late/Early exit check).` });
+            }
         }
 
         const template = employee.leaveTemplate;
