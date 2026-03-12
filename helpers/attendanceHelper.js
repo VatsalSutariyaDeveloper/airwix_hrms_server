@@ -125,7 +125,7 @@ async function punch(employeeId, meta, transaction = null) {
           employee_id: employeeId, punch_type: "OUT", day_id: lastIn.day_id, status: 0
         }, {}, transaction);
         if (hasOut) {
-          throw new Err("Multiple punches are disabled. You have already completed your punch session for this cycle.");
+          throw new Err("Already Punched");
         }
       }
     }
@@ -212,7 +212,7 @@ async function punch(employeeId, meta, transaction = null) {
   if (lastPunchGlobal) {
     const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
     if (minutesSinceLastPunch < 2) {
-      throw new Err("Please wait at least 2 minutes between scans");
+      throw new Err("Please wait 2 minutes between punches");
     }
   }
 
