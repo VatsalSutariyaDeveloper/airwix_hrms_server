@@ -56,7 +56,7 @@ function authMiddleware(req, res, next) {
       is_admin: decoded.role_id == 2,
       access: decoded.access || (decoded.role_id ? "employee" : "attendance device")
     };
-console.log("req.user",req.user)
+// console.log("req.user",req.user)
     requestContext.run(
       {
         userId: decoded.id,

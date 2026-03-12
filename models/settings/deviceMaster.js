@@ -3,6 +3,8 @@ module.exports = (sequelize, DataTypes) => {
         "DeviceMaster",
         {
             device_name: { type: DataTypes.STRING, allowNull: false },
+            imei_number: { type: DataTypes.STRING, allowNull: true },
+            ip_address: { type: DataTypes.STRING, allowNull: true },
             mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,

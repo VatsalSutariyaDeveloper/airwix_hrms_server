@@ -356,6 +356,15 @@ const constants = {
     APPROVED: 3,
     REJECTED: 4,
     CANCELLED: 5
+  },
+
+  ON_DUTY_STATUS: {
+    PENDING: 0,
+    PARTIALLY_APPROVED: 1,
+    DELETED: 2,
+    APPROVED: 3,
+    REJECTED: 4,
+    CANCELLED: 5
   }
 };
 

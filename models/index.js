@@ -26,6 +26,7 @@ const CompanyAddress = require("./settings/company/companyAddress")(sequelize, D
 const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
 const DesignationMaster = require("./settings/designationMaster")(sequelize, DataTypes);
 const BranchMaster = require("./settings/branchMaster")(sequelize, DataTypes);
+const OnDutyRequest = require("./settings/onDutyRequest")(sequelize, DataTypes);
 
 
 // Auth models
@@ -134,6 +135,7 @@ const db = {
   DeviceMaster,
   DesignationMaster,
   BranchMaster,
+  OnDutyRequest,
 
   // SeriesTypeMaster
   SeriesTypeMaster,

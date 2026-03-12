@@ -70,15 +70,21 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        // Find the record by settings_name
+        // Find the record by settings_name and company_id
         const existingRecord = await commonQuery.findOneRecord(EmployeeSettings, {
             settings_name: POST.settings_name,
             status: 0
         }, {}, transaction);
 
         if (!existingRecord) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Settings record not found" });
+            const newRecord = {
+                settings_name: POST.settings_name,
+                settings_value: POST.settings_value,
+            };
+            
+            await commonQuery.createRecord(EmployeeSettings, newRecord, transaction);
+            await transaction.commit();
+            return res.success(constants.CREATED);
         }
 
         // Update the found record

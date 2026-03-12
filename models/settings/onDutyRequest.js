@@ -1,0 +1,48 @@
+module.exports = (sequelize, DataTypes) => {
+    const OnDutyRequest = sequelize.define(
+        "OnDutyRequest",
+        {
+            employee_id: {
+                type: DataTypes.INTEGER,
+                allowNull: false,
+                references: { model: "employees", key: "id" },
+            },
+            start_date: { type: DataTypes.DATEONLY, allowNull: false },
+            end_date: { type: DataTypes.DATEONLY, allowNull: false },
+            total_days: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+            reason: { type: DataTypes.TEXT, allowNull: true },
+            approval_status: { 
+                type: DataTypes.INTEGER, 
+                defaultValue: 0,
+                comment: "0=PENDING, 1=PARTIALLY_APPROVED, 2=DELETED, 3=APPROVED, 4=REJECTED, 5=CANCELLED" 
+            },
+            current_on_duty_level: { 
+                type: DataTypes.INTEGER, 
+                defaultValue: 1,
+                comment: "Tracks the current approval stage"
+            },
+            approval_history: { 
+                type: DataTypes.JSON, 
+                allowNull: true,
+                comment: "Record of who approved at each level"
+            },
+            approved_by: { type: DataTypes.INTEGER, allowNull: true },
+            company_id: { type: DataTypes.INTEGER, allowNull: true },
+            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            user_id: { type: DataTypes.INTEGER, allowNull: true },
+            status: { type: DataTypes.SMALLINT, defaultValue: 0 },
+        },
+        {
+            tableName: "on_duty_requests",
+            timestamps: true,
+            underscored: true,
+        }
+    );
+
+    OnDutyRequest.associate = (models) => {
+        OnDutyRequest.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+        OnDutyRequest.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
+    };
+
+    return OnDutyRequest;
+};

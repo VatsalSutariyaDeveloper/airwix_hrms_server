@@ -1,8 +1,6 @@
 const { DeviceMaster } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const ApprovalEngine = require("../../helpers/approvalEngine");
-const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 
 const STATUS = {
     ACTIVE: 0,
@@ -18,13 +16,14 @@ exports.create = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
+            imei_number: "IMEI Number",
+            ip_address: "IP Address",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
             uniqueCheck: {
                 model: DeviceMaster,
-                fields: ["device_name", "mobile_no"],
-                excludeId: req.params.id,
+                fields: ["device_name", "mobile_no", 'imei_number'],
             }
         }, transaction);
 
@@ -48,6 +47,8 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["device_name", true, true],
+            ["ip_address", true, true],
+            ['imei_number', true, true]
         ];
 
         const data = await commonQuery.fetchPaginatedData(
@@ -79,7 +80,9 @@ exports.update = async (req, res) => {
         // Only validate fields sent in request
         const requiredFields = {
             device_name: "Device Name",
-            mobile_no: "Mobile No"
+            mobile_no: "Mobile No",
+            imei_number: "IMEI Number",
+            ip_address: "IP Address",
         };
 
         const errors = await validateRequest(
@@ -88,7 +91,7 @@ exports.update = async (req, res) => {
             {
                 uniqueCheck: {
                     model: DeviceMaster,
-                    fields: ["device_name", "mobile_no"],
+                    fields: ["device_name", "mobile_no", "imei_number"],
                     excludeId: req.params.id,
                 }
             },
