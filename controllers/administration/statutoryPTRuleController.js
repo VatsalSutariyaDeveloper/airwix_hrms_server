@@ -36,7 +36,7 @@ exports.create = async (req, res) => {
 
 // Get all status shift records
 exports.getAll = async (req, res) => {
-    console.log(req.data);
+    // console.log(req.data);
     try {
 
         const fieldConfig = [

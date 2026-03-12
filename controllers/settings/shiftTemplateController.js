@@ -176,8 +176,8 @@ exports.update = async (req, res) => {
                 end_time: b.end_time === "" ? null : b.end_time,
                 shift_template_id: req.params.id,
                 user_id: req.user?.id || 0,
-                branch_id: req.body.branch_id || 0,
-                company_id: req.body.company_id || 0
+                branch_id: req.user.branch_id || 0,
+                company_id: req.user.company_id || 0
             }));
             await commonQuery.bulkCreate(ShiftBreak, breaks, {}, transaction, { company_id: true });
         }

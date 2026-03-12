@@ -6,7 +6,7 @@ const { User, CompanyMaster, BranchMaster } = require("../models");
  * This is crucial for ensuring that all operations are performed within a valid tenant and user context.
  */
 const validateTenant = async (req, res, next) => {
-  console.log(req.body)
+  // console.log(req.body)
   const { company_id, branch_id, user_id } = req.body;
 
   // 1. Check for the presence of required IDs in the request body.

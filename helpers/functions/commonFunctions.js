@@ -1,6 +1,6 @@
 const NodeCache = require("node-cache");
 const { literal, Op } = require("sequelize");
-const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster,  } = require("../../models");
+const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings  } = require("../../models");
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
@@ -438,41 +438,66 @@ exports.createOrUpdateNotification = async (data, transaction = null) => {
 
 exports.initializeCompanySettings = async (company_id, branch_id, user_id, transaction) => {
     try {
-        // 1. Fetch all Master Settings (definitions)
-        // We assume status: 0 means Active master settings
-        const masterSettings = await commonQuery.findAllRecords(
-            CompanySettingsMaster, 
-            { status: 0 }, 
-            {}, 
-            transaction, 
-            false // No tenant check needed for Master table
-        );
+        // // 1. Fetch all Master Settings (definitions)
+        // // We assume status: 0 means Active master settings
+        // const masterSettings = await commonQuery.findAllRecords(
+        //     CompanySettingsMaster, 
+        //     { status: 0 }, 
+        //     {}, 
+        //     transaction, 
+        //     false // No tenant check needed for Master table
+        // );
 
-        if (!masterSettings || masterSettings.length === 0) {
-            console.warn("No Master Settings found to initialize.");
-            return;
-        }
+        // if (!masterSettings || masterSettings.length === 0) {
+        //     console.warn("No Master Settings found to initialize.");
+        //     return;
+        // }
 
-        // 2. Prepare Payload for CompanyConfigration
-        const settingsPayload = masterSettings.map(setting => ({
-            company_id: company_id,
-            branch_id: branch_id,
-            user_id: user_id,
-            setting_key: setting.setting_key,
-            // Use the default value from master, or empty string if null
-            setting_value: setting.default_value !== null ? setting.default_value : "", 
-            status: 0
-        }));
+        // // 2. Prepare Payload for CompanyConfigration
+        // const settingsPayload = masterSettings.map(setting => ({
+        //     company_id: company_id,
+        //     branch_id: branch_id,
+        //     user_id: user_id,
+        //     setting_key: setting.setting_key,
+        //     setting_value: setting.default_value !== null ? setting.default_value : "", 
+        //     status: 0
+        // }));
 
-        // 3. Bulk Create
-        await commonQuery.bulkCreate(
-            CompanyConfigration, 
-            settingsPayload, 
-            { company_id, branch_id, user_id }, 
+        // // 3. Bulk Create
+        // await commonQuery.bulkCreate(
+        //     CompanyConfigration, 
+        //     settingsPayload, 
+        //     { company_id, branch_id, user_id }, 
+        //     transaction
+        // );
+
+        const employeeSettingsPayload = [
+            {
+                settings_name: "is_auto_generate_employee_code",
+                settings_value: true,
+                status: 0,
+                user_id: user_id,
+                branch_id: branch_id,
+                company_id: company_id
+            },
+            {
+                settings_name: "employee_series",
+                settings_value: [],
+                status: 0,
+                user_id: user_id,
+                branch_id: branch_id,
+                company_id: company_id
+            }
+        ];
+
+        const data = await commonQuery.bulkCreate(
+            EmployeeSettings,
+            employeeSettingsPayload,
+            { company_id, branch_id, user_id },
             transaction
         );
         
-        console.log(`Initialized ${settingsPayload.length} settings for Company ${company_id}`);
+        // console.log(`Initialized ${settingsPayload.length} settings for Company ${company_id}`);
         return true;
 
     } catch (error) {

@@ -27,6 +27,7 @@ const designationMasterController = require("../controllers/settings/designation
 const incentiveTypeController = require("../controllers/settings/incentiveTypeController");
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
+const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -286,7 +287,19 @@ router.patch("/custom-fields/status", customFieldController.updateStatus);
 // Base Path: /employee-settings
 router.post("/employee-settings/", employeeSettingsController.create);
 router.post("/employee-settings/get-transactions", employeeSettingsController.getAll);
-router.put("/employee-settings/", employeeSettingsController.update);
+router.put("/employee-settings/update", employeeSettingsController.update);
+
+// ==========================
+// 39. ON DUTY REQUEST ROUTES
+// ==========================
+router.post("/onDuty-request/", onDutyRequestController.create);
+router.post("/onDuty-request/get-transactions", onDutyRequestController.getAll);
+router.post("/onDuty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
+router.get("/onDuty-request/:id", onDutyRequestController.getById);
+router.put("/onDuty-request/status/:id", onDutyRequestController.updateStatus);
+router.put("/onDuty-request/cancel/:id", onDutyRequestController.cancelLeave);
+router.post("/on-duty-summary", onDutyRequestController.getOnDutySummary);
+
 
 
 module.exports = router;
