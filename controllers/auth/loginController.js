@@ -666,7 +666,7 @@ exports.generatePin = async (req, res) => {
     if(!isDevice && entity.employee_id){
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image'],
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
           transaction
       });
 
@@ -674,6 +674,7 @@ exports.generatePin = async (req, res) => {
           entity.is_attendance_supervisor = employee.is_attendance_supervisor;
           entity.is_reporting_manager = employee.is_reporting_manager;
           entity.employee_profile_image = employee.profile_image;
+          entity.joining_date = employee.joining_date;
       }
     }
 
@@ -708,6 +709,7 @@ exports.generatePin = async (req, res) => {
       id: entity.id,
       role_id: isDevice ? null : entity.role_id,
       employee_id: isDevice ? null : entity.employee_id,
+      joining_date: isDevice ? null : entity.joining_date,
       is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
@@ -893,7 +895,7 @@ exports.pinLogin = async (req, res) => {
     if(!isDevice && entity.employee_id){
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image'],
+          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
           transaction
       });
 
@@ -901,6 +903,7 @@ exports.pinLogin = async (req, res) => {
           entity.is_attendance_supervisor = employee.is_attendance_supervisor;
           entity.is_reporting_manager = employee.is_reporting_manager;
           entity.employee_profile_image = employee.profile_image;
+          entity.joining_date = employee.joining_date;
       }
     }
 
@@ -935,6 +938,7 @@ exports.pinLogin = async (req, res) => {
       id: entity.id,
       role_id: isDevice ? null : entity.role_id,
       employee_id: isDevice ? null : entity.employee_id,
+      joining_date: isDevice ? null : entity.joining_date,
       is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
