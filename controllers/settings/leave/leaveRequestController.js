@@ -32,8 +32,12 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        let { employee_id, leave_category_id, start_date, end_date } = req.body;
+        let { employee_id, leave_category_id, start_date, end_date, start_session, end_session } = req.body;
         const currentYear = new Date(start_date).getFullYear();
+
+        // 0=Full Day, 1=Session 1, 2=Session 2
+        start_session = parseInt(start_session) || 0;
+        end_session = parseInt(end_session) || 0;
 
         // Map requested total_days to preserved half-days/custom entries
         const requestedTotal = parseFloat(req.body.total_days || 0);
@@ -50,8 +54,18 @@ exports.create = async (req, res) => {
             // --- Calculate total_days based on Sandwich Policy via Service ---
             const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
 
-            const reduction = calendarDays - requestedTotal; // accounts for 0.5 or other reductions
-            total_days = Math.max(0, workingDays - reduction);
+            // Calculate session-based reduction
+            let sessionReduction = 0;
+            if (start_session !== 0) sessionReduction += 0.5;
+            if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
+            
+            // If it's a single day leave and a session is selected, total is 0.5
+            if (start_date === end_date && start_session !== 0) {
+                total_days = workingDays > 0 ? 0.5 : 0;
+            } else {
+                total_days = Math.max(0, workingDays - sessionReduction);
+            }
+            
             total_days = Math.round(total_days * 10) / 10;
 
             // Check for Overlapping Leaves (Only for regular leaves)
@@ -135,9 +149,7 @@ exports.create = async (req, res) => {
                 }
             }
         }
-console.log("rules", rules);
-console.log("start_date", start_date);
-console.log("end_date", end_date);
+        
         // 3. Min Working Time & Late/Early Exit (Check Attendance)
         if (rules.min_working_time_mins || rules.max_late_early_mins) {
             const attDate = dayjs(start_date).format('YYYY-MM-DD');
@@ -742,12 +754,22 @@ exports.calculateLeaveDays = async (req, res) => {
         let workingDays = 0;
         const dateWiseBreakdown = [];
         const isEncashment = req.body.is_encashment === true || req.body.is_encashment === "true";
+        let { start_session, end_session } = req.body;
+        start_session = parseInt(start_session) || 0;
+        end_session = parseInt(end_session) || 0;
 
         if (isEncashment) {
             workingDays = calendarDays;
+            if (start_date === end_date && start_session !== 0) {
+                workingDays = 0.5;
+            } else {
+                if (start_session !== 0) workingDays -= 0.5;
+                if (end_session !== 0 && start_date !== end_date) workingDays -= 0.5;
+            }
         } else {
             for (let i = 0; i < calendarDays; i++) {
-                const cur = start.add(i, 'day').format('YYYY-MM-DD');
+                const curDate = start.add(i, 'day');
+                const cur = curDate.format('YYYY-MM-DD');
                 const dayOff = await getDayOffInfo(employee, cur);
 
                 let dayStatus = "Working Day";
@@ -767,12 +789,20 @@ exports.calculateLeaveDays = async (req, res) => {
                     is_working: isWorking
                 });
 
-                if (countSandwich) {
-                    workingDays += 1;
-                } else {
-                    if (isWorking) {
-                        workingDays += 1;
+                if (isWorking || countSandwich) {
+                    let dayVal = 1;
+                    if (i === 0 && start_session !== 0) {
+                        dayVal = 0.5;
+                    } else if (i === (calendarDays - 1) && end_session !== 0) {
+                        dayVal = 0.5;
                     }
+                    
+                    // Handle single day session leave
+                    if (calendarDays === 1 && start_session !== 0) {
+                        dayVal = 0.5;
+                    }
+
+                    workingDays += dayVal;
                 }
             }
         }

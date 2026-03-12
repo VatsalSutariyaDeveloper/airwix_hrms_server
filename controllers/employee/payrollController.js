@@ -1654,9 +1654,9 @@ exports.getSalaryOverview = async (req, res) => {
                         is_statutory: d.is_statutory
                     }));
 
-                    const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
-                    const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
-                    const netPayable = totalEarn - totalDed;
+                    // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
+                    // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
+                    const netPayable = summary.breakdown.total_earnings - summary.breakdown.total_deductions;
 
                     overview.push({
                         month: m.month,

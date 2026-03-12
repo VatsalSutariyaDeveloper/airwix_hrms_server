@@ -913,6 +913,25 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
           employee: emp, // Pass pre-fetched employee
           existingDay: existingRecord // Pass pre-fetched day
         }, t);
+        // Refresh after manualPunch (which calls rebuild)
+        existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
+          employee_id, 
+          attendance_date,
+        }, {}, t);
+      } else if ([0, 1, 12, 13].includes(status)) {
+          // If marking present/working without providing times, trigger a rebuild to process any existing punches
+          await rebuildAttendanceDay(employee_id, attendance_date, {
+            user_id: req.user.id,
+            company_id: req.user.company_id,
+            branch_id: req.user.branch_id,
+            shift_id: employee_shift_id,
+            employee: emp
+          }, t);
+          // Refresh after rebuild
+          existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
+            employee_id, 
+            attendance_date,
+          }, {}, t);
       }
 
       const payload = {

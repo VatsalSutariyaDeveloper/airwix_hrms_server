@@ -38,6 +38,16 @@ module.exports = (sequelize, DataTypes) => {
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             is_encashment: { type: DataTypes.BOOLEAN, defaultValue: false },
+            start_session: { 
+                type: DataTypes.SMALLINT, 
+                defaultValue: 0,
+                comment: "0=Full Day, 1=Session 1, 2=Session 2"
+            },
+            end_session: { 
+                type: DataTypes.SMALLINT, 
+                defaultValue: 0,
+                comment: "0=Full Day, 1=Session 1, 2=Session 2"
+            },
         },
         {
             tableName: "leave_requests",
