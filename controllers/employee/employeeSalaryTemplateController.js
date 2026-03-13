@@ -1,13 +1,19 @@
-
 const {
     Employee,
     EmployeeSalaryTemplate,
     EmployeeSalaryTemplateTransaction,
     SalaryComponent,
     sequelize,
-    SalaryRevisionHistory
+    SalaryRevisionHistory,
+    WeeklyOffTemplate,
+    WeeklyOffTemplateDay,
+    ShiftTemplate,
+    EmployeeShift,
+    EmployeeWeeklyOff
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
+const { calculateWorkingAndOffDays } = require("../../helpers/functions/commonFunctions");
+const dayjs = require("dayjs");
 const { constants } = require("../../helpers/constants");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
@@ -28,7 +34,7 @@ const employeeSalaryTemplateController = {
                         include: [{
                             model: SalaryComponent,
                             as: "component",
-                            attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component","formula"]
+                            attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component", "formula"]
                         }]
                     }]
                 },
@@ -41,7 +47,82 @@ const employeeSalaryTemplateController = {
                 return res.error("VALIDATION_ERROR", "No salary template assigned to this employee");
             }
 
-            return res.success("Employee salary template fetched successfully", template);
+            // Fetch dynamic working days and hours
+            const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+                attributes: ['id', 'weekly_off_template', 'shift_template']
+            });
+
+            let workingDays = 26;
+            let monthDays = 30;
+            let unitWorkingHours = 8;
+
+            if (employee) {
+                // 1. Working Days - Check Employee-specific weekly offs first
+                let weeklyOffDays = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+                    employee_id: employeeId,
+                    status: 0
+                }, {}, null, { company_id: true });
+
+                // If no specific employee weekly offs, fallback to template
+                if ((!weeklyOffDays || weeklyOffDays.length === 0) && employee.weekly_off_template) {
+                    const weeklyOffTemplate = await commonQuery.findOneRecord(
+                        WeeklyOffTemplate,
+                        employee.weekly_off_template,
+                        {
+                            include: [{ model: WeeklyOffTemplateDay, as: "days" }]
+                        },
+                        null,
+                        false,
+                        { company_id: true }
+                    );
+
+                    if (weeklyOffTemplate) {
+                        weeklyOffDays = weeklyOffTemplate.days;
+                    }
+                }
+
+                if (weeklyOffDays && weeklyOffDays.length > 0) {
+                    const result = calculateWorkingAndOffDays(weeklyOffDays, new Date());
+                    workingDays = result.working_days;
+                    monthDays = result.total_days_in_month;
+                }
+
+                // 2. Working Hours from Shift
+                const dateObj = dayjs();
+                const dayOfWeek = dateObj.day();
+
+                const empShift = await commonQuery.findOneRecord(EmployeeShift, {
+                    employee_id: employeeId,
+                    day_of_week: dayOfWeek,
+                    status: 0,
+                }, {}, null, false, { company_id: true });
+
+                let shift = null;
+                if (empShift && empShift.shift_id) {
+                    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, null, false, { company_id: true });
+                } else if (!empShift && employee.shift_template) {
+                    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+                } else if (empShift && !empShift.shift_id) {
+                    shift = empShift; // Manual shift configuration
+                }
+
+                if (shift) {
+                    if (parseFloat(shift.total_payable_hours) > 0) {
+                        unitWorkingHours = parseFloat(shift.total_payable_hours) / 60;
+                    } else if (shift.min_full_day_minutes > 0) {
+                        unitWorkingHours = shift.min_full_day_minutes / 60;
+                    }
+                }
+            }
+
+            const responseData = {
+                ...template.toJSON(),
+                working_days: workingDays,
+                month_days: monthDays,
+                unit_working_hours: unitWorkingHours
+            };
+
+            return res.success("Employee salary template fetched successfully", responseData);
         } catch (error) {
             return handleError(error, res, req);
         }

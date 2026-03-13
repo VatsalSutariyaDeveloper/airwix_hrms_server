@@ -179,7 +179,7 @@ exports.create = async (req, res) => {
             } else if (isToday || isPast) {
                 // If no attendance record exists for today or a past date, the rule is violated
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: `This leave requires a valid attendance record for the day (Minimum working time or Late/Early exit check).` });
+                return res.error("RULE_VIOLATION", { message: `Your Selected Date has no attendance record. Please add attendance first.` });
             }
         }
 
