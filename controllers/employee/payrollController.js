@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -256,8 +256,9 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
-
+    const advances = employee.employeeAdvances || [];
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
+    const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
 
     // Fetch Payment History for the month
     const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
@@ -405,7 +406,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
             return;
         }
-
         if (comp.is_statutory) {
             statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
             if (comp.component_type === "DEDUCTION") {
@@ -413,47 +413,67 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, base_amount: amount, amount: amount, is_statutory: true });
+                earnings.push({ name: comp.component_name, amount: amount, is_statutory: true });
             }
             return;
         }
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
+            // For Basic component, divide amount by payable days
+            let finalAmount = actualAmount;
+            if (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic')) {
+                finalAmount = parseFloat((actualAmount / (payableDaysValue || 1)).toFixed(2));
+            }
+            
             earnings.push({
                 name: comp.component_name,
-                base_amount: amount,
-                amount: actualAmount
+                amount: finalAmount
             });
 
-            takeHomeEarnings += actualAmount;
+            takeHomeEarnings += finalAmount;
         } else if (comp.component_type === "DEDUCTION") {
             const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
+            // Extract base rate from formula for food components
+            let rateValue = parseFloat(plain.monthly_amount || amount || 0);
+            if (isFoodComp && (plain.formula || comp.formula)) {
+                const formulaStr = plain.formula || comp.formula;
+                const rateMap = { ...valuesMap, CANTEEN_ATTENDANCE: 1 };
+                
+                const calculatedRate = evaluateComponentFormula(formulaStr, rateMap);
+                if (calculatedRate > 0) {
+                    rateValue = calculatedRate;
+                }
+            }
+            
             deductions.push({
                 name: comp.component_name,
                 amount: actualAmount,
                 is_food: isFoodComp,
                 meal_count: lunchCount,
-                rate: actualAmount
+                rate: rateValue
             });
             totalDeductions += actualAmount;
         } else if (comp.component_type === "BENEFIT") {
             earnings.push({
                 name: comp.component_name,
-                base_amount: amount,
                 amount: actualAmount,
                 is_benefit: true
             });
+            takeHomeEarnings += actualAmount;
         }
     });
 
+
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", base_amount: 0, amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
+        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
+    
+
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", base_amount: totalIncentive, amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
@@ -468,6 +488,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         deductions.push({ name: "Fines", amount: parseFloat(totalFine.toFixed(2)), is_fine: true });
         totalDeductions += totalFine;
     }
+
+    // Add advances to deductions
+    // if (totalAdvance > 0) {
+    //     deductions.push({ name: "Advance", amount: parseFloat(totalAdvance.toFixed(2)), is_advance: true });
+    //     totalDeductions += totalAdvance;
+    // }
 
     // Step G: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
@@ -493,13 +519,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         }
     }
 
-    if (tdsAmount > 0) {
-        statutory["Income Tax (TDS)"] = tdsAmount;
-        statutory["Income Tax (TDS) %"] = tdsPercentage;
-        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
-        totalDeductions += tdsAmount;
-    }
-
+    // if (tdsAmount > 0) {
+    //     statutory["Income Tax (TDS)"] = tdsAmount;
+    //     statutory["Income Tax (TDS) %"] = tdsPercentage;
+    //     deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
+    //     totalDeductions += tdsAmount;
+    // }    
     const netPayable = takeHomeEarnings - totalDeductions;
 
     // Calculate totals for breakdown arrays
@@ -622,6 +647,17 @@ const formatPayslipToSummary = async (payslip) => {
         })
         .reduce((sum, [, val]) => sum + parseFloat(val || 0), 0);
 
+    // Fetch Payment History for the month
+    const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
+        employee_id: payslip.employee_id,
+        month: payslip.month,
+        year: payslip.year,
+        status: { [Op.ne]: 2 }
+    }, {
+        attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
+    });
+    const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
+
     return {
         id: payslip.id,
         is_finalized: true,
@@ -691,6 +727,29 @@ const formatPayslipToSummary = async (payslip) => {
                     .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
                     .map(([, amount]) => amount)
             ].reduce((sum, val) => sum + val, 0).toFixed(2)
+        },
+        payment_history: {
+            salary: {
+                history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
+                    id: ph.id,
+                    amount: ph.amount,
+                    payment_mode: ph.payment_mode,
+                    payment_date: ph.payment_date,
+                    payment_type: ph.payment_type
+                })),
+                sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+            },
+            advance: {
+                history: paymentHistories.filter(ph => ph.payment_type === 'Advance').map(ph => ({
+                    id: ph.id,
+                    amount: ph.amount,
+                    payment_mode: ph.payment_mode,
+                    payment_date: ph.payment_date,
+                    payment_type: ph.payment_type
+                })),
+                sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+            },
+            grand_total: totalPaid.toFixed(2)
         }
     };
 };
@@ -718,13 +777,14 @@ exports.calculateMonthlySalary = async (req, res) => {
             }]
         });
 
-        if (existingPayslip) {
+        if (existingPayslip) {            
             const summary = await formatPayslipToSummary(existingPayslip);
             return res.ok(summary);
         }
 
         // 2. Otherwise perform fresh calculation based on attendance and template
         const summary = await performSalaryCalculation(employee_id, month, year);
+        
         return res.ok(summary);
     } catch (err) {
         return handleError(err, res, req);
@@ -1341,6 +1401,23 @@ exports.getPayslipById = async (req, res) => {
             status: { [Op.ne]: 2 }
         });
 
+        // Fetch Employee Leave Balance data
+        const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+            employee_id: payslip.employee_id,
+            year: year
+        });
+
+        // Fetch Payment History for the month
+        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
+            employee_id: payslip.employee_id,
+            month: month,
+            year: year,
+            status: { [Op.ne]: 2 }
+        }, {
+            attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
+        });
+        const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
+
         // Granular attendance recalculation for UI (since Payslip summary is slightly compressed)
         const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
         const absentDays = parseFloat(payslip.absent_days || 0);
@@ -1455,6 +1532,29 @@ exports.getPayslipById = async (req, res) => {
             },
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
+            leave_balances: leaveBalances,
+            payment_history: {
+                salary: {
+                    history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
+                        id: ph.id,
+                        amount: ph.amount,
+                        payment_mode: ph.payment_mode,
+                        payment_date: ph.payment_date,
+                        payment_type: ph.payment_type
+                    })),
+                    sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                },
+                advance: {
+                    history: paymentHistories.filter(ph => ph.payment_type === 'Advance').map(ph => ({
+                        id: ph.id,
+                        amount: ph.amount,
+                        payment_mode: ph.payment_mode,
+                        payment_date: ph.payment_date,
+                        payment_type: ph.payment_type
+                    })),
+                    sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                },
+            },
             status: payslip.status,
             status_text: payslip.status === 0 ? "Draft" : (payslip.status === 1 ? "Finalized" : "Paid")
         };
@@ -1533,26 +1633,31 @@ exports.getSalaryOverview = async (req, res) => {
                 status: { [Op.in]: [1, 2] }
             });
             if (payslip) {
+                // Use stored values from payslip database
                 const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
                 const fine = parseFloat(payslip.total_fine || 0);
-
+                
+                // Use stored earnings and deductions from break_down
                 const earnList = (breakdown.earnings || []).map(e => ({
                     name: e.name,
-                    amount: parseFloat(e.actual_amount || 0).toFixed(2),
+                    amount: parseFloat(e.amount || 0).toFixed(2),
+                    is_benefit: e.is_benefit,
+                    is_incentive: e.is_incentive,
                     is_employer: e.is_employer || false
                 }));
+                
                 const dedList = (breakdown.deductions || []).map(d => ({
                     name: d.name,
                     amount: parseFloat(d.amount || 0).toFixed(2),
                     is_food: d.is_food,
                     meal_count: d.meal_count,
-                    rate: d.rate
+                    rate: d.rate,
+                    is_statutory: d.is_statutory
                 }));
 
-                // Include Statutory Employee Deductions in list
+                // Include Statutory Employee Deductions from stored statutory_details
                 const statDetails = payslip.statutory_details || {};
-                const tdsPercent = statDetails["Income Tax (TDS) %"];
                 Object.entries(statDetails).forEach(([name, amount]) => {
                     const amt = parseFloat(amount || 0);
                     if (amt > 0 && name !== "Income Tax (TDS) %") {
@@ -1564,29 +1669,19 @@ exports.getSalaryOverview = async (req, res) => {
                     }
                 });
 
-                if (ot > 0 && !earnList.find(e => e.is_ot || e.name === "Overtime")) earnList.push({ name: "Overtime", amount: ot.toFixed(2) });
-                if (fine > 0 && !dedList.find(d => d.is_fine || d.name === "Fines")) dedList.push({ name: "Fines", amount: fine.toFixed(2) });
-
-                const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
-                const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
-
-                const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
+                // Use stored attendance values
+                const lwpDays = parseFloat(payslip.wp_days || 0);
+                const presentDays = parseFloat(payslip.present_days || 0);
                 const absentDays = parseFloat(payslip.absent_days || 0);
                 const halfDays = (lwpDays - absentDays) / 0.5;
-                const presentDays = parseFloat(payslip.present_days || 0);
                 const leave_details = payslip.leave_details || {};
                 const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
-                const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
-                const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
-                let payableDays = 0;
-                if (basis === "WORKING_DAYS") {
-                    payableDays = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-                } else if (basis === "FIXED_30_DAYS") {
-                    payableDays = 30 - lwpDays;
-                } else {
-                    const daysInMonth = dayjs(`${m.year}-${m.month}-01`).daysInMonth();
-                    payableDays = daysInMonth - lwpDays;
-                }
+                const weeklyOffs = parseFloat(payslip.wo_days || 0);
+                const holidays = parseFloat(payslip.ph_days || 0);
+                const daysInMonth = dayjs(`${m.year}-${m.month}-01`).daysInMonth();
+                
+                // Use stored payable days or calculate if not available
+                const payableDays = parseFloat(payslip.pd_days || 0);
 
                 // Fetch Lunch History for finalized payslip
                 const startDate = dayjs(`${m.year}-${m.month}-01`).startOf('month').format('YYYY-MM-DD');
@@ -1601,18 +1696,48 @@ exports.getSalaryOverview = async (req, res) => {
                     time: dayjs(r.getDataValue('created_at')).format('hh:mm A')
                 }));
 
+                // Fetch employee incentive history
+                const incentives = await commonQuery.findAllRecords(EmployeeIncentive, {
+                    employee_id,
+                    month: m.month,
+                    year: m.year,
+                    status: { [Op.ne]: 2 }
+                });
+                const employeeIncentiveHistory = incentives.map(inc => ({
+                    type: "incentive",
+                    id: inc.id,
+                    amount: inc.amount,
+                    incentive_date: inc.incentive_date
+                }));
+
+                // Create payment history structure
+                const paymentHistory = {
+                    salary: { history: [], sum: "0.00" },
+                    advance: { history: [], sum: "0.00" },
+                    grand_total: "0.00"
+                };
+
+                // Use stored totals from payslip breakdown
+                const totalEarn = parseFloat(breakdown.total_earnings || 0);
+                const totalDed = parseFloat(breakdown.total_deductions || 0);
+                const netPayable = parseFloat(payslip.net_salary || 0);
+
                 overview.push({
                     id: payslip.id,
                     month: m.month,
                     year: m.year,
                     month_label: `${monthName}, ${yearShort}`,
-                    due_amount: payslip.net_salary || payslip.net_payable || 0,
-                    date_range: `01 ${monthName}'${yearShort} - ${dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
-                    net_receivable: payslip.net_salary || payslip.net_payable || 0,
-                    payable_days: payableDays.toFixed(1),
+                    due_amount: netPayable.toFixed(2),
+                    date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
+                    net_receivable: netPayable.toFixed(2),
+                    payable_days: payableDays % 1 === 0 ? payableDays.toString() : payableDays.toFixed(1),
+                    actualDaysValue: daysInMonth,
                     lwp_days: lwpDays || 0,
                     lunch_count: payslip.lunch_count || 0,
                     lunch_history: lunchHistory,
+                    employee_incentive_history: employeeIncentiveHistory,
+                    statutory: payslip.statutory_details || {},
+                    employer: payslip.employer_details || {},
                     breakdown: {
                         earnings: earnList,
                         deductions: dedList,
@@ -1621,9 +1746,11 @@ exports.getSalaryOverview = async (req, res) => {
                         total_earnings: totalEarn.toFixed(2),
                         total_deductions: totalDed.toFixed(2)
                     },
+                    payment_history: paymentHistory,
                     ot_amount: ot.toFixed(2),
                     total_fine: fine.toFixed(2),
-                    ctc_monthly: payslip.ctc_monthly,
+                    fine_amount: fine.toFixed(2),
+                    ctc_monthly: payslip.fixed_gross || 0,
                     tds_calculation_data: payslip.tds_calculation_data,
                     is_loaded: true,
                     is_finalized: true
@@ -1633,27 +1760,6 @@ exports.getSalaryOverview = async (req, res) => {
                 try {
                     const summary = await performSalaryCalculation(employee_id, m.month, m.year);
                     const payableDays = parseFloat(summary.attendance.payableDays);
-                    const daysInCalculation = summary.period.daysInCalculation || summary.period.daysInMonth;
-
-                    // Cleanly map the breakdown from the pre-calculated summary
-                    const earnList = summary.breakdown.earnings.map(e => ({
-                        name: e.name,
-                        // Map both possible internal names to consistently use amount/actual_amount
-                        amount: parseFloat(e.actual_amount || 0).toFixed(2),
-                        actual_amount: parseFloat(e.actual_amount || 0).toFixed(2),
-                        is_employer: e.is_employer || false
-                    }));
-
-                    const dedList = summary.breakdown.deductions.map(d => ({
-                        name: d.name,
-                        amount: parseFloat(d.amount || 0).toFixed(2),
-                        actual_amount: parseFloat(d.amount || 0).toFixed(2),
-                        is_food: d.is_food,
-                        meal_count: d.meal_count,
-                        rate: d.rate,
-                        is_statutory: d.is_statutory
-                    }));
-
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
                     const netPayable = summary.breakdown.total_earnings - summary.breakdown.total_deductions;
@@ -1665,7 +1771,7 @@ exports.getSalaryOverview = async (req, res) => {
                         due_amount: netPayable.toFixed(2),
                         date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
                         net_receivable: netPayable.toFixed(2),
-                        payable_days: payableDays.toFixed(1),
+                        payable_days: payableDays % 1 === 0 ? payableDays.toString() : payableDays.toFixed(1),
                         actualDaysValue: summary.attendance.actualDaysValue || 0,
                         lwp_days: summary.attendance.totalLWP,
                         lunch_count: summary.attendance.lunchCount || 0,
