@@ -9,9 +9,14 @@ exports.create = async (req, res) => {
     try {
         const POST = req.body;
         const requiredFields = {
-            employee_id: "Employee ID",
             date: "Date",
         };
+
+        if (POST.is_guest) {
+            requiredFields.guest_name = "Guest Name";
+        } else {
+            requiredFields.employee_id = "Employee ID";
+        }
 
         const errors = await validateRequest(POST, requiredFields, {}, transaction);
 
@@ -20,13 +25,15 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const employee = await commonQuery.findOneRecord(Employee, 
-        { id: POST.employee_id }, 
-        transaction);
-        
-        if (!employee) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND);
+        if (!POST.is_guest) {
+            const employee = await commonQuery.findOneRecord(Employee, 
+            { id: POST.employee_id }, 
+            transaction);
+            
+            if (!employee) {
+                await transaction.rollback();
+                return res.error(constants.NOT_FOUND);
+            }
         }
 
         await commonQuery.createRecord(CanteenAttendance, POST, transaction);
@@ -46,9 +53,14 @@ exports.update = async (req, res) => {
         const { id } = req.params;
         const POST = req.body;
         const requiredFields = {
-            employee_id: "Employee ID",
             date: "Date",
         };
+
+        if (POST.is_guest) {
+            requiredFields.guest_name = "Guest Name";
+        } else {
+            requiredFields.employee_id = "Employee ID";
+        }
 
         const errors = await validateRequest(POST, requiredFields, {}, transaction);
 
@@ -57,13 +69,15 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const employee = await commonQuery.findOneRecord(Employee, 
-        { id: POST.employee_id }, 
-        transaction);
-        
-        if (!employee) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND);
+        if (!POST.is_guest) {
+            const employee = await commonQuery.findOneRecord(Employee, 
+            { id: POST.employee_id }, 
+            transaction);
+            
+            if (!employee) {
+                await transaction.rollback();
+                return res.error(constants.NOT_FOUND);
+            }
         }
 
         const updatedAttendance = await commonQuery.updateRecordById(CanteenAttendance, id, POST, transaction);
@@ -96,7 +110,13 @@ exports.delete = async (req, res) => {
       return res.error(constants.INVALID_INPUT);
     }
 
-    const deleted = await commonQuery.hardDeleteRecords(CanteenAttendance, { employee_id: ids, date: date }, transaction);
+    const deleted = await commonQuery.hardDeleteRecords(CanteenAttendance, { 
+      date: date,
+      [Op.or]: [
+        { employee_id: ids },
+        { id: ids, is_guest: true }
+      ]
+    }, transaction);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -152,10 +172,29 @@ exports.getSummary = async (req, res) => {
         }
     });
 
+    const guestAttendance = await commonQuery.findAllRecords(CanteenAttendance, {
+        date: date,
+        is_guest: true,
+        status: 0
+    });
+
+    guestAttendance.forEach(att => {
+        presentEmployees.push({
+            id: att.id,
+            first_name: att.guest_name,
+            employee_code: "GUEST",
+            employee_type: "GUEST",
+            worker_type: "GUEST",
+            is_guest: true,
+            created_at: att.created_at
+        });
+    });
+
     const result = {
         presentCount: presentEmployees.length,
         absentCount: absentEmployees.length,
         totalStaffCount: allEmployees.items.length,
+        guestCount: guestAttendance.length,
         presentEmployeeData: presentEmployees,
         absentEmployeeData: absentEmployees
     };

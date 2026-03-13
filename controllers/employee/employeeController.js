@@ -578,7 +578,6 @@ exports.getProfile = async (req, res) => {
                 mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
             },
             bank_details: {
-                // name_as_per_bank: plainRecord.name_as_per_bank || 'N/A',
                 bank_name: plainRecord.bank_name || 'N/A',
                 account_no: plainRecord.bank_account_number || 'N/A',
                 ifsc: plainRecord.bank_ifsc_code || 'N/A',
@@ -589,21 +588,12 @@ exports.getProfile = async (req, res) => {
                 first_name: plainRecord.first_name,
                 gender: plainRecord.gender === 1 ? 'Male' : (plainRecord.gender === 2 ? 'Female' : (plainRecord.gender === 3 ? 'Others' : 'N/A')),
                 dob: plainRecord.dob || 'N/A',
-                marital_status: plainRecord.marital_status === 1 ? 'Married' : 'Unmarried',
                 blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plainRecord.blood_group - 1] || 'N/A',
-                physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
-                religion: plainRecord.religion || 'N/A',
-                caste: plainRecord.caste || 'N/A',
-                hobby: plainRecord.hobby || 'N/A',
                 father_name: plainRecord.father_name || 'N/A',
                 mother_name: plainRecord.mother_name || 'N/A',
                 spouse_name: plainRecord.spouse_name || 'N/A',
                 marriage_date: plainRecord.marriage_date || 'N/A',
                 nationality: plainRecord.nationality || 'Indian',
-                place_of_birth: plainRecord.place_of_birth || 'N/A',
-                height: plainRecord.height ? `${plainRecord.height} cm` : 'N/A',
-                weight: plainRecord.weight ? `${plainRecord.weight} kg` : 'N/A',
-                identification_mark: plainRecord.identification_mark || 'N/A'
             },
             general_info: {
                 salary_cycle: plainRecord.salary_type || 'N/A',
@@ -614,16 +604,13 @@ exports.getProfile = async (req, res) => {
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
                 lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis || 'N/A',
                 attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
-                salary_access: plainRecord.salary_access ? 'Yes' : 'No',
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
                 reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
             },
             employment_info: {
                 joining_date: plainRecord.joining_date || 'N/A',
-                confirmation_date: plainRecord.confirmation_date || 'N/A',
                 employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
                 worker_type: ["On-Role", "Off-Role"][plainRecord.worker_type - 1] || 'N/A',
-                employee_grade: plainRecord.employee_grade || 'N/A',
                 uan: plainRecord.uan_number || 'N/A',
                 pan: plainRecord.pan_number || 'N/A',
                 aadhaar: plainRecord.aadhaar_number || 'N/A',
@@ -632,9 +619,9 @@ exports.getProfile = async (req, res) => {
                 pt_eligible: plainRecord.pt_eligible ? 'Yes' : 'No',
                 lwf_eligible: plainRecord.lwf_eligible ? 'Yes' : 'No',
                 eps_eligible: plainRecord.eps_eligible ? 'Yes' : 'No',
-                probation_period: plainRecord.probation_period_days ? `${plainRecord.probation_period_days} Days` : 'N/A',
-                notice_period: plainRecord.notice_period_days ? `${plainRecord.notice_period_days} Days` : 'N/A',
-                referred_by: plainRecord.referred_by || 'N/A'
+                // probation_period: plainRecord.probation_period_days ? `${plainRecord.probation_period_days} Days` : 'N/A',
+                // notice_period: plainRecord.notice_period_days ? `${plainRecord.notice_period_days} Days` : 'N/A',
+                // referred_by: plainRecord.referred_by || 'N/A'
             },
             address_info: {
                 present: {
@@ -1486,7 +1473,6 @@ exports.facePunch = async (req, res) => {
             const res = await commonQuery.findAllRecords(Employee, {
                 status: 0,
                 face_descriptor: { [Op.ne]: null },
-                ...(companyId ? { company_id: companyId } : {})
             }, {
                 attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
                 raw: true
@@ -1716,7 +1702,6 @@ exports.getWages = async (req, res) => {
         let workingDays = null;
         const ctcMonthly = parseFloat(employeeSalaryTemplate.ctc_monthly || 0);
         const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
-console.log("salaryType",salaryType, "unitWorkingHours", unitWorkingHours,"employeeSalaryTemplate.daily_rate",employeeSalaryTemplate.daily_rate,"employeeSalaryTemplate.hourly_rate",employeeSalaryTemplate.hourly_rate)
         if (salaryType === "Daily") {
             dailyWage = parseFloat(employeeSalaryTemplate.daily_rate || 0);
             hourlyWage = dailyWage / unitWorkingHours;
@@ -1761,7 +1746,6 @@ console.log("salaryType",salaryType, "unitWorkingHours", unitWorkingHours,"emplo
                 monthDays = 30;
                 dailyWage = ctcMonthly / 30;
             }
-            console.log("workingDays", workingDays, "dailyWage", dailyWage, "unitWorkingHours", unitWorkingHours)
             hourlyWage = dailyWage ? dailyWage / unitWorkingHours : null;
         }
 

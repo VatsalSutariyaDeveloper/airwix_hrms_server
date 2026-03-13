@@ -354,18 +354,56 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // Helper to map multiplier to ID
-  const getRateIdAndAmount = (minutes, wage, multiplier) => {
+  const getRateIdAndAmount = (type, value, minutes, dailyWage, hourlyWage) => {
+    let amount = 0;
     let rateId = 5; // Default 1x Salary
-    const m = parseFloat(multiplier || 1);
+    let forcedStatus = null;
 
-    if (m === 1) rateId = 5;
-    else if (m === 1.5) rateId = 6;
-    else if (m === 2) rateId = 7;
-    else if (m === 3) rateId = 8;
-    else rateId = 2; // Fixed Per Hour for custom multipliers
+    const t = String(type);
+    const v = parseFloat(value || 0);
 
-    const amount = parseFloat(((minutes / 60) * wage * m).toFixed(2));
-    return { rateId, amount };
+    if (t === '1' || t === 'FIXED' || t === 'FIXED_AMOUNT') {
+      amount = v;
+      rateId = 1;
+    } else if (t === '2' || t === 'FIXED_PER_HOUR') {
+      amount = (minutes / 60) * v;
+      rateId = 2;
+    } else if (t === '3' || t === 'HALF_DAY') {
+      amount = dailyWage * 0.5;
+      rateId = 3;
+      forcedStatus = 1;
+    } else if (t === '4' || t === 'FULL_DAY') {
+      amount = dailyWage;
+      rateId = 4;
+      forcedStatus = 5; // Absent
+    } else if (t === '5' || t === '1X_SALARY') {
+      amount = (minutes / 60) * hourlyWage * 1;
+      rateId = 5;
+    } else if (t === '6' || t === '1_5X_SALARY') {
+      amount = (minutes / 60) * hourlyWage * 1.5;
+      rateId = 6;
+    } else if (t === '7' || t === '2X_SALARY') {
+      amount = (minutes / 60) * hourlyWage * 2;
+      rateId = 7;
+    } else if (t === '8' || t === '3X_SALARY') {
+      amount = (minutes / 60) * hourlyWage * 3;
+      rateId = 8;
+    } else {
+      // Fallback for custom multipliers or legacy strings
+      const multiplier = !isNaN(parseFloat(t)) ? parseFloat(t) : v;
+      amount = (minutes / 60) * hourlyWage * (multiplier || 1);
+      if (multiplier === 1) rateId = 5;
+      else if (multiplier === 1.5) rateId = 6;
+      else if (multiplier === 2) rateId = 7;
+      else if (multiplier === 3) rateId = 8;
+      else rateId = 2;
+    }
+
+    return {
+      amount: parseFloat(amount.toFixed(2)),
+      rateId,
+      forcedStatus
+    };
   };
 
   // 4. --- Attendance Processing Logic ---
@@ -936,7 +974,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     };
     if (template) {
       // Late Entry Fine
-      if (lateMinutes > 0) {
+      // if (lateMinutes > 0) {
         fineData.late_entry.minutes = lateMinutes;
         if (template.late_entry_rules.length > 0) {
           let rule = getMatchingRule(lateMinutes, template.late_entry_rules);
@@ -987,19 +1025,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               meta.forcedStatus = 5; // Mark as Absent
               meta.overrideAutomationNote = `Penalty: Late Entry Tier Limit reached${tierSuffix} (${lateMinutes} mins)`;
             } else if (rule.type === '5') {
-              const res = getRateIdAndAmount(lateMinutes, hourlyWage, 1);
+              const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
               fineAmount += res.amount;
             } else if (rule.type === '6') {
-              const res = getRateIdAndAmount(lateMinutes, hourlyWage, 1.5);
+              const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
               fineAmount += res.amount;
             } else if (rule.type === '7') {
-              const res = getRateIdAndAmount(lateMinutes, hourlyWage, 2);
+              const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
               fineAmount += res.amount;
             } else if (rule.type === '8') {
-              const res = getRateIdAndAmount(lateMinutes, hourlyWage, 3);
+              const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
               fineAmount += res.amount;
             } else if (rule.type === 'PERCENTAGE') {
@@ -1013,8 +1051,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
             } else if (rule.type === 'NONE') {
               fineData.late_entry = { minutes: lateMinutes, amount: 0, rate: 5 };
             } else {
-              const multiplier = !isNaN(parseFloat(rule.type)) ? rule.type : (rule.value || 1);
-              const res = getRateIdAndAmount(lateMinutes, hourlyWage, multiplier);
+              const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
               fineAmount += res.amount;
             }
@@ -1035,7 +1072,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               } else if (template.late_entry_fine_type === 'MINUTE_DEDUCTION') {
                 finalWorkedMinutes -= parseFloat(template.late_entry_fine_value || 0);
               } else if (template.late_entry_fine_type === 'DEDUCTION') {
-                const res = getRateIdAndAmount(lateMinutes, hourlyWage, template.late_entry_fine_value || 1);
+                const res = getRateIdAndAmount(template.late_entry_fine_type, template.late_entry_fine_value, lateMinutes, dailyWage, hourlyWage);
                 fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (template.late_entry_fine_type === 'HALF_DAY') {
@@ -1107,19 +1144,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 meta.forcedStatus = 5; // Mark as Absent
                 meta.overrideAutomationNote = `Penalty: Early Exit Tier Limit reached${tierSuffix} (${earlyOutMinutes} mins)`;
               } else if (rule.type === '5') {
-                const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 1);
+                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '6') {
-                const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 1.5);
+                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '7') {
-                const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 2);
+                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '8') {
-                const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, 3);
+                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === 'PERCENTAGE') {
@@ -1133,8 +1170,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               } else if (rule.type === 'NONE') {
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 5 };
               } else {
-                const multiplier = !isNaN(parseFloat(rule.type)) ? rule.type : (rule.value || 1);
-                const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, multiplier);
+                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
                 fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               }
@@ -1155,7 +1191,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 } else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') {
                   finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
                 } else if (template.early_exit_fine_type === 'DEDUCTION') {
-                  const res = getRateIdAndAmount(earlyOutMinutes, hourlyWage, template.early_exit_fine_value || 1);
+                  const res = getRateIdAndAmount(template.early_exit_fine_type, template.early_exit_fine_value, earlyOutMinutes, dailyWage, hourlyWage);
                   fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rateId };
                   fineAmount += res.amount;
                 } else if (template.early_exit_fine_type === 'HALF_DAY') {
@@ -1198,19 +1234,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 fineAmount += amount;
                 fineData.excess_breaks = { minutes: excessMins, amount, rate: 2 };
               } else if (rule.type === '5') {
-                const res = getRateIdAndAmount(excessMins, hourlyWage, 1);
+                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
                 fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '6') {
-                const res = getRateIdAndAmount(excessMins, hourlyWage, 1.5);
+                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
                 fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '7') {
-                const res = getRateIdAndAmount(excessMins, hourlyWage, 2);
+                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
                 fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === '8') {
-                const res = getRateIdAndAmount(excessMins, hourlyWage, 3);
+                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
                 fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               } else if (rule.type === 'PERCENTAGE') {
@@ -1222,8 +1258,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 finalWorkedMinutes -= deductMins;
                 fineData.excess_breaks = { minutes: excessMins, amount: 0, rate: 2, deducted_mins: deductMins };
               } else {
-                const multiplier = !isNaN(parseFloat(rule.type)) ? rule.type : (rule.value || 1);
-                const res = getRateIdAndAmount(excessMins, hourlyWage, multiplier);
+                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
                 fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rateId };
                 fineAmount += res.amount;
               }
@@ -1261,22 +1296,22 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               lateOtData.rate = 2;
               lateOtData.minutes = lateOvertimeMinutesRaw;
             } else if (otRule.type === '5') {
-              const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 1);
+              const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
               lateOtData.rate = result.rateId;
               lateOtData.amount = result.amount;
               lateOtData.minutes = lateOvertimeMinutesRaw;
             } else if (otRule.type === '6') {
-              const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 1.5);
+              const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
               lateOtData.rate = result.rateId;
               lateOtData.amount = result.amount;
               lateOtData.minutes = lateOvertimeMinutesRaw;
             } else if (otRule.type === '7') {
-              const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 2);
+              const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
               lateOtData.rate = result.rateId;
               lateOtData.amount = result.amount;
               lateOtData.minutes = lateOvertimeMinutesRaw;
             } else if (otRule.type === '8') {
-              const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 3);
+              const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
               lateOtData.rate = result.rateId;
               lateOtData.amount = result.amount;
               lateOtData.minutes = lateOvertimeMinutesRaw;
@@ -1288,14 +1323,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               lateOtData.rate = 2;
               lateOtData.amount = 0;
             } else {
-              const multiplier = !isNaN(parseFloat(otRule.type)) ? otRule.type : (otRule.value || 1);
-              const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, multiplier);
+              const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
               lateOtData.rate = result.rateId;
               lateOtData.amount = result.amount;
               lateOtData.minutes = lateOvertimeMinutesRaw;
             }
           } else {
-            const result = getRateIdAndAmount(lateOvertimeMinutesRaw, hourlyWage, 1);
+            const result = getRateIdAndAmount(otRule.type, otRule.value, lateOvertimeMinutesRaw, dailyWage, hourlyWage);
             lateOtData.rate = result.rateId;
             lateOtData.amount = result.amount;
             lateOtData.minutes = lateOvertimeMinutesRaw;
@@ -1322,22 +1356,22 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               earlyOtData.rate = 2;
               earlyOtData.minutes = earlyOvertimeMinutes;
             } else if (earlyOtRule.type === '5') {
-              const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 1);
+              const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
               earlyOtData.rate = result.rateId;
               earlyOtData.amount = result.amount;
               earlyOtData.minutes = earlyOvertimeMinutes;
             } else if (earlyOtRule.type === '6') {
-              const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 1.5);
+              const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
               earlyOtData.rate = result.rateId;
               earlyOtData.amount = result.amount;
               earlyOtData.minutes = earlyOvertimeMinutes;
             } else if (earlyOtRule.type === '7') {
-              const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 2);
+              const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
               earlyOtData.rate = result.rateId;
               earlyOtData.amount = result.amount;
               earlyOtData.minutes = earlyOvertimeMinutes;
             } else if (earlyOtRule.type === '8') {
-              const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 3);
+              const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
               earlyOtData.rate = result.rateId;
               earlyOtData.amount = result.amount;
               earlyOtData.minutes = earlyOvertimeMinutes;
@@ -1349,20 +1383,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               earlyOtData.rate = 2;
               earlyOtData.amount = 0;
             } else {
-              const multiplier = !isNaN(parseFloat(earlyOtRule.type)) ? earlyOtRule.type : (earlyOtRule.value || 1);
-              const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, multiplier);
+              const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
               earlyOtData.rate = result.rateId;
               earlyOtData.amount = result.amount;
               earlyOtData.minutes = earlyOvertimeMinutes;
             }
           } else {
-            const result = getRateIdAndAmount(earlyOvertimeMinutes, hourlyWage, 1);
+            const result = getRateIdAndAmount(earlyOtRule.type, earlyOtRule.value, earlyOvertimeMinutes, dailyWage, hourlyWage);
             earlyOtData.rate = result.rateId;
             earlyOtData.amount = result.amount;
             earlyOtData.minutes = earlyOvertimeMinutes;
           }
         }
-      }
+      // }
     }
   }
 

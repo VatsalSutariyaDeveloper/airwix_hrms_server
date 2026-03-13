@@ -12,7 +12,7 @@ module.exports = (sequelize, DataTypes) => {
     present_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     absent_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     total_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    lunch_count: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    lunch_count: { type: DataTypes.INTEGER(3), defaultValue: 0 },
     leave_details: { type: DataTypes.JSON, allowNull: true },
 
     // Dynamic Components
