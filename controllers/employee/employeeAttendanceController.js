@@ -40,17 +40,39 @@ const employeeAttendanceController = {
 
             // Fallback to Master Template if no individual setting exists
             if (settings.length === 0) {
-                const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['shift_template'] });
+                const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['shift_template', 'weekly_off_template'] });
                 if (employee && employee.shift_template) {
-                    const masterShifts = await commonQuery.findAllRecords(ShiftTemplate, employee.shift_template, {}, null, { company_id: true });
-                    // Map master to match the expected format if needed, 
-                    // though shift_template itself has the columns.
-                    // Usually ShiftTemplate is a single row, but maybe there's logic for multiple?
-                    // In the existing sync, it was creating rows 0-6.
-                    settings = masterShifts.map(s => ({
-                        ...s.toJSON(),
-                        is_template: true
-                    }));
+                    const masterShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+                    
+                    if (masterShift) {
+                        // Fetch weekly offs to skip them, matching the old sync behavior
+                        let offDays = [];
+                        let weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
+                            employee_id: employeeId,
+                            week_no: 0,
+                            is_off: true
+                        }, {}, null, { company_id: true });
+                        
+                        if (weeklyOffs.length === 0 && employee.weekly_off_template) {
+                            weeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
+                                template_id: employee.weekly_off_template, status: 0
+                            }, {}, null, false, { company_id: true });
+                        }
+                        
+                        offDays = weeklyOffs.filter(wo => wo.is_off && wo.week_no === 0).map(wo => wo.day_of_week);
+
+                        const shiftData = masterShift.toJSON();
+                        
+                        settings = [0, 1, 2, 3, 4, 5, 6]
+                            .filter(day => !offDays.includes(day))
+                            .map(day => ({
+                                ...shiftData,
+                                employee_id: employeeId,
+                                day_of_week: day,
+                                shift_id: masterShift.id,
+                                is_template: true
+                            }));
+                    }
                 }
             }
 

@@ -137,6 +137,20 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Step A: Aggregate Counts
     let presentDays = 0, halfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
+    let unpaidLeaveDays = 0, compoffLeaveDays = 0;
+
+    // Prefetch leave configurations to identify Unpaid or CompOff status
+    const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+        employee_id,
+        year
+    }, {}, transaction, { company_id: true });
+    const leaveParamMap = new Map();
+    leaveBalances.forEach(lb => {
+        leaveParamMap.set(lb.leave_category_id, { 
+            is_paid: lb.is_paid === true || lb.is_paid === 'true', 
+            is_compoff: lb.is_compoff === true || lb.is_compoff === 'true' 
+        });
+    });
 
     // A.1 Calculate Weekly Offs from EmployeeWeeklyOff
     const empWeeklyOffs = employee.employeeWeeklyOffs || [];
@@ -161,13 +175,35 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
     }, {}, transaction);
+    
     attendanceRecords.forEach(day => {
-
+        const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
         switch (parseInt(day.status)) {
-            case 0: case 12: presentDays++; break;
-            case 1: case 13: halfDays++; break;
-            case 5: absentDays++; break;
-            case 6: leaveDays++; break;
+            case 0: case 12: 
+                presentDays++; 
+                break;
+            case 1: case 13: 
+                if (catInfo) {
+                    presentDays += 0.5; // Count as 0.5 present since they worked the other half
+                    if (!catInfo.is_paid) unpaidLeaveDays += 0.5;
+                    else if (catInfo.is_compoff) compoffLeaveDays += 0.5;
+                    else leaveDays += 0.5;
+                } else {
+                    halfDays++; 
+                }
+                break;
+            case 5: 
+                absentDays++; 
+                break;
+            case 6: 
+                if (catInfo) {
+                    if (!catInfo.is_paid) unpaidLeaveDays++;
+                    else if (catInfo.is_compoff) compoffLeaveDays++;
+                    else leaveDays++;
+                } else {
+                    leaveDays++;
+                }
+                break;
         }
         totalFine += parseFloat(day.fine_amount || 0);
         totalOTAmount += parseFloat(day.overtime_amount || 0);
@@ -192,7 +228,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const lunchCount = lunchHistory.length;
 
     // Logic for LWP
-    const totalLWP = absentDays + (halfDays * 0.5);
+    const totalLWP = absentDays + (halfDays * 0.5) + unpaidLeaveDays;
 
     // Step B: Calculate Gross
     let monthlyGross = parseFloat(template.ctc_monthly || 0);
@@ -210,7 +246,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-    
+    console.log("payableDaysValue11111111111", payableDaysValue)
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
         actualDaysValue = daysInMonth - weeklyOffs;
@@ -348,8 +384,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             // Apply Attendance/LWP Impact to Basic immediately in Pass 1
             let actualAmount = amount;
             if (calcType === 'ATTENDANCE_BASED') {
-                const presentDaysValue = presentDays + (halfDays * 0.5);
-                actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
+                actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
             } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
                 actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
             }
@@ -384,8 +419,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         // Calculate actual pro-rated amount (Attendance/LWP Impact)
         let actualAmount = amount;
         if (calcType === 'ATTENDANCE_BASED') {
-            const presentDaysValue = presentDays + (halfDays * 0.5);
-            actualAmount = parseFloat(((amount / daysInCalculation) * presentDaysValue).toFixed(2));
+            actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
         } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
             actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
         }
@@ -418,11 +452,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             return;
         }
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
-            // For Basic component, divide amount by payable days
             let finalAmount = actualAmount;
-            if (comp.component_name.toLowerCase() === 'basic' || comp.component_name.toLowerCase().includes('system basic')) {
-                finalAmount = parseFloat((actualAmount / (payableDaysValue || 1)).toFixed(2));
-            }
             
             earnings.push({
                 name: comp.component_name,
@@ -542,7 +572,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -825,7 +855,11 @@ exports.finalizeMonthlySalary = async (req, res) => {
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
             total_days: summary.period.daysInMonth,
-            leave_details: { "Leave": summary.attendance.leaveDays },
+            leave_details: { 
+                "Paid Leave": summary.attendance.leaveDays || 0,
+                "Unpaid Leave": summary.attendance.unpaidLeaveDays || 0,
+                "Compoff": summary.attendance.compoffLeaveDays || 0
+            },
             lunch_count: summary.attendance.lunchCount || 0,
 
             // Dynamic JSON Components
@@ -2320,6 +2354,12 @@ exports.bulkFinalizePayroll = async (req, res) => {
                     wo_days: summary.attendance.weeklyOffs,
                     ph_days: summary.attendance.holidays,
                     total_days: summary.period.daysInMonth,
+                    leave_details: { 
+                        "Paid Leave": summary.attendance.leaveDays || 0,
+                        "Unpaid Leave": summary.attendance.unpaidLeaveDays || 0,
+                        "Compoff": summary.attendance.compoffLeaveDays || 0
+                    },
+                    lunch_count: summary.attendance.lunchCount || 0,
                     salary_template_id: summary.employee.template_id,
                     earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => { acc[e.name] = e.actual_amount; return acc; }, {}),
                     deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => { acc[d.name] = d.amount; return acc; }, {}),

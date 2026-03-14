@@ -71,7 +71,7 @@ exports.create = async (req, res) => {
             // Check for Overlapping Leaves (Only for regular leaves)
             const overlap = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id,
-                approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
+                approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
                 status: 0,
                 is_encashment: false,
                 [Op.or]: [
@@ -136,7 +136,7 @@ exports.create = async (req, res) => {
                     where: {
                         employee_id,
                         leave_category_id,
-                        approval_status: { [Op.ne]: constants.LEAVE_APPROVAL_STATUS.REJECTED },
+                        approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
                         status: 0,
                         start_date: { [Op.between]: [startDateRange, endDateRange] }
                     },
@@ -176,8 +176,8 @@ exports.create = async (req, res) => {
                         return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins.` });
                     }
                 }
-            } else if (isToday || isPast) {
-                // If no attendance record exists for today or a past date, the rule is violated
+            } else {
+                // If no attendance record exists for the selected date (past, present, or future), the rule is violated
                 await transaction.rollback();
                 return res.error("RULE_VIOLATION", { message: `Your Selected Date has no attendance record. Please add attendance first.` });
             }
@@ -234,6 +234,111 @@ exports.create = async (req, res) => {
 
         await transaction.commit();
         return res.success("LEAVE_REQUESTED", leaveRequest);
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+// Update Leave Request
+exports.update = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const requiredFields = {
+            leave_category_id: "Leave Category",
+            start_date: "Start Date",
+            end_date: "End Date",
+            total_days: "Total Days",
+        };
+
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {}, transaction);
+        if (!leaveRequest || leaveRequest.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        if (leaveRequest.approval_status !== constants.LEAVE_APPROVAL_STATUS.PENDING && leaveRequest.approval_status !== constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+            await transaction.rollback();
+            return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
+        }
+
+        let { leave_category_id, start_date, end_date, start_session, end_session } = req.body;
+        const employee_id = leaveRequest.employee_id;
+
+        start_session = parseInt(start_session) || 0;
+        end_session = parseInt(end_session) || 0;
+        const requestedTotal = parseFloat(req.body.total_days || 0);
+
+        let total_days = 0;
+        let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
+
+        if (is_encashment) {
+            total_days = requestedTotal;
+        } else {
+            const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
+            let sessionReduction = 0;
+            if (start_session !== 0) sessionReduction += 0.5;
+            if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
+            
+            if (start_date === end_date && start_session !== 0) {
+                total_days = workingDays > 0 ? 0.5 : 0;
+            } else {
+                total_days = Math.max(0, workingDays - sessionReduction);
+            }
+            total_days = Math.round(total_days * 10) / 10;
+
+            const overlap = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id,
+                id: { [Op.ne]: id },
+                approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                status: 0,
+                is_encashment: false,
+                [Op.or]: [
+                    { start_date: { [Op.between]: [start_date, end_date] } },
+                    { end_date: { [Op.between]: [start_date, end_date] } },
+                    { [Op.and]: [{ start_date: { [Op.lte]: start_date } }, { end_date: { [Op.gte]: end_date } }] }
+                ]
+            }, {}, transaction);
+
+            if (overlap) {
+                await transaction.rollback();
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+            }
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        try {
+            await LeaveBalanceService.adjustLeaveBalance(employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
+            await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, dayjs(start_date), employee);
+        } catch (error) {
+            await transaction.rollback();
+            return res.error("INSUFFICIENT_BALANCE", { message: error.message });
+        }
+
+        const PUT = { 
+            ...req.body, 
+            total_days
+        };
+
+        if (req.files && Object.keys(req.files).length > 0) {
+            const savedFiles = await uploadFile(req, res, constants.LEAVE_DOC_FOLDER, transaction);
+            if (savedFiles.document) PUT.document = savedFiles.document;
+        }
+
+        await commonQuery.updateRecordById(LeaveRequest, id, PUT, transaction);
+
+        await transaction.commit();
+        return res.success("LEAVE_UPDATED");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -358,7 +463,7 @@ exports.getById = async (req, res) => {
 
         const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, null, false, { company_id: true });
         const totalLevels = template ? template.approval_levels : 1;
-        const levelConfigs = template ? (template.levels || []) : [];
+        const levelConfigs = template ? (template.approval_config || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
 
         const history = raw.approval_history || [];
@@ -582,7 +687,7 @@ exports.getPendingApprovals = async (req, res) => {
             const config = template ? (template.approval_config || []) : [];
 
             let currentStage = config.find(c => c.level === currentLevel);
-            if (!currentStage) currentStage = "ANYONE";
+            if (!currentStage) currentStage = { type: "ANYONE" };
             
             let isAuthorized = false;
             if (req.user.is_super_admin) {
@@ -605,7 +710,8 @@ exports.getPendingApprovals = async (req, res) => {
                     case 'ANYONE':
                         // Anyone of Reporting Manager, Supervisor, Admin, etc.
                         if (employee.reporting_manager === req.user.id ||
-                            employee.attendance_supervisor === req.user.id) {
+                            employee.attendance_supervisor === req.user.id ||
+                            req.user.is_admin) {
                             isAuthorized = true;
                         }
                         break;
@@ -662,24 +768,41 @@ exports.cancelLeave = async (req, res) => {
         const oldStatus = leaveRequest.approval_status;
 
         // 4. Restore Balance
-        const employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {
-            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
-        }, transaction);
+        // We restore balance if the leave was previously PENDING, PARTIALLY_APPROVED, or APPROVED.
+        if (
+            Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.PENDING ||
+            Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED ||
+            Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED
+        ) {
+            const employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {
+                include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+            }, transaction);
 
-        const template = employee?.leaveTemplate;
-        const cycleType = template?.leave_policy_cycle || 'CALENDAR_YEAR';
-        const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, cycleType, dayjs(leaveRequest.start_date));
+            const template = employee?.leaveTemplate;
+            const cycleType = template?.leave_policy_cycle || 'CALENDAR_YEAR';
+            const cycleDates = LeaveBalanceService.getCycleDates(employee?.joining_date, cycleType, dayjs(leaveRequest.start_date));
 
-        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-            employee_id: leaveRequest.employee_id,
-            leave_category_id: leaveRequest.leave_category_id,
-            year: cycleDates.end.year(),
-            month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
-            status: 0
-        }, {}, transaction, false, { company_id: true });
+            const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+                employee_id: leaveRequest.employee_id,
+                leave_category_id: leaveRequest.leave_category_id,
+                year: cycleDates.end.year(),
+                month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+                status: 0
+            }, {}, transaction, false, { company_id: true });
 
-        if (balance) {
-            await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
+            if (balance) {
+                // To restore balance, we pass a negative total_days value to adjustLeaveBalance
+                // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
+                // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
+                await LeaveBalanceService.adjustLeaveBalance(
+                    leaveRequest.employee_id, 
+                    leaveRequest.leave_category_id, 
+                    -parseFloat(leaveRequest.total_days), 
+                    transaction, 
+                    dayjs(leaveRequest.start_date), 
+                    employee
+                );
+            }
         }
 
         // 5. Update Request Status immediately so rebuildAttendanceDay sees the change

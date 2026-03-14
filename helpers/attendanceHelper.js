@@ -101,6 +101,20 @@ async function punch(employeeId, meta, transaction = null) {
   if (!employee) throw new Error("Employee not found");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
 
+  // 0️⃣.D Check if an active Approved Leave exists for this day
+  const approvedLeave = await commonQuery.findOneRecord(LeaveRequest, {
+    employee_id: employeeId,
+    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+    start_date: { [Op.lte]: targetDayDate },
+    end_date: { [Op.gte]: targetDayDate },
+    is_encashment: false,
+    status: 0
+  }, {}, transaction);
+
+  if (approvedLeave) {
+    throw new Err(`You have an approved leave on this date. Please cancel the leave first before punching attendance.`);
+  }
+
   // 1️⃣ Check Holiday & Weekly Off Policy
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, targetDayDate, transaction);
   if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
@@ -1519,6 +1533,24 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     status = meta.forcedStatus;
     if (meta.overrideAutomationNote) {
       autoAbsentReason = meta.overrideAutomationNote;
+    }
+
+    // Override fines and worked minutes for automated approvals (e.g. Short Leave treated as Present)
+    if (status === 0 || status === 1) { // 0: Present, 1: Half Day
+      lateMinutes = 0;
+      earlyOutMinutes = 0;
+      fineAmount = 0;
+      fineData = {
+        late_entry: { minutes: 0, amount: 0, rate: 0 },
+        early_exit: { minutes: 0, amount: 0, rate: 0 },
+        excess_breaks: { minutes: 0, amount: 0, rate: 0 }
+      };
+
+      if (status === 0) {
+        finalWorkedMinutes = shift ? (shift.min_full_day_minutes || 480) : 480;
+      } else if (status === 1) {
+        finalWorkedMinutes = shift ? (shift.min_half_day_minutes || 240) : 240;
+      }
     }
   }
 

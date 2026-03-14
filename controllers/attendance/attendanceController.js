@@ -49,6 +49,8 @@ exports.attendancePunch = async (req, res) => {
       company_id: req.user.company_id,
       branch_id: req.user.branch_id,
       ip_address: req.ip,
+      latitude: req.body.latitude || null,
+      longitude: req.body.longitude || null,
       device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
       image_name: punchImage
     }, t);
@@ -1121,6 +1123,9 @@ exports.getAttendanceDayDetails = async (req, res) => {
           } else {
             punch.image_url = null;
           }
+          punch.latitude = punch.latitude || null;
+          punch.longitude = punch.longitude || null;
+          punch.ip_address = punch.ip_address || null;
           return punch;
         });
         
@@ -1393,8 +1398,11 @@ exports.getMonthlyAttendance = async (req, res) => {
             type: p.punch_type,
             punch_by: p.user?.user_name || "System",
             image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}` : null,
+            latitude: p.latitude || null,
+            longitude: p.longitude || null,
+            ip_address: p.ip_address || null,
             punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
-          })).reverse()
+          }))
         };
       } else {
         // No attendance record - Check Holiday
@@ -1498,19 +1506,19 @@ exports.getLeaveSummary = async (req, res) => {
     // 3. Format Balances
     let totalUsed = 0;
     let totalLeft = 0;
+    console.log("leave balances",balances)
     const formattedBalances = balances.map(b => {
       const used = parseFloat(b.used_leaves || 0);
-      const allocated = parseFloat(b.total_allocated || 0);
-      const left = allocated - used;
+      const pending = parseFloat(b.pending_leaves || 0);
       
       totalUsed += used;
-      totalLeft += left;
+      totalLeft += pending;
 
       return {
         id: b.id,
         leave_name: b.leave_category_name,
-        balance: `${left.toFixed(1)} Left`,
-        to_be_accrued: `${used.toFixed(1)} Left` // Following design
+        balance: `${pending.toFixed(1)} Left`,
+        to_be_accrued: `${used.toFixed(1)} Used` // Following design
       };
     });
 
@@ -1559,7 +1567,10 @@ exports.getLeaveSummary = async (req, res) => {
         id: leave.id,
         date_range: dateRange,
         duration_display: `${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}`,
+        duration_days: `${parseFloat(leave.total_days).toFixed(1)} Days`,
+        leave_type: `${leave.category?.leave_category_name}`,
         reason: leave.reason || "",
+        document_url: leave.document ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${leave.document}` : null,
         status_id: leave.approval_status,
         status: statusMap[leave.approval_status] || "PENDING",
         status_color: colorMap[leave.approval_status] || "#F59E0B",

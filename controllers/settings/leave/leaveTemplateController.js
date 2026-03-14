@@ -59,15 +59,15 @@ exports.create = async (req, res) => {
                 is_compoff: false
             });
         }
-        if (!finalCategories.find(c => c.leave_category_name === "Short Leave")) {
-            finalCategories.push({
-                leave_category_name: "Short Leave",
-                leave_count: 0,
-                unused_leave_rule: 'LAPSE',
-                is_paid: true,
-                is_compoff: false
-            });
-        }
+        // if (!finalCategories.find(c => c.leave_category_name === "Short Leave")) {
+        //     finalCategories.push({
+        //         leave_category_name: "Short Leave",
+        //         leave_count: 0,
+        //         unused_leave_rule: 'LAPSE',
+        //         is_paid: true,
+        //         is_compoff: false
+        //     });
+        // }
 
         if (finalCategories.length > 0) {
             const categoryData = finalCategories.map(cat => ({
@@ -150,15 +150,15 @@ exports.update = async (req, res) => {
                     is_compoff: false
                 });
             }
-            if (!finalCategories.find(c => c.leave_category_name === "Short Leave") && !existingCategories.find(c => c.leave_category_name === "Short Leave")) {
-                finalCategories.push({
-                    leave_category_name: "Short Leave",
-                    leave_count: 0,
-                    unused_leave_rule: 'LAPSE',
-                    is_paid: true,
-                    is_compoff: false
-                });
-            }
+            // if (!finalCategories.find(c => c.leave_category_name === "Short Leave") && !existingCategories.find(c => c.leave_category_name === "Short Leave")) {
+            //     finalCategories.push({
+            //         leave_category_name: "Short Leave",
+            //         leave_count: 0,
+            //         unused_leave_rule: 'LAPSE',
+            //         is_paid: true,
+            //         is_compoff: false
+            //     });
+            // }
 
             const existingIds = existingCategories.map(c => c.id);
             const inputIds = finalCategories.filter(c => c.id).map(c => c.id);
@@ -167,7 +167,7 @@ exports.update = async (req, res) => {
             const idsToDelete = existingIds.filter(eid => {
                 if (inputIds.includes(eid)) return false;
                 const ec = existingCategories.find(c => c.id === eid);
-                if (ec && (ec.is_compoff || !ec.is_paid || ec.leave_category_name === "Short Leave")) return false; // KEEP special categories
+                if (ec && (ec.is_compoff || !ec.is_paid)) return false; // KEEP special categories
                 return true;
             });
             

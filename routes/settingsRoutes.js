@@ -194,6 +194,7 @@ router.post("/payroll/import-data", uploadExcelToDisk("file"), importEmployeeCon
 // 30. LEAVE REQUEST & BALANCE ROUTES
 // ==========================
 router.post("/leave-request", bufferFile(["document"]), leaveRequestController.create);
+router.put("/leave-request/:id", bufferFile(["document"]), leaveRequestController.update);
 router.post("/leave-request/get-transactions", leaveRequestController.getAll);
 router.post("/leave-request/pending-approvals", leaveRequestController.getPendingApprovals);
 router.get("/leave-request/:id", leaveRequestController.getById);
