@@ -615,10 +615,16 @@ exports.getProfile = async (req, res) => {
                 pan: plainRecord.pan_number || 'N/A',
                 aadhaar: plainRecord.aadhaar_number || 'N/A',
                 pf_eligible: plainRecord.pf_eligible ? 'Yes' : 'No',
+                pf_number: plainRecord.pf_number || 'N/A',
+                pf_joining_date: plainRecord.pf_joining_date || 'N/A',
                 esi_eligible: plainRecord.esi_eligible ? 'Yes' : 'No',
+                esi_number: plainRecord.esi_number || 'N/A',
                 pt_eligible: plainRecord.pt_eligible ? 'Yes' : 'No',
                 lwf_eligible: plainRecord.lwf_eligible ? 'Yes' : 'No',
                 eps_eligible: plainRecord.eps_eligible ? 'Yes' : 'No',
+                eps_joining_date: plainRecord.eps_joining_date || 'N/A',
+                eps_exit_date: plainRecord.eps_exit_date || 'N/A',
+                hps_eligible: plainRecord.hps_eligible ? 'Yes' : 'No',
                 // probation_period: plainRecord.probation_period_days ? `${plainRecord.probation_period_days} Days` : 'N/A',
                 // notice_period: plainRecord.notice_period_days ? `${plainRecord.notice_period_days} Days` : 'N/A',
                 // referred_by: plainRecord.referred_by || 'N/A'
@@ -643,13 +649,9 @@ exports.getProfile = async (req, res) => {
             document_center: {
                 aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc, constants.EMPLOYEE_DOC_FOLDER),
                 pan_doc: getFileUrl(plainRecord.pan_doc, constants.EMPLOYEE_DOC_FOLDER),
-                bank_proof_doc: getFileUrl(plainRecord.bank_proof_doc, constants.EMPLOYEE_DOC_FOLDER),
                 driving_license_doc: getFileUrl(plainRecord.driving_license_doc, constants.EMPLOYEE_DOC_FOLDER),
                 voter_id_doc: getFileUrl(plainRecord.voter_id_doc, constants.EMPLOYEE_DOC_FOLDER),
                 uan_doc: getFileUrl(plainRecord.uan_doc, constants.EMPLOYEE_DOC_FOLDER),
-                passport_doc: getFileUrl(plainRecord.passport_doc, constants.EMPLOYEE_DOC_FOLDER),
-                permanent_address_proof: getFileUrl(plainRecord.permanent_address_proof_doc, constants.EMPLOYEE_DOC_FOLDER),
-                present_address_proof: getFileUrl(plainRecord.present_address_proof_doc, constants.EMPLOYEE_DOC_FOLDER)
             },
             education: plainRecord.education_details || [],
             custom_fields: plainRecord.custom_fields || {}
@@ -1374,9 +1376,10 @@ exports.registerFace = async (req, res) => {
         try {
             const fileBuffer = fs.readFileSync(fullFilePath);
 
-            // 🚀 OPTIMIZATION: Send raw binary buffer (Matches the Python side expectation)
-            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
-                headers: { 'Content-Type': 'application/octet-stream' }
+            const formData = new FormData();
+            formData.append('image', fileBuffer, filename);
+            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+                headers: { ...formData.getHeaders() }
             });
 
             if (aiResponse.data.status) {
@@ -1446,8 +1449,12 @@ exports.facePunch = async (req, res) => {
         const getEmbeddingTask = (async () => {
             const aiStart = Date.now();
             try {
-                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
-                    headers: { 'Content-Type': 'application/octet-stream' }
+                const formData = new FormData();
+                formData.append('image', imageBuffer, originalName);
+
+                debugLog("AI-Call", "Sending to Python...");
+                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+                    headers: { ...formData.getHeaders() }
                 });
 
                 timings.ai = Date.now() - aiStart;
@@ -1536,6 +1543,8 @@ exports.facePunch = async (req, res) => {
                     company_id: req.user?.company_id || bestMatch.company_id,
                     branch_id: req.user?.branch_id || bestMatch.branch_id,
                     ip_address: req.ip,
+                    latitude: req.body.latitude || null,
+                    longitude: req.body.longitude || null,
                     device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
                     attendance_by: 'face',
                     skipRebuild: true 
