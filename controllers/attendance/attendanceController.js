@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -87,7 +87,7 @@ exports.getAttendanceSummary = async (req, res) => {
     if (shift_id) consolidatedFilter.shift_template = shift_id;
 
     // Create a shared employee filter for all summary queries
-    const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id };
+    const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id, branch_id: req.user.branch_id };
     if (search) {
       employeeWhere[Op.or] = [
         { first_name: { [Op.iLike]: `%${search}%` } },
@@ -102,7 +102,9 @@ exports.getAttendanceSummary = async (req, res) => {
         if (isPastOrToday) {
             const employeesToSync = await Employee.findAll({
                 where: employeeWhere,
-                attributes: ['id', 'company_id', 'branch_id']
+                attributes: ['id', 'company_id', 'branch_id'],
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
             });
 
             if (employeesToSync.length > 0) {
@@ -169,7 +171,7 @@ exports.getAttendanceSummary = async (req, res) => {
         ],
         order: [['first_name', 'ASC']],
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id"]
-      }
+      },
     );
 
     // 2.5 Identify WO/Holiday for the paginated items
@@ -178,7 +180,7 @@ exports.getAttendanceSummary = async (req, res) => {
       const dayOfWeek = dayjs(targetDate).day();
       const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
 
-      const [itemHolidays, itemWeeklyOffs] = await Promise.all([
+      const [itemHolidays, itemWeeklyOffs, itemOnDuties] = await Promise.all([
         commonQuery.findAllRecords(EmployeeHoliday, { 
           employee_id: { [Op.in]: itemIds }, 
           date: targetDate, 
@@ -190,17 +192,26 @@ exports.getAttendanceSummary = async (req, res) => {
           status: 0, 
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
+        }, {}, null, { company_id: true }),
+        commonQuery.findAllRecords(OnDutyRequest, {
+          employee_id: { [Op.in]: itemIds },
+          approval_status: constants.ON_DUTY_STATUS.APPROVED,
+          start_date: { [Op.lte]: targetDate },
+          end_date: { [Op.gte]: targetDate },
+          status: 0
         }, {}, null, { company_id: true })
       ]);
 
       const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
       const itemWeeklyOffMap = new Set(itemWeeklyOffs.map(w => w.employee_id));
+      const itemOnDutyMap = new Set(itemOnDuties.map(o => o.employee_id));
 
       employeesResult.items.forEach(emp => {
         const day = emp.attendanceDays?.[0];
         if (day) {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
+          day.setDataValue('is_on_duty_approved', itemOnDutyMap.has(emp.id));
           
           // Enhanced Status Text logic (Same as monthly summary)
           const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
@@ -1192,6 +1203,16 @@ exports.getMonthlyAttendance = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Employee not found");
     }
 
+    // 1.1 Check for Approved On Duty Request for TODAY
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    const onDutyRequest = await commonQuery.findOneRecord(OnDutyRequest, {
+      employee_id: employee_id,
+      start_date: { [Op.lte]: todayStr },
+      end_date: { [Op.gte]: todayStr },
+      approval_status: 3, // APPROVED
+      status: 0
+    });
+
     // 2. Fetch AttendanceDay records for the month
     const attendanceDays = await commonQuery.findAllRecords(AttendanceDay, {
       employee_id,
@@ -1241,6 +1262,13 @@ exports.getMonthlyAttendance = async (req, res) => {
             status: 0
         }, {}, null, { company_id: true });
     }
+    const monthlyOnDuties = await commonQuery.findAllRecords(OnDutyRequest, {
+      employee_id,
+      approval_status: constants.ON_DUTY_STATUS.APPROVED,
+      start_date: { [Op.lte]: endDate },
+      end_date: { [Op.gte]: startDate },
+      status: 0
+    }, {}, null, { company_id: true });
 
     // 3. Fetch all raw punches for the month with User info
     const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1299,6 +1327,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         day_status: 10, // Default Not Marked
         status: "Not Marked",
         note: null,
+        is_on_duty_approved: !!monthlyOnDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
         punches: []
       };
 
@@ -1440,6 +1469,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       employeeDetails: employee,
       month_year: date.format('MMMM YYYY'),
       summary,
+      can_punch_from_personal_device: !!onDutyRequest,
       attendance: allDays.reverse() // DESC order
     });
   } catch (err) {
@@ -1539,7 +1569,18 @@ exports.getLeaveSummary = async (req, res) => {
 
       // Only count approved leaves in the monthly header count if needed, 
       // but usually the header shows total requested in that month
-      group.total_days += parseFloat(leave.total_days || 0);
+      // Sum up days for the month. Credits (Earned) are added, Debits (Taken) are subtracted or just shown?
+      // Usually "total_days" in summary means total leave days taken. 
+      // But if we want to show net change or just total volume, we need to decide.
+      // User said "look like earned leave not deducted leave". 
+      // Let's keep total_days as volume but differentiate in the items.
+      // Sum up only "Taken" (DEBIT) leaves for the monthly header count.
+      // This avoids negative counts (like -1) when only earned leaves exist.
+      if([constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.PENDING].includes(leave.approval_status)){
+        if (leave.request_type !== 'CREDIT') {
+          group.total_days += parseFloat(leave.total_days || 0);
+        }
+      }
       
       const start = dayjs(leave.start_date);
       const end = dayjs(leave.end_date);
@@ -1563,17 +1604,22 @@ exports.getLeaveSummary = async (req, res) => {
         [constants.LEAVE_APPROVAL_STATUS.DELETED]: "#9CA3AF",
       };
 
+      const isCredit = leave.request_type === 'CREDIT';
+      const labelPrefix = isCredit ? "(+) " : "";
+      const typeSuffix = isCredit ? " (Earned)" : "";
+
       group.leaves.push({
         id: leave.id,
         date_range: dateRange,
-        duration_display: `${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}`,
-        duration_days: `${parseFloat(leave.total_days).toFixed(1)} Days`,
-        leave_type: `${leave.category?.leave_category_name}`,
+        request_type: leave.request_type || 'DEBIT',
+        duration_display: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}${typeSuffix}`,
+        duration_days: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days`,
+        leave_type: `${leave.category?.leave_category_name}${typeSuffix}`,
         reason: leave.reason || "",
         document_url: leave.document ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${leave.document}` : null,
         status_id: leave.approval_status,
         status: statusMap[leave.approval_status] || "PENDING",
-        status_color: colorMap[leave.approval_status] || "#F59E0B",
+        status_color: isCredit ? "#10B981" : (colorMap[leave.approval_status] || "#F59E0B"),
         approved_by: leave.approvedBy?.user_name || null
       });
     });

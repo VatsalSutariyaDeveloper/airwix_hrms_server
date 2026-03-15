@@ -531,7 +531,7 @@ exports.getProfile = async (req, res) => {
                 
                 // Joins with Employee-specific Templates/Data
                 { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
-                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate', attributes: ['mode', 'holiday_policy', 'late_entry_limit', 'early_exit_limit'] },
+                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate' },
                 
                 // Master Template Joins (kept for names if not in employee-specific tables)
                 { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },

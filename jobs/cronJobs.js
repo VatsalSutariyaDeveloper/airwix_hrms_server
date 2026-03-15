@@ -54,6 +54,73 @@ const initCronJobs = () => {
         }
     });
 
+    // ⏰ Daily Attendance Rebuild Task
+    // Runs every day at 00:01 AM for Yesterday
+    cron.schedule('1 0 * * *', async () => {
+        const { requestContext } = require("../utils/requestContext");
+        
+        // Wrap everything in a System context to satisfy commonQuery/getContext
+        await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true }, async () => {
+            console.log('⏰ Running daily attendance rebuild task...');
+            try {
+                const dayjs = require('dayjs');
+                const { Employee, AttendanceDay } = require("../models");
+                const attendanceHelper = require("../helpers/attendanceHelper");
+                const { commonQuery, Op } = require("../helpers");
+
+                const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+                // 1. Fetch all active employees (Pass {} to skip tenant/context check for global fetch)
+                const employees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ['id', 'company_id', 'branch_id'] }, null, {});
+                const employeeIds = employees.map(emp => emp.id);
+
+                // 2. Identify employees who ALREADY have a record for yesterday (usually due to punches)
+                const existingAttendance = await commonQuery.findAllRecords(AttendanceDay, {
+                    attendance_date: yesterday,
+                    status: { [Op.ne]: 2 }
+                }, { attributes: ['employee_id'] }, null, {});
+                
+                const existingEmpIds = existingAttendance.map(a => a.employee_id);
+
+                // 3. Rebuild existing records to finalize calculations
+                console.log(`[Cron] Rebuilding ${existingEmpIds.length} existing attendance records for ${yesterday}...`);
+                for (const empId of existingEmpIds) {
+                    try {
+                        const emp = employees.find(e => e.id === empId);
+                        // Run each rebuild in its own company context for accurate settings/shift fetching
+                        await requestContext.run({ 
+                            userId: 0, 
+                            companyId: emp?.company_id || 0, 
+                            branchId: emp?.branch_id || 0,
+                            is_super_admin: true 
+                        }, async () => {
+                            await attendanceHelper.rebuildAttendanceDay(empId, yesterday, { 
+                                employee: emp,
+                                user_id: 0,
+                                company_id: emp?.company_id,
+                                branch_id: emp?.branch_id
+                            });
+                        });
+                    } catch (err) {
+                        console.error(`[Cron] Rebuild failed for emp ${empId} on ${yesterday}:`, err.message);
+                    }
+                }
+
+                // 4. Create missing records (Mark Absent/Holiday/WeeklyOff/Leave)
+                console.log(`[Cron] Syncing missing attendance records for ${yesterday}...`);
+                // bulkSyncAttendanceDays doesn't currently check context for company_id internally, 
+                // but we run it in super-admin context just in case.
+                await attendanceHelper.bulkSyncAttendanceDays(employeeIds, yesterday, {
+                    user_id: 0,
+                });
+
+                console.log('✅ Daily attendance rebuild completed.');
+            } catch (error) {
+                console.error('❌ Attendance rebuild failed:', error);
+            }
+        });
+    });
+
     // ⏰ Hourly Payslip PDF Cleanup Task
     // Runs every hour to delete PDFs older than 24 hours
     cron.schedule('0 * * * *', async () => {

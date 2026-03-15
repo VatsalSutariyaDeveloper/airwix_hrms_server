@@ -166,7 +166,7 @@ const employeeAttendanceController = {
 
             await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { 
                 employee_id: employeeId 
-            }, transaction);
+            }, transaction, { company_id: true });
 
             if (weeklyOffs.length > 0) {
                 const payloads = weeklyOffs.map(off => ({
