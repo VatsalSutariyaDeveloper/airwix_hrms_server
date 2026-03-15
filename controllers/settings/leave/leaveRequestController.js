@@ -149,6 +149,31 @@ exports.create = async (req, res) => {
                 }
             }
         }
+
+        // 4. Half Day / Full Day Restriction
+        if (rules.allow_half_day === false || rules.allow_full_day === false) {
+            const startSess = parseInt(req.body.start_session) || 0;
+            const endSess = parseInt(req.body.end_session) || 0;
+            const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
+
+            if (rules.allow_half_day === false) {
+                if (startSess !== 0 || endSess !== 0) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
+                }
+            }
+
+            if (rules.allow_full_day === false) {
+                if (calendarDays > 1) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
+                }
+                if (calendarDays === 1 && startSess === 0) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
+                }
+            }
+        }
         
         // 3. Min Working Time & Late/Early Exit (Check Attendance)
         if (rules.min_working_time_mins || rules.max_late_early_mins) {
@@ -310,6 +335,40 @@ exports.update = async (req, res) => {
             if (overlap) {
                 await transaction.rollback();
                 return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+            }
+        }
+
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction, false, { company_id: true });
+        if (!category) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
+        }
+
+        // --- Automation Rules Validation ---
+        const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+
+        // 4. Half Day / Full Day Restriction
+        if (rules.allow_half_day === false || rules.allow_full_day === false) {
+            const startSess = parseInt(req.body.start_session) || 0;
+            const endSess = parseInt(req.body.end_session) || 0;
+            const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
+
+            if (rules.allow_half_day === false) {
+                if (startSess !== 0 || endSess !== 0) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
+                }
+            }
+
+            if (rules.allow_full_day === false) {
+                if (calendarDays > 1) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
+                }
+                if (calendarDays === 1 && startSess === 0) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
+                }
             }
         }
 
@@ -881,6 +940,25 @@ exports.calculateLeaveDays = async (req, res) => {
         let { start_session, end_session } = req.body;
         start_session = parseInt(start_session) || 0;
         end_session = parseInt(end_session) || 0;
+
+        const { leave_category_id } = req.body;
+        if (leave_category_id) {
+            const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, null, false, { company_id: true });
+            if (category) {
+                const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+                if (rules.allow_half_day === false && (start_session !== 0 || end_session !== 0)) {
+                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
+                }
+                if (rules.allow_full_day === false) {
+                    if (calendarDays > 1) {
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
+                    }
+                    if (calendarDays === 1 && start_session === 0) {
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
+                    }
+                }
+            }
+        }
 
         if (isEncashment) {
             workingDays = calendarDays;
