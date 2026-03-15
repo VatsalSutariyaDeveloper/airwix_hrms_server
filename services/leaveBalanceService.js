@@ -528,8 +528,8 @@ class LeaveBalanceService {
                 used = Math.round((used + roundedAmount) * 10) / 10;
             }
 
-            let pending = Math.round((parseFloat(balance.pending_leaves || 0) - roundedAmount) * 10) / 10;
-
+            let pending = Math.round((allocated + parseFloat(balance.carry_forward_leaves || 0) - used) * 10) / 10;
+            
             // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
             if (pending < 0 && (balance.is_paid || balance.is_compoff)) {
                 throw new Error(`Insufficient leave balance in ${balance.leave_category_name}. Available: ${balance.pending_leaves}. Required: ${roundedAmount}.`);
@@ -566,6 +566,7 @@ class LeaveBalanceService {
         if (!employeeId || !date) return null;
         const t = transaction || (await sequelize.transaction());
         try {
+            console.log(`[syncLeaveRecord] Start - Emp: ${employeeId}, Date: ${date}, Category: ${categoryId}, Amount: ${amount}`);
             const AUTO_REASON = "Auto-generated from Attendance";
             
             // 1. Check if a MANUAL approved request exists for this day
@@ -591,8 +592,10 @@ class LeaveBalanceService {
 
             // If a manual request covers this day, we should probably not have an auto-generated one competing.
             if (manualRequest) {
+                console.log(`[syncLeaveRecord] Manual request found: #${manualRequest.id}`);
                 // If we have an auto-generated one, cancel it (manual wins)
                 if (existingAuto) {
+                    console.log(`[syncLeaveRecord] Cancelling competing auto-request: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 }
@@ -608,27 +611,35 @@ class LeaveBalanceService {
 
             // CASE A: Amount is 0 (Status changed away from Leave/HalfDay)
             if (roundedAmount === 0) {
+                console.log(`[syncLeaveRecord] CASE A: Amount is 0`);
                 if (existingAuto) {
+                    console.log(`[syncLeaveRecord] Cancelling auto-request because amount is 0: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 } else if (manualRequest) {
+                    console.log(`[syncLeaveRecord] Checking manual request rejection rule...`);
                     // [MOD] Check if category has an automation rule marking day as 'Present' (Status 0)
                     const category = await commonQuery.findOneRecord(LeaveTemplateCategory, manualRequest.leave_category_id, {}, t);
                     const rules = category?.automation_rules ? JSON.parse(category.automation_rules) : {};
-                    const isForcedPresent = rules.auto_attendance_status === "0"; 
+                    const isForcedPresent = String(rules.auto_attendance_status) === "0"; 
 
                     if (!isForcedPresent) {
                         // If it's a single day manual request, cancel it
                         if (manualRequest.start_date === date && manualRequest.end_date === date) {
+                            console.log(`[syncLeaveRecord] Cancelling single-day manual request: #${manualRequest.id}`);
                             await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
                             await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                         }
+                    } else {
+                        console.log(`[syncLeaveRecord] Manual request preserved due to 'Forced Present' rule.`);
                     }
                 }
             }
             // CASE B: Category or Amount Changed for existing auto-request
             else if (existingAuto) {
+                console.log(`[syncLeaveRecord] CASE B: Existing auto-request found: #${existingAuto.id}`);
                 if (existingAuto.leave_category_id !== categoryId || parseFloat(existingAuto.total_days || 0) !== roundedAmount) {
+                    console.log(`[syncLeaveRecord] Updating auto-request category or days.`);
                     // Refund OLD
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     // Deduct NEW
@@ -637,12 +648,16 @@ class LeaveBalanceService {
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, {
                         leave_category_id: categoryId,
                         total_days: roundedAmount,
-                        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED
+                        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+                        request_type: 'DEBIT'
                     }, t);
+                } else {
+                    console.log(`[syncLeaveRecord] No changes needed for existing auto-request.`);
                 }
             } 
             // CASE C: No existing auto-request, create one
             else {
+                console.log(`[syncLeaveRecord] CASE C: Creating new auto-request.`);
                 // Deduct Balance
                 await this.adjustLeaveBalance(employeeId, categoryId, roundedAmount, t, date, employee);
                 
@@ -658,6 +673,7 @@ class LeaveBalanceService {
                     start_date: date,
                     end_date: date,
                     total_days: roundedAmount,
+                    request_type: 'DEBIT',
                     reason: AUTO_REASON,
                     approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                     approved_by: 0, // System/Auto

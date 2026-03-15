@@ -1,6 +1,6 @@
 const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { sequelize, OnDutyRequest, User, Employee } = require("../../models");
+const { sequelize, OnDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
 const dayjs = require("dayjs");
 
 
@@ -19,11 +19,25 @@ const transaction = await sequelize.transaction();
             req.body.employee_id = req.user.employee_id
         }
 
-         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        // Check Employee's Attendance Template Settings
+        const employee = await commonQuery.findOneRecord(Employee, req.body.employee_id, {
+            include: [
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        }, transaction);
+
+        const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
+        if (template && template.enble_on_duty === false) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "On Duty requests are disabled for this employee's template." });
         }
 
         await commonQuery.createRecord(
@@ -142,15 +156,48 @@ exports.updateStatus = async (req, res) => {
         const { id } = req.params;
         const { approval_status, remarks } = req.body;
 
-        const onDutyRequest = await commonQuery.findOneRecord(OnDutyRequest, { id }, {}, transaction);
+        const onDutyRequest = await commonQuery.findOneRecord(OnDutyRequest, { id }, {
+            include: [{ model: Employee, as: "employee" }]
+        }, transaction);
         if (!onDutyRequest) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
 
+        let newStatus = approval_status;
+        let newLevel = onDutyRequest.current_on_duty_level;
+
+        // Multi-level Approval Logic
+        if (approval_status === constants.ON_DUTY_STATUS.APPROVED) {
+            const employee = await commonQuery.findOneRecord(Employee, onDutyRequest.employee_id, {
+                include: [
+                    { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                    { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+                ]
+            }, transaction);
+
+            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
+            const maxLevel = template ? (template.on_duty_approval_level || 1) : 1;
+
+            if (onDutyRequest.current_on_duty_level < maxLevel) {
+                newStatus = constants.ON_DUTY_STATUS.PARTIALLY_APPROVED;
+                newLevel = onDutyRequest.current_on_duty_level + 1;
+            }
+        }
+
+        const history = onDutyRequest.approval_history || [];
+        history.push({
+            level: onDutyRequest.current_on_duty_level,
+            action: approval_status === constants.ON_DUTY_STATUS.APPROVED ? "APPROVED" : "REJECTED",
+            by: req.user.id,
+            at: new Date(),
+            remarks: remarks || ""
+        });
+
         await commonQuery.updateRecordById(OnDutyRequest, id, {
-            approval_status,
-            remarks,
+            approval_status: newStatus,
+            current_on_duty_level: newLevel,
+            approval_history: history,
             approved_by: req.user.id
         }, transaction);
 

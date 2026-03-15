@@ -48,6 +48,11 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0=Full Day, 1=Session 1, 2=Session 2"
             },
+            request_type: {
+                type: DataTypes.ENUM('DEBIT', 'CREDIT'),
+                defaultValue: 'DEBIT',
+                comment: "DEBIT: Taken leave, CREDIT: Earned leave"
+            }
         },
         {
             tableName: "leave_requests",

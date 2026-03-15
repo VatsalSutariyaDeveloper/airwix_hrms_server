@@ -168,7 +168,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     // A.2 Calculate Holidays from EmployeeHoliday
-    holidays = (employee.employeeHolidays || []).length;
+    // holidays = (employee.employeeHolidays || []).length;
 
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
         employee_id,
@@ -191,6 +191,9 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 } else {
                     halfDays++; 
                 }
+                break;
+            case 4: 
+                holidays++; 
                 break;
             case 5: 
                 absentDays++; 
@@ -246,7 +249,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-    console.log("payableDaysValue11111111111", payableDaysValue)
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
         actualDaysValue = daysInMonth - weeklyOffs;

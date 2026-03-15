@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OnDutyRequest } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -29,25 +29,26 @@ const parseDateTime = (timeStr, baseDate) => {
  * Ensures robust finding/creating of the day record.
  */
 async function getOrCreateAttendanceDay(employeeId, date, meta = {}, transaction = null) {
+  // 0. Fetch employee to get correct company/branch if not provided in meta
+  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
+    attributes: ['id', 'company_id', 'branch_id']
+  }, transaction, false, false); // Skip tenant check to fetch basic info if needed
+
   const existingDay = await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
+    company_id: meta.company_id || (employee ? employee.company_id : undefined),
   }, {}, transaction);
 
   if (existingDay) return existingDay;
-
-  // Determine initial status based on holiday/weekly off/etc.
-  // For now, default to ABSENT (5) or based on simple logic, 
-  // but rebuildAttendanceDay usually handles strictly setting the status correctly later.
-  // We just need the record to exist for day_id.
 
   const payload = {
     employee_id: employeeId,
     attendance_date: date,
     status: 5, // Default ABSENT
     user_id: meta.user_id || 0,
-    company_id: meta.company_id || 0,
-    branch_id: meta.branch_id || 0,
+    company_id: meta.company_id || (employee ? employee.company_id : 0),
+    branch_id: meta.branch_id || (employee ? employee.branch_id : 0),
   };
 
   return await commonQuery.createRecord(AttendanceDay, payload, transaction);
@@ -61,6 +62,7 @@ async function punch(employeeId, meta, transaction = null) {
   // 0️⃣ Get Last Global Punch (Crucial for night shifts and 24h rules)
   const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
     employee_id: employeeId,
+    company_id: meta.company_id,
     status: 0,
   }, {
     order: [["punch_time", "DESC"]],
@@ -82,7 +84,10 @@ async function punch(employeeId, meta, transaction = null) {
   // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
   let targetDayDate = today;
   if (punchType === "OUT" && lastPunchGlobal && hoursSinceLast < 24) {
-    const lastInDay = await commonQuery.findOneRecord(AttendanceDay, lastPunchGlobal.day_id, {}, transaction);
+    const lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
+      id: lastPunchGlobal.day_id,
+      company_id: meta.company_id
+    }, {}, transaction);
     if (lastInDay) targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
   }
 
@@ -136,7 +141,11 @@ async function punch(employeeId, meta, transaction = null) {
       const hoursSinceLastIn = Math.abs(dayjs(now).diff(dayjs(lastIn.punch_time), "hour", true));
       if (hoursSinceLastIn < 24) {
         const hasOut = await commonQuery.findOneRecord(AttendancePunch, {
-          employee_id: employeeId, punch_type: "OUT", day_id: lastIn.day_id, status: 0
+          employee_id: employeeId, 
+          punch_type: "OUT", 
+          day_id: lastIn.day_id, 
+          company_id: meta.company_id,
+          status: 0
         }, {}, transaction);
         if (hasOut) {
           throw new Err("Already Punched");
@@ -422,7 +431,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // 4. --- Attendance Processing Logic ---
   if (meta.onlyCreateNonWorking && meta.skipIfPunchesExist) {
-    const exists = await AttendanceDay.count({ where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction });
+    const exists = await AttendanceDay.count({ 
+      where: { 
+        employee_id: employeeId, 
+        attendance_date: date, 
+        company_id: employee.company_id,
+        status: { [Op.ne]: 2 } 
+      }, 
+      transaction 
+    });
     if (exists > 0) return;
   }
 
@@ -430,6 +447,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const existingDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
+    company_id: employee.company_id,
   }, {}, transaction);
 
   if (existingDay && existingDay.is_locked) {
@@ -444,11 +462,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       existingDay ? { day_id: existingDay.id } : null,
       {
         day_id: null,
+        company_id: employee.company_id,
         punch_time: {
           [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
         }
       }
     ].filter(Boolean),
+    company_id: employee.company_id,
     status: 0,
   }, {
     order: [["punch_time", "ASC"]],
@@ -466,9 +486,49 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     status: 0
   }, {}, transaction);
 
+  const approvedOnDuty = (meta.preFetchedOnDuty !== undefined) ? meta.preFetchedOnDuty : await commonQuery.findOneRecord(OnDutyRequest, {
+    employee_id: employeeId,
+    approval_status: constants.ON_DUTY_STATUS.APPROVED,
+    start_date: { [Op.lte]: date },
+    end_date: { [Op.gte]: date },
+    status: 0
+  }, {}, transaction);
+
+  // --- ON DUTY PROCESSING ---
+  if (approvedOnDuty && !hasPunches) {
+      const odPayload = {
+          employee_id: employeeId,
+          attendance_date: date,
+          status: 12, // ON_DUTY
+          shift_id: null,
+          user_id: meta.user_id || 0,
+          branch_id: meta.branch_id || employee.branch_id,
+          company_id: meta.company_id || employee.company_id,
+          note: "System: On Duty auto-detected"
+      };
+
+      const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
+          employee_id: employeeId,
+          attendance_date: date,
+          company_id: employee.company_id
+      }, {}, transaction);
+
+      if (existingDayRecord) {
+          await commonQuery.updateRecordById(AttendanceDay, existingDayRecord.id, odPayload, transaction);
+      } else {
+          await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
+      }
+      return;
+  } else if (approvedOnDuty && hasPunches) {
+      // If they have punches while on duty, we treat it as PRESENT (0) but keep the flag?
+      // Actually, usually status 12 is for On Duty.
+      // We set meta.forcedStatus to ensure it uses 12.
+      meta.forcedStatus = 12;
+  }
+
   // --- LEAVE PROCESSING ---
   if (approvedLeave) {
-    const category = await commonQuery.findOneRecord(LeaveTemplateCategory, approvedLeave.leave_category_id, {}, transaction);
+    const category = await commonQuery.findOneRecord(LeaveTemplateCategory, approvedLeave.leave_category_id, {}, transaction, false, { company_id: true });
     const rules = (category && category.automation_rules) ? JSON.parse(category.automation_rules) : {};
 
     // Determine if today is a half day based on sessions
@@ -483,13 +543,17 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Auto Attendance Status Mapping
     let finalStatus = isHalfDay ? 1 : 6; // 1: Half Day, 6: Leave
+    console.log("rules",rules)
     const overrideStatus = rules.auto_attendance_status;
+    console.log("overrideStatus",overrideStatus)
     if (overrideStatus && overrideStatus !== 'default') {
       finalStatus = parseInt(overrideStatus);
     }
+    console.log("finalStatus",finalStatus)
 
-    const isSpecialStatus = overrideStatus && overrideStatus !== 'default';
 
+    const isSpecialStatus = overrideStatus !== undefined && overrideStatus !== null && overrideStatus !== 'default';
+    console.log("isSpecialStatus",isSpecialStatus)
     if (hasPunches && !isSpecialStatus) {
       // Standard: Cancel leave if employee punches in
       if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
@@ -517,14 +581,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         leave_category_id: approvedLeave.leave_category_id,
         leave_session: approvedLeave.leave_session,
         user_id: meta.user_id || 0,
-        branch_id: meta.branch_id || 0,
-        company_id: meta.company_id || 0,
+        branch_id: meta.branch_id || employee.branch_id,
+        company_id: meta.company_id || employee.company_id,
         note: isSpecialStatus ? `System: Marked via ${category.leave_category_name}` : null
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
         employee_id: employeeId,
         attendance_date: date,
+        company_id: employee.company_id
       }, {}, transaction);
 
       if (existingDayRecord) {
@@ -616,6 +681,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const existingDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id: employeeId,
       attendance_date: date,
+      company_id: employee.company_id,
     }, { attributes: ['id', 'status', 'worked_minutes', 'late_minutes', 'early_out_minutes', 'overtime_minutes', 'early_overtime_minutes', 'total_break_minutes', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction);
 
     // [MOD] Preserve existing status if it exists. 
@@ -676,8 +742,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status: emptyStatus,
       shift_id: (isWeeklyOff || isHoliday) ? null : (shift ? shift.id : null),
       user_id: meta.user_id || 0,
-      branch_id: meta.branch_id || 0,
-      company_id: meta.company_id || 0,
+      branch_id: meta.branch_id || employee.branch_id,
+      company_id: meta.company_id || employee.company_id,
       first_in: existingDay?.first_in || null,
       last_out: existingDay?.last_out || null,
       worked_minutes: finalNoPunchMinutes,
@@ -999,6 +1065,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 where: {
                   employee_id: employeeId,
                   attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
+                  company_id: employee.company_id,
                   late_minutes: { [Op.between]: [rule.from_mins, rule.to_mins] },
                   status: { [Op.ne]: 2 }
                 },
@@ -1074,6 +1141,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               where: {
                 employee_id: employeeId,
                 attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
+                company_id: employee.company_id,
                 late_minutes: { [Op.gt]: 0 },
                 status: { [Op.ne]: 2 }
               },
@@ -1118,6 +1186,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                   where: {
                     employee_id: employeeId,
                     attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
+                    company_id: employee.company_id,
                     early_out_minutes: { [Op.between]: [rule.from_mins, rule.to_mins] },
                     status: { [Op.ne]: 2 }
                   },
@@ -1193,6 +1262,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 where: {
                   employee_id: employeeId,
                   attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
+                  company_id: employee.company_id,
                   early_out_minutes: { [Op.gt]: 0 },
                   status: { [Op.ne]: 2 }
                 },
@@ -1514,6 +1584,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
+    company_id: employee.company_id,
   }, { attributes: ['status'] }, transaction);
 
   if (existingDayForStatus) {
@@ -1557,6 +1628,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const existingDay2 = await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
+    company_id: employee.company_id,
   }, {}, transaction);
 
   const attendancePayload = {
@@ -1585,8 +1657,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     fine_amount: fineAmount,
     status: status,
     user_id: meta.user_id || 0,
-    branch_id: meta.branch_id || 0,
-    company_id: meta.company_id || 0,
+    branch_id: meta.branch_id || employee.branch_id,
+    company_id: meta.company_id || employee.company_id,
     note: (function () {
       let effectiveAutoReason = autoAbsentReason;
       // If we are now PRESENT/HALF_DAY, ignore negative auto reasons (e.g. from downgrade prevention)
@@ -1635,16 +1707,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 }
 
 async function manualPunch(employeeId, date, inTime, outTime, meta, transaction = null) {
+  // 0. Fetch employee early for metadata and policy checks
+  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
+    include: [
+      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+    ],
+  }, transaction);
+
   const commonMeta = {
     user_id: meta.user_id || 0,
-    company_id: meta.company_id || 0,
-    branch_id: meta.branch_id || 0,
+    company_id: meta.company_id || (employee ? employee.company_id : 0),
+    branch_id: meta.branch_id || (employee ? employee.branch_id : 0),
     device_id: meta.device_id,
   };
 
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
+    company_id: commonMeta.company_id, // Added tenant check
   }, {}, transaction);
 
   if (!attendanceDay) {
@@ -1667,13 +1748,6 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   };
 
   // 1. Policy Validation: Block Attendance on Holidays/Weekly Off if Strict
-  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
-    include: [
-      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
-      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
-    ],
-  }, transaction);
-
   if (employee) {
     const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
     if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
@@ -1858,7 +1932,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
         const diff = creditAmount - parseFloat(existingCompOff.total_days);
         const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
         if (error) return error;
-        await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount }, transaction);
+        await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount, request_type: 'CREDIT' }, transaction);
       }
     } else {
       // New Credit
@@ -1871,6 +1945,7 @@ async function syncCompOffCredit(employee, date, status, transaction) {
         start_date: date,
         end_date: date,
         total_days: creditAmount,
+        request_type: 'CREDIT',
         reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
         approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
         approved_by: 0,
@@ -2007,7 +2082,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const empShiftMap = new Map(employeeShifts.map(s => [s.employee_id, s]));
 
   // 3. Fetch all potential non-working day triggers in bulk
-  const [holidays, weeklyOffs, leaveRequests] = await Promise.all([
+  const [holidays, weeklyOffs, leaveRequests, onDutyRequests] = await Promise.all([
     commonQuery.findAllRecords(
       EmployeeHoliday,
       {
@@ -2043,6 +2118,18 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       },
       {},
       transaction
+    ),
+    commonQuery.findAllRecords(
+      OnDutyRequest,
+      {
+        employee_id: { [Op.in]: missingEmpIds },
+        start_date: { [Op.lte]: date },
+        end_date: { [Op.gte]: date },
+        approval_status: constants.ON_DUTY_STATUS.APPROVED,
+        status: 0
+      },
+      {},
+      transaction
     )
   ]);
 
@@ -2050,6 +2137,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const holidayMap = new Map(holidays.map(h => [h.employee_id, h]));
   const weeklyOffMap = new Map(weeklyOffs.map(w => [w.employee_id, w]));
   const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
+  const onDutyMap = new Map(onDutyRequests.map(o => [o.employee_id, o]));
 
   const payloads = [];
   for (const emp of employees) {
@@ -2057,7 +2145,10 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     let leave_cat = null;
     let note = null;
 
-    if (leaveMap.has(emp.id)) {
+    if (onDutyMap.has(emp.id)) {
+      status = 12; // ON_DUTY
+      note = "System: On Duty auto-detected";
+    } else if (leaveMap.has(emp.id)) {
       status = 6; // LEAVE
       leave_cat = leaveMap.get(emp.id).leave_category_id;
       note = "System: Leave auto-detected";

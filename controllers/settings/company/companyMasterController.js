@@ -185,7 +185,7 @@ exports.create = async (req, res) => {
     );
     if(!newCompany){
       await transaction.rollback();
-      return res.error(constants.INTERNAL_SERVER_ERROR, { message: "Failed to create company." });
+      return res.error(constants.SERVER_ERROR, { message: "Failed to create company." });
     }
 
 
@@ -302,10 +302,7 @@ exports.getCompanies = async (req, res) => {
     ];
 
     const result = await commonQuery.findAllRecords(CompanyMaster, {
-      [Op.or]: [
-        { id: companyId },
-        { company_id: companyId },
-      ],
+      organization_id: record.organization_id,
       status: 0,
     }, { include: includeOptions },null, {});
 

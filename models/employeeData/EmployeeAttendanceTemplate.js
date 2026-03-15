@@ -39,6 +39,19 @@ module.exports = (sequelize, DataTypes) => {
     paid_break_duration_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     break_rules: { type: DataTypes.JSON, defaultValue: [] },
 
+    // On Duty Approval
+    on_duty_approval_level: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1,
+      comment: "1, 2, or 3 levels of approval"
+    },
+    on_duty_approval_config: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
+    },
+    enble_on_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
+
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

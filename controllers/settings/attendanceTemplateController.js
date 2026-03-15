@@ -212,7 +212,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
     try {
-        const result = await commonQuery.findAllRecords(AttendanceTemplate, { status: 0 }, { attributes:["id", "name", "mode"] }, null, { company_id: true });
+        const result = await commonQuery.findAllRecords(AttendanceTemplate, { status: 0 }, { attributes:["id", "name", "mode", "on_duty_approval_level", "on_duty_approval_config", "enble_on_duty"] }, null, { company_id: true });
         return res.ok(result);
     } catch (err) {
         return handleError(err, res, req);

@@ -413,7 +413,8 @@ exports.getAll = async (req, res) => {
             };
             const statusLabel = statusLabels[raw.approval_status] || "PENDING";
             const total = raw.employee?.leaveTemplate?.approval_levels || 1;
-            raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level} of ${total})`;
+            const typeLabel = raw.request_type === 'CREDIT' ? " [EARNED]" : "";
+            raw.tracking_summary = `${statusLabel}${typeLabel} (Stage ${raw.current_level} of ${total})`;
 
             if (raw.document) {
                 const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
