@@ -14,6 +14,7 @@ module.exports = (sequelize, DataTypes) => {
     total_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     lunch_count: { type: DataTypes.INTEGER(3), defaultValue: 0 },
     leave_details: { type: DataTypes.JSON, allowNull: true },
+    leave_balances: { type: DataTypes.JSON, allowNull: true },
 
     // Dynamic Components
     earning_details: { type: DataTypes.JSON, allowNull: true },

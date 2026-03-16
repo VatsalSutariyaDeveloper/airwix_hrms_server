@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -144,9 +144,28 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         employee_id,
         year
     }, {}, transaction, { company_id: true });
+
+    // Also fetch categories from the employee's assigned leave template for name fallback
+    let templateCategories = [];
+    if (employee.leave_template) {
+        templateCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
+            leave_template_id: employee.leave_template
+        }, {}, transaction, { company_id: true });
+    }
+
     const leaveParamMap = new Map();
+    // Initialize with template defaults
+    templateCategories.forEach(cat => {
+        leaveParamMap.set(cat.id, {
+            name: cat.name,
+            is_paid: cat.is_paid === true || cat.is_paid === 'true',
+            is_compoff: false 
+        });
+    });
+    // Supplement with actual balance data
     leaveBalances.forEach(lb => {
         leaveParamMap.set(lb.leave_category_id, { 
+            name: lb.leave_category_name,
             is_paid: lb.is_paid === true || lb.is_paid === 'true', 
             is_compoff: lb.is_compoff === true || lb.is_compoff === 'true' 
         });
@@ -176,8 +195,24 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         status: { [Op.ne]: 2 }
     }, {}, transaction);
     
+    const monthLeaveUsage = {}; // Track usage per category ID for the current month
+    const leaveCategoryDetails = {}; // Track usage per category name for leave_details
     attendanceRecords.forEach(day => {
         const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
+        
+        // Track current month leave usage
+        let dayUsage = 0;
+        const status = parseInt(day.status);
+        if (status === 6) dayUsage = 1;
+        else if (status === 1 || status === 13) dayUsage = 0.5;
+
+        if (dayUsage > 0 && day.leave_category_id) {
+            monthLeaveUsage[day.leave_category_id] = (monthLeaveUsage[day.leave_category_id] || 0) + dayUsage;
+            
+            const catName = catInfo ? catInfo.name : "Other Leave";
+            leaveCategoryDetails[catName] = (leaveCategoryDetails[catName] || 0) + dayUsage;
+        }
+
         switch (parseInt(day.status)) {
             case 0: case 12: 
                 presentDays++; 
@@ -527,7 +562,39 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     //     totalDeductions += totalAdvance;
     // }
 
-    // Step G: Calculate Statutory TDS (Tax Deducted at Source)
+    // Step G: Process Statutory Config (PF, ESI, PT, LWF)
+    if (template.statutory_config) {
+        const sc = template.statutory_config;
+
+        const addStatRecord = (name, amount, isEmployer = false) => {
+            if (!amount || amount <= 0) return;
+            if (isEmployer) {
+                if (!employer[name]) employer[name] = parseFloat(amount);
+            } else {
+                if (!statutory[name]) {
+                    statutory[name] = parseFloat(amount);
+                    if (!deductions.find(d => d.name === name)) {
+                        deductions.push({ name, amount: parseFloat(amount), is_statutory: true });
+                        totalDeductions += parseFloat(amount);
+                    }
+                }
+            }
+        };
+
+        // Employee Shares
+        if (sc.employee_pf?.enabled) addStatRecord("Employee PF", sc.employee_pf.amount, false);
+        if (sc.employee_esi?.enabled) addStatRecord("Employee ESI", sc.employee_esi.amount, false);
+        if (sc.pt?.enabled) addStatRecord("Professional Tax", sc.pt.amount, false);
+        if (sc.employee_lwf?.enabled) addStatRecord("Employee LWF", sc.employee_lwf.amount, false);
+
+        // Employer Shares
+        if (sc.employer_pf?.enabled) addStatRecord("Employer PF", sc.employer_pf.amount, true);
+        if (sc.employer_esi?.enabled) addStatRecord("Employer ESI", sc.employer_esi.amount, true);
+        if (sc.employer_lwf?.enabled) addStatRecord("Employer LWF", sc.employer_lwf.amount, true);
+        if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
+    }
+
+    // Step H: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
     let tdsPercentage = 0;
     let tdsCalculationData = null;
@@ -574,7 +641,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -592,6 +659,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         breakdown: {
             earnings,
             deductions,
+            statutory,
+            employer,
             total_earnings: totalEarningsBreakdown.toFixed(2),
             total_deductions: totalDeductionsBreakdown.toFixed(2)
         },
@@ -620,6 +689,15 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         },
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
         tds_calculation_data: tdsCalculationData,
+        leave_balances: Array.from(leaveParamMap.entries()).map(([catId, info]) => {
+            const balanceRecord = leaveBalances.find(lb => lb.leave_category_id === catId);
+            return {
+                leave_category_id: catId,
+                leave_category_name: info.name,
+                used_leaves: monthLeaveUsage[catId] || 0,
+                balance: balanceRecord ? balanceRecord.pending_leaves : 0
+            };
+        }),
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
@@ -690,6 +768,20 @@ const formatPayslipToSummary = async (payslip) => {
     });
     const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
 
+    let leaveBalances = payslip.leave_balances;
+    if (!leaveBalances) {
+        const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+            employee_id: payslip.employee_id,
+            year: payslip.year
+        });
+        leaveBalances = rawLeaveBalances.map(lb => ({
+            leave_category_id: lb.leave_category_id,
+            leave_category_name: lb.leave_category_name,
+            used_leaves: lb.used_leaves,
+            balance: lb.pending_leaves
+        }));
+    }
+
     return {
         id: payslip.id,
         is_finalized: true,
@@ -727,6 +819,7 @@ const formatPayslipToSummary = async (payslip) => {
             advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
             netPayable: payslip.net_salary || 0
         },
+        leave_balances: leaveBalances,
         breakdown: {
             earnings: (payslip.break_down?.earnings || Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val }))),
             deductions: [
@@ -857,11 +950,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
             total_days: summary.period.daysInMonth,
-            leave_details: { 
-                "Paid Leave": summary.attendance.leaveDays || 0,
-                "Unpaid Leave": summary.attendance.unpaidLeaveDays || 0,
-                "Compoff": summary.attendance.compoffLeaveDays || 0
-            },
+            leave_details: summary.attendance.leave_category_details,
             lunch_count: summary.attendance.lunchCount || 0,
 
             // Dynamic JSON Components
@@ -885,6 +974,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
 
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
+            leave_balances: summary.leave_balances,
             status: 1, // Finalized
             user_id: req.user.id || 0,
             branch_id: summary.meta.branch_id,
@@ -923,6 +1013,53 @@ exports.finalizeMonthlySalary = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+/**
+ * Delete a payslip and unlock associated attendance records
+ */
+exports.deletePayslip = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.body;
+        if (!id) {
+            await transaction.rollback();
+            return res.error("VALIDATION_ERROR", { message: "Payslip ID is required" });
+        }
+
+        const payslip = await commonQuery.findOneRecord(Payslip, id, {}, transaction);
+        if (!payslip) {
+            await transaction.rollback();
+            return res.error("NOT_FOUND", { message: "Payslip not found" });
+        }
+
+        if (payslip.status === 3) {
+            await transaction.rollback();
+            return res.error("NOT_ALLOWED", { message: "Cannot delete a paid payslip." });
+        }
+
+        const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
+        const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
+
+        // Unlock Attendance
+        await AttendanceDay.update({ is_locked: false }, {
+            where: {
+                employee_id: payslip.employee_id,
+                attendance_date: { [Op.between]: [startDate, endDate] }
+            },
+            transaction
+        });
+
+        // Hard delete payslip record
+        await payslip.destroy({ transaction });
+
+        await transaction.commit();
+        return res.success("PAYSLIP_DELETED", { message: "Payslip deleted and attendance records unlocked." });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
 
 exports.calculateBatchMonthlySalary = async (req, res) => {
     try {
@@ -1438,10 +1575,16 @@ exports.getPayslipById = async (req, res) => {
         });
 
         // Fetch Employee Leave Balance data
-        const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+        const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
             employee_id: payslip.employee_id,
             year: year
         });
+        const leaveBalances = rawLeaveBalances.map(lb => ({
+            leave_category_id: lb.leave_category_id,
+            leave_category_name: lb.leave_category_name,
+            used_leaves: lb.used_leaves,
+            balance: lb.pending_leaves
+        }));
 
         // Fetch Payment History for the month
         const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
@@ -1568,7 +1711,7 @@ exports.getPayslipById = async (req, res) => {
             },
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
-            leave_balances: leaveBalances,
+            leave_balances: payslip.leave_balances || leaveBalances,
             payment_history: {
                 salary: {
                     history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
@@ -2484,6 +2627,74 @@ exports.getPaymentHistory = async (req, res) => {
         return res.ok({
             paymentHistories,
             totalAmount: parseFloat(totalAmount.toFixed(2))
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getEmployerContributionReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        const where = {
+            month,
+            year,
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
+        };
+
+        if (branch_id) {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['id', 'first_name', 'employee_code'],
+                    include: [
+                        {
+                            model: DesignationMaster,
+                            as: 'designation',
+                            attributes: ['designation_name']
+                        }
+                    ]
+                }
+            ]
+        });
+
+        const report = payslips.map(ps => {
+            const employerDetails = ps.employer_details || {};
+            let totalContribution = 0;
+            const contributionMap = {};
+
+            // Extract values and calculate total
+            Object.entries(employerDetails).forEach(([key, value]) => {
+                const val = parseFloat(value || 0);
+                contributionMap[key] = val;
+                totalContribution += val;
+            });
+
+            return {
+                id: ps.id,
+                employee_id: ps.employee?.id,
+                employee_name: ps.employee?.first_name,
+                employee_code: ps.employee?.employee_code,
+                designation: ps.employee?.designation?.designation_name,
+                contribution: contributionMap,
+                total_contribution: parseFloat(totalContribution.toFixed(2))
+            };
+        });
+
+        return res.ok({
+            report,
+            month,
+            year
         });
 
     } catch (err) {

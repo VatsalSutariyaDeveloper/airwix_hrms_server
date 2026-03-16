@@ -17,7 +17,7 @@ exports.create = async (req, res) => {
             req.body,
             requiredFields,
             {},
-            transaction
+            transaction,
         );
 
 
@@ -114,7 +114,10 @@ exports.getById = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
                 ]
-            }
+            },
+            null,
+            false,
+            false
         );
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
@@ -146,7 +149,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(StatutoryLWFRule, req.params.id, req.body, transaction);
+        const updated = await commonQuery.updateRecordById(StatutoryLWFRule, req.params.id, req.body, transaction, false, false);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -180,7 +183,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(StatutoryLWFRule, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(StatutoryLWFRule, ids, transaction, false);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
@@ -222,7 +225,9 @@ exports.updateStatus = async (req, res) => {
             StatutoryLWFRule,
             ids,
             { status },
-            transaction
+            transaction,
+            false,
+            false
         );
 
         if (!updated || updated.status === 2) {

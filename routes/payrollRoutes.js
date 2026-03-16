@@ -9,6 +9,8 @@ const paymentHistoryController = require("../controllers/employee/paymentHistory
 router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
 router.post("/finalize", payrollController.finalizeMonthlySalary);
+router.post("/delete-payslip", payrollController.deletePayslip);
+
 router.post("/get-employee-payslip", payrollController.getEmployeePayslip);
 router.post("/get-payslip-employeeList", payrollController.getPayslipEmployeeList);
 router.post("/get-payslipview", payrollController.getPayslipView);
@@ -19,6 +21,7 @@ router.post("/get-available-months", payrollController.getAvailableMonthsForCalc
 router.post("/get-payrollEmployee", payrollController.getEmployeesByMonthYear);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
+router.post("/get-employer-contribution-report", payrollController.getEmployerContributionReport);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
 router.post("/payment-history", payrollController.getPaymentHistory);
 
