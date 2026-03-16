@@ -58,6 +58,8 @@ const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes
 const Employee = require("./employee")(sequelize, DataTypes);
 const EmployeeFamilyMember = require("./employeeFamilyMember")(sequelize, DataTypes);
 
+const AttendanceReconciliation = require("./attendance/attendanceReconciliation")(sequelize, DataTypes);
+
 // SeriesTypeMaster
 const SeriesTypeMaster = require("./settings/seriesTypeMaster")(sequelize, DataTypes);
 
@@ -223,7 +225,10 @@ const db = {
 
   // Canteen Attendance
   CanteenAttendance,
-  SalaryRevisionHistory
+  SalaryRevisionHistory,
+
+  // Attendance Reconciliation
+  AttendanceReconciliation
 };
 
 Object.keys(db).forEach(modelName => {

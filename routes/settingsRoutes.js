@@ -28,6 +28,7 @@ const incentiveTypeController = require("../controllers/settings/incentiveTypeCo
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
 const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
+const attendanceReconciliationController = require("../controllers/attendance/attendanceReconciliationController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -173,8 +174,6 @@ router.delete("/attendance-template", attendanceTemplateController.delete);
 router.patch("/attendance-template/status", attendanceTemplateController.updateStatus);
 router.post("/attendance-template/dropdown-list", attendanceTemplateController.dropdownList);
 
-
-
 // ==========================
 // 29. LEAVE TEMPLATE ROUTES
 // ==========================
@@ -299,8 +298,14 @@ router.post("/onDuty-request/pending-approvals", onDutyRequestController.getPend
 router.get("/onDuty-request/:id", onDutyRequestController.getById);
 router.put("/onDuty-request/status/:id", onDutyRequestController.updateStatus);
 router.put("/onDuty-request/cancel/:id", onDutyRequestController.cancelLeave);
-router.post("/on-duty-summary", onDutyRequestController.getOnDutySummary);
+router.post("/onDuty-request/summary", onDutyRequestController.getOnDutySummary);
 
+// ===============================
+// 40. ATTENDANCE RECONCILIATION ROUTES
+// ===============================
+router.post("/attendance-reconciliation/", attendanceReconciliationController.create);
+router.post("/attendance-reconciliation/summary", attendanceReconciliationController.getAttendanceReconciliationSummary);
+router.put("/attendance-reconciliation/status/:id", attendanceReconciliationController.updateStatus);
 
 
 module.exports = router;

@@ -5,11 +5,12 @@ const {
     Holiday,
     Department,
     ShiftTemplate,
-    sequelize,
     Payslip,
-    CanteenAttendance
+    CanteenAttendance,
+    LeaveTemplate,
+    OnDutyRequest
 } = require("../../models");
-const { commonQuery, handleError, constants } = require("../../helpers");
+const { commonQuery, handleError, constants, sequelize } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 
@@ -17,42 +18,98 @@ exports.getCounts = async (req, res) => {
     try {
         const today = dayjs().format("YYYY-MM-DD");
 
-        // Total Active Employees
-        const totalEmployees = await commonQuery.countRecords(Employee, { status: 0 }, req);
+        const totalEmployees = await commonQuery.countRecords(Employee, { status: 0 }, {}, false);
 
-        // Present Today (Status 0=Present, 1=HalfDay)
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: { [Op.in]: [0, 1] }
-        });
+        }, {}, false);
 
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: 5
-        });
+        }, {}, false);
 
-        // On Leave Today (Status 6=Leave)
         const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: 6
-        });
+        }, {}, false);
 
-        // Pending Leave Requests
-        const pendingLeaves = await commonQuery.countRecords(LeaveRequest,
-            {
-                approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
-                status: 0 // Active record
-            },
-            {
-                include: [{
-                    model: Employee,
-                    as: 'employee',
-                    required: true
-                }]
+        let pendingLeaves = 0;
+        let authorizedOnDutyRequests = 0;
+
+        if (req.user.is_super_admin) {
+            // Optimization for super admins
+            pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 }, {}, false);
+            authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 }, {}, false);
+        } else {
+            // Helper function to check authorization
+            const isUserAuthorizedForRequest = (request, levelField) => {
+                const employee = request.employee;
+                if (!employee) return false;
+
+                const template = employee?.leaveTemplate;
+                const currentLevel = request[levelField];
+                const config = template ? (template.approval_config || []) : [];
+
+                let currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+
+                switch (currentStage.type) {
+                    case 'REPORTING_MANAGER':
+                        return req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id;
+                    case 'ATTENDANCE_SUPERVISOR':
+                        return req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id;
+                    case 'ADMIN':
+                        return req.user.is_admin;
+                    case 'EMPLOYER':
+                        return true;
+                    case 'ANYONE':
+                        return employee.reporting_manager === req.user.id ||
+                               employee.attendance_supervisor === req.user.id ||
+                               req.user.is_admin;
+                    default:
+                        return false;
+                }
+            };
+
+            const queryIncludeOptions = {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                    }
+                ]
+            };
+
+            const allPendingRequests = await commonQuery.findAllRecords(LeaveRequest,
+                { approval_status: { [Op.in]: [0, 1] }, status: 0 },
+                queryIncludeOptions,
+                false
+            );
+
+            for (const request of allPendingRequests) {
+                if (isUserAuthorizedForRequest(request, 'current_level')) {
+                    pendingLeaves++;
+                }
             }
-        );
 
-        // Late Entry Count (employees who arrived after shift start time + grace period)
+            const pendingOnDutyRequests = await commonQuery.findAllRecords(OnDutyRequest,
+                { approval_status: { [Op.in]: [0, 1] }, status: 0 },
+                queryIncludeOptions,
+                false
+            );
+
+            for (const request of pendingOnDutyRequests) {
+                if (isUserAuthorizedForRequest(request, 'current_on_duty_level')) {
+                    authorizedOnDutyRequests++;
+                }
+            }
+        }
+
+        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests;
+        
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {
                 attendance_date: today
@@ -64,12 +121,12 @@ exports.getCounts = async (req, res) => {
                     required: false,
                     attributes: ['start_time', 'grace_minutes']
                 }]
-            }
+            },
+            null,
+            false
         );
        
-        // Count late entries by comparing first_in time with shift start time + grace minutes
         const lateEntryRecords = lateEntry.filter(record => {
-            // Skip records without first_in time or shift template
             if (!record.first_in || !record.shiftTemplate) return false;
             
             const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
@@ -82,28 +139,31 @@ exports.getCounts = async (req, res) => {
 
         const lateEntryCount = lateEntryRecords.length;
 
-        // Canteen Attendance for Today - fetch all employees and their canteen status
-        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 });
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, {}, null, false);
         const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
             date: today
-        });
+        }, {}, null, false);
       
-        // Get employee IDs who have canteen attendance today
-        const presentEmployeeIds = canteenAttendanceToday.map(att => att.employee_id);
+        // Separate guest and employee data
+        const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
+        const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
         
-        // Count present and absent employees
+        const guestCount = guestAttendance.length;
+        const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
+        
         const canteenPresentToday = presentEmployeeIds.length;
-        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length;
+        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
 
         return res.ok({
             totalEmployees,
             presentToday,
             absentToday,
             onLeaveToday,
-            pendingLeaves,
+            pendingGlobalCount,
             lateEntry: lateEntryCount,
             canteenPresentToday,
-            canteenAbsentToday
+            canteenAbsentToday,
+            guestCount
         });
     } catch (err) {
         return handleError(err, res, req);
@@ -205,7 +265,7 @@ exports.getPayrollOverview = async (req, res) => {
             month: currentMonth,
             year: currentYear,
             status: 0 // Draft
-        });
+        }, {}, false);
 
         return res.ok({
             month: dayjs().format("MMMM YYYY"),
@@ -217,3 +277,4 @@ exports.getPayrollOverview = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+

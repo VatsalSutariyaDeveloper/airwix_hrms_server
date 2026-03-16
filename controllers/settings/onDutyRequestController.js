@@ -1,6 +1,6 @@
 const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { sequelize, OnDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
+const { sequelize, OnDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const dayjs = require("dayjs");
 
 
@@ -125,25 +125,88 @@ exports.getById = async (req, res) => {
 // Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
+        // Fetch all pending on-duty requests with employee and template details
         const requests = await commonQuery.findAllRecords(
-          OnDutyRequest, 
-          {
-            approval_status: { [Op.in]: [constants.ON_DUTY_STATUS.PENDING, constants.ON_DUTY_STATUS.PARTIALLY_APPROVED] },
-            status: 0
-          },
-          {
-            include: [
-              {
-                model: Employee,
-                as: "employee",
-                attributes: ["id", "first_name", "employee_code"],
-                required: false
-              }
-            ]
-          }
+            OnDutyRequest, 
+            {
+                approval_status: { [Op.in]: [constants.ON_DUTY_STATUS.PENDING, constants.ON_DUTY_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            },
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "leave_template"],
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ]
+            }
         );
 
-        return res.ok(requests);
+        // Apply authorization logic - only return requests user can approve
+        const pendingForUser = [];
+        for (const request of requests) {
+            const employee = request.employee;
+            if (!employee) continue;
+
+            // Get leave template if employee has one (on-duty uses same template as leave)
+            const template = employee?.leaveTemplate;
+            const currentLevel = request.current_on_duty_level;
+            const config = template ? (template.approval_config || []) : [];
+
+            let currentStage = config.find(c => c.level === currentLevel);
+            if (!currentStage) currentStage = { type: "ANYONE" };
+
+            // Reset authorization for each request to prevent cross-contamination
+            let isAuthorized = false;
+            
+            console.log("OnDuty Request:", request.id, "Employee:", employee.id, 
+                       "User ID:", req.user.id, "Role:", req.user.role_id,
+                       "Stage:", currentStage.type, "Config:", currentStage);
+            
+            if (req.user.is_super_admin) {
+                isAuthorized = true;
+            } else {
+                switch (currentStage.type) {
+                    case 'REPORTING_MANAGER':
+                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        break;
+                    case 'ATTENDANCE_SUPERVISOR':
+                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        break;
+                    case 'ADMIN':
+                        if (req.user.is_admin) isAuthorized = true;
+                        break;
+                    case 'EMPLOYER':
+                        isAuthorized = true;
+                        break;
+                    case 'ANYONE':
+                        if (employee.reporting_manager === req.user.id ||
+                            employee.attendance_supervisor === req.user.id ||
+                            req.user.is_admin) {
+                            isAuthorized = true;
+                        }
+                        break;
+                }
+            }
+            
+            console.log("Request", request.id, "Authorized:", isAuthorized);
+            
+            if (isAuthorized) {
+                const raw = request.get({ plain: true });
+                raw.approved_by_name = raw.approvedBy?.user_name || null;
+                pendingForUser.push(raw);
+            }
+        }
+
+        return res.ok(pendingForUser);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -313,23 +376,13 @@ exports.getOnDutySummary = async (req, res) => {
         [constants.ON_DUTY_STATUS.DELETED]: "DELETED",
       };
 
-      const colorMap = {
-        [constants.ON_DUTY_STATUS.APPROVED]: "#10B981",
-        [constants.ON_DUTY_STATUS.REJECTED]: "#EF4444",
-        [constants.ON_DUTY_STATUS.PENDING]: "#F59E0B",
-        [constants.ON_DUTY_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
-        [constants.ON_DUTY_STATUS.CANCELLED]: "#6B7280",
-        [constants.ON_DUTY_STATUS.DELETED]: "#9CA3AF",
-      };
-
       group.on_duties.push({
         id: onDuty.id,
         date_range: dateRange,
         duration_display: `${parseFloat(onDuty.total_days).toFixed(1)} Days | On Duty`,
         reason: onDuty.reason || "",
         status_id: onDuty.approval_status,
-        status: statusMap[onDuty.approval_status] || "PENDING",
-        status_color: colorMap[onDuty.approval_status] || "#F59E0B",
+        status: statusMap[onDuty.approval_status],
         approved_by: onDuty.approvedBy?.user_name || null
       });
     });
