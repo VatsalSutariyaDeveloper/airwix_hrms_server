@@ -594,29 +594,81 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
     }
 
+    /*
     // Step H: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
     let tdsPercentage = 0;
     let tdsCalculationData = null;
     if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
         const tdsConfig = template.statutory_config.tds;
-        if (tdsConfig.calculation_type === 'Manual Amount') {
+        
+        // India Financial Year Logic (April to March)
+        const currentMonth = parseInt(month);
+        const currentYear = parseInt(year);
+        let fyStartYear = currentMonth < 4 ? currentYear - 1 : currentYear;
+        
+        // Calculate months left in FY (including current)
+        // monthsSpent: April=0, May=1... March=11
+        let monthsSpent = (currentMonth >= 4) ? (currentMonth - 4) : (currentMonth + 8);
+        let monthsRemaining = 12 - monthsSpent;
+
+        // Fetch already deducted TDS in this FY
+        // This ensures tax is spread over remaining months if it wasn't deducted correctly before
+        const previousPayslips = await Payslip.findAll({
+            where: {
+                employee_id,
+                [Op.or]: [
+                    { year: fyStartYear, month: { [Op.gte]: 4 } },
+                    { year: fyStartYear + 1, month: { [Op.lte]: 3 } }
+                ]
+            },
+            transaction
+        });
+
+        let taxPaidAlready = 0;
+        let actualYTD = 0;
+        previousPayslips.forEach(p => {
+            // Only count months strictly BEFORE the current period
+            if (p.year < currentYear || (p.year === currentYear && p.month < currentMonth)) {
+                const statutoryDetails = p.statutory_details || {};
+                taxPaidAlready += parseFloat(statutoryDetails['Income Tax (TDS)'] || 0);
+                actualYTD += parseFloat(p.total_earnings || p.break_down?.total_earnings || 0);
+            }
+        });
+
+        if (tdsConfig.calculation_type === 'Fixed') {
             tdsAmount = parseFloat(tdsConfig.amount || 0);
-            tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount };
+            tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount, monthlyTDS: tdsAmount };
         } else if (tdsConfig.calculation_type !== 'None') {
-            const annualGross = monthlyGross * 12;
-            const regimeMap = {
-                'System Calculated': 'new_regime',
-                'New Regime': 'new_regime',
-                'Old Regime': 'old_regime'
-            };
-            const regime = regimeMap[tdsConfig.calculation_type] || 'new_regime';
-            const tdsResult = calculateTDS(annualGross, regime);
+            // Advanced Projection Approach: 
+            // Estimated Annual Gross = Actual YTD (from prev months) + Current Month Actual + Projected Remaining Months
+            const currentMonthActual = takeHomeEarnings;
+            const projectedRemaining = parseFloat(template.ctc_monthly || 0) * (monthsRemaining - 1);
+            
+            const annualGross = actualYTD + currentMonthActual + projectedRemaining;
+            
+            // Map NEW/OLD to new_regime/old_regime
+            const regime = tdsConfig.regime === 'OLD' ? 'old_regime' : 'new_regime';
+            
+            // Deductions/Exemptions from config (80C, 80D, etc.)
+            const exemptions = parseFloat(tdsConfig.exemptions || 0);
+
+            const tdsResult = calculateTDS(annualGross, regime, exemptions, taxPaidAlready, monthsRemaining);
+            
             tdsAmount = tdsResult.monthlyTDS;
             tdsPercentage = tdsResult.percentage;
             tdsCalculationData = tdsResult;
         }
     }
+
+    if (tdsAmount > 0) {
+        statutory["Income Tax (TDS)"] = tdsAmount;
+        // statutory["Income Tax (TDS) %"] = tdsPercentage;
+        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
+        totalDeductions += tdsAmount;
+    }
+    */
+    // let tdsCalculationData = null;
 
     // if (tdsAmount > 0) {
     //     statutory["Income Tax (TDS)"] = tdsAmount;
@@ -651,7 +703,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             incentiveAmount: totalIncentive.toFixed(2),
             // advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount.toFixed(2),
-            tdsPercentage: tdsPercentage.toFixed(2),
+            // tdsPercentage: tdsPercentage.toFixed(2),
             netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
@@ -688,7 +740,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             grand_total: totalPaid.toFixed(2)
         },
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
-        tds_calculation_data: tdsCalculationData,
+        // tds_calculation_data: tdsCalculationData,
+        // tdsDetails: tdsCalculationData,
         leave_balances: Array.from(leaveParamMap.entries()).map(([catId, info]) => {
             const balanceRecord = leaveBalances.find(lb => lb.leave_category_id === catId);
             return {
@@ -875,7 +928,9 @@ const formatPayslipToSummary = async (payslip) => {
                 sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
             grand_total: totalPaid.toFixed(2)
-        }
+        },
+        // tds_calculation_data: payslip.tds_calculation_data,
+        // tdsDetails: payslip.tds_calculation_data
     };
 };
 
@@ -1154,11 +1209,15 @@ const processPayslipData = (payslips) => {
         // Total deductions including statutory
         const totalDeductionsSum = regularDeductionsSum + statutoryDeductionsSum;
 
+        const tdsData = payslip.tds_calculation_data || {};
+        const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
+
         return {
             id: payslip.id,
             employee_id: payslip.employee_id,
             employee_name: payslip.employee?.first_name || "",
             employee_code: payslip.employee?.employee_code || "",
+            designation: payslip.employee?.designation?.designation_name || "",
             month: payslip.month,
             year: payslip.year,
             pd_days: payslip.pd_days,
@@ -1173,7 +1232,18 @@ const processPayslipData = (payslips) => {
             total_deduction: payslip.total_deduction,
             net_salary: payslip.net_salary,
             earnings_sum: parseFloat(earningsSum.toFixed(2)),
-            deductions_sum: parseFloat(totalDeductionsSum.toFixed(2))
+            deductions_sum: parseFloat(totalDeductionsSum.toFixed(2)),
+            
+            // TDS Data
+            annual_gross: tdsData.annualGross || 0,
+            standard_deduction: tdsData.standardDeduction || 0,
+            taxable_income: tdsData.taxableIncome || 0,
+            annual_tax: tdsData.annualTax || 0,
+            monthly_tds: tdsData.monthlyTDS || 0,
+            tds_percentage: tdsData.percentage || 0,
+            regime: tdsData.regime || 'new_regime',
+            actual_tds_deducted: actualTds,
+            exemption_amount: (tdsData.exemptions || []).reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
         };
     });
 };
@@ -1195,6 +1265,7 @@ exports.getPayslipEmployeeList = async (req, res) => {
                     model: Employee,
                     as: 'employee',
                     attributes: ['id', 'employee_code', 'first_name'],
+                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                 }
             ]
         }
@@ -1225,6 +1296,7 @@ exports.getPayslipView = async (req, res) => {
                     model: Employee,
                     as: 'employee',
                     attributes: ['id', 'employee_code', 'first_name'],
+                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                 }
             ]
         }
@@ -1255,7 +1327,8 @@ exports.exportPayrollView = async (req, res) => {
                     {
                         model: Employee,
                         as: 'employee',
-                        attributes: ['id', 'employee_code', 'first_name'],
+                        attributes: ['id', 'employee_code', 'first_name', 'pan_number'],
+                        include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                     }
                 ]
             }
@@ -1274,21 +1347,18 @@ exports.exportPayrollView = async (req, res) => {
             { header: "Employee ID", key: "employee_id" },
             { header: "Employee Name", key: "employee_name" },
             { header: "Employee Code", key: "employee_code" },
+            { header: "Job Title", key: "designation" },
             { header: "Month", key: "month" },
             { header: "Year", key: "year" },
-            { header: "Present Days", key: "pd_days" },
-            { header: "Half Days", key: "ph_days" },
-            { header: "Weekly Offs", key: "wo_days" },
-            { header: "Without Pay Days", key: "wp_days" },
-            { header: "Present Days Count", key: "present_days" },
-            { header: "Absent Days", key: "absent_days" },
-            { header: "Total Days", key: "total_days" },
-            { header: "Lunch Count", key: "lunch_count" },
+            { header: "Regime", key: "regime" },
+            { header: "Earnings", key: "annual_gross" },
+            { header: "Exemptions", key: "exemption_amount" },
+            { header: "Deductions", key: "actual_deduction" },
+            { header: "Standard Deduction", key: "standard_deduction" },
+            { header: "Taxable Income", key: "taxable_income" },
+            { header: "Tax Liability", key: "monthly_tds" },
             { header: "Paid Gross", key: "paid_gross" },
-            { header: "Total Deduction", key: "total_deduction" },
-            { header: "Net Salary", key: "net_salary" },
-            { header: "Earnings Sum", key: "earnings_sum" },
-            { header: "Deductions Sum", key: "deductions_sum" }
+            { header: "Net Salary", key: "net_salary" }
         ];
 
         // Generate Excel file
@@ -2146,6 +2216,8 @@ exports.generatePayslipPdf = async (req, res) => {
  * Get detailed TDS Deduction report across employees for a specific period
  */
 exports.getTDSDeductionReport = async (req, res) => {
+    return res.ok([]);
+    /*
     try {
         const { month, year, branch_id } = req.body;
         if (!month || !year) {
@@ -2166,7 +2238,8 @@ exports.getTDSDeductionReport = async (req, res) => {
             include: [{
                 model: Employee,
                 as: "employee",
-                attributes: ['id', 'first_name', 'employee_code', 'pan_number']
+                attributes: ['id', 'first_name', 'employee_code', 'pan_number'],
+                include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
             }],
             order: [['employee_id', 'ASC']]
         });
@@ -2175,18 +2248,15 @@ exports.getTDSDeductionReport = async (req, res) => {
 
         payslips.forEach(payslip => {
             const tdsData = payslip.tds_calculation_data || {};
-
-            // Extract the actual TDS deducted (from statutory or breakdown)
             const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
 
-            // Only include in report if TDS was actually deducted
-            if (actualTds > 0) {
-                reportData.push({
+            reportData.push({
                     id: payslip.id,
                     employee_id: payslip.employee_id,
                     employee_name: payslip.employee?.first_name,
                     employee_code: payslip.employee?.employee_code,
                     pan_number: payslip.employee?.pan_number,
+                    designation: payslip.employee?.designation?.designation_name,
 
                     // Detailed tax data from stored snapshot
                     annual_gross: tdsData.annualGross || 0,
@@ -2194,20 +2264,23 @@ exports.getTDSDeductionReport = async (req, res) => {
                     taxable_income: tdsData.taxableIncome || 0,
                     regime: tdsData.regime || 'new_regime',
                     annual_tax: tdsData.annualTax || 0,
+                    tax_paid_already: tdsData.taxPaidAlready || 0,
                     monthly_tds: tdsData.monthlyTDS || 0,
                     percentage: tdsData.percentage || 0,
+                    exemption_amount: parseFloat(tdsData.exemptions || 0),
+                    total_deduction: payslip.total_deduction || 0,
 
                     // What was actually deducted in the finalized payslip
                     actual_tds_deducted: actualTds,
                     status: payslip.status
                 });
-            }
         });
 
         return res.ok(reportData);
     } catch (err) {
         return handleError(err, res, req);
     }
+    */
 };
 
 exports.getEmployeesByMonthYear = async (req, res) => {
