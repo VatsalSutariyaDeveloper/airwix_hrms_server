@@ -278,7 +278,8 @@ exports.getAttendanceSummary = async (req, res) => {
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'punched_in_count'],
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count'],
-          [sequelize.fn('SUM', sequelize.col('fine_amount')), 'total_fine_amount']
+          [sequelize.fn('SUM', sequelize.col('fine_amount')), 'total_fine_amount'],
+          [sequelize.fn('SUM', sequelize.col('overtime_amount')), 'total_overtime_amount']
         ],
         group: ['AttendanceDay.status'],
     raw: true
@@ -299,6 +300,7 @@ exports.getAttendanceSummary = async (req, res) => {
       overtimeHours: "0h 0m",
       fineHours: "0h 0m",
       fineAmount: 0,
+      overtimeAmount: 0,
       punchedIn: 0,
       punchedOut: 0,
       incomplete: 0
@@ -326,6 +328,7 @@ exports.getAttendanceSummary = async (req, res) => {
       totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
       summary.fineAmount += parseFloat(stat.total_fine_amount || 0);
+      summary.overtimeAmount += parseFloat(stat.total_overtime_amount || 0);
       summary.shortPresence += parseInt(stat.short_presence_count || 0);
       summary.punchedIn += parseInt(stat.punched_in_count || 0);
       summary.punchedOut += parseInt(stat.punched_out_count || 0);
@@ -828,7 +831,6 @@ exports.deleteAttendanceDay = async (req, res) => {
       attendance_date,
     }, {}, t, { company_id: true });
 
-    console.log("dayily",days)
     for (const day of days) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
       const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);

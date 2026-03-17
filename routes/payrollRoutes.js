@@ -26,7 +26,7 @@ router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
 router.post("/payment-history", payrollController.getPaymentHistory);
 
 // Cash Voucher
-router.post("/cash-voucher/get-cashVoucher-employee", cashVoucherController.getEmployeesByMonthYear);
+router.post("/cash-voucher/get-voucher-employee", cashVoucherController.getEmployeesByMonthYear);
 router.post("/cash-voucher/calculate", cashVoucherController.calculateCashVoucher);
 router.post("/cash-voucher/get-voucher-details", cashVoucherController.getCashVoucherById);
 // Enterprise Standard Listing & Bulk Operations

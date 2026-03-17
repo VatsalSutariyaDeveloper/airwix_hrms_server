@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -111,6 +111,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     date: { [Op.between]: [startDate, endDate] },
                     status: 0 
                 },
+                required: false
+            },
+            {
+                model: EmployeeAttendanceTemplate,
+                as: "employeeAttendanceTemplate",
+                where: { status: 0 },
+                required: false
+            },
+            {
+                model: AttendanceTemplate,
+                as: "attendanceTemplate",
                 required: false
             }
         ]
@@ -325,7 +336,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const lwpDeductionTotal = salaryType === "Monthly" ? (totalLWP * perDaySalary) : 0;
-    const otAmount = totalOTAmount;
+    
+    // Check if Overtime should be included in total earnings based on attendance configuration
+    const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+    const includeOTInTotal = activeAttendanceTemplate ? activeAttendanceTemplate.include_overtime_in_total : true;
+    
+    const otAmount = includeOTInTotal ? totalOTAmount : 0;
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
@@ -366,6 +382,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             name: "Leave Encashment",
             // base_amount: encashmentAmount,
             amount: parseFloat(encashmentAmount.toFixed(2)),
+            actual_amount: parseFloat(encashmentAmount.toFixed(2)),
             days: totalEncashedDays,
             is_encashment: true
         });
@@ -484,7 +501,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, amount: amount, is_statutory: true });
+                earnings.push({ name: comp.component_name, amount: amount, actual_amount: amount, is_statutory: true });
             }
             return;
         }
@@ -493,7 +510,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             
             earnings.push({
                 name: comp.component_name,
-                amount: finalAmount
+                amount: finalAmount,
+                actual_amount: finalAmount
             });
 
             takeHomeEarnings += finalAmount;
@@ -523,6 +541,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             earnings.push({
                 name: comp.component_name,
                 amount: actualAmount,
+                actual_amount: actualAmount,
                 is_benefit: true
             });
             takeHomeEarnings += actualAmount;
@@ -532,7 +551,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
+        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), actual_amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
@@ -540,7 +559,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), actual_amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
