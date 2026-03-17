@@ -182,7 +182,8 @@ exports.login = async (req, res) => {
         await transaction.rollback();
         return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Mobile and Password/PIN OR Mobile and OTP." });
     }
-
+    
+    user = user.get({ plain: true });
     const verify_code = req.body.verify_code; 
 
     // 0. Activation Logic
@@ -303,7 +304,7 @@ exports.login = async (req, res) => {
     }
 
     const token = generateToken({
-      ...user.get({ plain: true }),
+      ...user,
       access: "employee"
     }, finalCompanyId, access_by);
 

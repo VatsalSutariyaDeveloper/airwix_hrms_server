@@ -413,6 +413,11 @@ exports.update = async (req, res) => {
       return res.error(constants.COMPANY_NOT_FOUND, { company_id: "Company not found" });
     }
 
+    let isLogoDeleted = false;
+    if (POST.logo_image === 'deleted') {
+      isLogoDeleted = true;
+    }
+
     delete POST.company_id;
     delete POST.logo_image;
     
@@ -424,6 +429,11 @@ exports.update = async (req, res) => {
       if (uploaded && uploaded.logo_image) {
         POST.logo_image = uploaded.logo_image;
       }
+    } else if (isLogoDeleted) {
+      if (existing.logo_image) {
+        await deleteFile(req, res, constants.COMPANY_LOGO_IMG_FOLDER, existing.logo_image);
+      }
+      POST.logo_image = null;
     }
 
     await ensureSingleDefault(POST, existing, transaction);
