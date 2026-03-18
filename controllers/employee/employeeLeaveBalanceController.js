@@ -81,7 +81,7 @@ exports.getByEmployeeId = async (req, res) => {
 exports.updateByEmployeeId = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { employeeId } = req.params;
+        const employeeId = req.params.id;
         const { leaveBalances } = req.body; // Array of balance updates
 
         if (!Array.isArray(leaveBalances)) {
@@ -90,7 +90,35 @@ exports.updateByEmployeeId = async (req, res) => {
 
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
         if (!employee) {
-            return res.error(NOT_FOUND,"Employee not found");
+            return res.error(constants.NOT_FOUND,"Employee not found");
+        }
+
+        let activeYear = null;
+        let activeMonth = null;
+        if (employee.leave_template) {
+            const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction, false, { company_id: true });
+            if (template) {
+                const dayjs = require("dayjs");
+                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                activeYear = end.year();
+                const isMonthlyCycle = ['MONTHLY', 'QUARTERLY'].includes(template.leave_policy_cycle);
+                activeMonth = isMonthlyCycle ? end.month() + 1 : null;
+            }
+        }
+
+        const currentActiveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+            employee_id: employeeId,
+            status: 0,
+            ...(activeYear ? { year: activeYear } : {}),
+            ...(activeMonth ? { month: activeMonth } : {})
+        }, {}, transaction, { company_id: true });
+
+        const providedIds = leaveBalances.map(bal => bal.id).filter(Boolean);
+        
+        for (const currentBal of currentActiveBalances) {
+            if (!providedIds.includes(currentBal.id)) {
+                await commonQuery.softDeleteById(EmployeeLeaveBalance, { id: currentBal.id }, transaction);
+            }
         }
 
         for (const bal of leaveBalances) {

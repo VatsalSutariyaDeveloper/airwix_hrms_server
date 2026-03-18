@@ -731,6 +731,8 @@ exports.getAll = async (req, res) => {
         const fieldConfig = [
             ["first_name", true, true],
             ["employee_code", true, true],
+            ["employee.mobile_no", true, false],
+            ["joining_date", true, false],
         ];
 
         const data = await commonQuery.fetchPaginatedData(

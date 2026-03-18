@@ -48,3 +48,10 @@ package.json
 
 # Python AI Service
 python/venv/
+python/Dockerfile
+
+# Uploads
+uploads/
+
+# Docker
+Dockerfile

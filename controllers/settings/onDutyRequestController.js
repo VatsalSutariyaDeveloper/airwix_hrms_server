@@ -40,9 +40,33 @@ const transaction = await sequelize.transaction();
             return res.error(constants.VALIDATION_ERROR, { message: "On Duty requests are disabled for this employee's template." });
         }
 
+        let { start_date, end_date, start_session, end_session } = req.body;
+        const employee_id = req.body.employee_id;
+
+        // 0=Full Day, 1=Session 1, 2=Session 2
+        start_session = parseInt(start_session) || 0;
+        end_session = parseInt(end_session) || 0;
+
+        // Check for Overlapping On Duty Requests
+        const overlap = await commonQuery.findOneRecord(OnDutyRequest, {
+            employee_id,
+            approval_status: { [Op.notIn]: [constants.ON_DUTY_STATUS.REJECTED, constants.ON_DUTY_STATUS.CANCELLED, constants.ON_DUTY_STATUS.DELETED] },
+            status: 0,
+            [Op.or]: [
+                { start_date: { [Op.between]: [start_date, end_date] } },
+                { end_date: { [Op.between]: [start_date, end_date] } },
+                { [Op.and]: [{ start_date: { [Op.lte]: start_date } }, { end_date: { [Op.gte]: end_date } }] }
+            ]
+        }, {}, transaction);
+
+        if (overlap) {
+            await transaction.rollback();
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('YYYY-MM-DD')} to ${dayjs(overlap.end_date).format('YYYY-MM-DD')})` });
+        }
+
         await commonQuery.createRecord(
             OnDutyRequest,
-            req.body,
+            { ...req.body, start_session, end_session },
             transaction
         )
 
@@ -398,6 +422,15 @@ exports.getOnDutySummary = async (req, res) => {
         [constants.ON_DUTY_STATUS.DELETED]: "DELETED",
       };
 
+      const colorMap = {
+        [constants.ON_DUTY_STATUS.APPROVED]: "#10B981",
+        [constants.ON_DUTY_STATUS.REJECTED]: "#EF4444",
+        [constants.ON_DUTY_STATUS.PENDING]: "#F59E0B",
+        [constants.ON_DUTY_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+        [constants.ON_DUTY_STATUS.CANCELLED]: "#6B7280",
+        [constants.ON_DUTY_STATUS.DELETED]: "#9CA3AF",
+      };
+
       group.on_duties.push({
         id: onDuty.id,
         date_range: dateRange,
@@ -405,6 +438,7 @@ exports.getOnDutySummary = async (req, res) => {
         reason: onDuty.reason || "",
         status_id: onDuty.approval_status,
         status: statusMap[onDuty.approval_status],
+        status_color: colorMap[onDuty.approval_status] || "#F59E0B",
         approved_by: onDuty.approvedBy?.user_name || null
       });
     });

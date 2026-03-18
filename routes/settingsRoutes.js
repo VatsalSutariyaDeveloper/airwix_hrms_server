@@ -293,13 +293,13 @@ router.put("/employee-settings/update", employeeSettingsController.update);
 // ==========================
 // 39. ON DUTY REQUEST ROUTES
 // ==========================
-router.post("/onDuty-request/", onDutyRequestController.create);
-router.post("/onDuty-request/get-transactions", onDutyRequestController.getAll);
-router.post("/onDuty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
-router.get("/onDuty-request/:id", onDutyRequestController.getById);
-router.put("/onDuty-request/status/:id", onDutyRequestController.updateStatus);
-router.put("/onDuty-request/cancel/:id", onDutyRequestController.cancelLeave);
-router.post("/onDuty-request/summary", onDutyRequestController.getOnDutySummary);
+router.post("/on-duty-request/", onDutyRequestController.create);
+router.post("/on-duty-request/get-transactions", onDutyRequestController.getAll);
+router.post("/on-duty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
+router.get("/on-duty-request/:id", onDutyRequestController.getById);
+router.put("/on-duty-request/status/:id", onDutyRequestController.updateStatus);
+router.put("/on-duty-request/cancel/:id", onDutyRequestController.cancelLeave);
+router.post("/on-duty-request/summary", onDutyRequestController.getOnDutySummary);
 
 // ===============================
 // 40. ATTENDANCE RECONCILIATION ROUTES

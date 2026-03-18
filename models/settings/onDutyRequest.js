@@ -30,6 +30,16 @@ module.exports = (sequelize, DataTypes) => {
             company_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
+            start_session: { 
+                type: DataTypes.SMALLINT, 
+                defaultValue: 0,
+                comment: "0=Full Day, 1=Session 1, 2=Session 2"
+            },
+            end_session: { 
+                type: DataTypes.SMALLINT, 
+                defaultValue: 0,
+                comment: "0=Full Day, 1=Session 1, 2=Session 2"
+            },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         },
         {
