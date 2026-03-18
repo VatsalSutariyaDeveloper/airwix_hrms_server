@@ -1,9 +1,11 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
+const isSameOrBefore = require("dayjs/plugin/isSameOrBefore");
+dayjs.extend(isSameOrBefore);
 const LeaveBalanceService = require("../../../services/leaveBalanceService");
 
 /**
@@ -409,30 +411,25 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["approval_status", true, true],
-            ["first_name", true, false],
-            ["employee_code", true, false],
+            ["employee.first_name", true, false],
+            ["employee.employee_code", true, false],
         ];
 
         // Add date filtering based on payload
         let whereClause = {};
-        const { filter } = req.body;
+        const leaveFilter = req.body?.leave_filter;
         
-        if (filter) {
-            const today = dayjs().startOf('day');
-            const todayEnd = dayjs().endOf('day');
+        if (leaveFilter) {
+            const today = dayjs().toDate();
             
-            switch (filter) {
+            switch (leaveFilter) {
                 case 'previous':
-                    // Previous: before today
-                    whereClause.start_date = {
-                        [Op.lt]: today.format('YYYY-MM-DD HH:mm:ss')
-                    };
+                    // Previous: ended before today
+                    whereClause.end_date = { [Op.lt]: today };
                     break;
                 case 'upcoming':
-                    // Upcoming: after today
-                    whereClause.start_date = {
-                        [Op.gt]: todayEnd.format('YYYY-MM-DD HH:mm:ss')
-                    };
+                    // Upcoming: ends today or later
+                    whereClause.end_date = { [Op.gte]: today };
                     break;
             }
         }
@@ -454,14 +451,17 @@ exports.getAll = async (req, res) => {
                     { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
                 ],
                 attributes: { exclude: ['reason'] },
-                where: whereClause,
+                // removed where from options as it must be passed as customWhere (Arg 7)
                 order: [['created_at', 'DESC']]
-            }
+            },
+            true, // requireTenantFields
+            'created_at', // dateField
+            whereClause // customWhere
         );
 
         // Add a "progression" summary for the UI and document URL
-        data.rows = data?.rows?.map(row => {
-            const raw = row.get({ plain: true });
+        data.items = data?.items?.map(row => {
+            const raw = row.get ? row.get({ plain: true }) : row;
             const statusLabels = {
                 [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
                 [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
@@ -707,7 +707,12 @@ exports.getPendingApprovals = async (req, res) => {
                 "approved_by",
                 "document",
                 "branch.branch_name",
-                "status"
+                "status",
+                "request_type",
+                "is_encashment",
+                "start_session",
+                "end_session",
+                "createdAt"
             ],
             include: [
                 {
@@ -779,18 +784,41 @@ exports.getPendingApprovals = async (req, res) => {
             }
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
+                
+                // Add Progression Summary consistent with getAll
+                const statusLabels = {
+                    [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
+                    [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                    [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "APPROVED",
+                    [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "REJECTED",
+                    [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+                    [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
+                };
+                const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+                const total = raw.employee?.leaveTemplate?.approval_levels || 1;
+                const typeLabel = (raw.request_type === 'CREDIT' ? " [EARNED]" : "");
+                raw.tracking_summary = `${statusLabel}${typeLabel} (Stage ${raw.current_level} of ${total})`;
+
                 if (raw.document) {
                     const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
                     raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
                 } else {
                     raw.document_url = null;
                 }
-                raw.approved_by_name = raw.approvedBy?.user_name || null;
                 pendingForUser.push(raw);
             }
         }
 
-        return res.ok(pendingForUser);
+        // --- 5. Apply Search filter ---
+        const search = req.body.search ? req.body.search.toLowerCase() : null;
+        const filteredPending = search 
+            ? pendingForUser.filter(item => {
+                const searchString = `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`.toLowerCase();
+                return searchString.includes(search);
+            })
+            : pendingForUser;
+
+        return res.ok(filteredPending);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -1013,6 +1041,188 @@ exports.calculateLeaveDays = async (req, res) => {
             total_days: workingDays,
             breakdown: dateWiseBreakdown
         });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+// 12. Get Leave Report
+exports.getLeaveReport = async (req, res) => {
+    try {
+        const { year, staff_type, branch_id } = req.body;
+
+        if (!year) {
+             return res.error(constants.VALIDATION_ERROR, "year is required");
+        }
+
+        const startDateStr = `${year}-01-01`;
+        const endDateStr = `${year}-12-31`;
+        const startDate = dayjs(startDateStr);
+        const endDate = dayjs(endDateStr);
+
+        // Fetch Employees
+        const employeeWhere = { status: 0, company_id: req.user.company_id };
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
+        if (staff_type) employeeWhere.employee_type = staff_type;
+
+        // Fetch all branches for mapping since it's not directly included via model sometimes
+        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id });
+        const branchMap = {};
+        branches.forEach(b => branchMap[b.id] = b.branch_name);
+
+        const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+            attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id'],
+            include: [
+                { model: Department, as: 'department', attributes: ['name'] },
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+            ]
+        });
+
+        if (employees.length === 0) return res.ok({ categories: [], reportData: [] });
+        const employeeIds = employees.map(e => e.id);
+
+        // Fetch LeaveBalances logic
+        const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+            year: parseInt(year),
+            employee_id: { [Op.in]: employeeIds },
+            status: 0
+        }, {}, null, { company_id: true });
+
+        const balancesByEmp = {};
+        balances.forEach(b => {
+            if(!balancesByEmp[b.employee_id]) balancesByEmp[b.employee_id] = {};
+            const catName = b.leave_category_name;
+            const assigned = parseFloat(b.total_allocated || 0) + parseFloat(b.carry_forward_leaves || 0);
+            balancesByEmp[b.employee_id][catName] = assigned;
+        });
+
+        // Prepare categories
+        const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { company_id: req.user.company_id, status: 0 }, {}, null, { company_id: true });
+        const leaveCatNames = allLeaveCategories.map(c => c.leave_category_name);
+        const allCategories = ['Week Off', 'Holiday', ...leaveCatNames];
+
+        // Fetch leaves, weekoffs, holidays
+        const leaves = await commonQuery.findAllRecords(LeaveRequest, {
+            employee_id: { [Op.in]: employeeIds },
+            approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+            status: 0,
+            [Op.or]: [
+                { start_date: { [Op.between]: [startDateStr, endDateStr] } },
+                { end_date: { [Op.between]: [startDateStr, endDateStr] } },
+                { [Op.and]: [{ start_date: { [Op.lte]: startDateStr } }, { end_date: { [Op.gte]: endDateStr } }] }
+            ]
+        }, {
+            include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['leave_category_name'] }]
+        });
+
+        const holidays = await commonQuery.findAllRecords(EmployeeHoliday, {
+            employee_id: { [Op.in]: employeeIds },
+            status: 0,
+            date: { [Op.between]: [startDateStr, endDateStr] }
+        }, {}, null, { company_id: true });
+
+        const weekOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+            employee_id: { [Op.in]: employeeIds },
+            status: 0
+        }, {}, null, { company_id: true });
+
+        const holidaysByEmp = {};
+        holidays.forEach(h => {
+            if(!holidaysByEmp[h.employee_id]) holidaysByEmp[h.employee_id] = [];
+            holidaysByEmp[h.employee_id].push({ date: h.date, name: h.name });
+        });
+
+        const weekOffsByEmp = {};
+        weekOffs.forEach(w => {
+            if(!weekOffsByEmp[w.employee_id]) weekOffsByEmp[w.employee_id] = [];
+            weekOffsByEmp[w.employee_id].push({ day: w.day_of_week, weekMask: w.week_no });
+        });
+
+        const leavesByEmp = {};
+        leaves.forEach(l => {
+            if(!leavesByEmp[l.employee_id]) leavesByEmp[l.employee_id] = [];
+            leavesByEmp[l.employee_id].push({
+                start: dayjs(l.start_date).isBefore(startDate) ? startDate : dayjs(l.start_date),
+                end: dayjs(l.end_date).isAfter(endDate) ? endDate : dayjs(l.end_date),
+                total_days: l.total_days,
+                category: l.category?.leave_category_name || 'Other'
+            });
+        });
+
+        const reportData = employees.map(emp => {
+            const row = {
+                employee_code: emp.employee_code || '-',
+                employee_name: emp.first_name || '-',
+                phone: emp.mobile_no || '-',
+                branch: branchMap[emp.branch_id] || '-',
+                department: emp.department?.name || '-',
+                designation: emp.designation?.designation_name || '-',
+                assigned: balancesByEmp[emp.id] || {},
+                total_used: {},
+                months: {}
+            };
+            
+            allCategories.forEach(c => row.total_used[c] = 0);
+            for(let m=1; m<=12; m++) {
+                row.months[m] = {};
+                allCategories.forEach(c => row.months[m][c] = 0);
+            }
+
+            const empHolidays = holidaysByEmp[emp.id] || [];
+            const empWeekOffs = weekOffsByEmp[emp.id] || [];
+            const empLeaves = leavesByEmp[emp.id] || [];
+            const leaveSet = new Set();
+            
+            empLeaves.forEach(lr => {
+                let current = lr.start;
+                const spanDays = lr.end.diff(lr.start, 'day') + 1;
+                // If a leave started or ended out of year, total_days might be off, but approximation holds for split
+                const dailyVal = parseFloat(lr.total_days) / spanDays;
+                
+                while(current.isSameOrBefore(lr.end, 'day')) {
+                    const m = current.month() + 1;
+                    const cat = lr.category;
+                    if (row.months[m][cat] !== undefined) {
+                        row.months[m][cat] += dailyVal;
+                        row.total_used[cat] += dailyVal;
+                    }
+                    if (dailyVal >= 0.5) leaveSet.add(current.format('YYYY-MM-DD'));
+                    current = current.add(1, 'day');
+                }
+            });
+
+            // Prevent checking dates before joining
+            const empStartDate = emp.joining_date && dayjs(emp.joining_date).isAfter(startDate) 
+                                ? dayjs(emp.joining_date) : startDate;
+
+            for (let d = empStartDate; d.isSameOrBefore(endDate, 'day'); d = d.add(1, 'day')) {
+                const dateStr = d.format('YYYY-MM-DD');
+                if (leaveSet.has(dateStr)) continue; // skip weekoff count if actively on leave
+                
+                const m = d.month() + 1;
+                
+                const isHoli = empHolidays.find(h => h.date === dateStr);
+                if (isHoli) {
+                    row.months[m]['Holiday'] += 1;
+                    row.total_used['Holiday'] += 1;
+                    continue;
+                }
+
+                const weekOfMonth = Math.ceil(d.date() / 7);
+                const isWO = empWeekOffs.find(w => {
+                     return w.day === d.day() && (w.weekMask === 0 || w.weekMask === weekOfMonth);
+                });
+
+                if (isWO) {
+                    row.months[m]['Week Off'] += 1;
+                    row.total_used['Week Off'] += 1;
+                }
+            }
+
+            return row;
+        });
+
+        return res.ok({ categories: allCategories, reportData });
     } catch (err) {
         return handleError(err, res, req);
     }

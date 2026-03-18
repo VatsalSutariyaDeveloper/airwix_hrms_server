@@ -200,6 +200,7 @@ router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
 router.post("/leave-request/calculate-days", leaveRequestController.calculateLeaveDays);
+router.post("/leave-request/report", leaveRequestController.getLeaveReport);
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
 
 // ==========================

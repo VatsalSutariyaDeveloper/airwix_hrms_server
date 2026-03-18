@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -228,6 +228,12 @@ exports.getAttendanceSummary = async (req, res) => {
           }
           day.setDataValue('status_text', statusText);
           
+          // Map employee and worker type labels
+          const employeeTypeMap = { 1: "Staff", 2: "Worker", 3: "Contractor" };
+          const workerTypeMap = { 1: "On-role", 2: "Off-role" };
+          emp.setDataValue('employee_type_label', employeeTypeMap[emp.employee_type] || 'N/A');
+          emp.setDataValue('worker_type_label', workerTypeMap[emp.worker_type] || 'N/A');
+
           if (day.first_in) {
             const punches = day.attendancePunches || [];
             const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
@@ -1663,6 +1669,446 @@ exports.updateAttendanceNote = async (req, res) => {
     await commonQuery.updateRecordById(AttendanceDay, attendanceDay.id, { note });
 
     return res.ok({ message: "Note updated successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET ATTENDANCE REPORT (Daily or Monthly)
+ */
+exports.getAttendanceReport = async (req, res) => {
+  try {
+    const { report_type, date, month_year, staff_type, branch_id } = req.body;
+
+    if (!report_type || !['daily', 'monthly'].includes(report_type)) {
+      return res.error(constants.VALIDATION_ERROR, "report_type must be either 'daily' or 'monthly'");
+    }
+
+    let startDate, endDate;
+    if (report_type === 'daily') {
+      if (!date) return res.error(constants.VALIDATION_ERROR, "date is required for daily report");
+      startDate = date;
+      endDate = date;
+    } else {
+      if (!month_year) return res.error(constants.VALIDATION_ERROR, "month_year is required for monthly report");
+      const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
+      const parsedDate = dayjs(normalizedMonthYear, ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
+      if (!parsedDate.isValid()) {
+        return res.error(constants.VALIDATION_ERROR, "Invalid month and year format");
+      }
+      startDate = parsedDate.startOf('month').format('YYYY-MM-DD');
+      endDate = parsedDate.endOf('month').format('YYYY-MM-DD');
+    }
+
+    const employeeWhere = { status: 0, company_id: req.user.company_id };
+    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
+    if (staff_type) employeeWhere.employee_type = staff_type;
+    
+    // Only include employees who joined on or before the end date of the report (or if joining_date is missing)
+    employeeWhere[Op.or] = [
+        { joining_date: null },
+        { joining_date: { [Op.lte]: endDate } }
+    ];
+
+    // 1. Fetch All Active Employees
+    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date'],
+      include: [
+        { model: ShiftTemplate, as: "shiftTemplate", attributes: ["id", "shift_name"] }
+      ],
+      order: [['first_name', 'ASC']]
+    });
+
+    if (employees.length === 0) return res.ok([]);
+
+    const employeeIds = employees.map(e => e.id);
+
+    // 2. Fetch Attendance Days
+    const attendanceDays = await commonQuery.findAllRecords(AttendanceDay, {
+      employee_id: { [Op.in]: employeeIds },
+      attendance_date: { [Op.between]: [startDate, endDate] },
+      status: { [Op.ne]: 2 }
+    }, {
+      include: [
+        { model: LeaveTemplateCategory, as: "leaveCategory", attributes: ["id", "leave_category_name"] }
+      ],
+      order: [['attendance_date', 'ASC']]
+    });
+
+    // 3. Pre-fetch Holidays & Week Offs & On Duty
+    const [holidays, weeklyOffs, onDuties] = await Promise.all([
+      commonQuery.findAllRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds }, date: { [Op.between]: [startDate, endDate] }, status: 0 }, {}, null, { company_id: true }),
+      commonQuery.findAllRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds }, status: 0, is_off: true }, {}, null, { company_id: true }),
+      commonQuery.findAllRecords(OnDutyRequest, { employee_id: { [Op.in]: employeeIds }, approval_status: constants.ON_DUTY_STATUS.APPROVED, start_date: { [Op.lte]: endDate }, end_date: { [Op.gte]: startDate }, status: 0 }, {}, null, { company_id: true })
+    ]);
+
+    // Fast lookups
+    const attendanceMap = new Map();
+    attendanceDays.forEach(day => {
+      const key = `${day.employee_id}_${day.attendance_date}`;
+      attendanceMap.set(key, day);
+    });
+
+    const holidayMap = new Map();
+    holidays.forEach(h => {
+      const key = `${h.employee_id}_${h.date}`;
+      holidayMap.set(key, true);
+    });
+
+    const onDutyMap = new Map();
+    onDuties.forEach(od => {
+      const currDate = dayjs(od.start_date);
+      const limitDate = dayjs(od.end_date);
+      while(currDate.isBefore(limitDate) || currDate.isSame(limitDate, 'day')) {
+         onDutyMap.set(`${od.employee_id}_${currDate.format('YYYY-MM-DD')}`, true);
+         currDate.add(1, 'day');
+      }
+    });
+
+    // Generate date range
+    let curDate = dayjs(startDate);
+    const end = dayjs(endDate);
+    const daysArray = [];
+    while (curDate.isBefore(end) || curDate.isSame(end, 'day')) {
+      daysArray.push(curDate.format('YYYY-MM-DD'));
+      curDate = curDate.add(1, 'day');
+    }
+
+    const reportData = [];
+
+    // 4. Transform data into report structure
+    for (const emp of employees) {
+      const empData = {
+        employee_id: emp.id,
+        employee_code: emp.employee_code,
+        employee_name: emp.first_name.trim(),
+        employee_type: emp.employee_type || 'N/A',
+        employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+        worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+        shift_name: emp.shiftTemplate?.shift_name || 'N/A',
+        days: {},
+        summary: {
+           present: 0,
+           halfDay: 0,
+           absent: 0,
+           leave: 0,
+           holiday: 0,
+           weeklyOff: 0,
+           onDuty: 0,
+           totalWorkedMinutes: 0,
+           totalLateMinutes: 0,
+           totalOvertimeMinutes: 0
+        }
+      };
+
+      for (const d of daysArray) {
+        const key = `${emp.id}_${d}`;
+        const dayRecord = attendanceMap.get(key);
+        
+        let status = "PENDING";
+        let statusId = null;
+        let inTime = null;
+        let outTime = null;
+        let workedMins = 0;
+        let lateMins = 0;
+        let otMins = 0;
+        
+        const dayOfWeek = dayjs(d).day();
+        const weekNo = Math.ceil(dayjs(d).date() / 7);
+        const isScheduledWo = weeklyOffs.some(wo => wo.employee_id === emp.id && wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekNo));
+
+        if (dayRecord) {
+           statusId = dayRecord.status;
+           const sMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
+           status = sMap[statusId] || "Pending";
+           
+           if (statusId === 6 && dayRecord.leaveCategory) status = dayRecord.leaveCategory.leave_category_name;
+           else if (statusId === 1 && dayRecord.leaveCategory) status = `Half Day / ${dayRecord.leaveCategory.leave_category_name}`;
+
+           if (dayRecord.first_in) inTime = dayRecord.first_in;
+           if (dayRecord.last_out) outTime = dayRecord.last_out;
+           workedMins = dayRecord.worked_minutes || 0;
+           lateMins = dayRecord.late_minutes || 0;
+           otMins = dayRecord.overtime_minutes || 0;
+
+           if (statusId === 0) empData.summary.present += 1;
+           else if (statusId === 1) empData.summary.halfDay += 1;
+           else if (statusId === 3) empData.summary.weeklyOff += 1;
+           else if (statusId === 4) empData.summary.holiday += 1;
+           else if (statusId === 5) empData.summary.absent += 1;
+           else if (statusId === 6) empData.summary.leave += 1;
+           else if (statusId === 12) empData.summary.onDuty += 1;
+           else if (statusId === 13) empData.summary.halfDay += 1;
+        } else {
+           // Inherit auto statuses
+           if (holidayMap.has(key)) {
+               status = "Holiday";
+               empData.summary.holiday += 1;
+           } else if (isScheduledWo) {
+               status = "Weekly Off";
+               empData.summary.weeklyOff += 1;
+           } else if (onDutyMap.has(key)) {
+               status = "On Duty";
+               empData.summary.onDuty += 1;
+           } else if (dayjs(d).isBefore(dayjs(emp.joining_date || dayjs()), 'day')) {
+               status = "N/A";
+           } else if (dayjs(d).isSame(dayjs(), 'day') || dayjs(d).isAfter(dayjs(), 'day')) {
+               status = "Pending";
+           } else {
+               status = "Absent";
+               empData.summary.absent += 1;
+           }
+        }
+
+        empData.summary.totalWorkedMinutes += workedMins;
+        empData.summary.totalLateMinutes += lateMins;
+        empData.summary.totalOvertimeMinutes += otMins;
+
+        empData.days[d] = {
+           status,
+           inTime,
+           outTime,
+           workedMins: Math.floor(workedMins / 60) + 'h ' + (workedMins % 60) + 'm',
+           otMins: Math.floor(otMins / 60) + 'h ' + (otMins % 60) + 'm',
+           lateMins: Math.floor(lateMins / 60) + 'h ' + (lateMins % 60) + 'm',
+        };
+      }
+
+      reportData.push(empData);
+    }
+
+    return res.ok({
+      report_type,
+      start_date: startDate,
+      end_date: endDate,
+      items: reportData
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.getLateEntryReport = async (req, res) => {
+  try {
+    const { month, year, branch_id } = req.body;
+
+    if (!month || !year) {
+      return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+    }
+
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    // Cap the endDate to today's date if the selected month is the current month or in the future
+    if (dayjs(endDate).isAfter(dayjs(), 'day')) {
+        endDate = dayjs().format('YYYY-MM-DD');
+    }
+
+    let employeeWhere = { company_id: req.user.company_id, status: { [Op.ne]: 2 } };
+    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+      employeeWhere.branch_id = branch_id;
+    }
+
+    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+      attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+      include: [
+        { model: Department, as: 'department', attributes: ['name'] },
+        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
+      ]
+    });
+
+    if (employees.length === 0) return res.ok({ reportData: [] });
+
+    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+    const branchMap = {};
+    branches.forEach(b => branchMap[b.id] = b.branch_name);
+
+    const employeeIds = employees.map(e => e.id);
+
+    // Fetch all attendance records with late minutes > 0
+    const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
+      employee_id: { [Op.in]: employeeIds },
+      attendance_date: { [Op.between]: [startDate, endDate] },
+      late_minutes: { [Op.gt]: 0 },
+      status: { [Op.ne]: 2 }
+    }, {
+      order: [['attendance_date', 'ASC']]
+    });
+
+    // Group late records by employee
+    const lateDataMap = {};
+    attendanceRecords.forEach(record => {
+      if (!lateDataMap[record.employee_id]) {
+         lateDataMap[record.employee_id] = { days: {}, totalLateMins: 0, lateCount: 0 };
+      }
+      const lateMins = record.late_minutes || 0;
+      lateDataMap[record.employee_id].days[record.attendance_date] = lateMins;
+      lateDataMap[record.employee_id].totalLateMins += lateMins;
+      lateDataMap[record.employee_id].lateCount += 1;
+    });
+
+    const reportData = [];
+
+    // Construct dynamically the full array of dates in the month to use as dynamic columns optionally
+    let curDate = dayjs(startDate);
+    const end = dayjs(endDate);
+    const daysArray = [];
+    while (curDate.isBefore(end) || curDate.isSame(end, 'day')) {
+      daysArray.push(curDate.format('D-MMM-YY'));
+      curDate = curDate.add(1, 'day');
+    }
+
+    employees.forEach(emp => {
+      const lateInfo = lateDataMap[emp.id];
+      if (!lateInfo) return;
+
+      const totalMins = lateInfo.totalLateMins;
+      const hours = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      
+      let row = {
+        employee_name: emp.first_name || '-',
+        employee_code: emp.employee_code || '-',
+        phone_number: emp.mobile_no || '-',
+        department: emp.department?.name || '-',
+        designation: emp.designation?.designation_name || '-',
+        branch_name: branchMap[emp.branch_id] || '-',
+        employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+        worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+        late_days_count: lateInfo.lateCount,
+        total_late: `${hours > 0 ? hours + 'h ' : ''}${mins}m`,
+        days: {} // Date string to late duration string
+      };
+
+      Object.keys(lateInfo.days).forEach(dateStr => {
+         const m = lateInfo.days[dateStr];
+         const h = Math.floor(m / 60);
+         const min = m % 60;
+         const formattedDate = dayjs(dateStr).format('D-MMM-YY');
+         row.days[formattedDate] = `${h > 0 ? h + 'h ' : ''}${min}m`;
+      });
+
+      reportData.push(row);
+    });
+
+    return res.ok({
+      daysArray: daysArray,
+      reportData
+    });
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.getOvertimeReport = async (req, res) => {
+  try {
+    const { month, year, branch_id } = req.body;
+
+    if (!month || !year) {
+      return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+    }
+
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    // Cap the endDate to today's date if the selected month is the current month or in the future
+    if (dayjs(endDate).isAfter(dayjs(), 'day')) {
+        endDate = dayjs().format('YYYY-MM-DD');
+    }
+
+    let employeeWhere = { company_id: req.user.company_id, status: { [Op.ne]: 2 } };
+    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+      employeeWhere.branch_id = branch_id;
+    }
+
+    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+      attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+      include: [
+        { model: Department, as: 'department', attributes: ['name'] },
+        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
+      ]
+    });
+
+    if (employees.length === 0) return res.ok({ reportData: [] });
+
+    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+    const branchMap = {};
+    branches.forEach(b => branchMap[b.id] = b.branch_name);
+
+    const employeeIds = employees.map(e => e.id);
+
+    // Fetch all attendance records for overtime
+    const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
+      employee_id: { [Op.in]: employeeIds },
+      attendance_date: { [Op.between]: [startDate, endDate] },
+      status: { [Op.ne]: 2 }
+    }, {
+      order: [['attendance_date', 'ASC']]
+    });
+
+    // Group overtime records by employee
+    const otDataMap = {};
+    attendanceRecords.forEach(record => {
+      if (!otDataMap[record.employee_id]) {
+         otDataMap[record.employee_id] = { days: {}, totalOTMins: 0 };
+      }
+      const otMins = record.overtime_minutes || 0;
+      if (otMins >= 0) {
+          otDataMap[record.employee_id].days[record.attendance_date] = otMins;
+          otDataMap[record.employee_id].totalOTMins += otMins;
+      }
+    });
+
+    const reportData = [];
+
+    // Construct dynamically the full array of dates in the month to use as dynamic columns optionally
+    let curDate = dayjs(startDate);
+    const end = dayjs(endDate);
+    const daysArray = [];
+    while (curDate.isBefore(end) || curDate.isSame(end, 'day')) {
+      daysArray.push(curDate.format('D-MMM-YY'));
+      curDate = curDate.add(1, 'day');
+    }
+
+    employees.forEach(emp => {
+      const otInfo = otDataMap[emp.id] || { days: {}, totalOTMins: 0 };
+
+      const totalMins = otInfo.totalOTMins;
+      const hours = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      
+      let row = {
+        employee_name: emp.first_name || '-',
+        employee_code: emp.employee_code || '-',
+        phone_number: emp.mobile_no || '-',
+        department: emp.department?.name || '-',
+        designation: emp.designation?.designation_name || '-',
+        branch_name: branchMap[emp.branch_id] || '-',
+        employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+        worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+        total_overtime: `${hours < 10 ? '0'+hours : hours}h ${mins < 10 ? '0'+mins : mins}m`,
+        days: {} // Date string to overtime duration string
+      };
+
+      // Populate daily overtime minutes string
+      daysArray.forEach(dateStr => {
+         const sysDateStr = dayjs(dateStr, 'D-MMM-YY').format('YYYY-MM-DD');
+         const m = otInfo.days[sysDateStr] || 0;
+         const h = Math.floor(m / 60);
+         const min = m % 60;
+         row.days[dateStr] = `${h < 10 ? '0'+h : h}h ${min < 10 ? '0'+min : min}m`;
+      });
+
+      reportData.push(row);
+    });
+
+    return res.ok({
+      daysArray: daysArray,
+      reportData
+    });
+
   } catch (err) {
     return handleError(err, res, req);
   }

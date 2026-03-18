@@ -127,7 +127,7 @@ exports.login = async (req, res) => {
         
         if (!user) {
             await transaction.rollback();
-            return res.error(constants.INVALID_CREDENTIALS);
+            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
         }
 
         if (user.status === 1) {
@@ -138,7 +138,7 @@ exports.login = async (req, res) => {
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             await transaction.rollback();
-            return res.error(constants.INVALID_CREDENTIALS);
+            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
         }
 
     } else if (mobile_no && otp) {
@@ -810,7 +810,7 @@ exports.pinLogin = async (req, res) => {
     const isPinValid = await bcrypt.compare(pin, entity.password);
     if (!isPinValid) {
         await transaction.rollback();
-        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid PIN." });
+        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
     }
 
     // --- FROM HERE, IT'S THE SAME AS THE STANDARD LOGIN LOGIC ---
@@ -1071,7 +1071,7 @@ exports.verifyPin = async (req, res) => {
 
         const isPinValid = await bcrypt.compare(pin, entity.password);
         if (!isPinValid) {
-            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid PIN." });
+            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
         }
 
         return res.success("PIN Verified Successfully");

@@ -65,6 +65,25 @@ exports.getAll = async (req, res) => {
     ["total_days", false, true],
   ];
 
+    // Add date filtering based on payload
+    let whereClause = {};
+    const leaveFilter = req.body?.leave_filter;
+    
+    if (leaveFilter) {
+        const today = dayjs().toDate();
+        
+        switch (leaveFilter) {
+            case 'previous':
+                // Previous: ended before today
+                whereClause.end_date = { [Op.lt]: today };
+                break;
+            case 'upcoming':
+                // Upcoming: ends today or later
+                whereClause.end_date = { [Op.gte]: today };
+                break;
+        }
+    }
+
     const data = await commonQuery.fetchPaginatedData(
         OnDutyRequest, 
         {...req.body}, 
@@ -84,7 +103,10 @@ exports.getAll = async (req, res) => {
               required: false
             }
           ]
-        }
+        },
+        true, // requireTenantFields
+        'created_at', // dateField
+        whereClause // customWhere
     );
     
     return res.ok(data);

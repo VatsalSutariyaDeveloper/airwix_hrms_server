@@ -1,6 +1,6 @@
 /**
  * AUTO-GENERATED MODULE & ENTITY CONSTANTS
- * Generated on: 17/03/2026, 1:07:24 pm
+ * Generated on: 18/3/2026, 1:45:08 am
  * Usage: 
  * const { ENTITIES } = require('./moduleEntitiesConstants');
  * console.log(ENTITIES.ITEM_MASTER_ID);
@@ -14,15 +14,6 @@ exports.MODULES = {
       "ID": 1,
       "NAME": "Analytics Dashboard",
       "MODULE_ID": 1
-    }
-  },
-  "CANTEEN": {
-    "ID": 15,
-    "NAME": "Canteen",
-    "CANTEEN": {
-      "ID": 80,
-      "NAME": "Canteen",
-      "MODULE_ID": 15
     }
   },
   "ATTENDANCE": {
@@ -43,9 +34,28 @@ exports.MODULES = {
       "MODULE_ID": 12
     }
   },
+  "CANTEEN": {
+    "ID": 15,
+    "NAME": "Canteen",
+    "CANTEEN": {
+      "ID": 80,
+      "NAME": "Canteen",
+      "MODULE_ID": 15
+    }
+  },
   "PAYROLL": {
     "ID": 3,
     "NAME": "Payroll",
+    "EMPLOYEE_ADVANCE": {
+      "ID": 75,
+      "NAME": "Employee Advance",
+      "MODULE_ID": 3
+    },
+    "PAYROLL_LIST": {
+      "ID": 70,
+      "NAME": "Payroll List",
+      "MODULE_ID": 3
+    },
     "INCENTIVE_TYPE": {
       "ID": 72,
       "NAME": "Incentive Type",
@@ -61,73 +71,28 @@ exports.MODULES = {
       "NAME": "Pay Slip",
       "MODULE_ID": 3
     },
-    "PAYMENT_HISTORY": {
-      "ID": 76,
-      "NAME": "Payment History",
-      "MODULE_ID": 3
-    },
     "PAYROLL_SUMMARY": {
       "ID": 83,
       "NAME": "Payroll Summary",
       "MODULE_ID": 3
     },
-    "EMPLOYEE_ADVANCE": {
-      "ID": 75,
-      "NAME": "Employee Advance",
+    "PAYMENT_HISTORY": {
+      "ID": 76,
+      "NAME": "Payment History",
       "MODULE_ID": 3
     },
     "EMPLOYEE_INCENTIVE": {
       "ID": 74,
       "NAME": "Employee Incentive",
       "MODULE_ID": 3
-    },
-    "PAYROLL_LIST": {
-      "ID": 70,
-      "NAME": "Payroll List",
-      "MODULE_ID": 3
     }
   },
   "REPORTS": {
     "ID": 8,
     "NAME": "Reports",
-    "EMPLOYEE_CONTRIBUTION": {
-      "ID": 93,
-      "NAME": "Employee Contribution",
-      "MODULE_ID": 8
-    },
-    "ATTENDANCE_SUMMARY": {
-      "ID": 94,
-      "NAME": "Attendance Summary",
-      "MODULE_ID": 8
-    },
-    "LEAVE_REPORT": {
-      "ID": 95,
-      "NAME": "Leave Report",
-      "MODULE_ID": 8
-    },
-    "OVERTIME_REPORT": {
-      "ID": 96,
-      "NAME": "Overtime Report",
-      "MODULE_ID": 8
-    },
-    "EMPLOYEE_ESI_REPORT": {
+    "ESI_REPORT": {
       "ID": 100,
-      "NAME": "Employee ESI Report",
-      "MODULE_ID": 8
-    },
-    "LATE_ARRIVAL_REPORT": {
-      "ID": 97,
-      "NAME": "Late Arrival Report",
-      "MODULE_ID": 8
-    },
-    "REPORT": {
-      "ID": 103,
-      "NAME": "report",
-      "MODULE_ID": 8
-    },
-    "EMPLOYEE_LIST_REPORT": {
-      "ID": 101,
-      "NAME": "Employee list Report",
+      "NAME": "ESI Report",
       "MODULE_ID": 8
     },
     "PF_REPORT": {
@@ -135,28 +100,53 @@ exports.MODULES = {
       "NAME": "PF Report",
       "MODULE_ID": 8
     },
-    "SALARY_SHEET": {
-      "ID": 99,
-      "NAME": "Salary Sheet",
+    "OVERTIME_REPORT": {
+      "ID": 96,
+      "NAME": "Overtime Report",
       "MODULE_ID": 8
     },
-    "ALL_PAYSLIP_REPORT": {
+    "PAYSLIP_REPORT": {
       "ID": 98,
-      "NAME": "All Payslip Report",
+      "NAME": "Payslip Report",
       "MODULE_ID": 8
     },
-    "TDS_REPORTS": {
-      "ID": 92,
-      "NAME": "TDS Reports",
+    "LEAVE_REPORT": {
+      "ID": 95,
+      "NAME": "Leave Report",
+      "MODULE_ID": 8
+    },
+    "REPORT": {
+      "ID": 103,
+      "NAME": "report",
+      "MODULE_ID": 8
+    },
+    "ATTENDANCE_SUMMARY": {
+      "ID": 94,
+      "NAME": "Attendance Summary",
+      "MODULE_ID": 8
+    },
+    "EMPLOYER_CONTRIBUTION": {
+      "ID": 93,
+      "NAME": "Employer Contribution",
+      "MODULE_ID": 8
+    },
+    "CTC_BREAKDOWN_REPORT": {
+      "ID": 99,
+      "NAME": "CTC Breakdown Report",
+      "MODULE_ID": 8
+    },
+    "LATE_ENTRY_REPORT": {
+      "ID": 97,
+      "NAME": "Late Entry Report",
       "MODULE_ID": 8
     }
   },
   "SETTINGS": {
     "ID": 9,
     "NAME": "Settings",
-    "WEEK_OFF_TEMPLATE": {
-      "ID": 59,
-      "NAME": "Week Off Template",
+    "ATTENDANCE_TEMPLATE": {
+      "ID": 64,
+      "NAME": "Attendance Template",
       "MODULE_ID": 9
     },
     "DATA_IMPORT": {
@@ -219,14 +209,9 @@ exports.MODULES = {
       "NAME": "Department",
       "MODULE_ID": 9
     },
-    "ATTENDANCE_TEMPLATE": {
-      "ID": 64,
-      "NAME": "Attendance Template",
-      "MODULE_ID": 9
-    },
-    "HOLIDAY_MASTER": {
-      "ID": 45,
-      "NAME": "Holiday Master",
+    "WEEK_OFF_TEMPLATE": {
+      "ID": 59,
+      "NAME": "Week Off Template",
       "MODULE_ID": 9
     },
     "SALARY_TEMPLATE": {
@@ -268,6 +253,11 @@ exports.MODULES = {
       "NAME": "Country",
       "MODULE_ID": 10
     },
+    "HOLIDAY_MASTER": {
+      "ID": 45,
+      "NAME": "Holiday Master",
+      "MODULE_ID": 10
+    },
     "MODULE_MASTER": {
       "ID": 42,
       "NAME": "Module Master",
@@ -279,30 +269,28 @@ exports.MODULES = {
 exports.ENTITIES = {
   // === ALL IDs ===
   ANALYTICS_DASHBOARD_ID: 1,
-  CANTEEN_ID: 80,
   ATTENDANCE_ID: 61,
   EMPLOYEES_ID: 60,
+  CANTEEN_ID: 80,
+  EMPLOYEE_ADVANCE_ID: 75,
+  PAYROLL_LIST_ID: 70,
   INCENTIVE_TYPE_ID: 72,
   CASH_VOUCHER_ID: 81,
   PAY_SLIP_ID: 71,
-  PAYMENT_HISTORY_ID: 76,
   PAYROLL_SUMMARY_ID: 83,
-  EMPLOYEE_ADVANCE_ID: 75,
+  PAYMENT_HISTORY_ID: 76,
   EMPLOYEE_INCENTIVE_ID: 74,
-  PAYROLL_LIST_ID: 70,
-  EMPLOYEE_CONTRIBUTION_ID: 93,
-  ATTENDANCE_SUMMARY_ID: 94,
-  LEAVE_REPORT_ID: 95,
-  OVERTIME_REPORT_ID: 96,
-  EMPLOYEE_ESI_REPORT_ID: 100,
-  LATE_ARRIVAL_REPORT_ID: 97,
-  REPORT_ID: 103,
-  EMPLOYEE_LIST_REPORT_ID: 101,
+  ESI_REPORT_ID: 100,
   PF_REPORT_ID: 102,
-  SALARY_SHEET_ID: 99,
-  ALL_PAYSLIP_REPORT_ID: 98,
-  TDS_REPORTS_ID: 92,
-  WEEK_OFF_TEMPLATE_ID: 59,
+  OVERTIME_REPORT_ID: 96,
+  PAYSLIP_REPORT_ID: 98,
+  LEAVE_REPORT_ID: 95,
+  REPORT_ID: 103,
+  ATTENDANCE_SUMMARY_ID: 94,
+  EMPLOYER_CONTRIBUTION_ID: 93,
+  CTC_BREAKDOWN_REPORT_ID: 99,
+  LATE_ENTRY_REPORT_ID: 97,
+  ATTENDANCE_TEMPLATE_ID: 64,
   DATA_IMPORT_ID: 35,
   USERS_ROLES_ID: 32,
   SHIFT_TEMPLATE_ID: 62,
@@ -315,8 +303,7 @@ exports.ENTITIES = {
   BRANCH_MASTER_ID: 78,
   DESIGNATION_ID: 73,
   DEPARTMENT_ID: 67,
-  ATTENDANCE_TEMPLATE_ID: 64,
-  HOLIDAY_MASTER_ID: 45,
+  WEEK_OFF_TEMPLATE_ID: 59,
   SALARY_TEMPLATE_ID: 65,
   LABOUR_WELFARE_FUND_RULE_ID: 68,
   PROFESSIONAL_TAX_ID: 69,
@@ -324,34 +311,33 @@ exports.ENTITIES = {
   MODULE_ENTITY_ID: 43,
   CURRENCY_ID: 47,
   COUNTRY_ID: 48,
+  HOLIDAY_MASTER_ID: 45,
   MODULE_MASTER_ID: 42,
 
   // === ALL NAMES ===
   ANALYTICS_DASHBOARD_NAME: "Analytics Dashboard",
-  CANTEEN_NAME: "Canteen",
   ATTENDANCE_NAME: "Attendance",
   EMPLOYEES_NAME: "Employees",
+  CANTEEN_NAME: "Canteen",
+  EMPLOYEE_ADVANCE_NAME: "Employee Advance",
+  PAYROLL_LIST_NAME: "Payroll List",
   INCENTIVE_TYPE_NAME: "Incentive Type",
   CASH_VOUCHER_NAME: "Cash Voucher",
   PAY_SLIP_NAME: "Pay Slip",
-  PAYMENT_HISTORY_NAME: "Payment History",
   PAYROLL_SUMMARY_NAME: "Payroll Summary",
-  EMPLOYEE_ADVANCE_NAME: "Employee Advance",
+  PAYMENT_HISTORY_NAME: "Payment History",
   EMPLOYEE_INCENTIVE_NAME: "Employee Incentive",
-  PAYROLL_LIST_NAME: "Payroll List",
-  EMPLOYEE_CONTRIBUTION_NAME: "Employee Contribution",
-  ATTENDANCE_SUMMARY_NAME: "Attendance Summary",
-  LEAVE_REPORT_NAME: "Leave Report",
-  OVERTIME_REPORT_NAME: "Overtime Report",
-  EMPLOYEE_ESI_REPORT_NAME: "Employee ESI Report",
-  LATE_ARRIVAL_REPORT_NAME: "Late Arrival Report",
-  REPORT_NAME: "report",
-  EMPLOYEE_LIST_REPORT_NAME: "Employee list Report",
+  ESI_REPORT_NAME: "ESI Report",
   PF_REPORT_NAME: "PF Report",
-  SALARY_SHEET_NAME: "Salary Sheet",
-  ALL_PAYSLIP_REPORT_NAME: "All Payslip Report",
-  TDS_REPORTS_NAME: "TDS Reports",
-  WEEK_OFF_TEMPLATE_NAME: "Week Off Template",
+  OVERTIME_REPORT_NAME: "Overtime Report",
+  PAYSLIP_REPORT_NAME: "Payslip Report",
+  LEAVE_REPORT_NAME: "Leave Report",
+  REPORT_NAME: "report",
+  ATTENDANCE_SUMMARY_NAME: "Attendance Summary",
+  EMPLOYER_CONTRIBUTION_NAME: "Employer Contribution",
+  CTC_BREAKDOWN_REPORT_NAME: "CTC Breakdown Report",
+  LATE_ENTRY_REPORT_NAME: "Late Entry Report",
+  ATTENDANCE_TEMPLATE_NAME: "Attendance Template",
   DATA_IMPORT_NAME: "Data Import",
   USERS_ROLES_NAME: "Users & Roles",
   SHIFT_TEMPLATE_NAME: "Shift Template",
@@ -364,8 +350,7 @@ exports.ENTITIES = {
   BRANCH_MASTER_NAME: "Branch Master",
   DESIGNATION_NAME: "Designation",
   DEPARTMENT_NAME: "Department",
-  ATTENDANCE_TEMPLATE_NAME: "Attendance Template",
-  HOLIDAY_MASTER_NAME: "Holiday Master",
+  WEEK_OFF_TEMPLATE_NAME: "Week Off Template",
   SALARY_TEMPLATE_NAME: "Salary Template",
   LABOUR_WELFARE_FUND_RULE_NAME: "Labour Welfare Fund Rule",
   PROFESSIONAL_TAX_NAME: "Professional Tax",
@@ -373,5 +358,6 @@ exports.ENTITIES = {
   MODULE_ENTITY_NAME: "Module Entity",
   CURRENCY_NAME: "Currency",
   COUNTRY_NAME: "Country",
+  HOLIDAY_MASTER_NAME: "Holiday Master",
   MODULE_MASTER_NAME: "Module Master"
 };

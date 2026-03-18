@@ -22,6 +22,10 @@ router.post("/get-payrollEmployee", payrollController.getEmployeesByMonthYear);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
 router.post("/get-employer-contribution-report", payrollController.getEmployerContributionReport);
+router.post("/get-ctc-breakdown-report", payrollController.getCTCBreakdownReport);
+router.post("/get-generated-payslip-report", payrollController.getGeneratedPayslipReport);
+router.post("/get-pf-report", payrollController.getPFReport);
+router.post("/get-esi-report", payrollController.getESIReport);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
 router.post("/payment-history", payrollController.getPaymentHistory);
 
