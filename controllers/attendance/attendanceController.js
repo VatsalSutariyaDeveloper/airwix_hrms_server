@@ -1628,7 +1628,9 @@ exports.getLeaveSummary = async (req, res) => {
         status_id: leave.approval_status,
         status: statusMap[leave.approval_status] || "PENDING",
         status_color: isCredit ? "#10B981" : (colorMap[leave.approval_status] || "#F59E0B"),
-        approved_by: leave.approvedBy?.user_name || null
+        approved_by: leave.approvedBy?.user_name || null,
+        start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
+        end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
       });
     });
 
