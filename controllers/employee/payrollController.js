@@ -3051,7 +3051,7 @@ exports.getPFReport = async (req, res) => {
                 }
             ]
         }, null, { company_id: true });
-
+        // payslips = payslips.get({ plain: true });
         // Filter out employees without PF
         // We consider someone in PF if they have UAN/PF OR if there's any PF amount in statutory/employer details.
         
@@ -3061,16 +3061,34 @@ exports.getPFReport = async (req, res) => {
             const bd = ps.break_down || {};
             
             // Extraction helper to handle both Array and Object formats in JSON fields
+            // It normalizes key names (trim + case-insensitive) since legacy data sometimes includes extra spaces
             const getValueFromJSON = (data, keys) => {
+                // eslint-disable-next-line no-console
                 console.log("Extracting PF value from data:", data, "with keys:", keys);
                 if (!data) return 0;
+
+                const normalizedKeys = (keys || []).map(k => (typeof k === 'string' ? k.trim().toLowerCase() : k));
+
                 if (Array.isArray(data)) {
-                    const found = data.find(item => keys.includes(item.name.trim()));
+                    const found = data.find(item => {
+                        const name = typeof item?.name === 'string' ? item.name.trim().toLowerCase() : '';
+                        return normalizedKeys.includes(name);
+                    });
                     return found ? parseFloat(found.amount || 0) : 0;
                 }
-                for (const key of keys) {
-                    if (data[key] !== undefined) return parseFloat(data[key] || 0);
+
+                // Normalize object keys to allow matching keys with extra spaces/case differences
+                const normalizedData = {};
+                Object.entries(data).forEach(([k, v]) => {
+                    if (typeof k === 'string') {
+                        normalizedData[k.trim().toLowerCase()] = v;
+                    }
+                });
+
+                for (const nk of normalizedKeys) {
+                    if (normalizedData[nk] !== undefined) return parseFloat(normalizedData[nk] || 0);
                 }
+
                 return 0;
             };
 
@@ -3078,7 +3096,6 @@ exports.getPFReport = async (req, res) => {
             const statData = ps.statutory_details || (bd.breakdown?.statutory || {});
             const dedData = ps.deduction_details || (bd.breakdown?.deductions || {});
             const pfKeys = ['Employee PF', 'PF', 'EPF', 'Provident Fund'];
-
             let employee_pf = getValueFromJSON(statData, pfKeys);
             if (employee_pf === 0) {
                 employee_pf = getValueFromJSON(dedData, pfKeys);
@@ -3185,16 +3202,32 @@ exports.getESIReport = async (req, res) => {
             const emp = ps.employee || {};
             const bd = ps.break_down || {};
             
-            // Extraction helper to handle both Array and Object formats
+            // Extraction helper to handle both Array and Object formats in JSON fields
+            // It normalizes key names (trim + case-insensitive) since legacy data sometimes includes extra spaces
             const getValueFromJSON = (data, keys) => {
                 if (!data) return 0;
+
+                const normalizedKeys = (keys || []).map(k => (typeof k === 'string' ? k.trim().toLowerCase() : k));
+
                 if (Array.isArray(data)) {
-                    const found = data.find(item => keys.includes(item.name));
+                    const found = data.find(item => {
+                        const name = typeof item?.name === 'string' ? item.name.trim().toLowerCase() : '';
+                        return normalizedKeys.includes(name);
+                    });
                     return found ? parseFloat(found.amount || 0) : 0;
                 }
-                for (const key of keys) {
-                    if (data[key] !== undefined) return parseFloat(data[key] || 0);
+
+                const normalizedData = {};
+                Object.entries(data).forEach(([k, v]) => {
+                    if (typeof k === 'string') {
+                        normalizedData[k.trim().toLowerCase()] = v;
+                    }
+                });
+
+                for (const nk of normalizedKeys) {
+                    if (normalizedData[nk] !== undefined) return parseFloat(normalizedData[nk] || 0);
                 }
+
                 return 0;
             };
 
@@ -3217,7 +3250,7 @@ exports.getESIReport = async (req, res) => {
             // Let's rely on actual total_earnings to determine ESI wages (which it usually is, capped or not depending on settings but normally ESIC requires actual Gross during return)
             const gross_earnings = parseFloat(ps.paid_gross || bd.salary?.takeHomeEarnings || 0).toFixed(2);
             
-            const total_worked_days = parseFloat(ps.wp_days || 0);
+            const total_worked_days = parseFloat(ps.present_days || 0);
 
             let row = {
                 ip_number: emp.esi_number || '-',
@@ -3227,8 +3260,8 @@ exports.getESIReport = async (req, res) => {
                 employee_share: employee_esi,
                 employer_share: employer_esi,
                 total_contribution: parseFloat((employee_esi + employer_esi).toFixed(2)),
-                reason_code_for_zero_working_days: total_worked_days === 0 ? 'LWD' : '-', // Provide a generic dummy reason e.g., Leave Without Pay if 0 days
-                last_working_day: '-',
+                // reason_code_for_zero_working_days: total_worked_days === 0 ? 'LWD' : '-', // Provide a generic dummy reason e.g., Leave Without Pay if 0 days
+                // last_working_day: '-',
                 employee_code: emp.employee_code || '-',
                 employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
                 worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
