@@ -11,7 +11,7 @@ exports.create = async (req, res) => {
   try {
     const POST = req.body;
 
-    const entity_id = MODULES.HR.EMPLOYEE.ID;
+    const entity_id = MODULES.EMPLOYEE.ID;
 
     // 1. Basic Validation (field_name removed)
     const requiredFields = {

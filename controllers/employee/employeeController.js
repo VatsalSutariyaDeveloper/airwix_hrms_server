@@ -1384,6 +1384,11 @@ exports.registerFace = async (req, res) => {
                 headers: { ...formData.getHeaders() }
             });
 
+            //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
+            // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
+            //     headers: { 'Content-Type': 'application/octet-stream' }
+            // });
+
             if (aiResponse.data.status) {
                 faceDescriptor = aiResponse.data.embedding;
             } else {
@@ -1458,6 +1463,11 @@ exports.facePunch = async (req, res) => {
                 const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
                     headers: { ...formData.getHeaders() }
                 });
+
+                // for face punch python service accepts raw buffer instead of form data to reduce overhead and latency
+                // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
+                //     headers: { 'Content-Type': 'application/octet-stream' }
+                // });
 
                 timings.ai = Date.now() - aiStart;
                 if (aiResponse.data.status) {

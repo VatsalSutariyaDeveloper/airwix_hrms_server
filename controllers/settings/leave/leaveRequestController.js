@@ -855,6 +855,16 @@ exports.cancelLeave = async (req, res) => {
 
         const oldStatus = leaveRequest.approval_status;
 
+        // 3.5. Prevent cancelling an already-ended approved leave
+        // (system should not allow cancelling once the leave window is in the past)
+        if (
+            Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED &&
+            dayjs(leaveRequest.end_date).isBefore(dayjs().startOf('day'))
+        ) {
+            await transaction.rollback();
+            return res.error("INVALID_OPERATION", { message: "Cannot cancel a leave that has already ended." });
+        }
+
         // 4. Restore Balance
         // We restore balance if the leave was previously PENDING, PARTIALLY_APPROVED, or APPROVED.
         if (
@@ -908,15 +918,15 @@ exports.cancelLeave = async (req, res) => {
         }, transaction);
 
         // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
-        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
-            const start = dayjs(leaveRequest.start_date);
-            const end = dayjs(leaveRequest.end_date);
-            const diff = end.diff(start, 'day');
-            for (let i = 0; i <= diff; i++) {
-                const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
-                await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
-            }
-        }
+        // if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
+        //     const start = dayjs(leaveRequest.start_date);
+        //     const end = dayjs(leaveRequest.end_date);
+        //     const diff = end.diff(start, 'day');
+        //     for (let i = 0; i <= diff; i++) {
+        //         const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+        //         await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+        //     }
+        // }
 
         await transaction.commit();
         return res.success("LEAVE_CANCELLED");
