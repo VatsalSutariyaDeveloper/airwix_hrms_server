@@ -1,6 +1,6 @@
 const dayjs = require("dayjs");
 const { commonQuery, handleError, Op } = require("../../helpers");
-const { AttendanceDay, Employee, AttendanceTemplate, CashVoucher } = require("../../models");
+const { AttendanceDay, Employee, CashVoucher, EmployeeAttendanceTemplate } = require("../../models");
 
 
 exports.getEmployeesByMonthYear = async (req, res) => {
@@ -37,8 +37,8 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                         attributes: ["first_name", "employee_code"],
                         include: [
                             {
-                                model: AttendanceTemplate,
-                                as: "attendanceTemplate",
+                                model: EmployeeAttendanceTemplate,
+                                as: "employeeAttendanceTemplate",
                                 where: { include_overtime_in_total: false },
                                 required: true,
                                 attributes:[]
@@ -224,8 +224,8 @@ exports.calculateCashVoucher = async (req, res) => {
                         as: "employee",
                         include: [
                             {
-                                model: AttendanceTemplate,
-                                as: "attendanceTemplate",
+                                model: EmployeeAttendanceTemplate,
+                                as: "employeeAttendanceTemplate",
                                 where: { include_overtime_in_total: false },
                                 required: true,
                                 attributes: ["id", "name", "include_overtime_in_total"]

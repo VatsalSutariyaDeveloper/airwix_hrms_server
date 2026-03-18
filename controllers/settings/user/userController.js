@@ -707,7 +707,7 @@ exports.getAll = async (req, res) => {
   try {
     const company_id = req.user.company_id;
     const organization_id = req.user.organization_id;
-
+    console.log(req.user);
     let extraFilters = {
       [Op.and]: [
         {
@@ -736,7 +736,7 @@ exports.getAll = async (req, res) => {
 
         extraFilters[Op.and].push({
           [Op.or]: [
-            { is_super_admin: true, company_id: { [Op.in]: organizationCompanyIds } },
+            { is_super_admin: true, role_id: 1, company_id: { [Op.in]: organizationCompanyIds } },
             { role_id: 2, company_id: company_id, branch_id: req.user.branch_id }
           ]
         });

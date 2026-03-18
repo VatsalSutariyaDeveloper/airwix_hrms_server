@@ -1342,7 +1342,7 @@ exports.registerFace = async (req, res) => {
         const employee = await commonQuery.findOneRecord(Employee, id);
         if (!employee) {
             await transaction.rollback();
-            return res.error(constants.EMPLOYEE_NOT_FOUND);
+            return res.error(constants.NOT_FOUND);
         }
 
         // 1. Save File to Disk (Permanent Profile Image)

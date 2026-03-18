@@ -40,8 +40,9 @@ exports.create = async (req, res) => {
     }
     await commonQuery.createRecord(
       ModuleMaster,
-      req.body,
-      transaction
+      { ...req.body, company_id: -1, branch_id: -1, user_id: -1 },
+      transaction,
+      false
     );
     await transaction.commit();
     return res.success(constants.MODULE_CREATED);
@@ -103,7 +104,7 @@ exports.update = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors );
     }
-    const updated = await commonQuery.updateRecordById(ModuleMaster, req.params.id, req.body, transaction, false, false);
+    const updated = await commonQuery.updateRecordById(ModuleMaster, req.params.id, { ...req.body, company_id: -1, branch_id: -1, user_id: -1 }, transaction, false, false);
     if (!updated || updated.status === 2) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);

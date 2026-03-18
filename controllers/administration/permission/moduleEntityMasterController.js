@@ -44,8 +44,9 @@ exports.create = async (req, res) => {
     }
     const result = await commonQuery.createRecord(
       ModuleEntityMaster,
-      POST,
-      transaction
+      { ...POST, company_id: -1, branch_id: -1, user_id: -1 },
+      transaction,
+      false
     );
 
     const actionList = Array.isArray(POST.actions) ? POST.actions : [POST.actions];
@@ -71,6 +72,9 @@ exports.create = async (req, res) => {
         module_id: POST.module_id,
         entity_id: result.id,
         action: action.action,
+        company_id: -1,
+        branch_id: -1,
+        user_id: -1,
       }, transaction, false);
 
       createdPermissions.push(newPerm);
@@ -225,7 +229,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors );
     }
 
-    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, POST, transaction, false, false);
+    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, { ...POST, company_id: -1, branch_id: -1, user_id: -1 }, transaction, false, false);
 
     if (!updated || updated.status === 2) {
       await transaction.rollback();
@@ -248,7 +252,10 @@ exports.update = async (req, res) => {
             Permission,
             action.id,
             { 
-              action: action.action
+              action: action.action,
+              company_id: -1,
+              branch_id: -1,
+              user_id: -1,
             },
             transaction,
             false,

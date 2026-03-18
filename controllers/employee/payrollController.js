@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
 const { Op, QueryTypes, where } = require("sequelize");
 const dayjs = require("dayjs");
@@ -112,6 +112,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     status: 0 
                 },
                 required: false
+            },
+            {
+                model: EmployeeAttendanceTemplate,
+                as: "employeeAttendanceTemplate",
+                where: { status: 0 },
+                required: false
+            },
+            {
+                model: AttendanceTemplate,
+                as: "attendanceTemplate",
+                required: false
             }
         ]
     }, transaction);
@@ -144,9 +155,28 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         employee_id,
         year
     }, {}, transaction, { company_id: true });
+
+    // Also fetch categories from the employee's assigned leave template for name fallback
+    let templateCategories = [];
+    if (employee.leave_template) {
+        templateCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
+            leave_template_id: employee.leave_template
+        }, {}, transaction, { company_id: true });
+    }
+
     const leaveParamMap = new Map();
+    // Initialize with template defaults
+    templateCategories.forEach(cat => {
+        leaveParamMap.set(cat.id, {
+            name: cat.name,
+            is_paid: cat.is_paid === true || cat.is_paid === 'true',
+            is_compoff: false 
+        });
+    });
+    // Supplement with actual balance data
     leaveBalances.forEach(lb => {
         leaveParamMap.set(lb.leave_category_id, { 
+            name: lb.leave_category_name,
             is_paid: lb.is_paid === true || lb.is_paid === 'true', 
             is_compoff: lb.is_compoff === true || lb.is_compoff === 'true' 
         });
@@ -176,8 +206,24 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         status: { [Op.ne]: 2 }
     }, {}, transaction);
     
+    const monthLeaveUsage = {}; // Track usage per category ID for the current month
+    const leaveCategoryDetails = {}; // Track usage per category name for leave_details
     attendanceRecords.forEach(day => {
         const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
+        
+        // Track current month leave usage
+        let dayUsage = 0;
+        const status = parseInt(day.status);
+        if (status === 6) dayUsage = 1;
+        else if (status === 1 || status === 13) dayUsage = 0.5;
+
+        if (dayUsage > 0 && day.leave_category_id) {
+            monthLeaveUsage[day.leave_category_id] = (monthLeaveUsage[day.leave_category_id] || 0) + dayUsage;
+            
+            const catName = catInfo ? catInfo.name : "Other Leave";
+            leaveCategoryDetails[catName] = (leaveCategoryDetails[catName] || 0) + dayUsage;
+        }
+
         switch (parseInt(day.status)) {
             case 0: case 12: 
                 presentDays++; 
@@ -290,7 +336,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const lwpDeductionTotal = salaryType === "Monthly" ? (totalLWP * perDaySalary) : 0;
-    const otAmount = totalOTAmount;
+    
+    // Check if Overtime should be included in total earnings based on attendance configuration
+    const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+    const includeOTInTotal = activeAttendanceTemplate ? activeAttendanceTemplate.include_overtime_in_total : true;
+    
+    const otAmount = includeOTInTotal ? totalOTAmount : 0;
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
@@ -331,6 +382,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             name: "Leave Encashment",
             // base_amount: encashmentAmount,
             amount: parseFloat(encashmentAmount.toFixed(2)),
+            actual_amount: parseFloat(encashmentAmount.toFixed(2)),
             days: totalEncashedDays,
             is_encashment: true
         });
@@ -449,7 +501,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, amount: amount, is_statutory: true });
+                earnings.push({ name: comp.component_name, amount: amount, actual_amount: amount, is_statutory: true });
             }
             return;
         }
@@ -458,7 +510,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             
             earnings.push({
                 name: comp.component_name,
-                amount: finalAmount
+                amount: finalAmount,
+                actual_amount: finalAmount
             });
 
             takeHomeEarnings += finalAmount;
@@ -488,6 +541,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             earnings.push({
                 name: comp.component_name,
                 amount: actualAmount,
+                actual_amount: actualAmount,
                 is_benefit: true
             });
             takeHomeEarnings += actualAmount;
@@ -497,7 +551,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
+        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), actual_amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
@@ -505,7 +559,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), actual_amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
@@ -527,29 +581,113 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     //     totalDeductions += totalAdvance;
     // }
 
-    // Step G: Calculate Statutory TDS (Tax Deducted at Source)
+    // Step G: Process Statutory Config (PF, ESI, PT, LWF)
+    if (template.statutory_config) {
+        const sc = template.statutory_config;
+
+        const addStatRecord = (name, amount, isEmployer = false) => {
+            if (!amount || amount <= 0) return;
+            if (isEmployer) {
+                if (!employer[name]) employer[name] = parseFloat(amount);
+            } else {
+                if (!statutory[name]) {
+                    statutory[name] = parseFloat(amount);
+                    if (!deductions.find(d => d.name === name)) {
+                        deductions.push({ name, amount: parseFloat(amount), is_statutory: true });
+                        totalDeductions += parseFloat(amount);
+                    }
+                }
+            }
+        };
+
+        // Employee Shares
+        if (sc.employee_pf?.enabled) addStatRecord("Employee PF", sc.employee_pf.amount, false);
+        if (sc.employee_esi?.enabled) addStatRecord("Employee ESI", sc.employee_esi.amount, false);
+        if (sc.pt?.enabled) addStatRecord("Professional Tax", sc.pt.amount, false);
+        if (sc.employee_lwf?.enabled) addStatRecord("Employee LWF", sc.employee_lwf.amount, false);
+
+        // Employer Shares
+        if (sc.employer_pf?.enabled) addStatRecord("Employer PF", sc.employer_pf.amount, true);
+        if (sc.employer_esi?.enabled) addStatRecord("Employer ESI", sc.employer_esi.amount, true);
+        if (sc.employer_lwf?.enabled) addStatRecord("Employer LWF", sc.employer_lwf.amount, true);
+        if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
+    }
+
+    /*
+    // Step H: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
     let tdsPercentage = 0;
     let tdsCalculationData = null;
     if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
         const tdsConfig = template.statutory_config.tds;
-        if (tdsConfig.calculation_type === 'Manual Amount') {
+        
+        // India Financial Year Logic (April to March)
+        const currentMonth = parseInt(month);
+        const currentYear = parseInt(year);
+        let fyStartYear = currentMonth < 4 ? currentYear - 1 : currentYear;
+        
+        // Calculate months left in FY (including current)
+        // monthsSpent: April=0, May=1... March=11
+        let monthsSpent = (currentMonth >= 4) ? (currentMonth - 4) : (currentMonth + 8);
+        let monthsRemaining = 12 - monthsSpent;
+
+        // Fetch already deducted TDS in this FY
+        // This ensures tax is spread over remaining months if it wasn't deducted correctly before
+        const previousPayslips = await Payslip.findAll({
+            where: {
+                employee_id,
+                [Op.or]: [
+                    { year: fyStartYear, month: { [Op.gte]: 4 } },
+                    { year: fyStartYear + 1, month: { [Op.lte]: 3 } }
+                ]
+            },
+            transaction
+        });
+
+        let taxPaidAlready = 0;
+        let actualYTD = 0;
+        previousPayslips.forEach(p => {
+            // Only count months strictly BEFORE the current period
+            if (p.year < currentYear || (p.year === currentYear && p.month < currentMonth)) {
+                const statutoryDetails = p.statutory_details || {};
+                taxPaidAlready += parseFloat(statutoryDetails['Income Tax (TDS)'] || 0);
+                actualYTD += parseFloat(p.total_earnings || p.break_down?.total_earnings || 0);
+            }
+        });
+
+        if (tdsConfig.calculation_type === 'Fixed') {
             tdsAmount = parseFloat(tdsConfig.amount || 0);
-            tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount };
+            tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount, monthlyTDS: tdsAmount };
         } else if (tdsConfig.calculation_type !== 'None') {
-            const annualGross = monthlyGross * 12;
-            const regimeMap = {
-                'System Calculated': 'new_regime',
-                'New Regime': 'new_regime',
-                'Old Regime': 'old_regime'
-            };
-            const regime = regimeMap[tdsConfig.calculation_type] || 'new_regime';
-            const tdsResult = calculateTDS(annualGross, regime);
+            // Advanced Projection Approach: 
+            // Estimated Annual Gross = Actual YTD (from prev months) + Current Month Actual + Projected Remaining Months
+            const currentMonthActual = takeHomeEarnings;
+            const projectedRemaining = parseFloat(template.ctc_monthly || 0) * (monthsRemaining - 1);
+            
+            const annualGross = actualYTD + currentMonthActual + projectedRemaining;
+            
+            // Map NEW/OLD to new_regime/old_regime
+            const regime = tdsConfig.regime === 'OLD' ? 'old_regime' : 'new_regime';
+            
+            // Deductions/Exemptions from config (80C, 80D, etc.)
+            const exemptions = parseFloat(tdsConfig.exemptions || 0);
+
+            const tdsResult = calculateTDS(annualGross, regime, exemptions, taxPaidAlready, monthsRemaining);
+            
             tdsAmount = tdsResult.monthlyTDS;
             tdsPercentage = tdsResult.percentage;
             tdsCalculationData = tdsResult;
         }
     }
+
+    if (tdsAmount > 0) {
+        statutory["Income Tax (TDS)"] = tdsAmount;
+        // statutory["Income Tax (TDS) %"] = tdsPercentage;
+        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
+        totalDeductions += tdsAmount;
+    }
+    */
+    // let tdsCalculationData = null;
 
     // if (tdsAmount > 0) {
     //     statutory["Income Tax (TDS)"] = tdsAmount;
@@ -574,7 +712,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue },
+        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -584,7 +722,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             incentiveAmount: totalIncentive.toFixed(2),
             // advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount.toFixed(2),
-            tdsPercentage: tdsPercentage.toFixed(2),
+            // tdsPercentage: tdsPercentage.toFixed(2),
             netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
             takeHomeEarnings: takeHomeEarnings.toFixed(2),
             totalDeductions: totalDeductions.toFixed(2)
@@ -592,6 +730,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         breakdown: {
             earnings,
             deductions,
+            statutory,
+            employer,
             total_earnings: totalEarningsBreakdown.toFixed(2),
             total_deductions: totalDeductionsBreakdown.toFixed(2)
         },
@@ -619,7 +759,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             grand_total: totalPaid.toFixed(2)
         },
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
-        tds_calculation_data: tdsCalculationData,
+        // tds_calculation_data: tdsCalculationData,
+        // tdsDetails: tdsCalculationData,
+        leave_balances: Array.from(leaveParamMap.entries()).map(([catId, info]) => {
+            const balanceRecord = leaveBalances.find(lb => lb.leave_category_id === catId);
+            return {
+                leave_category_id: catId,
+                leave_category_name: info.name,
+                used_leaves: monthLeaveUsage[catId] || 0,
+                balance: balanceRecord ? balanceRecord.pending_leaves : 0
+            };
+        }),
         meta: { branch_id: employee.branch_id, company_id: employee.company_id }
     };
 };
@@ -690,6 +840,20 @@ const formatPayslipToSummary = async (payslip) => {
     });
     const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
 
+    let leaveBalances = payslip.leave_balances;
+    if (!leaveBalances) {
+        const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+            employee_id: payslip.employee_id,
+            year: payslip.year
+        });
+        leaveBalances = rawLeaveBalances.map(lb => ({
+            leave_category_id: lb.leave_category_id,
+            leave_category_name: lb.leave_category_name,
+            used_leaves: lb.used_leaves,
+            balance: lb.pending_leaves
+        }));
+    }
+
     return {
         id: payslip.id,
         is_finalized: true,
@@ -727,6 +891,7 @@ const formatPayslipToSummary = async (payslip) => {
             advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
             netPayable: payslip.net_salary || 0
         },
+        leave_balances: leaveBalances,
         breakdown: {
             earnings: (payslip.break_down?.earnings || Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val }))),
             deductions: [
@@ -782,7 +947,9 @@ const formatPayslipToSummary = async (payslip) => {
                 sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
             grand_total: totalPaid.toFixed(2)
-        }
+        },
+        // tds_calculation_data: payslip.tds_calculation_data,
+        // tdsDetails: payslip.tds_calculation_data
     };
 };
 
@@ -857,11 +1024,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
             total_days: summary.period.daysInMonth,
-            leave_details: { 
-                "Paid Leave": summary.attendance.leaveDays || 0,
-                "Unpaid Leave": summary.attendance.unpaidLeaveDays || 0,
-                "Compoff": summary.attendance.compoffLeaveDays || 0
-            },
+            leave_details: summary.attendance.leave_category_details,
             lunch_count: summary.attendance.lunchCount || 0,
 
             // Dynamic JSON Components
@@ -885,6 +1048,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
 
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
+            leave_balances: summary.leave_balances,
             status: 1, // Finalized
             user_id: req.user.id || 0,
             branch_id: summary.meta.branch_id,
@@ -923,6 +1087,53 @@ exports.finalizeMonthlySalary = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+/**
+ * Delete a payslip and unlock associated attendance records
+ */
+exports.deletePayslip = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.body;
+        if (!id) {
+            await transaction.rollback();
+            return res.error("VALIDATION_ERROR", { message: "Payslip ID is required" });
+        }
+
+        const payslip = await commonQuery.findOneRecord(Payslip, id, {}, transaction);
+        if (!payslip) {
+            await transaction.rollback();
+            return res.error("NOT_FOUND", { message: "Payslip not found" });
+        }
+
+        if (payslip.status === 3) {
+            await transaction.rollback();
+            return res.error("NOT_ALLOWED", { message: "Cannot delete a paid payslip." });
+        }
+
+        const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
+        const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
+
+        // Unlock Attendance
+        await AttendanceDay.update({ is_locked: false }, {
+            where: {
+                employee_id: payslip.employee_id,
+                attendance_date: { [Op.between]: [startDate, endDate] }
+            },
+            transaction
+        });
+
+        // Hard delete payslip record
+        await payslip.destroy({ transaction });
+
+        await transaction.commit();
+        return res.success("PAYSLIP_DELETED", { message: "Payslip deleted and attendance records unlocked." });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
 
 exports.calculateBatchMonthlySalary = async (req, res) => {
     try {
@@ -1017,11 +1228,15 @@ const processPayslipData = (payslips) => {
         // Total deductions including statutory
         const totalDeductionsSum = regularDeductionsSum + statutoryDeductionsSum;
 
+        const tdsData = payslip.tds_calculation_data || {};
+        const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
+
         return {
             id: payslip.id,
             employee_id: payslip.employee_id,
             employee_name: payslip.employee?.first_name || "",
             employee_code: payslip.employee?.employee_code || "",
+            designation: payslip.employee?.designation?.designation_name || "",
             month: payslip.month,
             year: payslip.year,
             pd_days: payslip.pd_days,
@@ -1036,7 +1251,18 @@ const processPayslipData = (payslips) => {
             total_deduction: payslip.total_deduction,
             net_salary: payslip.net_salary,
             earnings_sum: parseFloat(earningsSum.toFixed(2)),
-            deductions_sum: parseFloat(totalDeductionsSum.toFixed(2))
+            deductions_sum: parseFloat(totalDeductionsSum.toFixed(2)),
+            
+            // TDS Data
+            annual_gross: tdsData.annualGross || 0,
+            standard_deduction: tdsData.standardDeduction || 0,
+            taxable_income: tdsData.taxableIncome || 0,
+            annual_tax: tdsData.annualTax || 0,
+            monthly_tds: tdsData.monthlyTDS || 0,
+            tds_percentage: tdsData.percentage || 0,
+            regime: tdsData.regime || 'new_regime',
+            actual_tds_deducted: actualTds,
+            exemption_amount: (tdsData.exemptions || []).reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
         };
     });
 };
@@ -1058,6 +1284,7 @@ exports.getPayslipEmployeeList = async (req, res) => {
                     model: Employee,
                     as: 'employee',
                     attributes: ['id', 'employee_code', 'first_name'],
+                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                 }
             ]
         }
@@ -1088,6 +1315,7 @@ exports.getPayslipView = async (req, res) => {
                     model: Employee,
                     as: 'employee',
                     attributes: ['id', 'employee_code', 'first_name'],
+                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                 }
             ]
         }
@@ -1118,7 +1346,8 @@ exports.exportPayrollView = async (req, res) => {
                     {
                         model: Employee,
                         as: 'employee',
-                        attributes: ['id', 'employee_code', 'first_name'],
+                        attributes: ['id', 'employee_code', 'first_name', 'pan_number'],
+                        include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                     }
                 ]
             }
@@ -1137,21 +1366,18 @@ exports.exportPayrollView = async (req, res) => {
             { header: "Employee ID", key: "employee_id" },
             { header: "Employee Name", key: "employee_name" },
             { header: "Employee Code", key: "employee_code" },
+            { header: "Job Title", key: "designation" },
             { header: "Month", key: "month" },
             { header: "Year", key: "year" },
-            { header: "Present Days", key: "pd_days" },
-            { header: "Half Days", key: "ph_days" },
-            { header: "Weekly Offs", key: "wo_days" },
-            { header: "Without Pay Days", key: "wp_days" },
-            { header: "Present Days Count", key: "present_days" },
-            { header: "Absent Days", key: "absent_days" },
-            { header: "Total Days", key: "total_days" },
-            { header: "Lunch Count", key: "lunch_count" },
+            { header: "Regime", key: "regime" },
+            { header: "Earnings", key: "annual_gross" },
+            { header: "Exemptions", key: "exemption_amount" },
+            { header: "Deductions", key: "actual_deduction" },
+            { header: "Standard Deduction", key: "standard_deduction" },
+            { header: "Taxable Income", key: "taxable_income" },
+            { header: "Tax Liability", key: "monthly_tds" },
             { header: "Paid Gross", key: "paid_gross" },
-            { header: "Total Deduction", key: "total_deduction" },
-            { header: "Net Salary", key: "net_salary" },
-            { header: "Earnings Sum", key: "earnings_sum" },
-            { header: "Deductions Sum", key: "deductions_sum" }
+            { header: "Net Salary", key: "net_salary" }
         ];
 
         // Generate Excel file
@@ -1438,10 +1664,16 @@ exports.getPayslipById = async (req, res) => {
         });
 
         // Fetch Employee Leave Balance data
-        const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
+        const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
             employee_id: payslip.employee_id,
             year: year
         });
+        const leaveBalances = rawLeaveBalances.map(lb => ({
+            leave_category_id: lb.leave_category_id,
+            leave_category_name: lb.leave_category_name,
+            used_leaves: lb.used_leaves,
+            balance: lb.pending_leaves
+        }));
 
         // Fetch Payment History for the month
         const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
@@ -1568,7 +1800,7 @@ exports.getPayslipById = async (req, res) => {
             },
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
-            leave_balances: leaveBalances,
+            leave_balances: payslip.leave_balances || leaveBalances,
             payment_history: {
                 salary: {
                     history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
@@ -1950,7 +2182,7 @@ exports.generatePayslipPdf = async (req, res) => {
                 },
                 period: {
                     label: `${monthName} ${payslip.year}`,
-                    payDate: dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('DD/MM/YYYY')
+                    payDate: dayjs(payslip.created_at).format('DD/MM/YYYY')
                 },
                 attendance: {
                     present: presentDays,
@@ -2003,6 +2235,8 @@ exports.generatePayslipPdf = async (req, res) => {
  * Get detailed TDS Deduction report across employees for a specific period
  */
 exports.getTDSDeductionReport = async (req, res) => {
+    return res.ok([]);
+    /*
     try {
         const { month, year, branch_id } = req.body;
         if (!month || !year) {
@@ -2023,7 +2257,8 @@ exports.getTDSDeductionReport = async (req, res) => {
             include: [{
                 model: Employee,
                 as: "employee",
-                attributes: ['id', 'first_name', 'employee_code', 'pan_number']
+                attributes: ['id', 'first_name', 'employee_code', 'pan_number'],
+                include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
             }],
             order: [['employee_id', 'ASC']]
         });
@@ -2032,18 +2267,15 @@ exports.getTDSDeductionReport = async (req, res) => {
 
         payslips.forEach(payslip => {
             const tdsData = payslip.tds_calculation_data || {};
-
-            // Extract the actual TDS deducted (from statutory or breakdown)
             const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
 
-            // Only include in report if TDS was actually deducted
-            if (actualTds > 0) {
-                reportData.push({
+            reportData.push({
                     id: payslip.id,
                     employee_id: payslip.employee_id,
                     employee_name: payslip.employee?.first_name,
                     employee_code: payslip.employee?.employee_code,
                     pan_number: payslip.employee?.pan_number,
+                    designation: payslip.employee?.designation?.designation_name,
 
                     // Detailed tax data from stored snapshot
                     annual_gross: tdsData.annualGross || 0,
@@ -2051,20 +2283,23 @@ exports.getTDSDeductionReport = async (req, res) => {
                     taxable_income: tdsData.taxableIncome || 0,
                     regime: tdsData.regime || 'new_regime',
                     annual_tax: tdsData.annualTax || 0,
+                    tax_paid_already: tdsData.taxPaidAlready || 0,
                     monthly_tds: tdsData.monthlyTDS || 0,
                     percentage: tdsData.percentage || 0,
+                    exemption_amount: parseFloat(tdsData.exemptions || 0),
+                    total_deduction: payslip.total_deduction || 0,
 
                     // What was actually deducted in the finalized payslip
                     actual_tds_deducted: actualTds,
                     status: payslip.status
                 });
-            }
         });
 
         return res.ok(reportData);
     } catch (err) {
         return handleError(err, res, req);
     }
+    */
 };
 
 exports.getEmployeesByMonthYear = async (req, res) => {
@@ -2484,6 +2719,530 @@ exports.getPaymentHistory = async (req, res) => {
         return res.ok({
             paymentHistories,
             totalAmount: parseFloat(totalAmount.toFixed(2))
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getEmployerContributionReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        const where = {
+            month,
+            year,
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
+        };
+
+        if (branch_id) {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['id', 'first_name', 'employee_code'],
+                    include: [
+                        {
+                            model: DesignationMaster,
+                            as: 'designation',
+                            attributes: ['designation_name']
+                        }
+                    ]
+                }
+            ]
+        });
+
+        const report = payslips.map(ps => {
+            const employerDetails = ps.employer_details || {};
+            let totalContribution = 0;
+            const contributionMap = {};
+
+            // Extract values and calculate total
+            Object.entries(employerDetails).forEach(([key, value]) => {
+                const val = parseFloat(value || 0);
+                contributionMap[key] = val;
+                totalContribution += val;
+            });
+
+            return {
+                id: ps.id,
+                employee_id: ps.employee?.id,
+                employee_name: ps.employee?.first_name,
+                employee_code: ps.employee?.employee_code,
+                designation: ps.employee?.designation?.designation_name,
+                contribution: contributionMap,
+                total_contribution: parseFloat(totalContribution.toFixed(2))
+            };
+        });
+
+        return res.ok({
+            report,
+            month,
+            year
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getCTCBreakdownReport = async (req, res) => {
+    try {
+        const { branch_id } = req.body;
+        
+        let where = { status: 0, company_id: req.user.company_id };
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+            where.branch_id = branch_id;
+        }
+
+        const employees = await commonQuery.findAllRecords(Employee, where, {
+            attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] },
+                { 
+                    model: EmployeeSalaryTemplate, 
+                    as: 'employeeSalaryTemplate',
+                    include: [{
+                        separate: true,
+                        model: EmployeeSalaryTemplateTransaction,
+                        as: 'employeeSalaryTemplateTransactions',
+                        include: [{ model: SalaryComponent, as: 'component', attributes: ['component_name'] }]
+                    }]
+                }
+            ]
+        }, null, { company_id: true });
+
+        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+        const branchMap = {};
+        branches.forEach(b => branchMap[b.id] = b.branch_name);
+
+        let allComponentNames = new Set();
+        let reportData = [];
+
+        employees.forEach(emp => {
+            const template = emp.employeeSalaryTemplate;
+            if (!template) return;
+
+            let row = {
+                employee_name: emp.first_name || '-',
+                designation: emp.designation?.designation_name || '-',
+                employee_code: emp.employee_code || '-',
+                branch: branchMap[emp.branch_id] || '-',
+                department: emp.department?.name || '-',
+                ctc: parseFloat(template.ctc_monthly || 0),
+                salary_type: template.salary_type || 'Monthly',
+                components: {}
+            };
+
+            const sc = template.statutory_config || {};
+            if (sc.employee_pf?.enabled) { row.components['Employee PF Contribution'] = sc.employee_pf.amount; allComponentNames.add('Employee PF Contribution'); }
+            if (sc.employee_esi?.enabled) { row.components['Employee ESI Contribution'] = sc.employee_esi.amount; allComponentNames.add('Employee ESI Contribution'); }
+            if (sc.pt?.enabled) { row.components['Professional Tax'] = sc.pt.amount; allComponentNames.add('Professional Tax'); }
+            if (sc.employee_lwf?.enabled) { row.components['Employee LWF Contribution'] = sc.employee_lwf.amount; allComponentNames.add('Employee LWF Contribution'); }
+            if (sc.employer_pf?.enabled) { row.components['Employer PF Contribution'] = sc.employer_pf.amount; allComponentNames.add('Employer PF Contribution'); }
+            if (sc.employer_esi?.enabled) { row.components['Employer ESI Contribution'] = sc.employer_esi.amount; allComponentNames.add('Employer ESI Contribution'); }
+            if (sc.employer_lwf?.enabled) { row.components['Employer LWF Contribution'] = sc.employer_lwf.amount; allComponentNames.add('Employer LWF Contribution'); }
+            if (sc.pf_edli_admin?.enabled) { row.components['PF EDLI & Admin Charges'] = sc.pf_edli_admin.amount; allComponentNames.add('PF EDLI & Admin Charges'); }
+
+            const trans = template.employeeSalaryTemplateTransactions || [];
+            trans.forEach(tr => {
+                if (tr.component?.component_name) {
+                    const name = tr.component.component_name;
+                    row.components[name] = parseFloat(tr.monthly_amount || 0);
+                    allComponentNames.add(name);
+                }
+            });
+
+            reportData.push(row);
+        });
+
+        // make sure basic salary is always first if it exists
+        let cols = Array.from(allComponentNames);
+        const basicIndex = cols.findIndex(c => c.toLowerCase() === 'basic salary' || c.toLowerCase() === 'basic');
+        if (basicIndex > 0) {
+            const b = cols.splice(basicIndex, 1)[0];
+            cols.unshift(b);
+        }
+
+        return res.ok({
+            categories: cols,
+            reportData
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getGeneratedPayslipReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; // not deleted
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['first_name', 'employee_code', 'joining_date', 'pan_number', 'uan_number', 'pf_number', 'branch_id'],
+                    include: [
+                        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                        { model: Department, as: 'department', attributes: ['name'] }
+                    ]
+                }
+            ]
+        }, null, { company_id: true });
+
+        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+        const branchMap = {};
+        branches.forEach(b => branchMap[b.id] = b.branch_name);
+
+        let dynamicEarnings = new Set();
+        let dynamicDeductions = new Set();
+        let dynamicStatutory = new Set();
+
+        let reportData = [];
+
+        payslips.forEach(ps => {
+            const emp = ps.employee || {};
+            const bd = ps.break_down || {};
+            const att = bd.attendance || {};
+            const sal = bd.salary || {};
+
+            let row = {
+                employee_name: emp.first_name || '-',
+                employee_code: emp.employee_code || '-',
+                branch_name: branchMap[emp.branch_id] || '-',
+                department: emp.department?.name || '-',
+                designation: emp.designation?.designation_name || '-',
+                joining_date: emp.joining_date || '-',
+                pan_number: emp.pan_number || '-',
+                uan_number: emp.uan_number || '-',
+                pf_number: emp.pf_number || '-',
+                
+                salary_amount: parseFloat(sal.ctc_monthly || ps.fixed_gross || 0),
+                salary_type: 'Monthly',
+                
+                days_in_month: ps.total_days || att.daysInMonth || 0,
+                payable_days: ps.wp_days || att.payableDays || 0,
+                present_days: ps.present_days || att.presentDays || 0,
+                double_present: 0,
+                half_days: att.halfDays || 0,
+                absent_days: ps.absent_days || att.absentDays || 0,
+                holidays: ps.ph_days || att.holidays || 0,
+                week_offs: ps.wo_days || att.weeklyOffs || 0,
+                paid_leaves: att.leaveDays || 0,
+                unpaid_leaves: att.unpaidLeaveDays || 0,
+                
+                total_payable_days: ps.wp_days || att.payableDays || 0,
+                total_paid_days: ps.wp_days || att.payableDays || 0,
+                actual_payable_days: ps.wp_days || att.payableDays || 0,
+                paid_leave_amount: 0, 
+
+                base_salary: 0,
+                overtime: att.totalOTMins ? (att.totalOTMins/60).toFixed(2) : 0,
+                overtime_amount: parseFloat(sal.overtimeAmount || 0),
+                overtime_mins: att.totalOTMins || 0,
+                
+                earnings: {},
+                deductions: {},
+                statutory: {},
+                
+                net_salary: parseFloat(ps.net_salary || 0)
+            };
+
+            const earningsArr = ps.earning_details || (bd.breakdown?.earnings || []);
+            earningsArr.forEach(e => {
+                const name = e.name;
+                const amt = parseFloat(e.amount || 0);
+                if (name.toLowerCase().includes('basic') || name.toLowerCase().includes('base')) {
+                    row.base_salary += amt;
+                } else if (!name.toLowerCase().includes('overtime')) {
+                    dynamicEarnings.add(name);
+                    row.earnings[name] = (row.earnings[name] || 0) + amt;
+                }
+            });
+
+            const dedArr = ps.deduction_details || (bd.breakdown?.deductions || []);
+            dedArr.forEach(d => {
+                const name = d.name;
+                const amt = parseFloat(d.amount || 0);
+                // Exclude statutory items duplicated in deductions
+                if (!d.is_statutory) {
+                     dynamicDeductions.add(name);
+                     row.deductions[name] = (row.deductions[name] || 0) + amt;
+                }
+            });
+
+            // Fallback for statutory if it's stored in statutory_details directly
+            const statObj = ps.statutory_details || (bd.breakdown?.statutory || {});
+            Object.keys(statObj).forEach(k => {
+                const amt = parseFloat(statObj[k] || 0);
+                dynamicStatutory.add(k);
+                row.statutory[k] = amt;
+            });
+
+            // Extract statutory from deductions array if it has is_statutory flag
+            dedArr.forEach(d => {
+                if (d.is_statutory) {
+                    const name = d.name;
+                    const amt = parseFloat(d.amount || 0);
+                    dynamicStatutory.add(name);
+                    row.statutory[name] = amt;
+                }
+            });
+
+            reportData.push(row);
+        });
+
+        // Convert sets to arrays
+        const earningColumns = Array.from(dynamicEarnings);
+        const deductionColumns = Array.from(dynamicDeductions);
+        const statutoryColumns = Array.from(dynamicStatutory);
+
+        return res.ok({
+            earningColumns,
+            deductionColumns,
+            statutoryColumns,
+            reportData
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getPFReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['first_name', 'employee_code', 'uan_number', 'pf_number', 'branch_id', 'employee_type', 'worker_type']
+                }
+            ]
+        }, null, { company_id: true });
+
+        // Filter out employees without PF
+        // We consider someone in PF if they have UAN/PF OR if there's any PF amount in statutory/employer details.
+        
+        let reportData = [];
+        payslips.forEach(ps => {
+            const emp = ps.employee || {};
+            const bd = ps.break_down || {};
+            
+            // Extraction helper to handle both Array and Object formats in JSON fields
+            const getValueFromJSON = (data, keys) => {
+                console.log("Extracting PF value from data:", data, "with keys:", keys);
+                if (!data) return 0;
+                if (Array.isArray(data)) {
+                    const found = data.find(item => keys.includes(item.name.trim()));
+                    return found ? parseFloat(found.amount || 0) : 0;
+                }
+                for (const key of keys) {
+                    if (data[key] !== undefined) return parseFloat(data[key] || 0);
+                }
+                return 0;
+            };
+
+            // 1. Extract Employee PF (from statutory or deductions)
+            const statData = ps.statutory_details || (bd.breakdown?.statutory || {});
+            const dedData = ps.deduction_details || (bd.breakdown?.deductions || {});
+            const pfKeys = ['Employee PF', 'PF', 'EPF', 'Provident Fund'];
+
+            let employee_pf = getValueFromJSON(statData, pfKeys);
+            if (employee_pf === 0) {
+                employee_pf = getValueFromJSON(dedData, pfKeys);
+            }
+
+            // 2. Extract Employer PF
+            const employerData = ps.employer_details || (bd.breakdown?.employer || {});
+            const empPfKeys = ['Employer PF', 'EPF Employer', 'Employer Contribution PF'];
+            let employer_pf = getValueFromJSON(employerData, empPfKeys);
+            
+            // 3. Extract Basic Salary (often used as base for PF)
+            const earnData = ps.earning_details || (bd.breakdown?.earnings || {});
+            const basicKeys = ['Basic Salary', 'Basic', 'BASIC', 'Basic Pay'];
+            let basic_salary = getValueFromJSON(earnData, basicKeys);
+
+            let pf_edli_admin = getValueFromJSON(employerData, ['PF EDLI/Admin', 'EDLI', 'Admin Charges']);
+            
+            // If they have no PF deduction or contribution, skip them (unless they have pf config active)
+            // Or just include all for now to let admin see zeroes if unconfigured
+            
+            // Indian PF logic rough calculation for PF wages if not saved explicitly
+            // PF Wages is usually the base (Basic+DA) capped at 15000 or the actual base
+            let pf_wages = 0;
+            if (employee_pf > 0) {
+                pf_wages = Math.round(employee_pf / 0.12);
+            } else if (basic_salary > 0 && (emp.pf_number || emp.uan_number)) {
+                // If PF is configured but deduction was 0 (maybe skipped or lwp), we might still want to show base
+                pf_wages = basic_salary;
+            }
+            
+            // In ECR, EPS (Pension) is 8.33% of PF Wages (Capped at 15000 usually)
+            // EPF Diff is 3.67% of PF Wages
+            let eps_wages = pf_wages > 15000 ? 15000 : pf_wages;
+            let eps_contribution = Math.round(eps_wages * 0.0833);
+            let epf_eps_diff = Math.round(employee_pf - eps_contribution);
+            
+            // If EPS is not enabled or different, rely on whatever data we have, but usually we just calculate ECR standard here
+            
+            // NCP Days (Non-contributing period) is basically LWP days
+            const lwp_days = parseFloat(ps.wp_days || 0) < parseFloat(ps.total_days || 0) 
+                             ? parseFloat(ps.total_days || 0) - parseFloat(ps.wp_days || 0) 
+                             : 0;
+
+            let row = {
+                uan: emp.uan_number || '-',
+                member_name: emp.first_name || '-',
+                gross_wages: parseFloat((ps.fixed_gross || bd.salary?.ctc_monthly || 0)).toFixed(2),
+                epf_wages: pf_wages,
+                eps_wages: eps_wages,
+                edli_wages: eps_wages, 
+                epf_contri_remitted: Math.round(employee_pf), // 12%
+                eps_contri_remitted: eps_contribution, // 8.33%
+                epf_eps_diff_remitted: epf_eps_diff, // 3.67%
+                ncp_days: lwp_days,
+                refund_of_advances: 0,
+                employee_code: emp.employee_code || '-',
+                employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+                worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+                pf_number: emp.pf_number || '-'
+            };
+
+            // Only include employees who actually have PF configured or deducted
+            if (row.epf_contri_remitted > 0 || row.uan !== '-') {
+                reportData.push(row);
+            }
+            
+        });
+
+        return res.ok({
+            reportData
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getESIReport = async (req, res) => {
+    try {
+        const { month, year, branch_id } = req.body;
+        
+        if (!month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+        }
+
+        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+            where.branch_id = branch_id;
+        }
+
+        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+            include: [
+                {
+                    model: Employee,
+                    as: 'employee',
+                    attributes: ['first_name', 'employee_code', 'esi_number', 'branch_id', 'employee_type', 'worker_type']
+                }
+            ]
+        }, null, { company_id: true });
+
+        let reportData = [];
+
+        payslips.forEach(ps => {
+            const emp = ps.employee || {};
+            const bd = ps.break_down || {};
+            
+            // Extraction helper to handle both Array and Object formats
+            const getValueFromJSON = (data, keys) => {
+                if (!data) return 0;
+                if (Array.isArray(data)) {
+                    const found = data.find(item => keys.includes(item.name));
+                    return found ? parseFloat(found.amount || 0) : 0;
+                }
+                for (const key of keys) {
+                    if (data[key] !== undefined) return parseFloat(data[key] || 0);
+                }
+                return 0;
+            };
+
+            // 1. Extract Employee ESI
+            const statData = ps.statutory_details || (bd.breakdown?.statutory || {});
+            const dedData = ps.deduction_details || (bd.breakdown?.deductions || {});
+            const esiKeys = ['Employee ESI', 'ESI', 'ESIC'];
+
+            let employee_esi = getValueFromJSON(statData, esiKeys);
+            if (employee_esi === 0) {
+                employee_esi = getValueFromJSON(dedData, esiKeys);
+            }
+
+            // 2. Extract Employer ESI
+            const employerData = ps.employer_details || (bd.breakdown?.employer || {});
+            let employer_esi = getValueFromJSON(employerData, ['Employer ESI', 'ESI Employer', 'Employer Contribution ESI']);
+            
+            // ESI calculation logic rough deduction check
+            // Employee pays 0.75%, Employer pays 3.25% of gross wages usually.
+            // Let's rely on actual total_earnings to determine ESI wages (which it usually is, capped or not depending on settings but normally ESIC requires actual Gross during return)
+            const gross_earnings = parseFloat(ps.paid_gross || bd.salary?.takeHomeEarnings || 0).toFixed(2);
+            
+            const total_worked_days = parseFloat(ps.wp_days || 0);
+
+            let row = {
+                ip_number: emp.esi_number || '-',
+                ip_name: emp.first_name || '-',
+                no_of_days_worked: total_worked_days,
+                total_monthly_wages: gross_earnings,
+                employee_share: employee_esi,
+                employer_share: employer_esi,
+                total_contribution: parseFloat((employee_esi + employer_esi).toFixed(2)),
+                reason_code_for_zero_working_days: total_worked_days === 0 ? 'LWD' : '-', // Provide a generic dummy reason e.g., Leave Without Pay if 0 days
+                last_working_day: '-',
+                employee_code: emp.employee_code || '-',
+                employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+                worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+            };
+
+            // Only include employees who actually have ESI configured or deducted
+            if (row.employee_share > 0 || row.employer_share > 0 || (row.ip_number && row.ip_number !== '-')) {
+                reportData.push(row);
+            }
+            
+        });
+
+        return res.ok({
+            reportData
         });
 
     } catch (err) {

@@ -89,8 +89,8 @@ const BLOOD_GROUP_MAP = {
 };
 
 const getEmployeeTypeDetails = (typeStr, codeStr) => {
-    const s = String(typeStr || '').toLowerCase();
-    const c = String(codeStr || '').toLowerCase();
+    const s = String(typeStr || '').trim().toLowerCase();
+    const c = String(codeStr || '').trim().toLowerCase();
     
     let employee_type = 1; // Default to Staff
     let worker_type = null;
@@ -440,7 +440,8 @@ const runWorker = async () => {
             const rowIndex = i + 2;
             const originalRecord = originalRows[i];
 
-            const empCode = record.employee_code ? String(record.employee_code).trim().toLowerCase() : null;
+            const trimmedEmpCode = record.employee_code ? String(record.employee_code).trim() : null;
+            const empCode = trimmedEmpCode ? trimmedEmpCode.toLowerCase() : null;
             const mobile = record.mobile_no ? String(record.mobile_no).trim() : null;
             const email = record.email ? String(record.email).trim().toLowerCase() : null;
             const pan = record.pan_number ? String(record.pan_number).trim().toUpperCase() : null;
@@ -453,7 +454,7 @@ const runWorker = async () => {
             const duplicates = [];
             
             // Check Excel-to-Excel duplicates
-            if (empCode && rows.filter((r, idx) => idx !== i && r.employee_code && String(r.employee_code).trim().toLowerCase() === empCode).length > 0) duplicates.push(`Employee Code '${record.employee_code}' (Excel Duplicate)`);
+            if (empCode && rows.filter((r, idx) => idx !== i && r.employee_code && String(r.employee_code).trim().toLowerCase() === empCode).length > 0) duplicates.push(`Employee Code '${trimmedEmpCode}' (Excel Duplicate)`);
             if (mobile && rows.filter((r, idx) => idx !== i && r.mobile_no && String(r.mobile_no).trim() === mobile).length > 0) duplicates.push(`Mobile '${mobile}' (Excel Duplicate)`);
             if (email && rows.filter((r, idx) => idx !== i && r.email && String(r.email).trim().toLowerCase() === email).length > 0) duplicates.push(`Email '${email}' (Excel Duplicate)`);
             if (pan && rows.filter((r, idx) => idx !== i && r.pan_number && String(r.pan_number).trim().toUpperCase() === pan).length > 0) duplicates.push(`PAN '${pan}' (Excel Duplicate)`);
@@ -464,7 +465,7 @@ const runWorker = async () => {
             if (bankAccount && rows.filter((r, idx) => idx !== i && r.bank_account_number && String(r.bank_account_number).trim() === bankAccount).length > 0) duplicates.push(`Bank Account '${bankAccount}' (Excel Duplicate)`);
 
             // Check against Database
-            if (empCode && employeeData.dbEmpCodeSet.has(empCode)) duplicates.push(`Employee Code '${record.employee_code}' (Exists in System)`);
+            if (empCode && employeeData.dbEmpCodeSet.has(empCode)) duplicates.push(`Employee Code '${trimmedEmpCode}' (Exists in System)`);
             if (mobile && employeeData.dbEmpMobileSet.has(mobile)) duplicates.push(`Mobile '${mobile}' (Exists in System)`);
             if (email && employeeData.dbEmailSet.has(email)) duplicates.push(`Email '${email}' (Exists in System)`);
             if (pan && employeeData.dbPanSet.has(pan)) duplicates.push(`PAN '${pan}' (Exists in System)`);
@@ -615,7 +616,8 @@ const runWorker = async () => {
                 const firstName = String(firstNameRaw).trim();
                 const email = String(record.email || '').trim().toLowerCase();
                 const mobile = record.mobile_no ? String(record.mobile_no).trim() : null;
-                const empCode = record.employee_code ? String(record.employee_code).trim().toLowerCase() : null;
+                const trimmedEmpCode = record.employee_code ? String(record.employee_code).trim() : null;
+                const empCode = trimmedEmpCode ? trimmedEmpCode.toLowerCase() : null;
                 const pan = record.pan_number ? String(record.pan_number).trim().toUpperCase() : null;
                 const uan = record.uan_number ? String(record.uan_number).trim() : null;
                 const aadhaar = record.aadhaar_number ? String(record.aadhaar_number).replace(/\s/g, '') : null;
@@ -645,10 +647,10 @@ const runWorker = async () => {
                 // if (!gender) fail("Gender is required");
 
                 // Prepare employee data
-                const typeDetails = getEmployeeTypeDetails(record.employee_type, record.employee_code);
+                const typeDetails = getEmployeeTypeDetails(record.employee_type, trimmedEmpCode);
 
                 const prepareData = {
-                    employee_code: record.employee_code,
+                    employee_code: trimmedEmpCode,
                     first_name: firstName,
                     mobile_no: mobile,
                     employee_type: typeDetails.employee_type,
