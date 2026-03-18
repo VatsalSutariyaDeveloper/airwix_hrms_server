@@ -378,16 +378,30 @@ const runWorker = async () => {
         });
 
         // 2. Fetch existing records from database for all unique fields
-        const queryConditions = [];
-        if (employeeCodeSet.size > 0) queryConditions.push({ employee_code: { [Op.in]: Array.from(employeeCodeSet) } });
-        if (mobileNoSet.size > 0) queryConditions.push({ mobile_no: { [Op.in]: Array.from(mobileNoSet) } });
-        if (emailsSet.size > 0) queryConditions.push({ email: { [Op.in]: Array.from(emailsSet) } });
-        if (panNumbersSet.size > 0) queryConditions.push({ pan_number: { [Op.in]: Array.from(panNumbersSet) } });
-        if (aadhaarNumbersSet.size > 0) queryConditions.push({ aadhaar_number: { [Op.in]: Array.from(aadhaarNumbersSet) } });
-        if (uanNumbersSet.size > 0) queryConditions.push({ uan_number: { [Op.in]: Array.from(uanNumbersSet) } });
-        if (drivingLicensesSet.size > 0) queryConditions.push({ driving_license_number: { [Op.in]: Array.from(drivingLicensesSet) } });
-        if (voterIdsSet.size > 0) queryConditions.push({ voter_id_number: { [Op.in]: Array.from(voterIdsSet) } });
-        if (bankAccountNumbersSet.size > 0) queryConditions.push({ bank_account_number: { [Op.in]: Array.from(bankAccountNumbersSet) } });
+        // orConditions will store conditions that will be checked in a single query using Op.or
+        const orConditions = [];
+
+        // employee_code check is always company specific
+        if (employeeCodeSet.size > 0) {
+            orConditions.push({
+                company_id,
+                employee_code: { [Op.in]: Array.from(employeeCodeSet) }
+            });
+        }
+
+        // mobile_no check is global across the whole database (per user request)
+        if (mobileNoSet.size > 0) {
+            orConditions.push({ mobile_no: { [Op.in]: Array.from(mobileNoSet) } });
+        }
+
+        // Other identifiers are also checked globally for a robust uniqueness check
+        if (emailsSet.size > 0) orConditions.push({ email: { [Op.in]: Array.from(emailsSet) } });
+        if (panNumbersSet.size > 0) orConditions.push({ pan_number: { [Op.in]: Array.from(panNumbersSet) } });
+        if (aadhaarNumbersSet.size > 0) orConditions.push({ aadhaar_number: { [Op.in]: Array.from(aadhaarNumbersSet) } });
+        if (uanNumbersSet.size > 0) orConditions.push({ uan_number: { [Op.in]: Array.from(uanNumbersSet) } });
+        if (drivingLicensesSet.size > 0) orConditions.push({ driving_license_number: { [Op.in]: Array.from(drivingLicensesSet) } });
+        if (voterIdsSet.size > 0) orConditions.push({ voter_id_number: { [Op.in]: Array.from(voterIdsSet) } });
+        if (bankAccountNumbersSet.size > 0) orConditions.push({ bank_account_number: { [Op.in]: Array.from(bankAccountNumbersSet) } });
 
         const employeeData = {
             dbEmpCodeSet: new Set(),
@@ -406,23 +420,28 @@ const runWorker = async () => {
             fileTrackingEmployeeMap: new Map()
         };
 
-        if (queryConditions.length > 0) {
+        if (orConditions.length > 0) {
             const existingInDb = await commonQuery.findAllRecords(
                 Employee,
                 {
-                    company_id,
                     status: { [Op.ne]: 2 }, // Not deleted
-                    [Op.or]: queryConditions
+                    [Op.or]: orConditions
                 },
                 { 
-                    attributes: ['employee_code', 'mobile_no', 'email', 'pan_number', 'aadhaar_number', 'uan_number', 'driving_license_number', 'voter_id_number', 'bank_account_number'],
+                    attributes: ['company_id', 'employee_code', 'mobile_no', 'email', 'pan_number', 'aadhaar_number', 'uan_number', 'driving_license_number', 'voter_id_number', 'bank_account_number'],
                     raw: true 
                 },
-                transaction
+                transaction,
+                {} // Pass empty object to bypass the automatic company_id filter in commonQuery.findAllRecords
             );
 
             existingInDb.forEach(emp => {
-                if (emp.employee_code) employeeData.dbEmpCodeSet.add(String(emp.employee_code).trim().toLowerCase());
+                // employee_code is specifically company-bound; we only record it if it belongs to the target company
+                if (String(emp.company_id) === String(company_id)) {
+                    if (emp.employee_code) employeeData.dbEmpCodeSet.add(String(emp.employee_code).trim().toLowerCase());
+                }
+
+                // Other identifiers are tracked globally so we can prevent duplicates across companies
                 if (emp.mobile_no) employeeData.dbEmpMobileSet.add(String(emp.mobile_no).trim());
                 if (emp.email) employeeData.dbEmailSet.add(String(emp.email).trim().toLowerCase());
                 if (emp.pan_number) employeeData.dbPanSet.add(String(emp.pan_number).trim().toUpperCase());

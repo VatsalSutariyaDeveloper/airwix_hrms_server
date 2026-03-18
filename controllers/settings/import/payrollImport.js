@@ -391,7 +391,7 @@ const runWorker = async () => {
         }, {});
 
         const breakdown = { 
-            earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val, base_amount: 0 })),
+            earnings: Object.entries(earning_details).map(([name, val]) => ({ name, amount: val })),
             deductions: Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
             statutory: statutory_details,
             employer: employer_details

@@ -88,11 +88,23 @@ exports.getAttendanceSummary = async (req, res) => {
 
     // Create a shared employee filter for all summary queries
     const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id, branch_id: req.user.branch_id };
+    
+    employeeWhere[Op.and] = [
+      {
+        [Op.or]: [
+          { joining_date: { [Op.lte]: targetDate } },
+          { joining_date: null }
+        ]
+      }
+    ];
+
     if (search) {
-      employeeWhere[Op.or] = [
-        { first_name: { [Op.iLike]: `%${search}%` } },
-        { employee_code: { [Op.iLike]: `%${search}%` } }
-      ];
+      employeeWhere[Op.and].push({
+        [Op.or]: [
+          { first_name: { [Op.iLike]: `%${search}%` } },
+          { employee_code: { [Op.iLike]: `%${search}%` } }
+        ]
+      });
     }
 
     // 1.5 AUTO-SYNC: Create records for WO/Holiday/Leave if missing
@@ -1199,7 +1211,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1322,6 +1334,9 @@ exports.getMonthlyAttendance = async (req, res) => {
       
       // Stop if date is in the future
       if (dayObj.isAfter(dayjs(), 'day')) continue;
+      
+      // Stop if date is before joining_date
+      if (employee.joining_date && dayObj.isBefore(dayjs(employee.joining_date), 'day')) continue;
       
       const attendanceDay = attendanceDays.find(ad => ad.attendance_date === curDate);
       const dayPunches = punches.filter(p => dayjs(p.punch_time).format('YYYY-MM-DD') === curDate);

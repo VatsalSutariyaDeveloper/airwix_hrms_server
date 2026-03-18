@@ -16,8 +16,8 @@ exports.create = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
-            imei_number: "IMEI Number",
-            ip_address: "IP Address",
+            // imei_number: "IMEI Number",
+            // ip_address: "IP Address",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
@@ -81,8 +81,8 @@ exports.update = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
-            imei_number: "IMEI Number",
-            ip_address: "IP Address",
+            // _number: "IMEI Number",
+            // ip_address: "IP Address",
         };
 
         const errors = await validateRequest(

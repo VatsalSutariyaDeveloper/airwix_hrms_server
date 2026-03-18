@@ -398,7 +398,9 @@ exports.updateStatus = async (req, res) => {
       ModuleEntityMaster,
       ids,
       { status },
-      transaction
+      transaction,
+      false,
+      false
     );
 
     if (!updated || updated.status === 2) {

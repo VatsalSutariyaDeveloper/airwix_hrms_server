@@ -1,4 +1,4 @@
-const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService } = require("../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -270,23 +270,49 @@ exports.login = async (req, res) => {
     // Use Sequelize findAll directly
     const companyList = await CompanyMaster.findAll({
         where: whereCompany,
-        attributes: ['id', 'is_default'],
+        attributes: ['id', 'is_default', 'branch_id'],
         raw: true,
         transaction
     });
     
     
-    const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
-
-    
+    const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
     // Validate if user.company_id exists in user's company_access
     let finalCompanyId = defaultCompanyId;
     if (companyAccessList.length > 0) {
-      if (companyAccessList.includes(String(user.company_id))) {
+      if (!companyAccessList.includes(String(defaultCompanyId))) {
         finalCompanyId = user.company_id;
-      } else {
-        finalCompanyId = defaultCompanyId;
       }
+    }
+
+    // Adjust branch_id based on the selected finalCompanyId
+    const branchAccessList = normalizeCompanyAccess(user.branch_access || "");
+    const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
+    const currentBranchValid = await BranchMaster.findOne({
+      where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
+      attributes: ['id'],
+      raw: true,
+      transaction
+    });
+    user.branch_id = finalBranch;
+
+    if (!currentBranchValid) {
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: { 
+            company_id: finalCompanyId, 
+            status: 0,
+            ...(!user.is_super_admin && user.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+        
+        if (fallbackBranch) {
+          user.branch_id = fallbackBranch.id;
+        }
     }
 
     if(!user.is_super_admin && user.role_id != 1){
@@ -655,14 +681,42 @@ exports.generatePin = async (req, res) => {
     
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
+    // Validate if the default company exists in user's company_access
     let finalCompanyId = defaultCompanyId;
     if (companyAccessList.length > 0) {
-      if (companyAccessList.includes(String(entity.company_id))) {
+      if (!companyAccessList.includes(String(defaultCompanyId))) {
         finalCompanyId = entity.company_id;
-      } else {
-        finalCompanyId = defaultCompanyId;
       }
     }
+
+    // Adjust branch_id based on the selected finalCompanyId
+    const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
+    const currentBranchValid = await BranchMaster.findOne({
+      where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
+      attributes: ['id'],
+      raw: true,
+      transaction
+    });
+
+    if (!currentBranchValid) {
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: { 
+            company_id: finalCompanyId, 
+            status: 0,
+            ...(!isDevice && !entity.is_super_admin && entity.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+        
+        if (fallbackBranch) {
+          entity.branch_id = fallbackBranch.id;
+        }
+    }
+
 
     if(!isDevice && entity.employee_id){
       const employee = await Employee.findOne({
@@ -884,13 +938,40 @@ exports.pinLogin = async (req, res) => {
     
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
+    // Validate if the default company exists in user's company_access
     let finalCompanyId = defaultCompanyId;
     if (companyAccessList.length > 0) {
-      if (companyAccessList.includes(String(entity.company_id))) {
+      if (!companyAccessList.includes(String(defaultCompanyId))) {
         finalCompanyId = entity.company_id;
-      } else {
-        finalCompanyId = defaultCompanyId;
       }
+    }
+
+    // Adjust branch_id based on the selected finalCompanyId
+    const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
+    const currentBranchValid = await BranchMaster.findOne({
+      where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
+      attributes: ['id'],
+      raw: true,
+      transaction
+    });
+
+    if (!currentBranchValid) {
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: { 
+            company_id: finalCompanyId, 
+            status: 0,
+            ...(!isDevice && !entity.is_super_admin && entity.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+        
+        if (fallbackBranch) {
+          entity.branch_id = fallbackBranch.id;
+        }
     }
 
     if(!isDevice && entity.employee_id){
