@@ -2943,7 +2943,7 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 days_in_month: ps.total_days || att.daysInMonth || 0,
                 payable_days: ps.wp_days || att.payableDays || 0,
                 present_days: ps.present_days || att.presentDays || 0,
-                double_present: 0,
+                // double_present: 0,
                 half_days: att.halfDays || 0,
                 absent_days: ps.absent_days || att.absentDays || 0,
                 holidays: ps.ph_days || att.holidays || 0,
@@ -2968,7 +2968,11 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 net_salary: parseFloat(ps.net_salary || 0)
             };
 
-            const earningsArr = ps.earning_details || (bd.breakdown?.earnings || []);
+            let earningsArr = ps.earning_details || (bd.breakdown?.earnings || []);
+            if (!Array.isArray(earningsArr)) {
+                earningsArr = Object.entries(earningsArr).map(([name, amount]) => ({ name, amount }));
+            }
+            
             earningsArr.forEach(e => {
                 const name = e.name;
                 const amt = parseFloat(e.amount || 0);
@@ -2980,7 +2984,17 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 }
             });
 
-            const dedArr = ps.deduction_details || (bd.breakdown?.deductions || []);
+            let dedArr = ps.deduction_details || (bd.breakdown?.deductions || []);
+            if (!Array.isArray(dedArr)) {
+                // If it's an object from DB, check against statutory_details keys for is_statutory flag
+                const statObj = ps.statutory_details || (bd.breakdown?.statutory || {});
+                dedArr = Object.entries(dedArr).map(([name, amount]) => ({ 
+                    name, 
+                    amount,
+                    is_statutory: statObj.hasOwnProperty(name)
+                }));
+            }
+
             dedArr.forEach(d => {
                 const name = d.name;
                 const amt = parseFloat(d.amount || 0);
