@@ -147,7 +147,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         : (baseSalaryTemplate.salaryTemplateTransactions || []);
 
     // Step A: Aggregate Counts
-    let presentDays = 0, halfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
+    let presentDays = 0, halfDays = 0, uncategorizedHalfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
     let unpaidLeaveDays = 0, compoffLeaveDays = 0;
 
     // Prefetch leave configurations to identify Unpaid or CompOff status
@@ -229,13 +229,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 presentDays++; 
                 break;
             case 1: case 13: 
+                halfDays++; // Always track total half days for UI
                 if (catInfo) {
-                    presentDays += 0.5; // Count as 0.5 present since they worked the other half
                     if (!catInfo.is_paid) unpaidLeaveDays += 0.5;
                     else if (catInfo.is_compoff) compoffLeaveDays += 0.5;
                     else leaveDays += 0.5;
                 } else {
-                    halfDays++; 
+                    uncategorizedHalfDays++; 
                 }
                 break;
             case 4: 
@@ -277,7 +277,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const lunchCount = lunchHistory.length;
 
     // Logic for LWP
-    const totalLWP = absentDays + (halfDays * 0.5) + unpaidLeaveDays;
+    const totalLWP = absentDays + (uncategorizedHalfDays * 0.5) + unpaidLeaveDays;
+    
+    // Total mathematically worked days
+    const totalPresentDays = presentDays + (halfDays * 0.5);
 
     // Step B: Calculate Gross
     let monthlyGross = parseFloat(template.ctc_monthly || 0);
@@ -294,7 +297,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         daysInCalculation = daysInMonth - weeklyOffs;
     }
 
-    const payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+    const payableDaysValue = totalPresentDays + leaveDays + holidays;
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
         actualDaysValue = daysInMonth - weeklyOffs;
@@ -326,7 +329,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         perDaySalary = dailyRate;
         perHourSalary = dailyRate / unitWorkingHours;
         // Total earnings for the month based on daily rate
-        const totalPayableDays = presentDays + (halfDays * 0.5) + leaveDays + holidays + weeklyOffs;
+        const totalPayableDays = totalPresentDays + leaveDays + holidays + weeklyOffs;
         monthlyGross = dailyRate * totalPayableDays;
     } else if (salaryType === "Hourly") {
         // For Hourly: Gross is based on total worked minutes
@@ -396,7 +399,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         CTC: monthlyGross,
         CANTEEN_ATTENDANCE: lunchCount,
         DAYS_IN_MONTH: daysInMonth,
-        PRESENT_DAYS: presentDays,
+        PRESENT_DAYS: totalPresentDays,
         ABSENT_DAYS: absentDays,
         PAYABLE_DAYS: daysInMonth - totalLWP
     };
@@ -712,7 +715,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue, leave_category_details: leaveCategoryDetails },
+        attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -1899,20 +1902,21 @@ exports.getSalaryOverview = async (req, res) => {
                 month: m.month,
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
-            });
-            if (payslip) {
+            });            
+            if (payslip) {                
                 // Use stored values from payslip database
                 const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
                 const fine = parseFloat(payslip.total_fine || 0);
                 
-                // Use stored earnings and deductions from break_down
-                const earnList = (breakdown.earnings || []).map(e => ({
-                    name: e.name,
-                    amount: parseFloat(e.amount || 0).toFixed(2),
-                    is_benefit: e.is_benefit,
-                    is_incentive: e.is_incentive,
-                    is_employer: e.is_employer || false
+                // Use stored earnings from earning_details
+                const earningDetails = payslip.earning_details || {};
+                const earnList = Object.entries(earningDetails).map(([name, amount]) => ({
+                    name: name,
+                    amount: parseFloat(amount || 0).toFixed(2),
+                    is_benefit: false,
+                    is_incentive: false,
+                    is_employer: false
                 }));
                 
                 const dedList = (breakdown.deductions || []).map(d => ({
@@ -1923,6 +1927,20 @@ exports.getSalaryOverview = async (req, res) => {
                     rate: d.rate,
                     is_statutory: d.is_statutory
                 }));
+
+                // Also include deductions from deduction_details if not already covered
+                const deductionDetails = payslip.deduction_details || {};
+                Object.entries(deductionDetails).forEach(([name, amount]) => {
+                    const amt = parseFloat(amount || 0);
+                    if (amt > 0 && !dedList.find(d => d.name === name)) {
+                        dedList.push({
+                            name,
+                            amount: amt.toFixed(2),
+                            is_food: name.toLowerCase().includes('food'),
+                            is_statutory: false
+                        });
+                    }
+                });
 
                 // Include Statutory Employee Deductions from stored statutory_details
                 const statDetails = payslip.statutory_details || {};
@@ -1985,9 +2003,9 @@ exports.getSalaryOverview = async (req, res) => {
                     grand_total: "0.00"
                 };
 
-                // Use stored totals from payslip breakdown
-                const totalEarn = parseFloat(breakdown.total_earnings || 0);
-                const totalDed = parseFloat(breakdown.total_deductions || 0);
+                // Use stored totals - calculate from actual details
+                const totalEarn = Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+                const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
                 const netPayable = parseFloat(payslip.net_salary || 0);
 
                 overview.push({
@@ -2026,7 +2044,7 @@ exports.getSalaryOverview = async (req, res) => {
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
-                    const summary = await performSalaryCalculation(employee_id, m.month, m.year);
+                    const summary = await performSalaryCalculation(employee_id, m.month, m.year);                      
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);

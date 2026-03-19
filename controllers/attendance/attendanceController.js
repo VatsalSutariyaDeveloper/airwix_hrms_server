@@ -86,17 +86,24 @@ exports.getAttendanceSummary = async (req, res) => {
     if (staff_type) consolidatedFilter.employee_type = staff_type;
     if (shift_id) consolidatedFilter.shift_template = shift_id;
 
+    const joiningDateFilter = {
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: { [Op.lte]: targetDate } },
+            { joining_date: null }
+          ]
+        }
+      ]
+    };
+
     // Create a shared employee filter for all summary queries
-    const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id, branch_id: req.user.branch_id };
-    
-    employeeWhere[Op.and] = [
-      {
-        [Op.or]: [
-          { joining_date: { [Op.lte]: targetDate } },
-          { joining_date: null }
-        ]
-      }
-    ];
+    const employeeWhere = { 
+      ...consolidatedFilter, 
+      company_id: req.user.company_id, 
+      branch_id: req.user.branch_id,
+      [Op.and]: [...joiningDateFilter[Op.and]]
+    };
 
     if (search) {
       employeeWhere[Op.and].push({
@@ -112,12 +119,13 @@ exports.getAttendanceSummary = async (req, res) => {
     try {
         const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
         if (isPastOrToday) {
-            const employeesToSync = await Employee.findAll({
-                where: employeeWhere,
-                attributes: ['id', 'company_id', 'branch_id'],
-                company_id: req.user.company_id,
-                branch_id: req.user.branch_id
-            });
+            const employeesToSync = await commonQuery.findAllRecords(
+                Employee,
+                employeeWhere,
+                { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
+                null, 
+            );
+            
 
             if (employeesToSync.length > 0) {
               await bulkSyncAttendanceDays(
@@ -184,6 +192,9 @@ exports.getAttendanceSummary = async (req, res) => {
         order: [['first_name', 'ASC']],
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id"]
       },
+      true,
+      "createdAt",
+      joiningDateFilter
     );
 
     // 2.5 Identify WO/Holiday for the paginated items
@@ -1482,7 +1493,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       }
       
       allDays.push(dayData);
-    }
+    }    
 
     // Finalize Summary Formatting
     summary.fine = `${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
