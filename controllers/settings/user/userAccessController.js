@@ -263,7 +263,14 @@ exports.sessionData = async (req, res) => {
         });
 
         return { ...module, entities: filteredEntities };
-    }).filter(module => module.entities.length > 0);
+    }).filter(module => {
+        if (module.module_name === 'Administration' && process.env.NODE_ENV !== 'local') {
+            return false;
+        }
+        
+        // Keep the module if it has at least one visible entity
+        return module.entities.length > 0;
+    });
 
     let planStatus = "active";
     if (finalSubscriptionData) {

@@ -93,7 +93,7 @@ exports.getById = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(Holiday, { status: 0 });
+    const result = await commonQuery.findAllRecords(Holiday, { status: 0 }, {}, null, {});
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
