@@ -575,7 +575,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, approved_by } = req.body;
+        const { approval_status, approved_by, approval_remark } = req.body;
 
         const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {}, transaction);
         if (!leaveRequest || leaveRequest.status === 2) {
@@ -612,7 +612,8 @@ exports.updateStatus = async (req, res) => {
             });
 
             const updateData = {
-                approval_history: history
+                approval_history: history,
+                approval_remark: approval_remark || ""
             };
 
             if (currentLevel < totalLevels && !req.user?.is_super_admin) {
@@ -672,6 +673,7 @@ exports.updateStatus = async (req, res) => {
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, {
                 approval_status: (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? constants.LEAVE_APPROVAL_STATUS.REJECTED : constants.LEAVE_APPROVAL_STATUS.CANCELLED,
                 approved_by: approved_by || req.user?.id,
+                approval_remark: approval_remark || "",
                 approval_history: history
             }, transaction);
         }

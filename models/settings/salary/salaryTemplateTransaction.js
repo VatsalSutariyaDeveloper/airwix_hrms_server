@@ -14,6 +14,12 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM("FIXED", "PERCENTAGE", "FORMULA", "ATTENDANCE_BASED", "CANTEEN_BASED"),
       allowNull: true
     },
+    percentage_of: {
+      type: DataTypes.ENUM("BASIC", "GROSS", "CTC"),
+      allowNull: true
+    },
+    percentage_value: { type: DataTypes.DECIMAL(10,2) },
+    formula: { type: DataTypes.TEXT },
     status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },

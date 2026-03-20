@@ -28,7 +28,7 @@ const incentiveTypeController = require("../controllers/settings/incentiveTypeCo
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
 const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
-const attendanceReconciliationController = require("../controllers/attendance/attendanceReconciliationController");
+const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -303,16 +303,16 @@ router.put("/onduty-request/cancel/:id", onDutyRequestController.cancelLeave);
 router.post("/onduty-request/summary", onDutyRequestController.getOnDutySummary);
 
 // ===============================
-// 40. ATTENDANCE RECONCILIATION ROUTES
+// 40. ATTENDANCE REGULARIZATION  ROUTES
 // ===============================
-router.post("/attendance-reconciliation/", attendanceReconciliationController.create);
-router.post("/attendance-reconciliation/get-transactions", attendanceReconciliationController.getAll);
-router.post("/attendance-reconciliation/pending-approvals", attendanceReconciliationController.getPendingApprovals);
-router.post("/attendance-reconciliation/summary", attendanceReconciliationController.getAttendanceReconciliationSummary);
-router.get("/attendance-reconciliation/:id", attendanceReconciliationController.getById);
-router.put("/attendance-reconciliation/:id", attendanceReconciliationController.update);
-router.put("/attendance-reconciliation/status/:id", attendanceReconciliationController.updateStatus);
-router.put("/attendance-reconciliation/cancel/:id", attendanceReconciliationController.cancel);
+router.post("/attendance-regularization/", attendanceRegularizationController.create);
+router.post("/attendance-regularization/get-transactions", attendanceRegularizationController.getAll);
+router.post("/attendance-regularization/pending-approvals", attendanceRegularizationController.getPendingApprovals);
+router.post("/attendance-regularization/summary", attendanceRegularizationController.getAttendanceRegularizationSummary);
+router.get("/attendance-regularization/:id", attendanceRegularizationController.getById);
+router.put("/attendance-regularization/:id", attendanceRegularizationController.update);
+router.put("/attendance-regularization/status/:id", attendanceRegularizationController.updateStatus);
+router.put("/attendance-regularization/cancel/:id", attendanceRegularizationController.cancel);
 
 
 module.exports = router;

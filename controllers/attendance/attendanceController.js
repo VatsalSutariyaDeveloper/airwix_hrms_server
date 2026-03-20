@@ -869,12 +869,12 @@ exports.deleteAttendanceDay = async (req, res) => {
       }
 
       // 2. Delete punches by day_id specifically
-      await commonQuery.softDeleteById(AttendancePunch, {
+      await commonQuery.hardDeleteRecords(AttendancePunch, {
         day_id: day.id
       }, t);
 
       // 3. Delete the day summary
-      await commonQuery.softDeleteById(AttendanceDay, { 
+      await commonQuery.hardDeleteRecords(AttendanceDay, { 
         id: day.id
       }, t);
     }
@@ -885,7 +885,7 @@ exports.deleteAttendanceDay = async (req, res) => {
     }
 
     // 4. ALWAYS delete all punches for this employee on this date (handles unassigned punches)
-    await commonQuery.softDeleteById(AttendancePunch, {
+    await commonQuery.hardDeleteRecords(AttendancePunch, {
       employee_id,
       punch_time: {
         [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
@@ -1655,6 +1655,7 @@ exports.getLeaveSummary = async (req, res) => {
         status: statusMap[leave.approval_status] || "PENDING",
         status_color: isCredit ? "#10B981" : (colorMap[leave.approval_status] || "#F59E0B"),
         approved_by: leave.approvedBy?.user_name || null,
+        approval_remark: leave.approval_remark || "",
         start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
         end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
       });

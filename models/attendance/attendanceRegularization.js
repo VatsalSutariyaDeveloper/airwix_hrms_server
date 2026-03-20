@@ -1,5 +1,5 @@
 module.exports = (sequelize, DataTypes) => {
-    const AttendanceReconciliation = sequelize.define("attendance_reconciliation",
+    const AttendanceRegularization  = sequelize.define("attendance_regularization ",
         {
             employee_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'employees', key: 'id' } },
             attendance_date: { type: DataTypes.DATE, allowNull: false },
@@ -20,23 +20,24 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "Record of who approved at each level"
             },
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
+            approval_remark: { type: DataTypes.TEXT, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
             branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
             company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         },
         {
-            tableName: "attendance_reconciliation",
+            tableName: "attendance_regularization",
             timestamps: true,
             underscored: true,
         }
     );
 
-    AttendanceReconciliation.associate = (models) => {
-        AttendanceReconciliation.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
-        AttendanceReconciliation.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
+    AttendanceRegularization .associate = (models) => {
+        AttendanceRegularization .belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+        AttendanceRegularization .belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
 
     };
 
-    return AttendanceReconciliation;
+    return AttendanceRegularization ;
 };

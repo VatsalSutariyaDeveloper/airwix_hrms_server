@@ -216,10 +216,10 @@ exports.login = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (user.role_id === 5 && access_by !== "application") {
-        await transaction.rollback();
-        return res.error(403, { message: "Use the mobile application to access this account." });
-    }
+    // if (user.role_id === 5 && access_by !== "application") {
+    //     await transaction.rollback();
+    //     return res.error(403, { message: "Use the mobile application to access this account." });
+    // }
     // 2. Validate Company
     if (!user.company_id) {
         await transaction.rollback();
@@ -376,6 +376,7 @@ exports.login = async (req, res) => {
       profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
       authorized_signature: user.authorized_signature,
       role_name: userPermission?.role_name,
+      is_employee: user.role_id === 5,
       permission: userPermission?.permissions,
       is_login: 1,
       user_id: user.user_id,

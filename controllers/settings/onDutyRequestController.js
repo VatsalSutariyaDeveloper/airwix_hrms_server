@@ -390,7 +390,8 @@ exports.updateStatus = async (req, res) => {
             approval_status: newStatus,
             current_on_duty_level: newLevel,
             approval_history: history,
-            approved_by: req.user.id
+            approved_by: req.user.id,
+            approval_remark: remarks || ""
         }, transaction);
 
         await transaction.commit();
@@ -522,7 +523,8 @@ exports.getOnDutySummary = async (req, res) => {
         status_id: onDuty.approval_status,
         status: statusMap[onDuty.approval_status],
         status_color: colorMap[onDuty.approval_status] || "#F59E0B",
-        approved_by: onDuty.approvedBy?.user_name || null
+        approved_by: onDuty.approvedBy?.user_name || null,
+        approval_remark: onDuty.approval_remark || ""
       });
     });
 

@@ -25,7 +25,7 @@ const {
 } = require("../models");
 const { commonQuery, constants } = require("../helpers");
 const LeaveBalanceService = require("./leaveBalanceService");
-const { rebuildAttendanceDay } = require("../helpers/attendanceHelper");
+const { rebuildAttendanceDay, bulkSyncAttendanceDays } = require("../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 
 
@@ -164,6 +164,13 @@ class EmployeeTemplateService {
             await this.syncAttendanceTemplate(employee.id, employee.attendance_setting_template, null, t);
             await this.syncHolidayTemplate(employee.id, employee.holiday_template, null, t);
             await this.syncWeeklyOffTemplate(employee.id, employee.weekly_off_template, null, t);
+
+            // Auto-sync past data for the current month based on new templates
+            await this.syncAttendanceForPastDays([employee.id], t, {
+                company_id: employee.company_id,
+                branch_id: employee.branch_id
+            });
+
             await this.syncLeaveTemplate(employee.id, employee.leave_template, null, t);
             await this.syncSalaryTemplate(employee.id, employee.salary_template_id, null, t);
             await this.syncShiftTemplate(employee.id, employee.shift_template, null, t);
@@ -184,22 +191,40 @@ class EmployeeTemplateService {
      * @param {Object} transaction 
      */
     static async syncSpecificTemplate(employeeId, fieldName, templateId = null, manualData = null, transaction = null, skipRebuild = false, meta = {}) {
+        let result = null;
         switch (fieldName) {
             case 'attendance_setting_template':
-                return this.syncAttendanceTemplate(employeeId, templateId, manualData, transaction, meta);
+                result = await this.syncAttendanceTemplate(employeeId, templateId, manualData, transaction, meta);
+                break;
             case 'holiday_template':
-                return this.syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
+                result = await this.syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
+                break;
             case 'weekly_off_template':
-                return this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
+                result = await this.syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
+                break;
             case 'leave_template':
-                return this.syncLeaveTemplate(employeeId, templateId, manualData, transaction, meta);
+                result = await this.syncLeaveTemplate(employeeId, templateId, manualData, transaction, meta);
+                break;
             case 'salary_template_id':
-                return this.syncSalaryTemplate(employeeId, templateId, manualData, transaction, meta);
+                result = await this.syncSalaryTemplate(employeeId, templateId, manualData, transaction, meta);
+                break;
             case 'shift_template':
-                return this.syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
-            default:
-                return null;
+                result = await this.syncShiftTemplate(employeeId, templateId, manualData, transaction, skipRebuild, meta);
+                break;
         }
+
+        // Trigger past data sync for attendance related templates
+        if (!skipRebuild && ['attendance_setting_template', 'holiday_template', 'weekly_off_template'].includes(fieldName)) {
+            const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['id', 'company_id', 'branch_id'] }, transaction);
+            if (employee) {
+                await this.syncAttendanceForPastDays([employeeId], transaction, {
+                    user_id: meta.user_id || meta.req?.user?.id || 0,
+                    company_id: meta.company_id || employee.company_id,
+                    branch_id: meta.branch_id || employee.branch_id
+                });
+            }
+        }
+        return result;
     }
 
     /**
@@ -212,21 +237,56 @@ class EmployeeTemplateService {
     static async bulkSyncSpecificTemplate(employeeIds, fieldName, templateId = null, transaction = null, meta = {}) {
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
 
+        let result = null;
         switch (fieldName) {
             case 'attendance_setting_template':
-                return this.bulkSyncAttendanceTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                result = await this.bulkSyncAttendanceTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                break;
             case 'holiday_template':
-                return this.bulkSyncHolidayTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                result = await this.bulkSyncHolidayTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                break;
             case 'weekly_off_template':
-                return this.bulkSyncWeeklyOffTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                result = await this.bulkSyncWeeklyOffTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                break;
             case 'leave_template':
-                return LeaveBalanceService.bulkSyncEmployeeBalances(employeeIds, templateId, transaction, meta);
+                result = await LeaveBalanceService.bulkSyncEmployeeBalances(employeeIds, templateId, transaction, meta);
+                break;
             case 'salary_template_id':
-                return this.bulkSyncSalaryTemplate(employeeIds, templateId, transaction, meta);
+                result = await this.bulkSyncSalaryTemplate(employeeIds, templateId, transaction, meta);
+                break;
             case 'shift_template':
-                return this.bulkSyncShiftTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
-            default:
-                return null;
+                result = await this.bulkSyncShiftTemplate(employeeIds, templateId, transaction, meta, meta.skipRebuild);
+                break;
+        }
+
+        // Trigger past data sync for attendance related templates
+        if (!meta.skipRebuild && ['attendance_setting_template', 'holiday_template', 'weekly_off_template'].includes(fieldName)) {
+            await this.syncAttendanceForPastDays(employeeIds, transaction, {
+                user_id: meta.user_id || meta.req?.user?.id || 0,
+                company_id: meta.company_id,
+                branch_id: meta.branch_id
+            });
+        }
+        return result;
+    }
+
+    // --- ATTENDANCE SYNC HELPERS ---
+
+    static async syncAttendanceForPastDays(employeeIds, transaction = null, meta = {}) {
+        if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
+        try {
+            // Rebuild current month to fill in holidays, weekly offs, and auto-absent
+            const startOfMonth = dayjs().startOf('month');
+            const today = dayjs();
+            let cur = startOfMonth;
+
+            while (cur.isBefore(today) || cur.isSame(today, 'day')) {
+                await bulkSyncAttendanceDays(employeeIds, cur.format("YYYY-MM-DD"), meta, transaction);
+                cur = cur.add(1, 'day');
+            }
+        } catch (error) {
+            console.error("Error in syncAttendanceForPastDays:", error);
+            // Don't throw to avoid blocking the main transaction if auto-sync fails
         }
     }
 

@@ -99,6 +99,10 @@ exports.create = async (req, res) => {
         yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
         included_in_ctc: comp.included_in_ctc,
         is_employer_contribution: comp.is_employer_contribution,
+        calculation_type: comp.calculation_type,
+        percentage_of: comp.percentage_of,
+        percentage_value: comp.percentage_value,
+        formula: comp.formula,
         status: 0
       }));
 
@@ -272,6 +276,10 @@ exports.update = async (req, res) => {
         yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
         included_in_ctc: comp.included_in_ctc,
         is_employer_contribution: comp.is_employer_contribution,
+        calculation_type: comp.calculation_type,
+        percentage_of: comp.percentage_of,
+        percentage_value: comp.percentage_value,
+        formula: comp.formula,
         status: 0
       }));
 

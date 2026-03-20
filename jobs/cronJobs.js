@@ -4,6 +4,7 @@ const path = require('path');
 const { archiveAndCleanupLogs } = require('../helpers');
 const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
+const ResignationService = require("../services/resignationService");
 
 const initCronJobs = () => {
     // ⏰ Daily Log Cleanup Task
@@ -51,6 +52,18 @@ const initCronJobs = () => {
             console.log('✅ Contractor deactivation completed.');
         } catch (error) {
             console.error('❌ Contractor deactivation failed:', error);
+        }
+    });
+
+    // ⏰ Daily Resignation/Exit Processing Task
+    // Runs every day at 00:20 AM
+    cron.schedule('20 0 * * *', async () => {
+        console.log('⏰ Running daily resignation/exit processing task...');
+        try {
+            const count = await ResignationService.processDailyExits();
+            console.log(`✅ ${count} employee exits processed.`);
+        } catch (error) {
+            console.error('❌ Resignation processing failed:', error);
         }
     });
 

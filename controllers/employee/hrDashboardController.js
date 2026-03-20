@@ -86,7 +86,8 @@ exports.getCounts = async (req, res) => {
             const allPendingRequests = await commonQuery.findAllRecords(LeaveRequest,
                 { approval_status: { [Op.in]: [0, 1] }, status: 0 },
                 queryIncludeOptions,
-                false
+                null,
+                true
             );
 
             for (const request of allPendingRequests) {
@@ -98,7 +99,8 @@ exports.getCounts = async (req, res) => {
             const pendingOnDutyRequests = await commonQuery.findAllRecords(OnDutyRequest,
                 { approval_status: { [Op.in]: [0, 1] }, status: 0 },
                 queryIncludeOptions,
-                false
+                null,
+                true
             );
 
             for (const request of pendingOnDutyRequests) {

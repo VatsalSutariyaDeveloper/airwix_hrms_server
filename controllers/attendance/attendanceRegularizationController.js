@@ -1,10 +1,10 @@
 const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { sequelize, AttendanceReconciliation, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
+const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 
-// 1. Create Attendance Reconciliation Request
+// 1. Create Attendance Regularization  Request
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();    
     try {
@@ -25,7 +25,7 @@ exports.create = async (req, res) => {
         }
 
         await commonQuery.createRecord(
-            AttendanceReconciliation,
+            AttendanceRegularization ,
             req.body,
             transaction
         );
@@ -38,8 +38,8 @@ exports.create = async (req, res) => {
     }
 };
 
-// 2. Get Attendance Reconciliation Summary (History)
-exports.getAttendanceReconciliationSummary = async (req, res) => {
+// 2. Get Attendance Regularization  Summary (History)
+exports.getAttendanceRegularizationSummary = async (req, res) => {
     try {
         let { employee_id } = req.body;
         if (!employee_id) {
@@ -51,7 +51,7 @@ exports.getAttendanceReconciliationSummary = async (req, res) => {
         }
 
         // Fetch Requests for History (Ordered by date)
-        const history = await commonQuery.findAllRecords(AttendanceReconciliation, {
+        const history = await commonQuery.findAllRecords(AttendanceRegularization , {
             employee_id,
             status: 0
         }, {
@@ -76,7 +76,7 @@ exports.getAttendanceReconciliationSummary = async (req, res) => {
                 group = {
                     month_label: monthYear,
                     total_requests: 0,
-                    reconciliations: []
+                    regularizations: []
                 };
                 groupedHistory.push(group);
             }
@@ -86,31 +86,32 @@ exports.getAttendanceReconciliationSummary = async (req, res) => {
             const dateStr = dayjs(request.attendance_date).format("D MMM, ddd");
 
             const statusMap = {
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.PENDING]: "PENDING",
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.APPROVED]: "APPROVED",
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.REJECTED]: "REJECTED",
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.CANCELLED]: "CANCELLED",
-                [constants.ATTENDANCE_RECONCILIATION_STATUS.DELETED]: "DELETED",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING]: "PENDING",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED]: "PARTIALLYAPPROVED",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED]: "APPROVED",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED]: "REJECTED",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED]: "CANCELLED",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "DELETED",
             };
 
-            group.reconciliations.push({
+            group.regularizations.push({
                 id: request.id,
                 date: dateStr,
                 date_display: dateStr,
                 reason: request.reason || "",
                 status_id: request.approval_status,
                 status: statusMap[request.approval_status],
-                approved_by: request.approvedBy?.user_name || null
+                approved_by: request.approvedBy?.user_name || null,
+                approval_remark: request.approval_remark || ""
             });
         });
 
         return res.ok({
-            reconciliation_summary: {
+            regularization_summary: {
                 total_requests_text: `${history.length} Requests`,
                 total_requests: history.length
             },
-            reconciliation_history: groupedHistory
+            regularization_history: groupedHistory
         });
 
     } catch (err) {
@@ -118,7 +119,7 @@ exports.getAttendanceReconciliationSummary = async (req, res) => {
     }
 };
 
-// Get All Attendance Reconciliation Requests (Paginated)
+// Get All Attendance Regularization  Requests (Paginated)
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
@@ -147,7 +148,7 @@ exports.getAll = async (req, res) => {
         }
 
         const data = await commonQuery.fetchPaginatedData(
-            AttendanceReconciliation, 
+            AttendanceRegularization , 
             {...req.body}, 
             fieldConfig, 
             {
@@ -180,11 +181,11 @@ exports.getAll = async (req, res) => {
 // Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
-        // Fetch all pending attendance reconciliation requests with employee and template details
+        // Fetch all pending attendance regularization  requests with employee and template details
         const requests = await commonQuery.findAllRecords(
-            AttendanceReconciliation, 
+            AttendanceRegularization , 
             {
-                approval_status: { [Op.in]: [constants.ATTENDANCE_RECONCILIATION_STATUS.PENDING, constants.ATTENDANCE_RECONCILIATION_STATUS.PARTIALLY_APPROVED] },
+                approval_status: { [Op.in]: [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING, constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED] },
                 status: 0
             },
             {
@@ -211,7 +212,7 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
-            // Get leave template if employee has one (attendance reconciliation uses same template as leave)
+            // Get leave template if employee has one (attendance regularization  uses same template as leave)
             const template = employee?.leaveTemplate;
             const currentLevel = request.current_level || 1;
             const config = template ? (template.approval_config || []) : [];
@@ -222,7 +223,7 @@ exports.getPendingApprovals = async (req, res) => {
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
             
-            console.log("Attendance Reconciliation Request:", request.id, "Employee:", employee.id, 
+            console.log("Attendance Regularization  Request:", request.id, "Employee:", employee.id, 
                        "User ID:", req.user.id, "Role:", req.user.role_id,
                        "Stage:", currentStage.type, "Config:", currentStage);
             
@@ -274,7 +275,7 @@ exports.updateStatus = async (req, res) => {
         const { id } = req.params;
         const { approval_status, remarks } = req.body;
 
-        const request = await commonQuery.findOneRecord(AttendanceReconciliation, { id }, {
+        const request = await commonQuery.findOneRecord(AttendanceRegularization , { id }, {
             include: [{ model: Employee, as: "employee" }]
         }, transaction);
 
@@ -287,7 +288,7 @@ exports.updateStatus = async (req, res) => {
         let newLevel = request.current_level || 1;
 
         // Multi-level Approval Logic (Assuming same pattern if template defines it)
-        if (Number(approval_status) === constants.ATTENDANCE_RECONCILIATION_STATUS.APPROVED) {
+        if (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) {
             const employee = await commonQuery.findOneRecord(Employee, request.employee_id, {
                 include: [
                     { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
@@ -296,10 +297,10 @@ exports.updateStatus = async (req, res) => {
             }, transaction);
 
             const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
-            const maxLevel = template ? (template.attendance_reconciliation_approval_level || 1) : 1;
+            const maxLevel = template ? (template.attendance_regularization_approval_level || 1) : 1;
 
             if ((request.current_level || 1) < maxLevel) {
-                newStatus = constants.ATTENDANCE_RECONCILIATION_STATUS.PARTIALLY_APPROVED;
+                newStatus = constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED;
                 newLevel = (request.current_level || 1) + 1;
             }
         }
@@ -307,21 +308,22 @@ exports.updateStatus = async (req, res) => {
         const history = request.approval_history || [];
         history.push({
             level: request.current_level || 1,
-            action: (Number(approval_status) === constants.ATTENDANCE_RECONCILIATION_STATUS.APPROVED) ? "APPROVED" : "REJECTED",
+            action: (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) ? "APPROVED" : "REJECTED",
             by: req.user.id,
             at: new Date(),
             remarks: remarks || ""
         });
 
-        await commonQuery.updateRecordById(AttendanceReconciliation, id, {
+        await commonQuery.updateRecordById(AttendanceRegularization , id, {
             approval_status: newStatus,
             current_level: newLevel,
             approval_history: history,
-            approved_by: req.user.id
+            approved_by: req.user.id,
+            approval_remark: remarks || ""
         }, transaction);
 
         // Rebuild attendance day if fully approved just like leave-request
-        if (Number(newStatus) === constants.ATTENDANCE_RECONCILIATION_STATUS.APPROVED || newStatus === "APPROVED") {
+        if (Number(newStatus) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED || newStatus === "APPROVED") {
             const attDate = dayjs(request.attendance_date).format('YYYY-MM-DD');
             await rebuildAttendanceDay(request.employee_id, attDate, { user_id: req.user?.id }, transaction);
         }
@@ -338,7 +340,7 @@ exports.updateStatus = async (req, res) => {
 exports.getById = async (req, res) => {
     try {
         const { id } = req.params;
-        const request = await commonQuery.findOneRecord(AttendanceReconciliation, { id }, {
+        const request = await commonQuery.findOneRecord(AttendanceRegularization , { id }, {
             include: [
                 {
                     model: Employee,
@@ -363,7 +365,7 @@ exports.getById = async (req, res) => {
     }
 };
 
-// 4. Update Attendance Reconciliation Request
+// 4. Update Attendance Regularization  Request
 exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -378,13 +380,13 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const request = await commonQuery.findOneRecord(AttendanceReconciliation, { id }, {}, transaction);
+        const request = await commonQuery.findOneRecord(AttendanceRegularization , { id }, {}, transaction);
         if (!request || request.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
 
-        if (request.approval_status !== constants.ATTENDANCE_RECONCILIATION_STATUS.PENDING && request.approval_status !== constants.ATTENDANCE_RECONCILIATION_STATUS.PARTIALLY_APPROVED) {
+        if (request.approval_status !== constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING && request.approval_status !== constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED) {
             await transaction.rollback();
             return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
         }
@@ -400,38 +402,38 @@ exports.update = async (req, res) => {
         }, transaction);
 
         const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
-        if (template && template.enable_attendance_reconciliation === false) {
+        if (template && template.enable_attendance_regularization  === false) {
             await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "Attendance reconciliation requests are disabled for this employee's template." });
+            return res.error(constants.VALIDATION_ERROR, { message: "attendance regularization  requests are disabled for this employee's template." });
         }
 
         // Check for existing requests on the same date (excluding current request)
-        const existingRequest = await commonQuery.findOneRecord(AttendanceReconciliation, {
+        const existingRequest = await commonQuery.findOneRecord(AttendanceRegularization , {
             employee_id,
             id: { [Op.ne]: id },
             attendance_date: req.body.attendance_date,
-            approval_status: { [Op.notIn]: [constants.ATTENDANCE_RECONCILIATION_STATUS.REJECTED, constants.ATTENDANCE_RECONCILIATION_STATUS.CANCELLED, constants.ATTENDANCE_RECONCILIATION_STATUS.DELETED] },
+            approval_status: { [Op.notIn]: [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED, constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED, constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED] },
             status: 0
         }, {}, transaction);
 
         if (existingRequest) {
             await transaction.rollback();
-            return res.error("DUPLICATE_REQUEST", { message: `An attendance reconciliation request already exists for ${dayjs(req.body.attendance_date).format('YYYY-MM-DD')}` });
+            return res.error("DUPLICATE_REQUEST", { message: `An attendance regularization  request already exists for ${dayjs(req.body.attendance_date).format('YYYY-MM-DD')}` });
         }
 
         const PUT = { ...req.body };
 
-        await commonQuery.updateRecordById(AttendanceReconciliation, id, PUT, transaction);
+        await commonQuery.updateRecordById(AttendanceRegularization , id, PUT, transaction);
 
         await transaction.commit();
-        return res.success("ATTENDANCE_RECONCILIATION_UPDATED");
+        return res.success("ATTENDANCE_REGULARIZATION _UPDATED");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
 
-// 5. Cancel Attendance Reconciliation Request
+// 5. Cancel Attendance Regularization  Request
 exports.cancel = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -439,7 +441,7 @@ exports.cancel = async (req, res) => {
         const employeeId = req.user.employee_id;
 
         // 1. Fetch Request
-        const request = await commonQuery.findOneRecord(AttendanceReconciliation, { id }, {}, transaction);
+        const request = await commonQuery.findOneRecord(AttendanceRegularization , { id }, {}, transaction);
         if (!request || request.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -448,21 +450,21 @@ exports.cancel = async (req, res) => {
         // 2. Authorization Check (Only owner can cancel via this API)
         if (request.employee_id !== employeeId && !req.user.is_super_admin) {
             await transaction.rollback();
-            return res.error("UNAUTHORIZED", { message: "You can only cancel your own attendance reconciliation requests" });
+            return res.error("UNAUTHORIZED", { message: "You can only cancel your own attendance regularization  requests" });
         }
 
         // 3. Status Check
         if (
-            Number(request.approval_status) === constants.ATTENDANCE_RECONCILIATION_STATUS.CANCELLED ||
-            Number(request.approval_status) === constants.ATTENDANCE_RECONCILIATION_STATUS.REJECTED
+            Number(request.approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED ||
+            Number(request.approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED
         ) {
             await transaction.rollback();
             return res.error("INVALID_OPERATION", { message: `Request is already processed` });
         }
 
         // 4. Update Status to Cancelled
-        await commonQuery.updateRecordById(AttendanceReconciliation, id, {
-            approval_status: constants.ATTENDANCE_RECONCILIATION_STATUS.CANCELLED
+        await commonQuery.updateRecordById(AttendanceRegularization , id, {
+            approval_status: constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED
         }, transaction);
 
         await transaction.commit();

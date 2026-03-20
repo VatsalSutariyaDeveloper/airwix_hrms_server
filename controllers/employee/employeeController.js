@@ -390,10 +390,13 @@ exports.update = async (req, res) => {
             }
         }
 
-        // 4. Sync User Status if provided
-        if (POST.status !== undefined) {
-            await commonQuery.updateRecordById(User, { employee_id: id }, { status: POST.status }, transaction, false, false);
-        }
+        // 4. Sync User
+        await commonQuery.updateRecordById(User, { employee_id: id }, { 
+            user_name: POST.first_name,
+            email: POST.email,
+            mobile_no: POST.mobile_no,
+            ...(POST.status !== undefined && { status: POST.status })
+        }, transaction, false, false);
 
 
         // 3. Sync Family Members
@@ -445,6 +448,12 @@ exports.getById = async (req, res) => {
                 model: User,
                 as: 'linked_user',
                 attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'],
+                required: false
+            },
+            {
+                model: EmployeeAttendanceTemplate,
+                as: 'employeeAttendanceTemplate',
+                attributes: ['enble_on_duty'],
                 required: false
             },
             // If you have State/Country relations for addresses, include them here:
@@ -737,7 +746,7 @@ exports.getAll = async (req, res) => {
 
         const data = await commonQuery.fetchPaginatedData(
             Employee,
-            { ...POST, status: 0 },
+            POST,
             fieldConfig,
             {
                 include: [
@@ -753,6 +762,7 @@ exports.getAll = async (req, res) => {
                     "branch_id",
                     "profile_image",
                     "created_at",
+                    "status"
                 ]
             },
             true,

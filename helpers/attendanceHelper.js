@@ -774,6 +774,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       leave_category_id: null,
       leave_session: null,
       note: emptyStatus === 4 ? "System: Holiday restored (No punches found)" : (emptyStatus === 3 ? "System: Weekly Off restored (No punches found)" : (existingDay?.note || null))
+      // note: (function (note, emptyStatus) {
+      //   // If we are now PRESENT/HALF_DAY, ignore negative auto reasons (e.g. from downgrade prevention)
+      //   if ([0, 1, 12, 13].includes(emptyStatus) && note) {
+      //     if (typeof note === 'string' && (note.startsWith("System:") || note.startsWith("Auto Absent:") || note.startsWith("Incomplete:"))) {
+      //       note = null;
+      //     }
+      //   }
+      //   return note;
+      // })(existingDay?.note, emptyStatus)
     };
 
     if (existingDay) {
@@ -1672,7 +1681,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   if (!attendanceDay) {
     throw {
       handled: true,
-      message: { message: "Attendance Day record not found." }
+      message: "Attendance Day record not found."
     };
   }
   const dayId = attendanceDay.id;
@@ -1694,10 +1703,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
       const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
       if (isHoliday || isWeeklyOff) {
-        throw {
-          handled: true,
-          message: { message: `Attendance is blocked on ${isHoliday ? 'Holidays' : 'Weekly Offs'} (Strict Policy)` }
-        };
+        throw new Err(`Attendance is blocked on ${isHoliday ? 'Holidays' : 'Weekly Offs'} (Strict Policy)`);
       }
     }
   }
@@ -1727,13 +1733,13 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
       if (Math.abs(gap) < 2) {
         throw {
           handled: true,
-          message: { message: "Please wait at least 2 minutes between IN and OUT time" }
+          message: "Please wait at least 2 minutes between IN and OUT time"
         };
       }
       if (gap < 0) {
         throw {
           handled: true,
-          message: { message: "OUT time must be after IN time" }
+          message: "OUT time must be after IN time"
         };
       }
     }

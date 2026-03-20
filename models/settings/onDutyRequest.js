@@ -27,6 +27,7 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "Record of who approved at each level"
             },
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
+            approval_remark: { type: DataTypes.TEXT, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },

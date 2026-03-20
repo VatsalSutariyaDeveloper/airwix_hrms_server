@@ -10,6 +10,7 @@ const {
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const attendanceHelper = require("../../helpers/attendanceHelper");
+const EmployeeTemplateService = require("../../services/employeeTemplateService");
 const dayjs = require("dayjs");
 
 /**
@@ -113,7 +114,13 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction, { company_id: true });
             }
 
-            // await rebuildRecentAttendance(employeeId, transaction);
+            // Sync past attendance data for the current month
+            await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
+                user_id: req.user.id,
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
+            });
+
             await transaction.commit();
             return res.success("Employee shift settings updated successfully");
         } catch (error) {
@@ -182,7 +189,13 @@ const employeeAttendanceController = {
                 await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction, { company_id: true });
             }
 
-            // await rebuildRecentAttendance(employeeId, transaction);
+            // Sync past attendance data for the current month
+            await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
+                user_id: req.user.id,
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
+            });
+
             await transaction.commit();
             return res.success("Employee weekly offs updated successfully");
         } catch (error) {
@@ -232,7 +245,13 @@ const employeeAttendanceController = {
                 await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction, { company_id: true });
             }
 
-            // await rebuildRecentAttendance(employeeId, transaction);
+            // Sync past attendance data for the current month
+            await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
+                user_id: req.user.id,
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
+            });
+
             await transaction.commit();
             return res.success("Employee attendance template updated successfully");
         } catch (error) {
