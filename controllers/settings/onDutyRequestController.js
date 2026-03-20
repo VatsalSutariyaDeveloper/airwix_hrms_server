@@ -168,6 +168,89 @@ exports.getById = async (req, res) => {
     }
 };
 
+// Update On Duty Request
+exports.update = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const requiredFields = {
+            start_date: "Start Date",
+            end_date: "End Date",
+            total_days: "Total Days",
+        };
+
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+
+        const onDutyRequest = await commonQuery.findOneRecord(OnDutyRequest, { id }, {}, transaction);
+        if (!onDutyRequest || onDutyRequest.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        if (onDutyRequest.approval_status !== constants.ON_DUTY_STATUS.PENDING && onDutyRequest.approval_status !== constants.ON_DUTY_STATUS.PARTIALLY_APPROVED) {
+            await transaction.rollback();
+            return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
+        }
+
+        let { start_date, end_date, start_session, end_session } = req.body;
+        const employee_id = onDutyRequest.employee_id;
+
+        start_session = parseInt(start_session) || 0;
+        end_session = parseInt(end_session) || 0;
+        const requestedTotal = parseFloat(req.body.total_days || 0);
+
+        // Check Employee's Attendance Template Settings
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        }, transaction);
+
+        const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
+        if (template && template.enble_on_duty === false) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "On Duty requests are disabled for this employee's template." });
+        }
+
+        // Check for Overlapping On Duty Requests (excluding current request)
+        const overlap = await commonQuery.findOneRecord(OnDutyRequest, {
+            employee_id,
+            id: { [Op.ne]: id },
+            approval_status: { [Op.notIn]: [constants.ON_DUTY_STATUS.REJECTED, constants.ON_DUTY_STATUS.CANCELLED, constants.ON_DUTY_STATUS.DELETED] },
+            status: 0,
+            [Op.or]: [
+                { start_date: { [Op.between]: [start_date, end_date] } },
+                { end_date: { [Op.between]: [start_date, end_date] } },
+                { [Op.and]: [{ start_date: { [Op.lte]: start_date } }, { end_date: { [Op.gte]: end_date } }] }
+            ]
+        }, {}, transaction);
+
+        if (overlap) {
+            await transaction.rollback();
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('YYYY-MM-DD')} to ${dayjs(overlap.end_date).format('YYYY-MM-DD')})` });
+        }
+
+        const PUT = { 
+            ...req.body, 
+            start_session,
+            end_session
+        };
+
+        await commonQuery.updateRecordById(OnDutyRequest, id, PUT, transaction);
+
+        await transaction.commit();
+        return res.success("ON_DUTY_UPDATED");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
 // Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
@@ -307,7 +390,8 @@ exports.updateStatus = async (req, res) => {
             approval_status: newStatus,
             current_on_duty_level: newLevel,
             approval_history: history,
-            approved_by: req.user.id
+            approved_by: req.user.id,
+            approval_remark: remarks || ""
         }, transaction);
 
         await transaction.commit();
@@ -439,7 +523,8 @@ exports.getOnDutySummary = async (req, res) => {
         status_id: onDuty.approval_status,
         status: statusMap[onDuty.approval_status],
         status_color: colorMap[onDuty.approval_status] || "#F59E0B",
-        approved_by: onDuty.approvedBy?.user_name || null
+        approved_by: onDuty.approvedBy?.user_name || null,
+        approval_remark: onDuty.approval_remark || ""
       });
     });
 

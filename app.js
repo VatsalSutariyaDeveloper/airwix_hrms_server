@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const path = require("path");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -91,6 +91,7 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/canteen-attendance", canteenAttendanceRoutes);
 app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
+app.use("/api/resignation", require("./routes/resignationRoutes"));
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS

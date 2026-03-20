@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
+const { User, CompanyMaster, BranchMaster } = require("../models");
 
 // In-memory token blacklist
 const tokenBlacklist = new Set();
@@ -16,7 +17,7 @@ const isTokenBlacklisted = (token) => {
   return tokenBlacklist.has(token);
 };
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   // ✅ Skip auth for specific routes
   if (SKIP_ROUTES.includes(req.path)) {
     return next();
@@ -39,6 +40,23 @@ function authMiddleware(req, res, next) {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Verify User, Company, and Branch status
+    const userRole = decoded.role_id;
+    if (userRole) {
+      const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
+      if (!user) return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
+    }
+
+    if (decoded.company_id) {
+      const company = await CompanyMaster.findOne({ where: { id: decoded.company_id, status: 0 } });
+      if (!company) return res.status(401).json({ success: false, message: "Unauthorized - Company is inactive or not exist" });
+    }
+
+    if (decoded.branch_id) {
+      const branch = await BranchMaster.findOne({ where: { id: decoded.branch_id, status: 0 } });
+      if (!branch) return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
+    }
 
     req.user = {
       id: decoded.id,

@@ -24,6 +24,7 @@ module.exports = (sequelize, DataTypes) => {
         leave_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         shift_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         salary_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+        resignation_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         attendance_weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         geofence_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         attendance_setting_template: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -141,6 +142,20 @@ module.exports = (sequelize, DataTypes) => {
         user_id: { type: DataTypes.INTEGER, allowNull: true },
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
         company_id: { type: DataTypes.INTEGER, allowNull: true },
+
+        // Resignation Related
+        is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },
+        exit_date: { type: DataTypes.DATEONLY, allowNull: true },
+        resignation_status: { 
+            type: DataTypes.SMALLINT, 
+            defaultValue: 0, 
+            comment: "0: Active, 1: Resigned (On Notice), 2: Exited (Inactive)" 
+        },
+        resignation_template_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: "Assigned resignation policy"
+        },
     }, {
         tableName: 'employees',
         timestamps: true,
@@ -166,6 +181,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.ShiftTemplate, { foreignKey: "shift_template", as: "shiftTemplate" });
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
         Employee.belongsTo(models.DesignationMaster, { foreignKey: "designation_id", as: "designation" });
+        Employee.belongsTo(models.ResignationTemplate, { foreignKey: "resignation_template_id", as: "resignationTemplate" });
 
         // User-Wise Template Data
         Employee.hasOne(models.EmployeeAttendanceTemplate, { foreignKey: "employee_id", as: "employeeAttendanceTemplate" });
@@ -181,6 +197,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.EmployeeIncentive, { foreignKey: "employee_id", as: "employeeIncentive" });
         Employee.hasMany(models.CashVoucher, { foreignKey: "employee_id", as: "cashVouchers" });
         Employee.hasMany(models.Payslip, { foreignKey: "employee_id", as: "payslips" });
+        Employee.hasMany(models.EmployeeResignation, { foreignKey: "employee_id", as: "resignations" });
     };
 
     return Employee;

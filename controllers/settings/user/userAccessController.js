@@ -40,7 +40,7 @@ exports.sessionData = async (req, res) => {
     // 2. Fetch User & Access Logic (Standard Sequelize)
     const userData = await User.findOne({
       where: { id: user_id },
-      attributes: ['id', 'user_name', 'email', 'role_id', 'is_super_admin', 'mobile_no', 'profile_image', 'company_access', 'branch_access', 'is_login', 'status', 'branch_id', 'company_id'],
+      attributes: ['id', 'user_name', 'email', 'role_id', 'is_super_admin', 'mobile_no', 'profile_image', 'company_access', 'branch_access', 'is_login', 'status', 'branch_id', 'company_id', 'employee_id'],
       include: [{ 
           model: RolePermission, 
           as: "RolePermission", 

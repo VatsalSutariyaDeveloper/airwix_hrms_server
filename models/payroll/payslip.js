@@ -5,13 +5,17 @@ module.exports = (sequelize, DataTypes) => {
     year: { type: DataTypes.INTEGER, allowNull: false },
     
     // Attendance Summary
-    pd_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    ph_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    wo_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
-    wp_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    pd_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 }, //payable days
+    ph_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// paid holidays
+    half_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// half days
+    wo_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// weekly offs
+    wp_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// weekly offs paid
     present_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    lp_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// leave without pay
+    ul_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },// unpaid leave
     absent_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     total_days: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
+    days_in_calculation: { type: DataTypes.DECIMAL(10,2), defaultValue: 0 },
     lunch_count: { type: DataTypes.INTEGER(3), defaultValue: 0 },
     leave_details: { type: DataTypes.JSON, allowNull: true },
     leave_balances: { type: DataTypes.JSON, allowNull: true },

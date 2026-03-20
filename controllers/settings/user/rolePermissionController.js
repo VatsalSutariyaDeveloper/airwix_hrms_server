@@ -42,6 +42,11 @@ exports.getAll = async (req, res) => {
 
   const company_id = req.user.company_id;
   
+  
+  if (process.env.NODE_ENV !== 'local') {
+    req.body.filter.is_superadmin = false; 
+  }
+  
   // const extraFilters = {
   //   [Op.or]: [
   //     { company_id: company_id },

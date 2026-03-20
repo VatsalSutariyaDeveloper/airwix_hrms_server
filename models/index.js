@@ -26,6 +26,8 @@ const CompanyAddress = require("./settings/company/companyAddress")(sequelize, D
 const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
 const DesignationMaster = require("./settings/designationMaster")(sequelize, DataTypes);
 const BranchMaster = require("./settings/branchMaster")(sequelize, DataTypes);
+const ResignationTemplate = require("./settings/resignationTemplate")(sequelize, DataTypes);
+const ResignationReason = require("./settings/resignationReason")(sequelize, DataTypes);
 const OnDutyRequest = require("./settings/onDutyRequest")(sequelize, DataTypes);
 
 
@@ -36,6 +38,7 @@ const LoginHistory = require("./auth/loginHistory")(sequelize, DataTypes);
 const OtpVerification = require("./auth/otpVerification")(sequelize, DataTypes);
 const ActivityLog = require("./activityLog")(sequelize, DataTypes);
 const ActivationRequest = require("./activationRequest")(sequelize, DataTypes);
+const EmployeeResignation = require("./employeeResignation")(sequelize, DataTypes);
 const Logs = require("./logs")(sequelize, DataTypes);
 
 // Subscription models
@@ -58,7 +61,7 @@ const EmployeeShift = require("./attendance/employeeShift")(sequelize, DataTypes
 const Employee = require("./employee")(sequelize, DataTypes);
 const EmployeeFamilyMember = require("./employeeFamilyMember")(sequelize, DataTypes);
 
-const AttendanceReconciliation = require("./attendance/attendanceReconciliation")(sequelize, DataTypes);
+const AttendanceRegularization  = require("./attendance/attendanceRegularization")(sequelize, DataTypes);
 
 // SeriesTypeMaster
 const SeriesTypeMaster = require("./settings/seriesTypeMaster")(sequelize, DataTypes);
@@ -137,6 +140,8 @@ const db = {
   DeviceMaster,
   DesignationMaster,
   BranchMaster,
+  ResignationTemplate,
+  ResignationReason,
   OnDutyRequest,
 
   // SeriesTypeMaster
@@ -156,6 +161,7 @@ const db = {
   OtpVerification,
   ActivityLog,
   ActivationRequest,
+  EmployeeResignation,
   Logs,
 
   // Subscription
@@ -227,8 +233,8 @@ const db = {
   CanteenAttendance,
   SalaryRevisionHistory,
 
-  // Attendance Reconciliation
-  AttendanceReconciliation
+  // Attendance Regularization 
+  AttendanceRegularization 
 };
 
 Object.keys(db).forEach(modelName => {

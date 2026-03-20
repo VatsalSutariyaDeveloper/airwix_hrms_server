@@ -28,7 +28,7 @@ const incentiveTypeController = require("../controllers/settings/incentiveTypeCo
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
 const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
-const attendanceReconciliationController = require("../controllers/attendance/attendanceReconciliationController");
+const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -293,20 +293,26 @@ router.put("/employee-settings/update", employeeSettingsController.update);
 // ==========================
 // 39. ON DUTY REQUEST ROUTES
 // ==========================
-router.post("/on-duty-request/", onDutyRequestController.create);
-router.post("/on-duty-request/get-transactions", onDutyRequestController.getAll);
-router.post("/on-duty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
-router.get("/on-duty-request/:id", onDutyRequestController.getById);
-router.put("/on-duty-request/status/:id", onDutyRequestController.updateStatus);
-router.put("/on-duty-request/cancel/:id", onDutyRequestController.cancelLeave);
-router.post("/on-duty-request/summary", onDutyRequestController.getOnDutySummary);
+router.post("/onduty-request/", onDutyRequestController.create);
+router.post("/onduty-request/get-transactions", onDutyRequestController.getAll);
+router.post("/onduty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
+router.get("/onduty-request/:id", onDutyRequestController.getById);
+router.put("/onduty-request/:id", onDutyRequestController.update);
+router.put("/onduty-request/status/:id", onDutyRequestController.updateStatus);
+router.put("/onduty-request/cancel/:id", onDutyRequestController.cancelLeave);
+router.post("/onduty-request/summary", onDutyRequestController.getOnDutySummary);
 
 // ===============================
-// 40. ATTENDANCE RECONCILIATION ROUTES
+// 40. ATTENDANCE REGULARIZATION  ROUTES
 // ===============================
-router.post("/attendance-reconciliation/", attendanceReconciliationController.create);
-router.post("/attendance-reconciliation/summary", attendanceReconciliationController.getAttendanceReconciliationSummary);
-router.put("/attendance-reconciliation/status/:id", attendanceReconciliationController.updateStatus);
+router.post("/attendance-regularization/", attendanceRegularizationController.create);
+router.post("/attendance-regularization/get-transactions", attendanceRegularizationController.getAll);
+router.post("/attendance-regularization/pending-approvals", attendanceRegularizationController.getPendingApprovals);
+router.post("/attendance-regularization/summary", attendanceRegularizationController.getAttendanceRegularizationSummary);
+router.get("/attendance-regularization/:id", attendanceRegularizationController.getById);
+router.put("/attendance-regularization/:id", attendanceRegularizationController.update);
+router.put("/attendance-regularization/status/:id", attendanceRegularizationController.updateStatus);
+router.put("/attendance-regularization/cancel/:id", attendanceRegularizationController.cancel);
 
 
 module.exports = router;

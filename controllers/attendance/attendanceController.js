@@ -86,17 +86,24 @@ exports.getAttendanceSummary = async (req, res) => {
     if (staff_type) consolidatedFilter.employee_type = staff_type;
     if (shift_id) consolidatedFilter.shift_template = shift_id;
 
+    const joiningDateFilter = {
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: { [Op.lte]: targetDate } },
+            { joining_date: null }
+          ]
+        }
+      ]
+    };
+
     // Create a shared employee filter for all summary queries
-    const employeeWhere = { ...consolidatedFilter, company_id: req.user.company_id, branch_id: req.user.branch_id };
-    
-    employeeWhere[Op.and] = [
-      {
-        [Op.or]: [
-          { joining_date: { [Op.lte]: targetDate } },
-          { joining_date: null }
-        ]
-      }
-    ];
+    const employeeWhere = { 
+      ...consolidatedFilter, 
+      company_id: req.user.company_id, 
+      branch_id: req.user.branch_id,
+      [Op.and]: [...joiningDateFilter[Op.and]]
+    };
 
     if (search) {
       employeeWhere[Op.and].push({
@@ -112,12 +119,13 @@ exports.getAttendanceSummary = async (req, res) => {
     try {
         const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
         if (isPastOrToday) {
-            const employeesToSync = await Employee.findAll({
-                where: employeeWhere,
-                attributes: ['id', 'company_id', 'branch_id'],
-                company_id: req.user.company_id,
-                branch_id: req.user.branch_id
-            });
+            const employeesToSync = await commonQuery.findAllRecords(
+                Employee,
+                employeeWhere,
+                { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
+                null, 
+            );
+            
 
             if (employeesToSync.length > 0) {
               await bulkSyncAttendanceDays(
@@ -184,6 +192,9 @@ exports.getAttendanceSummary = async (req, res) => {
         order: [['first_name', 'ASC']],
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id"]
       },
+      true,
+      "createdAt",
+      joiningDateFilter
     );
 
     // 2.5 Identify WO/Holiday for the paginated items
@@ -858,12 +869,12 @@ exports.deleteAttendanceDay = async (req, res) => {
       }
 
       // 2. Delete punches by day_id specifically
-      await commonQuery.softDeleteById(AttendancePunch, {
+      await commonQuery.hardDeleteRecords(AttendancePunch, {
         day_id: day.id
       }, t);
 
       // 3. Delete the day summary
-      await commonQuery.softDeleteById(AttendanceDay, { 
+      await commonQuery.hardDeleteRecords(AttendanceDay, { 
         id: day.id
       }, t);
     }
@@ -874,7 +885,7 @@ exports.deleteAttendanceDay = async (req, res) => {
     }
 
     // 4. ALWAYS delete all punches for this employee on this date (handles unassigned punches)
-    await commonQuery.softDeleteById(AttendancePunch, {
+    await commonQuery.hardDeleteRecords(AttendancePunch, {
       employee_id,
       punch_time: {
         [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
@@ -1482,7 +1493,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       }
       
       allDays.push(dayData);
-    }
+    }    
 
     // Finalize Summary Formatting
     summary.fine = `${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
@@ -1644,6 +1655,7 @@ exports.getLeaveSummary = async (req, res) => {
         status: statusMap[leave.approval_status] || "PENDING",
         status_color: isCredit ? "#10B981" : (colorMap[leave.approval_status] || "#F59E0B"),
         approved_by: leave.approvedBy?.user_name || null,
+        approval_remark: leave.approval_remark || "",
         start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
         end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
       });
