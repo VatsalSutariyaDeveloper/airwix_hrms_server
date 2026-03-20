@@ -344,13 +344,26 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
     const includeOTInTotal = activeAttendanceTemplate ? activeAttendanceTemplate.include_overtime_in_total : true;
     
-    const otAmount = includeOTInTotal ? totalOTAmount : 0;
+    const otAmount = totalOTAmount > 0 ? totalOTAmount : (includeOTInTotal ? totalOTAmount : 0);
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
     const advances = employee.employeeAdvances || [];
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
+
+    // Create overtime history from attendance records
+    const overtimeHistory = attendanceRecords
+        .filter(day => parseFloat(day.overtime_minutes || 0) > 0 || parseFloat(day.overtime_amount || 0) > 0)
+        .map(day => ({
+            type: "overtime",
+            id: day.id,
+            date: day.attendance_date,
+            minutes: parseInt(day.overtime_minutes || 0),
+            amount: parseFloat(day.overtime_amount || 0),
+            note: day.note || '',
+            overtime_data: day.overtime_data || null
+        }));
 
     // Fetch Payment History for the month
     const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
@@ -475,9 +488,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         // Calculate actual pro-rated amount (Attendance/LWP Impact)
         let actualAmount = amount;
+        const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
+        
         if (calcType === 'ATTENDANCE_BASED') {
             actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-        } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
+        } else if ((comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
             actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
         }
 
@@ -507,7 +522,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 earnings.push({ name: comp.component_name, amount: amount, actual_amount: amount, is_statutory: true });
             }
             return;
-        }
+        }        
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
             let finalAmount = actualAmount;
             
@@ -715,7 +730,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(2), actualDaysValue, leave_category_details: leaveCategoryDetails },
+        attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
             ctc_monthly: monthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
@@ -738,6 +753,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             total_earnings: totalEarningsBreakdown.toFixed(2),
             total_deductions: totalDeductionsBreakdown.toFixed(2)
         },
+        overtime_history: overtimeHistory,
         payment_history: {
             salary: {
                 history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
@@ -782,57 +798,52 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
  * used by the Payroll Processor UI.
  */
 const formatPayslipToSummary = async (payslip) => {
-    // Reconstruct attendance stats
-    const lwpDays = parseFloat(payslip.wp_days || 0);
+    // 1. Attendance Summary Reconstruct
+    const daysInCalculation = parseFloat(payslip.days_in_calculation || 0);
     const absentDays = parseFloat(payslip.absent_days || 0);
-    const halfDays = (lwpDays - absentDays) / 0.5;
+    const halfDays = parseFloat(payslip.half_days || 0);
     const presentDays = parseFloat(payslip.present_days || 0);
-    const leave_details = payslip.leave_details || {};
-    const leaveDays = Object.values(leave_details).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+    const leaveDays = parseFloat(payslip.lp_days || 0);
+    const unpaidLeaveDays = parseFloat(payslip.ul_days || 0);
     const weeklyOffs = parseFloat(payslip.wo_days || 0);
     const holidays = parseFloat(payslip.ph_days || 0);
 
-    // Fetch computation basis for calculation
-    const employee = await commonQuery.findOneRecord(Employee, payslip.employee_id, {
-        include: [{ model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['lwp_calculation_basis'] }]
+    const totalPresentDays = presentDays + (halfDays * 0.5);
+    const totalLWP = absentDays + unpaidLeaveDays;
+
+    // 2. Fetch Employee and Template details
+    const employeeData = await commonQuery.findOneRecord(Employee, { id: payslip.employee_id }, {
+        include: [
+            { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+            { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['id', 'lwp_calculation_basis'] }
+        ]
     });
-    const basis = employee?.employeeSalaryTemplate?.lwp_calculation_basis || 'DAYS_IN_MONTH';
 
-    let payableDaysValue = 0;
-    if (basis === "WORKING_DAYS") {
-        payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-    } else if (basis === "FIXED_30_DAYS") {
-        payableDaysValue = 30 - lwpDays;
-    } else {
-        const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
-        payableDaysValue = daysInMonth - lwpDays;
-    }
-    const payableDays = parseFloat(payableDaysValue).toFixed(2);
+    const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { id: employeeData.employeeSalaryTemplate?.id || 0 });
 
-    // Recalculate dynamic totals if needed, but primarily use stored values
+    // 3. Period
+    const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
     const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
 
-    // Use dynamic JSON fields for earnings and deductions
+    // 4. Salary and Totals
+    const fixedGross = parseFloat(payslip.fixed_gross || 0);
+    const perDaySalary = daysInCalculation > 0 ? (fixedGross / daysInCalculation) : 0;
+    const lwpDeduction = totalLWP * perDaySalary;
+
     const earningDetails = payslip.earning_details || {};
     const deductionDetails = payslip.deduction_details || {};
 
-    // For summary view, extract fine/misc from deduction_details
-    let totalFine = Object.entries(deductionDetails)
-        .filter(([name]) => {
-            const n = name.toLowerCase();
-            return n.includes('fine') || n.includes('misc') || n.includes('food') || n.includes('others') || n.includes('adjustment');
-        })
+    const getSum = (details, keywords) => Object.entries(details || {})
+        .filter(([name]) => keywords.some(k => name.toLowerCase().includes(k)))
         .reduce((sum, [, val]) => sum + parseFloat(val || 0), 0);
 
-    // Similar for Incentives from earning_details
-    let totalIncentive = Object.entries(earningDetails)
-        .filter(([name]) => {
-            const n = name.toLowerCase();
-            return n.includes('incentive') || n.includes('bonus');
-        })
-        .reduce((sum, [, val]) => sum + parseFloat(val || 0), 0);
+    const totalFine = getSum(deductionDetails, ['fine', 'misc', 'adjustment', 'food']);
+    const otAmount = getSum(earningDetails, ['overtime', 'ot']);
+    const totalIncentive = getSum(earningDetails, ['incentive', 'bonus']);
+    const encashmentAmount = getSum(earningDetails, ['encashment']);
+    const advanceAmount = getSum(deductionDetails, ['advance', 'loan']);
 
-    // Fetch Payment History for the month
+    // 6. Payment History
     const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
         employee_id: payslip.employee_id,
         month: payslip.month,
@@ -841,118 +852,147 @@ const formatPayslipToSummary = async (payslip) => {
     }, {
         attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
     });
-    const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
 
-    let leaveBalances = payslip.leave_balances;
-    if (!leaveBalances) {
-        const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
-            employee_id: payslip.employee_id,
-            year: payslip.year
-        });
-        leaveBalances = rawLeaveBalances.map(lb => ({
-            leave_category_id: lb.leave_category_id,
-            leave_category_name: lb.leave_category_name,
-            used_leaves: lb.used_leaves,
-            balance: lb.pending_leaves
+    // 7. Lunch History
+    const lunchRecords = await commonQuery.findAllRecords(CanteenAttendance, {
+        employee_id: payslip.employee_id,
+        date: {
+            [Op.between]: [
+                dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD'),
+                dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD')
+            ]
+        },
+        status: { [Op.ne]: 2 }
+    });
+    const lunchHistory = lunchRecords.map(lr => ({
+        date: lr.date,
+        time: dayjs(lr.createdAt).format('hh:mm A')
+    }));
+
+    // 8. Fetch Incentive and Overtime History
+    const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    // Fetch incentive history
+    const incentives = await commonQuery.findAllRecords(EmployeeIncentive, {
+        employee_id: payslip.employee_id,
+        month: payslip.month,
+        year: payslip.year,
+        status: { [Op.ne]: 2 }
+    });
+
+    const employeeIncentiveHistory = incentives.map(inc => ({
+        id: inc.id.toString(),
+        amount: inc.amount,
+        incentive_date: inc.incentive_date,
+        month: inc.month,
+        year: inc.year
+    }));
+
+    // Fetch overtime history from attendance records
+    const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
+        employee_id: payslip.employee_id,
+        attendance_date: { [Op.between]: [startDate, endDate] },
+        status: { [Op.ne]: 2 }
+    });
+
+    const overtimeHistory = attendanceRecords
+        .filter(day => parseFloat(day.overtime_minutes || 0) > 0 || parseFloat(day.overtime_amount || 0) > 0)
+        .map(day => ({
+            type: "overtime",
+            id: day.id,
+            date: day.attendance_date,
+            minutes: parseInt(day.overtime_minutes || 0),
+            amount: parseFloat(day.overtime_amount || 0),
+            note: day.note || '',
+            overtime_data: day.overtime_data || null
         }));
-    }
 
+    // 8. Final Summary Object
     return {
         id: payslip.id,
         is_finalized: true,
         employee: {
-            id: payslip.employee?.id || payslip.employee_id,
-            name: payslip.employee?.first_name || "Employee",
-            code: payslip.employee?.employee_code || "N/A",
-            designation: payslip.employee?.designation?.designation_name || "N/A"
+            id: employeeData.id,
+            name: employeeData.first_name,
+            code: employeeData.employee_code,
+            template: template?.template_name || "N/A",
+            template_id: template?.id || 0,
+            joining_date: employeeData.joining_date,
+            designation: employeeData.designation?.designation_name || "N/A"
         },
         period: {
-            month: payslip.month,
-            year: payslip.year,
-            daysInMonth: dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth(),
+            month: parseInt(payslip.month),
+            year: parseInt(payslip.year),
+            daysInMonth,
+            daysInCalculation,
             monthName
         },
         attendance: {
             presentDays,
-            halfDays: halfDays > 0 ? halfDays : 0,
+            halfDays,
+            totalPresentDays,
             absentDays,
             leaveDays,
+            unpaidLeaveDays,
+            compoffLeaveDays: 0, 
             weeklyOffs,
             holidays,
-            totalLWP: lwpDays,
-            payableDays,
-            lunch_count: payslip.lunch_count || 0,
-            leave_details: payslip.leave_details || {}
+            totalLWP,
+            lunchCount: payslip.lunch_count || 0,
+            lunchHistory,
+            payableDays: parseFloat(payslip.pd_days || 0).toString(),
+            actualDaysValue: daysInCalculation,
+            leave_category_details: payslip.leave_details || {}
         },
         salary: {
-            ctc_monthly: payslip.fixed_gross || 0,
-            perDaySalary: payslip.per_day_salary || 0,
-            lwpDeduction: payslip.lwp_deduction || 0,
+            ctc_monthly: fixedGross,
+            perDaySalary: perDaySalary.toFixed(2),
+            lwpDeduction: lwpDeduction.toFixed(2),
             totalFine: totalFine.toFixed(2),
-            overtimeAmount: earningDetails['Overtime'] || earningDetails['OT Pay'] || 0,
+            overtimeAmount: otAmount.toFixed(2),
             incentiveAmount: totalIncentive.toFixed(2),
-            advanceAmount: deductionDetails['Advance'] || deductionDetails['Loan'] || 0,
-            netPayable: payslip.net_salary || 0
+            encashmentAmount: encashmentAmount.toFixed(2),
+            advanceAmount: advanceAmount,
+            netPayable: parseFloat(payslip.net_salary || 0).toFixed(2),
+            takeHomeEarnings: parseFloat(payslip.paid_gross || 0).toFixed(2),
+            total_deductions: parseFloat(payslip.total_deduction || 0).toFixed(2),
+            totalDeductions: parseFloat(payslip.total_deduction || 0).toFixed(2)
         },
-        leave_balances: leaveBalances,
         breakdown: {
-            earnings: (payslip.break_down?.earnings || Object.entries(earningDetails).map(([name, val]) => ({ name, actual_amount: val }))),
-            deductions: [
-                ...Object.entries(deductionDetails)
-                    .filter(([name]) => {
-                        // Filter out statutory items from deductions if they exist in statutory_details
-                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                        const normName = normalize(name);
-                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
-                        return !statutoryKeys.includes(normName);
-                    })
-                    .map(([name, val]) => ({ name, amount: val })),
-                ...Object.entries(payslip.statutory_details || {})
-                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
-                    .map(([name, amount]) => ({ name, amount, is_statutory: true }))
-            ],
+            earnings: payslip.break_down?.earnings || [],
+            deductions: payslip.break_down?.deductions || [],
             statutory: payslip.statutory_details || {},
-            employer: payslip.break_down?.employer || payslip.employer_details || {},
-            total_earnings: parseFloat(payslip.break_down?.total_earnings || Object.values(earningDetails).reduce((sum, val) => sum + parseFloat(val || 0), 0)).toFixed(2),
-            total_deductions: [
-                ...Object.entries(deductionDetails)
-                    .filter(([name]) => {
-                        const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-                        const normName = normalize(name);
-                        const statutoryKeys = Object.keys(payslip.statutory_details || {}).map(k => normalize(k));
-                        return !statutoryKeys.includes(normName);
-                    })
-                    .map(([, val]) => parseFloat(val || 0)),
-                ...Object.entries(payslip.statutory_details || {})
-                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
-                    .map(([, amount]) => amount)
-            ].reduce((sum, val) => sum + val, 0).toFixed(2)
+            employer: payslip.employer_details || payslip.break_down?.employer || {},
+            total_earnings: parseFloat(payslip.paid_gross || 0).toFixed(2),
+            total_deductions: parseFloat(payslip.total_deduction || 0).toFixed(2)
         },
         payment_history: {
             salary: {
-                history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
+                history: (paymentHistories || []).filter(ph => ph.payment_type === 'Salary').map(ph => ({
                     id: ph.id,
                     amount: ph.amount,
                     payment_mode: ph.payment_mode,
                     payment_date: ph.payment_date,
                     payment_type: ph.payment_type
                 })),
-                sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                sum: (paymentHistories || []).filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
             advance: {
-                history: paymentHistories.filter(ph => ph.payment_type === 'Advance').map(ph => ({
+                history: (paymentHistories || []).filter(ph => ph.payment_type === 'Advance').map(ph => ({
                     id: ph.id,
                     amount: ph.amount,
                     payment_mode: ph.payment_mode,
                     payment_date: ph.payment_date,
                     payment_type: ph.payment_type
                 })),
-                sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                sum: (paymentHistories || []).filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
-            grand_total: totalPaid.toFixed(2)
+            grand_total: (paymentHistories || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
         },
-        // tds_calculation_data: payslip.tds_calculation_data,
-        // tdsDetails: payslip.tds_calculation_data
+        overtime_history: overtimeHistory,
+        employee_incentive_history: employeeIncentiveHistory,
+        leave_balances: payslip.leave_balances || [],
     };
 };
 
@@ -1002,8 +1042,8 @@ exports.finalizeMonthlySalary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summary = await performSalaryCalculation(employee_id, month, year, transaction);
-
+        const summary = await performSalaryCalculation(employee_id, month, year, transaction);  
+              
         // Check if already finalized
         const existing = await commonQuery.findOneRecord(Payslip, {
             employee_id, month, year, status: { [Op.in]: [1, 2] }
@@ -1020,12 +1060,15 @@ exports.finalizeMonthlySalary = async (req, res) => {
             month,
             year,
             // Attendance
+            days_in_calculation:summary.period.daysInCalculation,
             present_days: summary.attendance.presentDays,
             absent_days: summary.attendance.absentDays,
+            half_days: summary.attendance.halfDays,
             pd_days: summary.attendance.payableDays,
-            wp_days: summary.attendance.totalLWP, // Using wp_days for LWP
             wo_days: summary.attendance.weeklyOffs,
             ph_days: summary.attendance.holidays,
+            lp_days: summary.attendance.leaveDays,
+            ul_days: summary.attendance.unpaidLeaveDays,
             total_days: summary.period.daysInMonth,
             leave_details: summary.attendance.leave_category_details,
             lunch_count: summary.attendance.lunchCount || 0,
@@ -1052,10 +1095,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
             leave_balances: summary.leave_balances,
-            status: 1, // Finalized
-            user_id: req.user.id || 0,
-            branch_id: summary.meta.branch_id,
-            company_id: summary.meta.company_id
+            status: 1,
         };
 
         let finalizedPayslip;
@@ -2941,7 +2981,6 @@ exports.getGeneratedPayslipReport = async (req, res) => {
         payslips.forEach(ps => {
             const emp = ps.employee || {};
             const bd = ps.break_down || {};
-            const att = bd.attendance || {};
             const sal = bd.salary || {};
 
             let row = {
@@ -2958,26 +2997,24 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 salary_amount: parseFloat(sal.ctc_monthly || ps.fixed_gross || 0),
                 salary_type: 'Monthly',
                 
-                days_in_month: ps.total_days || att.daysInMonth || 0,
-                payable_days: ps.wp_days || att.payableDays || 0,
-                present_days: ps.present_days || att.presentDays || 0,
-                // double_present: 0,
-                half_days: att.halfDays || 0,
-                absent_days: ps.absent_days || att.absentDays || 0,
-                holidays: ps.ph_days || att.holidays || 0,
-                week_offs: ps.wo_days || att.weeklyOffs || 0,
-                paid_leaves: att.leaveDays || 0,
-                unpaid_leaves: att.unpaidLeaveDays || 0,
+                days_in_month: ps.total_days || 0,
+                payable_days: ps.pd_days || 0,
+                present_days: ps.present_days || 0,
+                half_days: parseFloat(ps.half_days) || 0,
+                absent_days: ps.absent_days || 0,
+                holidays: ps.ph_days || 0,
+                week_offs: ps.wo_days || 0,
+                paid_leaves: ps.lp_days || 0,
+                unpaid_leaves: ps.ul_days || 0,
                 
-                total_payable_days: ps.wp_days || att.payableDays || 0,
-                total_paid_days: ps.wp_days || att.payableDays || 0,
-                actual_payable_days: ps.wp_days || att.payableDays || 0,
+                total_payable_days: ps.pd_days || 0,
+                total_paid_days: ps.pd_days || 0,
+                actual_payable_days: ps.pd_days || 0,
                 paid_leave_amount: 0, 
 
                 base_salary: 0,
-                overtime: att.totalOTMins ? (att.totalOTMins/60).toFixed(2) : 0,
-                overtime_amount: parseFloat(sal.overtimeAmount || 0),
-                overtime_mins: att.totalOTMins || 0,
+                overtime: 0,
+                overtime_amount: 0,
                 
                 earnings: {},
                 deductions: {},
@@ -2996,7 +3033,11 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 const amt = parseFloat(e.amount || 0);
                 if (name.toLowerCase().includes('basic') || name.toLowerCase().includes('base')) {
                     row.base_salary += amt;
-                } else if (!name.toLowerCase().includes('overtime')) {
+                } else if (name.toLowerCase().includes('overtime')) {
+                    row.overtime_amount += amt;
+
+                    row.overtime = 0;
+                } else {
                     dynamicEarnings.add(name);
                     row.earnings[name] = (row.earnings[name] || 0) + amt;
                 }
