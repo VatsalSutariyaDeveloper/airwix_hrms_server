@@ -12,6 +12,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       id: user.id || user.user_id,
       employee_id: user.employee_id,
       role_id: user.role_id,
+      is_employee: user.role_id === 5,
       branch_id: branchId,
       company_id: companyId,
       organization_id: user.organization_id || null,
