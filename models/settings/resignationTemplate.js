@@ -18,6 +18,11 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0, 
                 comment: "0: Active, 1: Inactive, 2: Deleted" 
             },
+            notice_period_days: { 
+                type: DataTypes.INTEGER, 
+                defaultValue: 30, 
+                comment: "Default notice period in days for this policy" 
+            },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },

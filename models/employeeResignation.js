@@ -20,7 +20,7 @@ module.exports = (sequelize, DataTypes) => {
             
             // Post-Approval Tracking
             exit_interview_notes: { type: DataTypes.TEXT, allowNull: true },
-            ff_status: { 
+            ff_settlement_status: { 
                 type: DataTypes.SMALLINT, 
                 defaultValue: 0, 
                 comment: "0: Not Started, 1: In Progress, 2: Settled" 
@@ -51,6 +51,10 @@ module.exports = (sequelize, DataTypes) => {
         EmployeeResignation.belongsTo(models.User, {
             foreignKey: "user_id",
             as: "submitted_by",
+        });
+        EmployeeResignation.belongsTo(models.ResignationReason, {
+            foreignKey: "reason_type_id",
+            as: "reason_type",
         });
     };
 

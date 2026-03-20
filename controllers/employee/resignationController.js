@@ -5,15 +5,16 @@ const {
     ResignationTemplate, 
     EmployeeLeaveBalance, 
     EmployeeAdvance,
-    sequelize,
-    Op
+    ResignationReason
 } = require("../../models");
 
 const { 
     validateRequest, 
     commonQuery, 
     handleError, 
-    constants 
+    constants,
+    sequelize,
+    Op
 } = require("../../helpers");
 const dayjs = require("dayjs");
 
@@ -27,9 +28,16 @@ const dayjs = require("dayjs");
 
 exports.createTemplate = async (req, res) => {
     try {
-        const requiredFields = { template_name: "Template Name" };
+        const requiredFields = { 
+            template_name: "Template Name",
+            approval_levels: "Approval Levels"
+        };
         const errors = await validateRequest(req.body, requiredFields);
         if (errors) return res.error(constants.VALIDATION_ERROR, errors);
+
+        if (req.body.approval_levels > 0 && (!req.body.approval_config || !req.body.approval_config.length)) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Approval configuration is required for multi-level approval." });
+        }
 
         const record = await commonQuery.createRecord(ResignationTemplate, req.body);
         return res.success(constants.CREATED, record);
@@ -59,6 +67,9 @@ exports.getTemplateById = async (req, res) => {
 
 exports.updateTemplate = async (req, res) => {
     try {
+        if (req.body.approval_levels > 0 && (!req.body.approval_config || !req.body.approval_config.length)) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Approval configuration is required for multi-level approval." });
+        }
         const record = await commonQuery.updateRecordById(ResignationTemplate, req.params.id, req.body);
         return res.success(constants.UPDATED, record);
     } catch (err) {
@@ -103,20 +114,33 @@ exports.submitResignation = async (req, res) => {
             return res.error("ALREADY_RESIGNED", { message: "An active resignation request already exists for this employee." });
         }
 
-        const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [{ model: ResignationTemplate, as: 'resignationTemplate' }]
+        }, transaction);
+        
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
 
-        // 2. Pro-actively calculate notice period gap (Optional)
+        // 1b. Check if Resignation Policy is assigned
+        if (!employee.resignation_template_id) {
+            await transaction.rollback();
+            return res.error("POLICY_NOT_ASSIGNED", { message: "No resignation policy assigned. Please contact HR." });
+        }
+
+        const template = employee.resignationTemplate;
+
+        // 2. Calculate notice period (Employee's manual days takes precedence over Policy days)
         const resignationDate = req.body.resignation_date || dayjs().format('YYYY-MM-DD');
-        const noticeDays = employee.notice_period_days || 0;
+        const noticeDays = (employee.notice_period_days > 0) ? employee.notice_period_days : (template ? template.notice_period_days : 0);
+        
         const defaultLWD = dayjs(resignationDate).add(noticeDays, 'day').format('YYYY-MM-DD');
 
         const POST = {
             ...req.body,
             employee_id: employeeId,
+            submitted_by: req.user.id,
             resignation_date: resignationDate,
             preferred_lwd: req.body.preferred_lwd || defaultLWD,
             approval_status: constants.RESIGNATION_APPROVAL_STATUS.PENDING,
@@ -150,7 +174,11 @@ exports.handleAction = async (req, res) => {
         const { approval_status, remarks, approved_lwd } = req.body;
 
         const resignation = await commonQuery.findOneRecord(EmployeeResignation, id, {
-            include: [{ model: Employee, as: 'employee' }]
+            include: [{ 
+                model: Employee, 
+                as: 'employee',
+                attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id']
+            }]
         }, transaction);
 
         if (!resignation) {
@@ -158,19 +186,54 @@ exports.handleAction = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        // Fetch Resignation Template from Employee
+        // 1. Authorization Check
         const templateId = resignation.employee.resignation_template_id;
         const template = await commonQuery.findOneRecord(ResignationTemplate, templateId, {}, transaction);
         
+        const config = template ? (template.approval_config || []) : [];
         const totalLevels = template ? template.approval_levels : 1;
         const currentLevel = resignation.current_level;
 
+        let currentStage = config.find(c => c.level === currentLevel);
+        if (!currentStage) currentStage = { type: "ANYONE" };
+
+        let isAuthorized = false;
+        if (req.user.is_super_admin) {
+            isAuthorized = true;
+        } else {
+            switch (currentStage.type) {
+                case 'REPORTING_MANAGER':
+                    if (resignation.employee.reporting_manager === req.user.employee_id) isAuthorized = true;
+                    break;
+                case 'ATTENDANCE_SUPERVISOR':
+                    if (resignation.employee.attendance_supervisor === req.user.employee_id) isAuthorized = true;
+                    break;
+                case 'ADMIN':
+                    if (req.user.is_admin || req.user.role_id === constants.BUSINESS_ADMIN_ROLE_ID || req.user.role_id === constants.ADMIN_ROLE_ID) isAuthorized = true;
+                    break;
+                case 'ANYONE':
+                    if (resignation.employee.reporting_manager === req.user.employee_id ||
+                        resignation.employee.attendance_supervisor === req.user.employee_id ||
+                        req.user.is_admin) {
+                        isAuthorized = true;
+                    }
+                    break;
+            }
+        }
+
+        if (!isAuthorized) {
+            await transaction.rollback();
+            return res.error(constants.PERMISSION_DENIED, { message: "You are not authorized to approve this request at the current level." });
+        }
+
+        // 2. Process Action
         if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED) {
             const history = resignation.approval_history || [];
             history.push({
                 level: currentLevel,
                 action: "APPROVED",
                 by: req.user.id,
+                user_name: req.user.user_name,
                 at: new Date(),
                 remarks
             });
@@ -189,7 +252,8 @@ exports.handleAction = async (req, res) => {
                 // Update Employee Final Details
                 await commonQuery.updateRecordById(Employee, resignation.employee_id, {
                     exit_date: updateData.approved_lwd,
-                    resignation_status: 2 // Exited/Inactive marked for later
+                    status: 1, // Set Inactive
+                    resignation_status: 2 // Exited
                 }, transaction);
             }
 
@@ -200,6 +264,7 @@ exports.handleAction = async (req, res) => {
                 level: currentLevel,
                 action: "REJECTED",
                 by: req.user.id,
+                user_name: req.user.user_name,
                 at: new Date(),
                 remarks
             });
@@ -220,6 +285,82 @@ exports.handleAction = async (req, res) => {
         return res.success("ACTION_COMPLETED");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get Pending Approvals for Resignation
+ */
+exports.getPendingApprovals = async (req, res) => {
+    try {
+        const requests = await commonQuery.findAllRecords(EmployeeResignation, {
+            approval_status: { [Op.in]: [constants.RESIGNATION_APPROVAL_STATUS.PENDING, constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED] },
+            status: 0
+        }, {
+            include: [
+                {
+                    model: Employee,
+                    as: "employee",
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "resignation_template_id"],
+                    include: [{ model: ResignationTemplate, as: "resignationTemplate" }]
+                },
+                {
+                    model: User,
+                    as: "submitted_by",
+                    attributes: ["user_name"]
+                }
+            ],
+            order: [['createdAt', 'DESC']]
+        });
+
+        const pendingForUser = [];
+
+        for (const request of requests) {
+            const employee = request.employee;
+            if (!employee) continue;
+
+            const template = employee.resignationTemplate;
+            const currentLevel = request.current_level;
+            const config = template ? (template.approval_config || []) : [];
+
+            let currentStage = config.find(c => c.level === currentLevel);
+            if (!currentStage) currentStage = { type: "ANYONE" };
+            
+            let isAuthorized = false;
+            if (req.user.is_super_admin) {
+                isAuthorized = true;
+            } else {
+                switch (currentStage.type) {
+                    case 'REPORTING_MANAGER':
+                        if (employee.reporting_manager === req.user.employee_id) isAuthorized = true;
+                        break;
+                    case 'ATTENDANCE_SUPERVISOR':
+                        if (employee.attendance_supervisor === req.user.employee_id) isAuthorized = true;
+                        break;
+                    case 'ADMIN':
+                        if (req.user.is_admin || req.user.role_id === constants.BUSINESS_ADMIN_ROLE_ID || req.user.role_id === constants.ADMIN_ROLE_ID) isAuthorized = true;
+                        break;
+                    case 'ANYONE':
+                        if (employee.reporting_manager === req.user.employee_id ||
+                            employee.attendance_supervisor === req.user.employee_id ||
+                            req.user.is_admin) {
+                            isAuthorized = true;
+                        }
+                        break;
+                }
+            }
+
+            if (isAuthorized) {
+                const raw = request.get({ plain: true });
+                const total = template ? template.approval_levels : 1;
+                raw.tracking_summary = `Stage ${raw.current_level} of ${total}`;
+                pendingForUser.push(raw);
+            }
+        }
+
+        return res.ok(pendingForUser);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };
@@ -301,6 +442,7 @@ exports.getAllResignations = async (req, res) => {
             {
                 include: [
                     { model: Employee, as: 'employee', attributes: ['first_name', 'employee_code', 'joining_date'] },
+                    { model: ResignationReason, as: 'reason_type' },
                     { model: User, as: 'submitted_by', attributes: ['user_name'] }
                 ],
                 order: [['createdAt', 'DESC']]
@@ -316,7 +458,12 @@ exports.getResignationById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(EmployeeResignation, req.params.id, {
             include: [
-                { model: Employee, as: 'employee' },
+                { 
+                    model: Employee, 
+                    as: 'employee',
+                    include: [{ model: ResignationTemplate, as: 'resignationTemplate' }]
+                },
+                { model: ResignationReason, as: 'reason_type' },
                 { model: User, as: 'submitted_by', attributes: ['user_name'] }
             ]
         });
@@ -326,16 +473,6 @@ exports.getResignationById = async (req, res) => {
     }
 };
 
-exports.updateChecklist = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { checklist } = req.body;
-        await commonQuery.updateRecordById(EmployeeResignation, id, { checklist });
-        return res.success(constants.UPDATED);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
 
 exports.getMyResignation = async (req, res) => {
     try {

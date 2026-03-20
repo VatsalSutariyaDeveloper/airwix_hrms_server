@@ -24,7 +24,8 @@ const {
     ShiftTemplate,
     DesignationMaster,
     Department,
-    HolidayTemplate
+    HolidayTemplate,
+    ResignationTemplate
 } = require("../../models");
 
 const {
@@ -86,7 +87,8 @@ const ALLOWED_TEMPLATE_FIELDS = [
     "salary_template_id",
     "salary_access",
     "salary_cycle",
-    "shift_template"
+    "shift_template",
+    "resignation_template_id"
 ];
 
 const FILE_COLUMNS = [
@@ -454,6 +456,12 @@ exports.getById = async (req, res) => {
                 model: EmployeeAttendanceTemplate,
                 as: 'employeeAttendanceTemplate',
                 attributes: ['enble_on_duty'],
+                required: false
+            },
+            {
+                model: ResignationTemplate,
+                as: 'resignationTemplate',
+                attributes: ['id', 'template_name', 'notice_period_days'],
                 required: false
             },
             // If you have State/Country relations for addresses, include them here:

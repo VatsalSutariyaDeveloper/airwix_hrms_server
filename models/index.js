@@ -27,6 +27,7 @@ const DeviceMaster = require("./settings/deviceMaster")(sequelize, DataTypes);
 const DesignationMaster = require("./settings/designationMaster")(sequelize, DataTypes);
 const BranchMaster = require("./settings/branchMaster")(sequelize, DataTypes);
 const ResignationTemplate = require("./settings/resignationTemplate")(sequelize, DataTypes);
+const ResignationReason = require("./settings/resignationReason")(sequelize, DataTypes);
 const OnDutyRequest = require("./settings/onDutyRequest")(sequelize, DataTypes);
 
 
@@ -140,6 +141,7 @@ const db = {
   DesignationMaster,
   BranchMaster,
   ResignationTemplate,
+  ResignationReason,
   OnDutyRequest,
 
   // SeriesTypeMaster
