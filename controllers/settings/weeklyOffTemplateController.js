@@ -27,7 +27,7 @@ exports.create = async (req, res) => {
         const { days, ...templateData } = req.body;
 
         // 1️⃣ Create Template
-        const template = await commonQuery.createRecord(WeeklyOffTemplate, templateData, transaction, { company_id: true });
+        const template = await commonQuery.createRecord(WeeklyOffTemplate, templateData, transaction);
 
         // 2️⃣ Prepare Days
         const dayRecords = days.map(d => ({
@@ -38,7 +38,7 @@ exports.create = async (req, res) => {
         }));
 
         // 3️⃣ Bulk Insert Days
-        await commonQuery.bulkCreate(WeeklyOffTemplateDay, dayRecords, {}, transaction, { company_id: true });
+        await commonQuery.bulkCreate(WeeklyOffTemplateDay, dayRecords, {}, transaction);
 
         await transaction.commit();
         return res.success(constants.WEEKLY_OFF_CREATED, template );
@@ -59,18 +59,13 @@ exports.getAll = async (req, res) => {
             WeeklyOffTemplate,
             req.body,
             fieldConfig,
-            {},
-            { company_id: true }
         );
 
         if (records.items && Array.isArray(records.items)) {
             for (const record of records.items) {
                 const employeeCount = await commonQuery.countRecords(
                     Employee,
-                    { weekly_off_template: record.id, status: 0 },
-                    {},
-                    false,
-                    { company_id: true }
+                    { weekly_off_template: record.id, status: 0 }
                 );
                 if (record.dataValues) {
                     record.dataValues.employee_count = employeeCount;
@@ -90,7 +85,7 @@ exports.getById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(WeeklyOffTemplate, req.params.id, {
             include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-        }, null, false, { company_id: true });
+        });
 
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
@@ -129,7 +124,7 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const updated = await commonQuery.updateRecordById(WeeklyOffTemplate, id, templateData, transaction, false , { company_id: true });
+        const updated = await commonQuery.updateRecordById(WeeklyOffTemplate, id, templateData, transaction);
 
         if (!updated || updated.status === 2) {
             await transaction.rollback();
@@ -147,8 +142,7 @@ exports.update = async (req, res) => {
                     template_id: id,
                     id: { [Op.notIn]: incomingIds }
                 },
-                transaction,
-                { company_id: true }
+                transaction
             );
 
             // 2. Update or Create days
@@ -160,15 +154,15 @@ exports.update = async (req, res) => {
                 };
 
                 if (day.id) {
-                    await commonQuery.updateRecordById(WeeklyOffTemplateDay, day.id, dayPayload, transaction, false, { company_id: true });
+                    await commonQuery.updateRecordById(WeeklyOffTemplateDay, day.id, dayPayload, transaction);
                 } else {
-                    await commonQuery.createRecord(WeeklyOffTemplateDay, dayPayload, transaction, { company_id: true });
+                    await commonQuery.createRecord(WeeklyOffTemplateDay, dayPayload, transaction);
                 }
             }
         }
 
         // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction, { company_id: true });
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template'] }, transaction);
         if (employeesToSync.length > 0) {
             const employeeIds = employeesToSync.map(emp => emp.id);
             
@@ -217,8 +211,8 @@ exports.delete = async (req, res) => {
 
         let { ids } = req.body;
 
-        const deleted = await commonQuery.softDeleteById(WeeklyOffTemplate, ids, transaction, { company_id: true });
-        const deletedDays = await commonQuery.softDeleteById(WeeklyOffTemplateDay, { template_id: { [Op.in]: ids } }, transaction, { company_id: true });
+        const deleted = await commonQuery.softDeleteById(WeeklyOffTemplate, ids, transaction);
+        const deletedDays = await commonQuery.softDeleteById(WeeklyOffTemplateDay, { template_id: { [Op.in]: ids } }, transaction);
         if (!deleted || !deletedDays) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
@@ -260,18 +254,14 @@ exports.updateStatus = async (req, res) => {
             WeeklyOffTemplate,
             ids,
             { status },
-            transaction,
-            false,
-            { company_id: true }
+            transaction
         );
 
         const updatedDays = await commonQuery.updateRecordById(
             WeeklyOffTemplateDay,
             { template_id: { [Op.in]: ids } },
             { status },
-            transaction,
-            false,
-            { company_id: true }
+            transaction
         );
 
         if (!updated || !updatedDays) {
@@ -290,7 +280,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(WeeklyOffTemplate, { status: 0 }, { attributes: ["id", "name"] }, null, { company_id: true });
+    const result = await commonQuery.findAllRecords(WeeklyOffTemplate, { status: 0 }, { attributes: ["id", "name"] });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

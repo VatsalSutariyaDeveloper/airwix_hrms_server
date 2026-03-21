@@ -164,6 +164,13 @@ exports.getAttendanceSummary = async (req, res) => {
               {
                 model: AttendancePunch,
                 as: "attendancePunches",
+                include: [
+                  {
+                    model: BranchMaster,
+                    as: "branch",
+                    attributes: ["id", "branch_name"]
+                  }
+                ],
                 required: false
               },
               {
@@ -177,12 +184,17 @@ exports.getAttendanceSummary = async (req, res) => {
                 as: "shiftTemplate",
                 attributes: ["id", "shift_name", "start_time", "end_time"],
                 include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
+              },
+              {
+                model: BranchMaster,
+                as: "branch",
+                attributes: ["id", "branch_name"]
               }
             ]
           },
           {
             model: ShiftTemplate,
-            as: "shiftTemplate",
+            as: "shiftTemplate",  
             attributes: ["id", "shift_name", "start_time", "end_time"],
             include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
           },
@@ -190,7 +202,7 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id"]
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches"]
       },
       true,
       "createdAt",
@@ -208,21 +220,21 @@ exports.getAttendanceSummary = async (req, res) => {
           employee_id: { [Op.in]: itemIds }, 
           date: targetDate, 
           status: 0 
-        }, {}, null, { company_id: true }),
+        }),
         commonQuery.findAllRecords(EmployeeWeeklyOff, { 
           employee_id: { [Op.in]: itemIds }, 
           day_of_week: dayOfWeek, 
           status: 0, 
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
-        }, {}, null, { company_id: true }),
+        }),
         commonQuery.findAllRecords(OnDutyRequest, {
           employee_id: { [Op.in]: itemIds },
           approval_status: constants.ON_DUTY_STATUS.APPROVED,
           start_date: { [Op.lte]: targetDate },
           end_date: { [Op.gte]: targetDate },
           status: 0
-        }, {}, null, { company_id: true })
+        })
       ]);
 
       const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
@@ -235,6 +247,7 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
           day.setDataValue('is_on_duty_approved', itemOnDutyMap.has(emp.id));
+          day.setDataValue('branch_name', day.branch?.branch_name);
           
           // Enhanced Status Text logic (Same as monthly summary)
           const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
@@ -311,8 +324,8 @@ exports.getAttendanceSummary = async (req, res) => {
           [sequelize.fn('SUM', sequelize.col('overtime_amount')), 'total_overtime_amount']
         ],
         group: ['AttendanceDay.status'],
-    raw: true
-      }
+        raw: true
+      }, null, { company_id: true }
     );
 
     let summary = {
@@ -459,7 +472,7 @@ exports.updateAttendanceDay = async (req, res) => {
       {
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id,
+        branch_id: req.body.branch_id || req.user.branch_id,
       },
       t
     );
@@ -514,13 +527,13 @@ exports.updateAttendanceDay = async (req, res) => {
                 day_id: day.id,
                 punch_type: 'IN',
                 status: 0
-            }, { order: [['punch_time', 'ASC']] }, t);
+            }, { order: [['punch_time', 'ASC']] }, t, true, { company_id: true });
 
             const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
                 day_id: day.id,
                 punch_type: 'OUT',
                 status: 0
-            }, { order: [['punch_time', 'DESC']] }, t);
+            }, { order: [['punch_time', 'DESC']] }, t, true, { company_id: true });
 
             // 1. EARLY OVERTIME or LATE ENTRY (Affects First In)
             if (early_overtime_minutes !== undefined) {
@@ -567,9 +580,7 @@ exports.updateAttendanceDay = async (req, res) => {
             status: 0
           },
           {},
-          t,
-          false,
-          { company_id: true }
+          t
         );
         isTodayHoliday = !!holidayRecord;
       }
@@ -577,7 +588,7 @@ exports.updateAttendanceDay = async (req, res) => {
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id,
+        branch_id: req.body.branch_id || req.user.branch_id,
         shift_id: shift_id,
         bypassShiftRestrictions: true,
         employee: emp, // Pass pre-fetched employee
@@ -609,7 +620,7 @@ exports.updateAttendanceDay = async (req, res) => {
       status,
       user_id: req.user.id,
       company_id: req.user.company_id,
-      branch_id: req.user.branch_id
+      branch_id: req.body.branch_id || req.user.branch_id
     };
     
     if (shift_id) payload.shift_id = shift_id;
@@ -726,7 +737,7 @@ exports.updateAttendanceDay = async (req, res) => {
       return res.error(constants.LEAVE_BALANCE_ERROR,balanceError);
     }
 
-    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t);
+    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
@@ -816,7 +827,7 @@ exports.deletePunch = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Punch ID is required");
     }
 
-    const punchRecord = await commonQuery.findOneRecord(AttendancePunch, { id }, {}, t);
+    const punchRecord = await commonQuery.findOneRecord(AttendancePunch, { id }, {}, t, true, { company_id: true });
     if (!punchRecord) {
       await t.rollback();
       return res.error(constants.NOT_FOUND, "Punch not found");
@@ -825,7 +836,7 @@ exports.deletePunch = async (req, res) => {
     const employeeId = punchRecord.employee_id;
     const punchDate = new Date(punchRecord.punch_time).toISOString().split("T")[0];
 
-    await commonQuery.softDeleteById(AttendancePunch, { id }, t);
+    await commonQuery.softDeleteById(AttendancePunch, { id }, t, { company_id: true });
 
     // After deleting a punch, we MUST rebuild the day summary
     await rebuildAttendanceDay(employeeId, punchDate, {
@@ -871,12 +882,12 @@ exports.deleteAttendanceDay = async (req, res) => {
       // 2. Delete punches by day_id specifically
       await commonQuery.hardDeleteRecords(AttendancePunch, {
         day_id: day.id
-      }, t);
+      }, t, { company_id: true });
 
       // 3. Delete the day summary
       await commonQuery.hardDeleteRecords(AttendanceDay, { 
         id: day.id
-      }, t);
+      }, t, { company_id: true });
     }
 
     // If no AttendanceDay record was found, we still clear any auto-generated leaves
@@ -890,7 +901,7 @@ exports.deleteAttendanceDay = async (req, res) => {
       punch_time: {
         [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
       }
-    }, t);
+    }, t, { company_id: true });
 
     await t.commit();
     return res.success(constants.DELETED);
@@ -945,14 +956,14 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
         attendance_date,
-      }, {}, t);
+      }, {}, t, false, { company_id: true });
 
       // Reuse manualPunch if times are provided
       if (first_in || last_out) {
         await manualPunch(employee_id, attendance_date, first_in, last_out, {
           user_id: req.user.id,
           company_id: req.user.company_id,
-          branch_id: req.user.branch_id,
+          branch_id: req.body.branch_id || req.user.branch_id,
           shift_id: employee_shift_id,
           employee: emp, // Pass pre-fetched employee
           existingDay: existingRecord // Pass pre-fetched day
@@ -961,13 +972,13 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
           employee_id, 
           attendance_date,
-        }, {}, t);
+        }, {}, t, false, { company_id: true });
       } else if ([0, 1, 12, 13].includes(status)) {
           // If marking present/working without providing times, trigger a rebuild to process any existing punches
           await rebuildAttendanceDay(employee_id, attendance_date, {
             user_id: req.user.id,
             company_id: req.user.company_id,
-            branch_id: req.user.branch_id,
+            branch_id: req.body.branch_id || req.user.branch_id,
             shift_id: employee_shift_id,
             employee: emp
           }, t);
@@ -975,7 +986,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
           existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
             employee_id, 
             attendance_date,
-          }, {}, t);
+          }, {}, t, false, { company_id: true });
       }
 
       const payload = {
@@ -984,7 +995,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         status,
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id
+        branch_id: req.body.branch_id || req.user.branch_id
       };
 
       if (status !== undefined) payload.status = status;
@@ -1008,7 +1019,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
           employee_id,
           day_id: existingRecord?.id,
           status: 0
-        }, { status: 2 }, t);
+        }, { status: 2 }, t, { company_id: true });
       }
 
       if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
@@ -1036,7 +1047,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (existingRecord) {
         await commonQuery.updateRecordById(AttendanceDay, { 
           id: existingRecord.id,
-        }, payload, t);
+        }, payload, t, false, { company_id: true });
       } else {
         await commonQuery.createRecord(AttendanceDay, payload, t);
       }
@@ -1093,11 +1104,18 @@ exports.getAttendanceDayDetails = async (req, res) => {
         {
           model: AttendancePunch,
           as: "attendancePunches",
+          include: [
+            {
+              model: BranchMaster,
+              as: "branch",
+              attributes: ["branch_name"]
+            }
+          ],
           required: false,
           order: [["punch_time", "ASC"]]
         }
       ]
-    });
+    }, null, false, { company_id: true });
 
     // 2. Fetch all raw punches for this day
     // const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1126,14 +1144,14 @@ exports.getAttendanceDayDetails = async (req, res) => {
           employee_id, 
           date: attendance_date, 
           status: 0 
-        }, {}, null, false, { company_id: true }),
+        }),
         commonQuery.findOneRecord(EmployeeWeeklyOff, { 
           employee_id, 
           day_of_week: dayOfWeek, 
           status: 0, 
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
-        }, {}, null, false, { company_id: true })
+        })
       ]);
 
       // Fallback to Master Templates
@@ -1142,7 +1160,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
               template_id: attendanceDay.employee.holiday_template,
               date: attendance_date,
               status: 0
-          }, {}, null, false, { company_id: true });
+          });
       }
       if (!isWeeklyOff && attendanceDay?.employee?.weekly_off_template) {
           isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
@@ -1151,7 +1169,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
               [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
               is_off: true,
               status: 0
-          }, {}, null, false, { company_id: true });
+          });
       }
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
@@ -1259,24 +1277,29 @@ exports.getMonthlyAttendance = async (req, res) => {
         {
           model: LeaveTemplateCategory,
           as: "leaveCategory"
+        },
+        {
+          model: BranchMaster,
+          as: "branch",
+          attributes: ["id", "branch_name"]
         }
       ],
       order: [["attendance_date", "ASC"]]
-    });
+    }, null, { company_id: true });
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
       date: { [Op.between]: [startDate, endDate] },
       status: 0
-    }, {}, null, { company_id: true });
+    });
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
         employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
             template_id: employee.holiday_template,
             date: { [Op.between]: [startDate, endDate] },
             status: 0
-        }, {}, null, { company_id: true });
+        });
     }
 
     // 2.2 Fetch Weekly Offs for the employee
@@ -1284,14 +1307,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       employee_id,
       status: 0,
       is_off: true
-    }, {}, null, { company_id: true });
+    });
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
         employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
             template_id: employee.weekly_off_template,
             is_off: true,
             status: 0
-        }, {}, null, { company_id: true });
+        });
     }
     const monthlyOnDuties = await commonQuery.findAllRecords(OnDutyRequest, {
       employee_id,
@@ -1299,7 +1322,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       start_date: { [Op.lte]: endDate },
       end_date: { [Op.gte]: startDate },
       status: 0
-    }, {}, null, { company_id: true });
+    });
 
     // 3. Fetch all raw punches for the month with User info
     const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1318,9 +1341,14 @@ exports.getMonthlyAttendance = async (req, res) => {
         model: DeviceMaster,
         as: 'device',
         attributes: ['id', 'device_name']
+      },
+      {
+        model: BranchMaster,
+        as: 'branch',
+        attributes: ['id', 'branch_name']
       }],
       order: [["punch_time", "ASC"]]
-    });
+    }, t, { company_id: true });
 
     const summary = {
       present: 0,
@@ -1439,6 +1467,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           fine_amount: attendanceDay.fine_amount,
           overtime_data: attendanceDay.overtime_data,
           fine_data: attendanceDay.fine_data,
+          branch_name: attendanceDay.branch?.branch_name,
           leave_session: attendanceDay.leave_session,
           is_locked: attendanceDay.is_locked,
           shift_id: attendanceDay.shift_id,
@@ -1460,6 +1489,7 @@ exports.getMonthlyAttendance = async (req, res) => {
             date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
             type: p.punch_type,
             punch_by: p.user?.user_name || "System",
+            branch_name: p.branch?.branch_name,
             image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}` : null,
             latitude: p.latitude || null,
             longitude: p.longitude || null,
@@ -1542,7 +1572,7 @@ exports.getLeaveSummary = async (req, res) => {
       }
     }
 
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria, {}, null, { company_id: true });
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {
@@ -1689,13 +1719,13 @@ exports.updateAttendanceNote = async (req, res) => {
     const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id,
       attendance_date
-    });
+    }, {}, null, false, { company_id: true });
 
     if (!attendanceDay) {
       return res.error(constants.NOT_FOUND, "Attendance record not found for this date");
     }
 
-    await commonQuery.updateRecordById(AttendanceDay, attendanceDay.id, { note });
+    await commonQuery.updateRecordById(AttendanceDay, attendanceDay.id, { note }, null, false, { company_id: true });
 
     return res.ok({ message: "Note updated successfully" });
   } catch (err) {
@@ -1763,13 +1793,13 @@ exports.getAttendanceReport = async (req, res) => {
         { model: LeaveTemplateCategory, as: "leaveCategory", attributes: ["id", "leave_category_name"] }
       ],
       order: [['attendance_date', 'ASC']]
-    });
+    }, null, { company_id: true });
 
     // 3. Pre-fetch Holidays & Week Offs & On Duty
     const [holidays, weeklyOffs, onDuties] = await Promise.all([
-      commonQuery.findAllRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds }, date: { [Op.between]: [startDate, endDate] }, status: 0 }, {}, null, { company_id: true }),
-      commonQuery.findAllRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds }, status: 0, is_off: true }, {}, null, { company_id: true }),
-      commonQuery.findAllRecords(OnDutyRequest, { employee_id: { [Op.in]: employeeIds }, approval_status: constants.ON_DUTY_STATUS.APPROVED, start_date: { [Op.lte]: endDate }, end_date: { [Op.gte]: startDate }, status: 0 }, {}, null, { company_id: true })
+      commonQuery.findAllRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds }, date: { [Op.between]: [startDate, endDate] }, status: 0 }),
+      commonQuery.findAllRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds }, status: 0, is_off: true }),
+      commonQuery.findAllRecords(OnDutyRequest, { employee_id: { [Op.in]: employeeIds }, approval_status: constants.ON_DUTY_STATUS.APPROVED, start_date: { [Op.lte]: endDate }, end_date: { [Op.gte]: startDate }, status: 0 })
     ]);
 
     // Fast lookups
@@ -1963,7 +1993,7 @@ exports.getLateEntryReport = async (req, res) => {
       status: { [Op.ne]: 2 }
     }, {
       order: [['attendance_date', 'ASC']]
-    });
+    }, null, { company_id: true });
 
     // Group late records by employee
     const lateDataMap = {};
@@ -2075,7 +2105,7 @@ exports.getOvertimeReport = async (req, res) => {
       status: { [Op.ne]: 2 }
     }, {
       order: [['attendance_date', 'ASC']]
-    });
+    }, null, { company_id: true });
 
     // Group overtime records by employee
     const otDataMap = {};

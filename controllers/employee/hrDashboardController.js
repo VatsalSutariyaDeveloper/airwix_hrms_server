@@ -40,8 +40,8 @@ exports.getCounts = async (req, res) => {
 
         if (req.user.is_super_admin) {
             // Optimization for super admins
-            pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 }, {}, false);
-            authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 }, {}, false);
+            pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
+            authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
         } else {
             // Helper function to check authorization
             const isUserAuthorizedForRequest = (request, levelField) => {
@@ -86,8 +86,6 @@ exports.getCounts = async (req, res) => {
             const allPendingRequests = await commonQuery.findAllRecords(LeaveRequest,
                 { approval_status: { [Op.in]: [0, 1] }, status: 0 },
                 queryIncludeOptions,
-                null,
-                true
             );
 
             for (const request of allPendingRequests) {

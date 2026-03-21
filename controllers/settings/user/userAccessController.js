@@ -136,6 +136,7 @@ exports.sessionData = async (req, res) => {
               } : {})
           },
           attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id'],
+          order: [["id", "ASC"]],
           transaction
       }),
 
