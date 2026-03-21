@@ -25,7 +25,7 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const attendance_template = await commonQuery.createRecord(AttendanceTemplate, POST, transaction, { company_id: true });
+        const attendance_template = await commonQuery.createRecord(AttendanceTemplate, POST, transaction);
         await transaction.commit();
         return res.success(constants.CREATED, attendance_template);
     } catch (err) {
@@ -44,19 +44,14 @@ exports.getAll = async (req, res) => {
         const records = await commonQuery.fetchPaginatedData(
             AttendanceTemplate,
             req.body,
-            fieldConfig,
-            {},
-            { company_id: true }
+            fieldConfig
         );
 
         if (records.items && Array.isArray(records.items)) {
             for (const record of records.items) {
                 const employeeCount = await commonQuery.countRecords(
                     Employee,
-                    { attendance_setting_template: record.id, status: 0 },
-                    {},
-                    false,
-                    { company_id: true }
+                    { attendance_setting_template: record.id, status: 0 }
                 );
                 if (record.dataValues) {
                     record.dataValues.employee_count = employeeCount || 0;
@@ -74,7 +69,7 @@ exports.getAll = async (req, res) => {
 // Get By Id
 exports.getById = async (req, res) => {
     try {
-        const record = await commonQuery.findOneRecord(AttendanceTemplate, req.params.id, {}, null, false, { company_id: true });
+        const record = await commonQuery.findOneRecord(AttendanceTemplate, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -108,14 +103,14 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(AttendanceTemplate, req.params.id, req.body, transaction, false, { company_id: true });
+        const updated = await commonQuery.updateRecordById(AttendanceTemplate, req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
 
         // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { attendance_setting_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction, { company_id: true });
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { attendance_setting_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
         if (employeesToSync.length > 0) {
             const employeeIds = employeesToSync.map(emp => emp.id);
             await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'attendance_setting_template', req.params.id, transaction);
@@ -149,7 +144,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(AttendanceTemplate, ids, transaction, { company_id: true });
+        const deleted = await commonQuery.softDeleteById(AttendanceTemplate, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
@@ -191,9 +186,7 @@ exports.updateStatus = async (req, res) => {
             AttendanceTemplate,
             ids,
             { status },
-            transaction,
-            false,
-            { company_id: true }
+            transaction
         );
 
         if (!updated) {
@@ -212,7 +205,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
     try {
-        const result = await commonQuery.findAllRecords(AttendanceTemplate, { status: 0 }, { attributes:["id", "name", "mode", "on_duty_approval_level", "on_duty_approval_config", "enble_on_duty"] }, null, { company_id: true });
+        const result = await commonQuery.findAllRecords(AttendanceTemplate, { status: 0 }, { attributes:["id", "name", "mode", "on_duty_approval_level", "on_duty_approval_config", "enble_on_duty"] });
         return res.ok(result);
     } catch (err) {
         return handleError(err, res, req);

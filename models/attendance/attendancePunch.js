@@ -33,6 +33,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendancePunch.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendancePunch.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
     AttendancePunch.belongsTo(models.DeviceMaster, { foreignKey: "device_id", as: "device" });
+    AttendancePunch.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
   };
 
   return AttendancePunch;

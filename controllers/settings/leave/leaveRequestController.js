@@ -108,7 +108,7 @@ exports.create = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
-        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction, false, { company_id: true });
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
         if (!category) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
@@ -187,7 +187,7 @@ exports.create = async (req, res) => {
                 employee_id,
                 attendance_date: attDate,
                 status: { [Op.ne]: 2 }
-            }, {}, transaction);
+            }, {}, transaction, null, false, { company_id: true });
 
             if (attendance) {
                 if (rules.min_working_time_mins && (attendance.worked_minutes || 0) < rules.min_working_time_mins) {
@@ -220,7 +220,7 @@ exports.create = async (req, res) => {
             year: cycleDates.end.year(),
             month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
             status: 0
-        }, {}, transaction, false, { company_id: true });
+        }, {}, transaction);
 
         if (!balance) {
             await transaction.rollback();
@@ -340,7 +340,7 @@ exports.update = async (req, res) => {
             }
         }
 
-        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction, false, { company_id: true });
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
         if (!category) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
@@ -521,7 +521,7 @@ exports.getById = async (req, res) => {
         // Add approver name if available
         raw.approved_by = raw.approvedBy?.user_name || null;
 
-        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, null, false, { company_id: true });
+        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template);
         const totalLevels = template ? template.approval_levels : 1;
         const levelConfigs = template ? (template.approval_config || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
@@ -656,7 +656,7 @@ exports.updateStatus = async (req, res) => {
                 year: cycleDates.end.year(),
                 month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
                 status: 0
-            }, {}, transaction, false, { company_id: true });
+            }, {}, transaction);
 
             if (balance) {
                 await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
@@ -888,7 +888,7 @@ exports.cancelLeave = async (req, res) => {
                 year: cycleDates.end.year(),
                 month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
                 status: 0
-            }, {}, transaction, false, { company_id: true });
+            }, {}, transaction);
 
             if (balance) {
                 // To restore balance, we pass a negative total_days value to adjustLeaveBalance
@@ -983,7 +983,7 @@ exports.calculateLeaveDays = async (req, res) => {
 
         const { leave_category_id } = req.body;
         if (leave_category_id) {
-            const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, null, false, { company_id: true });
+            const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
             if (category) {
                 const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
                 if (rules.allow_half_day === false && (start_session !== 0 || end_session !== 0)) {
@@ -1098,7 +1098,7 @@ exports.getLeaveReport = async (req, res) => {
             year: parseInt(year),
             employee_id: { [Op.in]: employeeIds },
             status: 0
-        }, {}, null, { company_id: true });
+        });
 
         const balancesByEmp = {};
         balances.forEach(b => {
@@ -1109,7 +1109,7 @@ exports.getLeaveReport = async (req, res) => {
         });
 
         // Prepare categories
-        const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { company_id: req.user.company_id, status: 0 }, {}, null, { company_id: true });
+        const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { company_id: req.user.company_id, branch_id: req.user.branch_id, status: 0 });
         const leaveCatNames = allLeaveCategories.map(c => c.leave_category_name);
         const allCategories = ['Week Off', 'Holiday', ...leaveCatNames];
 
@@ -1131,12 +1131,12 @@ exports.getLeaveReport = async (req, res) => {
             employee_id: { [Op.in]: employeeIds },
             status: 0,
             date: { [Op.between]: [startDateStr, endDateStr] }
-        }, {}, null, { company_id: true });
+        });
 
         const weekOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
             employee_id: { [Op.in]: employeeIds },
             status: 0
-        }, {}, null, { company_id: true });
+        });
 
         const holidaysByEmp = {};
         holidays.forEach(h => {

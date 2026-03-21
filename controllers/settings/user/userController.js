@@ -372,8 +372,7 @@ exports.assignRole = async (req, res) => {
           ...(field_name === 'is_reporting_manager' && { is_reporting_manager: false }),  
         },
         transaction,
-        true,
-        { company_id: true }
+        true
       );
     }
 
@@ -630,8 +629,7 @@ exports.update = async (req, res) => {
         employee_id: req.body.employee_id || existing.employee_id,
       },
       transaction,
-      true,
-      { company_id: true }
+      true
     );
 
     if(updated.employee_id){
@@ -643,8 +641,7 @@ exports.update = async (req, res) => {
           ...(req.body.role_id == 4 && { is_reporting_manager: true }),
         },
         transaction,
-        true,
-        { company_id: true }
+        true
       );
     }
 

@@ -37,7 +37,7 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        const shifts = await commonQuery.createRecord(ShiftTemplate, req.body, transaction, { company_id: true });
+        const shifts = await commonQuery.createRecord(ShiftTemplate, req.body, transaction);
 
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
             const breaks = req.body.breaks.map(b => ({
@@ -56,7 +56,7 @@ exports.create = async (req, res) => {
                 branch_id: req.body.branch_id || 0,
                 company_id: req.body.company_id || 0
             };
-            await commonQuery.bulkCreate(ShiftBreak, breaks, commonBreaks, transaction, { company_id: true });
+            await commonQuery.bulkCreate(ShiftBreak, breaks, commonBreaks, transaction);
         }
 
         await transaction.commit();
@@ -80,7 +80,7 @@ exports.getAll = async (req, res) => {
       fieldConfig,
       {
         include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
-      }, { company_id: true }
+      }
     );
 
     if (records.items && Array.isArray(records.items)) {
@@ -88,8 +88,7 @@ exports.getAll = async (req, res) => {
                 records.items.map(async (record) => {
                     const employeeCount = await commonQuery.countRecords(
                         Employee,
-                        { shift_template: record.id, status: 0 },
-                        {}, { company_id: true }
+                        { shift_template: record.id, status: 0 }
                     );
                     
                     return {
@@ -111,7 +110,7 @@ exports.getById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(ShiftTemplate, req.params.id, {
             include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
-        }, null, false, { company_id: true });
+        });
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
     } catch (err) {
@@ -158,7 +157,7 @@ exports.update = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(ShiftTemplate,req.params.id, req.body, transaction, false, { company_id: true });
+        const updated = await commonQuery.updateRecordById(ShiftTemplate,req.params.id, req.body, transaction);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -166,7 +165,7 @@ exports.update = async (req, res) => {
 
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
             // Delete old breaks (Soft delete or Hard delete based on preference, here we replace)
-            await commonQuery.softDeleteById(ShiftBreak, { shift_template_id: req.params.id }, transaction, { company_id: true } );
+            await commonQuery.softDeleteById(ShiftBreak, { shift_template_id: req.params.id }, transaction);
             
             const breaks = req.body.breaks.map(b => ({
                 ...b,
@@ -179,11 +178,11 @@ exports.update = async (req, res) => {
                 branch_id: req.user.branch_id || 0,
                 company_id: req.user.company_id || 0
             }));
-            await commonQuery.bulkCreate(ShiftBreak, breaks, {}, transaction, { company_id: true });
+            await commonQuery.bulkCreate(ShiftBreak, breaks, {}, transaction);
         }
 
         // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction, { company_id: true });
+        const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
         if (employeesToSync.length > 0) {
             const employeeIds = employeesToSync.map(emp => emp.id);
             await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'shift_template', req.params.id, transaction);
@@ -218,7 +217,7 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(ShiftTemplate, ids, transaction, { company_id: true });
+        const deleted = await commonQuery.softDeleteById(ShiftTemplate, ids, transaction);
 
         if (!deleted) {
             await transaction.rollback();
@@ -262,9 +261,7 @@ exports.updateStatus = async (req, res) => {
       ShiftTemplate,
       ids,
       { status: status },
-      transaction,
-      false,
-      { company_id: true }
+      transaction
     );
 
     if (!updated || updated.status === 2) {
@@ -294,7 +291,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(ShiftTemplate, { status: 0 }, {}, null, { company_id: true });
+    const result = await commonQuery.findAllRecords(ShiftTemplate, { status: 0 });
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

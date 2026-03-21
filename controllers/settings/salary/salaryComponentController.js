@@ -83,7 +83,7 @@ exports.create = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    await commonQuery.createRecord(SalaryComponent, POST, transaction, { company_id: true });
+    await commonQuery.createRecord(SalaryComponent, POST, transaction);
 
     await transaction.commit();
     return res.success(constants.SALARY_COMPONENT_CREATED || "Salary component created successfully");
@@ -118,9 +118,8 @@ exports.getAll = async (req, res) => {
       { ...POST, limit: "All" },
       fieldConfig,
       {},
-      {},
-      "created_at",
-      { company_id: { [Op.in]: [req.user.company_id, -1] } }
+      false,
+      "created_at"
     );
 
     return res.ok(data);
@@ -195,7 +194,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, enumError);
     }
 
-    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction, false, { company_id: true });
+    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction);
 
     if (!updated) {
       await transaction.rollback();
@@ -215,7 +214,7 @@ exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { ids } = req.body;
-    const deleted = await commonQuery.softDeleteById(SalaryComponent, ids, transaction, { company_id: true });
+    const deleted = await commonQuery.softDeleteById(SalaryComponent, ids, transaction);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
@@ -238,7 +237,7 @@ exports.updateStatus = async (req, res) => {
       return res.error(constants.INVALID_ID);
     }
 
-    const count = await commonQuery.updateRecordById(SalaryComponent, ids, { status }, transaction, false, { company_id: true });
+    const count = await commonQuery.updateRecordById(SalaryComponent, ids, { status }, transaction);
 
     if (count === null) {
       await transaction.rollback();
