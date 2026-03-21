@@ -37,10 +37,7 @@ const employeeSalaryTemplateController = {
                             attributes: ["id", "component_name", "component_type", "component_category", "calculation_type", "is_taxable", "is_statutory", "is_lwp_impacted", "is_part_of_ctc", "is_part_of_gross", "is_part_of_take_home", "is_system_component", "formula"]
                         }]
                     }]
-                },
-                null,
-                false,
-                { company_id: true }
+                }
             );
 
             if (!template) {
@@ -61,7 +58,7 @@ const employeeSalaryTemplateController = {
                 let weeklyOffDays = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
                     employee_id: employeeId,
                     status: 0
-                }, {}, null, { company_id: true });
+                });
 
                 // If no specific employee weekly offs, fallback to template
                 if ((!weeklyOffDays || weeklyOffDays.length === 0) && employee.weekly_off_template) {
@@ -70,10 +67,7 @@ const employeeSalaryTemplateController = {
                         employee.weekly_off_template,
                         {
                             include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                        },
-                        null,
-                        false,
-                        { company_id: true }
+                        }
                     );
 
                     if (weeklyOffTemplate) {
@@ -95,13 +89,13 @@ const employeeSalaryTemplateController = {
                     employee_id: employeeId,
                     day_of_week: dayOfWeek,
                     status: 0,
-                }, {}, null, false, { company_id: true });
+                });
 
                 let shift = null;
                 if (empShift && empShift.shift_id) {
-                    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, null, false, { company_id: true });
+                    shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id);
                 } else if (!empShift && employee.shift_template) {
-                    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+                    shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template);
                 } else if (empShift && !empShift.shift_id) {
                     shift = empShift; // Manual shift configuration
                 }
@@ -154,7 +148,7 @@ const employeeSalaryTemplateController = {
             // 1. Get current template for history comparison
             let employeeTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, {
                 employee_id: employeeId
-            }, {}, transaction, false, { company_id: true });
+            }, {}, transaction);
 
             const oldCTC = employeeTemplate ? parseFloat(employeeTemplate.ctc_monthly) || 0 : 0;
             const newCTC = parseFloat(ctc_monthly) || 0;
@@ -177,9 +171,9 @@ const employeeSalaryTemplateController = {
             };
 
             if (employeeTemplate) {
-                await commonQuery.updateRecordById(EmployeeSalaryTemplate, employeeTemplate.id, templatePayload, transaction, false, { company_id: true });
+                await commonQuery.updateRecordById(EmployeeSalaryTemplate, employeeTemplate.id, templatePayload, transaction);
             } else {
-                employeeTemplate = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction, { company_id: true });
+                employeeTemplate = await commonQuery.createRecord(EmployeeSalaryTemplate, templatePayload, transaction);
             }
 
             // 2. History Recording
@@ -216,7 +210,7 @@ const employeeSalaryTemplateController = {
             if (Array.isArray(components)) {
                 await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, {
                     employee_id: employeeId
-                }, transaction, { company_id: true });
+                }, transaction);
                 const componentPayloads = components.map(comp => ({
                     employee_id: employeeId,
                     employee_salary_template_id: employeeTemplate.id,
@@ -234,7 +228,7 @@ const employeeSalaryTemplateController = {
                     user_id: req.user?.id || 0
                 }));
 
-                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction, { company_id: true });
+                await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction);
             }
 
             await transaction.commit();
@@ -248,9 +242,9 @@ const employeeSalaryTemplateController = {
     getRevisionHistory: async (req, res) => {
         try {
             const { employeeId } = req.params;
-            const { SalaryRevisionHistory } = require("../../models");
-            const history = await SalaryRevisionHistory.findAll({
-                where: { employee_id: employeeId },
+            const history = await commonQuery.findAllRecords(SalaryRevisionHistory, {
+                employee_id: employeeId
+            }, {
                 order: [["effective_date", "DESC"]]
             });
             return res.success("Revision history fetched successfully", history);

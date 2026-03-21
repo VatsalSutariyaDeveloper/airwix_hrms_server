@@ -99,7 +99,7 @@ class LeaveBalanceService {
 
             const template = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, templateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t, true, { company_id: true });
+            }, t, true);
 
             if (!template) throw new Error("Leave template not found or inactive");
 
@@ -164,7 +164,7 @@ class LeaveBalanceService {
                     employee_id: employeeId,
                     leave_category_id: category.id,
                     status: 0
-                }, {}, t, false, { company_id: true });
+                }, {}, t);
 
                 let balance;
                 // Calculate pending leaves (considering existing usage if applicable)
@@ -185,7 +185,7 @@ class LeaveBalanceService {
                         leave_template_id: templateId,
                         year: end.year(),
                         month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null
-                    }, t, false, { company_id: true });
+                    }, t);
                 } else {
                     balance = await commonQuery.createRecord(EmployeeLeaveBalance, {
                         ...metaFields,
@@ -197,7 +197,7 @@ class LeaveBalanceService {
                         total_allocated: allocated,
                         pending_leaves: pending,
                         company_id: employee.company_id
-                    }, t, false, { company_id: true });
+                    }, t);
                 }
                 results.push(balance);
             }
@@ -216,14 +216,14 @@ class LeaveBalanceService {
     static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null) {
         const t = transaction || (await sequelize.transaction());
         try {
-            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true, { company_id: true });
+            const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
             if (!employee) throw new Error("Employee not found");
 
             if (!newTemplateId) {
                 await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                     employee_id: employeeId,
                     status: 0
-                }, { status: 2 }, t, false, { company_id: true });
+                }, { status: 2 }, t);
                 
                 if (!transaction) await t.commit();
                 return [];
@@ -231,7 +231,7 @@ class LeaveBalanceService {
 
             const newTemplate = preFetchedTemplate || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t, false, { company_id: true });
+            }, t);
 
             if (!newTemplate) throw new Error("New leave template not found");
 
@@ -243,7 +243,7 @@ class LeaveBalanceService {
                 employee_id: employeeId,
                 status: 0,
                 leave_category_id: { [Op.notIn]: newCategoryIds }
-            }, { status: 2 }, t, false, { company_id: true });
+            }, { status: 2 }, t);
 
             // 2. Run standard initialization
             const results = await this.initializeBalance(employeeId, newTemplateId, t, employee, newTemplate);
@@ -268,14 +268,14 @@ class LeaveBalanceService {
                 await commonQuery.updateRecordById(EmployeeLeaveBalance, {
                     employee_id: { [Op.in]: employeeIds },
                     status: 0
-                }, { status: 2 }, t, false, { company_id: true });
+                }, { status: 2 }, t);
                 if (!transaction) await t.commit();
                 return;
             }
 
             const template = meta.preFetchedMaster || await commonQuery.findOneRecord(LeaveTemplate, newTemplateId, {
                 include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-            }, t, false, { company_id: true });
+            }, t);
             if (!template) throw new Error("Leave template not found");
 
             const categoryIds = template.categories.map(c => c.id);
@@ -285,7 +285,7 @@ class LeaveBalanceService {
                 employee_id: { [Op.in]: employeeIds },
                 status: 0,
                 leave_category_id: { [Op.notIn]: categoryIds }
-            }, { status: 2 }, t, false, { company_id: true });
+            }, { status: 2 }, t);
 
             // 2. Perform bulk initialization - process in chunks to avoid memory issues
             const chunkSize = 50;
@@ -502,7 +502,7 @@ class LeaveBalanceService {
 
             // Determine the correct cycle/year
             // Attempt to use templates from emp if they were included
-            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t, false, { company_id: true });
+            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
             const { end } = this.getCycleDates(emp.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', date);
             const year = end.year();
 
@@ -512,7 +512,7 @@ class LeaveBalanceService {
                 year: year,
                 month: (template && (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY')) ? end.month() + 1 : null,
                 status: 0
-            }, {}, t, false, { company_id: true });
+            }, {}, t);
 
             if (!balance) {
                 console.warn(`[LeaveBalanceService] No balance found for emp ${employeeId}, category ${categoryId}, year ${year}. Skipping adjustment.`);
@@ -544,7 +544,7 @@ class LeaveBalanceService {
                 total_allocated: allocated,
                 used_leaves: used,
                 pending_leaves: pending
-            }, t, false, { company_id: true });
+            }, t);
 
             if (!transaction) await t.commit();
         } catch (error) {

@@ -37,13 +37,13 @@ const employeeAttendanceController = {
             let settings = await commonQuery.findAllRecords(EmployeeShift, { 
                 employee_id: employeeId,
                 status: 0
-            }, {}, null, { company_id: true });
+            });
 
             // Fallback to Master Template if no individual setting exists
             if (settings.length === 0) {
                 const employee = await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['shift_template', 'weekly_off_template'] });
                 if (employee && employee.shift_template) {
-                    const masterShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+                    const masterShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template);
                     
                     if (masterShift) {
                         // Fetch weekly offs to skip them, matching the old sync behavior
@@ -52,12 +52,12 @@ const employeeAttendanceController = {
                             employee_id: employeeId,
                             week_no: 0,
                             is_off: true
-                        }, {}, null, { company_id: true });
+                        });
                         
                         if (weeklyOffs.length === 0 && employee.weekly_off_template) {
                             weeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
                                 template_id: employee.weekly_off_template, status: 0
-                            }, {}, null, false, { company_id: true });
+                            });
                         }
                         
                         offDays = weeklyOffs.filter(wo => wo.is_off && wo.week_no === 0).map(wo => wo.day_of_week);
@@ -99,7 +99,7 @@ const employeeAttendanceController = {
             // Remove existing day-wise shift settings
             await commonQuery.hardDeleteRecords(EmployeeShift, { 
                 employee_id: employeeId 
-            }, transaction, { company_id: true });
+            }, transaction);
 
             if (shifts.length > 0) {
                 const payloads = shifts.map(shift => {
@@ -111,7 +111,7 @@ const employeeAttendanceController = {
                    };
                 });
 
-                await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction, { company_id: true });
+                await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
             }
 
             // Sync past attendance data for the current month
@@ -138,7 +138,7 @@ const employeeAttendanceController = {
             let weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, { 
                 employee_id: employeeId,
                 status: 0
-            }, {}, null, { company_id: true });
+            });
 
             // Fallback to Master Template
             if (weeklyOffs.length === 0) {
@@ -147,7 +147,7 @@ const employeeAttendanceController = {
                     weeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
                         template_id: employee.weekly_off_template,
                         status: 0
-                    }, {}, null, false, { company_id: true });
+                    });
                     weeklyOffs = weeklyOffs.map(wo => ({ ...wo.toJSON(), is_template: true }));
                 }
             }
@@ -173,7 +173,7 @@ const employeeAttendanceController = {
 
             await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { 
                 employee_id: employeeId 
-            }, transaction, { company_id: true });
+            }, transaction);
 
             if (weeklyOffs.length > 0) {
                 const payloads = weeklyOffs.map(off => ({
@@ -186,7 +186,7 @@ const employeeAttendanceController = {
                     company_id: req.user?.company_id || 0,
                 }));
 
-                await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction, { company_id: true });
+                await commonQuery.bulkCreate(EmployeeWeeklyOff, payloads, {}, transaction);
             }
 
             // Sync past attendance data for the current month
@@ -212,7 +212,7 @@ const employeeAttendanceController = {
             const { employeeId } = req.params;
             const setting = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { 
                 employee_id: employeeId 
-            }, {}, null, false, { company_id: true });
+            });
 
             return res.success("Employee attendance template fetched successfully", setting);
         } catch (error) {
@@ -231,7 +231,7 @@ const employeeAttendanceController = {
 
             let existing = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { 
                 employee_id: employeeId 
-            }, {}, transaction, false, { company_id: true });
+            }, {}, transaction);
 
             const payload = {
                 ...data,
@@ -240,9 +240,9 @@ const employeeAttendanceController = {
             };
 
             if (existing) {
-                await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction, false, { company_id: true });
+                await commonQuery.updateRecordById(EmployeeAttendanceTemplate, existing.id, payload, transaction);
             } else {
-                await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction, { company_id: true });
+                await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
             }
 
             // Sync past attendance data for the current month

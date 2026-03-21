@@ -90,11 +90,12 @@ const runWorker = async () => {
     // 1. Fetch ALL LeaveTemplateCategory for the company to identify headers
     const allCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
         company_id: workerData.company_id,
+        branch_id: workerData.branch_id,
         status: 0
     }, {
         attributes: ['id', 'leave_template_id', 'leave_category_name', 'is_paid', 'is_compoff', 'unused_leave_rule', 'carry_forward_limit'],
         raw: true
-    }, transaction, { company_id: true });
+    }, transaction);
 
     // 2. Map headers to categories - exact match preferred, otherwise prep for creation
     const leaveColumns = [];
@@ -142,7 +143,7 @@ const runWorker = async () => {
     }, {
         attributes: ['id', 'employee_id', 'leave_category_name', 'leave_category_id', 'total_allocated', 'used_leaves'],
         raw: true
-    }, transaction, { company_id: true });
+    }, transaction);
 
     const balanceMap = new Map();
     existingBalances.forEach(b => {
@@ -169,7 +170,7 @@ const runWorker = async () => {
     });
 
     // 0. Ensure a default template exists for the company
-    let defaultTemplate = await commonQuery.findOneRecord(LeaveTemplate, { company_id: mockStore.companyId, status: 0 }, {}, transaction, false, { company_id: true });
+    let defaultTemplate = await commonQuery.findOneRecord(LeaveTemplate, { company_id: mockStore.companyId, branch_id: mockStore.branchId, status: 0 }, {}, transaction);
     if (!defaultTemplate) {
         defaultTemplate = await commonQuery.createRecord(LeaveTemplate, {
             template_name: "Default Leave Template",
@@ -177,7 +178,7 @@ const runWorker = async () => {
             branch_id: mockStore.branchId,
             user_id: mockStore.userId,
             status: 0
-        }, transaction, { company_id: true });
+        }, transaction);
     }
 
     // 6. PROCESSING LOOP
@@ -236,7 +237,7 @@ const runWorker = async () => {
                         branch_id: employee.branch_id || mockStore.branchId,
                         user_id: mockStore.userId,
                         status: 0
-                    }, transaction, { company_id: true });
+                    }, transaction);
                     
                     // Update maps for subsequent rows
                     categoryFallbackMap.set(col.canonicalCleanedName, categoryData);
@@ -313,11 +314,11 @@ const runWorker = async () => {
     }
 
     if (balancesToCreate.length > 0) {
-        await commonQuery.bulkCreate(EmployeeLeaveBalance, balancesToCreate, {}, transaction, { company_id: true });
+        await commonQuery.bulkCreate(EmployeeLeaveBalance, balancesToCreate, {}, transaction);
     }
 
     for (const b of balancesToUpdate) {
-        await commonQuery.updateRecordById(EmployeeLeaveBalance, b.id, b, transaction, false, { company_id: true });
+        await commonQuery.updateRecordById(EmployeeLeaveBalance, b.id, b, transaction);
     }
 
     await transaction.commit();

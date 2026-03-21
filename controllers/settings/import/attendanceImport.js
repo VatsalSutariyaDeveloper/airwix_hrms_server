@@ -277,7 +277,7 @@ const runWorker = async () => {
     
     // Fetch Leave Categories for the company
     const categoryRecords = await LeaveTemplateCategory.findAll({
-        where: { company_id: mockStore.companyId, status: { [Op.ne]: 2 } },
+        where: { company_id: mockStore.companyId, branch_id: mockStore.branchId, status: { [Op.ne]: 2 } },
         transaction,
         raw: true
     });
@@ -466,7 +466,7 @@ const runWorker = async () => {
     // --- Optimization Step: Ensure All Leave Templates/Categories/Balances Exist ---
     // Ensure Default Template
     let defaultTemplate = await LeaveTemplate.findOne({
-        where: { company_id: mockStore.companyId, status: 0 },
+        where: { company_id: mockStore.companyId, branch_id: mockStore.branchId, status: 0 },
         transaction,
         order: [['id', 'ASC']]
     });

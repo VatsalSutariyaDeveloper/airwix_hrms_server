@@ -24,7 +24,6 @@ module.exports = (sequelize, DataTypes) => {
         leave_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         shift_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         salary_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        resignation_template_id: { type: DataTypes.INTEGER, defaultValue: 0 },
         attendance_weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         geofence_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         attendance_setting_template: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -141,6 +140,7 @@ module.exports = (sequelize, DataTypes) => {
         status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
         user_id: { type: DataTypes.INTEGER, allowNull: true },
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
+        access_branches: { type: DataTypes.JSONB, defaultValue: [] },
         company_id: { type: DataTypes.INTEGER, allowNull: true },
 
         // Resignation Related

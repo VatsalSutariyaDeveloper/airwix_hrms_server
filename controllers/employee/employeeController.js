@@ -106,7 +106,7 @@ const FILE_COLUMNS = [
 
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
-    const fieldsToParse = ["education_details", "custom_fields"];
+    const fieldsToParse = ["education_details", "custom_fields", "access_branches"];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
@@ -768,6 +768,7 @@ exports.getAll = async (req, res) => {
                     "mobile_no",
                     "joining_date",
                     "branch_id",
+                    "access_branches",
                     "profile_image",
                     "created_at",
                     "status"
@@ -1090,26 +1091,26 @@ exports.assignTemplate = async (req, res) => {
         if (commonValue) {
             switch (field_name) {
                 case 'attendance_setting_template':
-                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction, false, { company_id: true });
+                    masterData = await commonQuery.findOneRecord(AttendanceTemplate, commonValue, {}, transaction);
                     break;
                 case 'holiday_template':
-                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction, { company_id: true });
+                    masterData = await commonQuery.findAllRecords(HolidayTransaction, { template_id: commonValue, status: 0 }, {}, transaction);
                     break;
                 case 'weekly_off_template':
-                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction, { company_id: true });
+                    masterData = await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: commonValue, status: 0 }, {}, transaction);
                     break;
                 case 'leave_template':
                     masterData = await commonQuery.findOneRecord(LeaveTemplate, commonValue, {
                         include: [{ model: LeaveTemplateCategory, as: "categories", where: { status: 0 } }]
-                    }, transaction, false, { company_id: true });
+                    }, transaction);
                     break;
                 case 'salary_template_id':
                     masterData = await commonQuery.findOneRecord(SalaryTemplate, commonValue, {
                         include: [{ model: SalaryTemplateTransaction, as: "salaryTemplateTransactions" }]
-                    }, transaction, false, { company_id: true });
+                    }, transaction);
                     break;
                 case 'shift_template':
-                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction, false, { company_id: true });
+                    masterData = await commonQuery.findOneRecord(ShiftTemplate, commonValue, {}, transaction);
                     break;
             }
         }
@@ -1666,7 +1667,10 @@ exports.getWages = async (req, res) => {
             },
             {
                 attributes: ['id', 'attendance_date', 'first_in', 'last_out', 'overtime_data', 'fine_data']
-            }
+            },
+            null,
+            false,
+            { company_id: true }
         );
 
         if (!attendanceDay) {
@@ -1690,10 +1694,7 @@ exports.getWages = async (req, res) => {
             },
             {
                 attributes: ['id', 'company_id', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate']
-            },
-            null,
-            false,
-            { company_id: true }
+            }
         );
 
         // Only calculate wages if employeeSalaryTemplate exists
@@ -1714,13 +1715,13 @@ exports.getWages = async (req, res) => {
             employee_id: employeeId,
             day_of_week: dayOfWeek,
             status: 0,
-        }, {}, null, false, { company_id: true });
+        });
 
         let shift = null;
         if (empShift && empShift.shift_id) {
-            shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, null, false, { company_id: true });
+            shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id);
         } else if (!empShift && employee.shift_template) {
-            shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, null, false, { company_id: true });
+            shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template);
         } else if (empShift && !empShift.shift_id) {
             shift = empShift; // Manual shift configuration
         }
@@ -1756,10 +1757,7 @@ exports.getWages = async (req, res) => {
                         employee.weekly_off_template,
                         {
                             include: [{ model: WeeklyOffTemplateDay, as: "days" }]
-                        },
-                        null,
-                        false,
-                        { company_id: true }
+                        }
                     );
 
                     if (weeklyOffTemplate) {

@@ -165,7 +165,7 @@ const runWorker = async () => {
         // 4. Pre-fetch existing templates for these employees
         const existingTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, {
             employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
-        }, { raw: true }, transaction, { company_id: true });
+        }, { raw: true }, transaction);
         
         const templateMap = new Map();
         existingTemplates.forEach(t => templateMap.set(t.employee_id, t));
@@ -487,10 +487,10 @@ const runWorker = async () => {
         if (createdCount > 0) {
             // 1. Bulk Update/Create Templates
             for (const t of templatesToUpdate) {
-                await commonQuery.updateRecordById(EmployeeSalaryTemplate, t.id, t, transaction, false, { company_id: true });
+                await commonQuery.updateRecordById(EmployeeSalaryTemplate, t.id, t, transaction);
             }
             if (templatesToCreate.length > 0) {
-                const newTemplates = await commonQuery.bulkCreate(EmployeeSalaryTemplate, templatesToCreate, { returning: true }, transaction, { company_id: true });
+                const newTemplates = await commonQuery.bulkCreate(EmployeeSalaryTemplate, templatesToCreate, { returning: true }, transaction);
                 // Assign newly created template IDs back to employees
                 newTemplates.forEach(nt => {
                     const emp = existingEmployees.find(e => e.id === nt.employee_id);
@@ -504,7 +504,7 @@ const runWorker = async () => {
             // 2. Refresh Template Map and Prep Transactions
             const finalTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, {
                 employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
-            }, { raw: true }, transaction, { company_id: true });
+            }, { raw: true }, transaction);
             const finalTemplateMap = new Map();
             finalTemplates.forEach(t => finalTemplateMap.set(t.employee_id, t));
 
@@ -523,11 +523,11 @@ const runWorker = async () => {
             });
 
             // 3. Clear and Mega-Bulk Create Transactions
-            await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: empIdsWithTransactions } }, transaction, { company_id: true });
+            await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: empIdsWithTransactions } }, transaction);
             if (transactionsToCreate.length > 0) {
                 const CHUNK_SIZE = 1000;
                 for (let i = 0; i < transactionsToCreate.length; i += CHUNK_SIZE) {
-                    await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, transactionsToCreate.slice(i, i + CHUNK_SIZE), {}, transaction, { company_id: true });
+                    await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, transactionsToCreate.slice(i, i + CHUNK_SIZE), {}, transaction);
                 }
             }
 

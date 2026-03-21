@@ -154,14 +154,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
         employee_id,
         year
-    }, {}, transaction, { company_id: true });
+    }, {}, transaction);
 
     // Also fetch categories from the employee's assigned leave template for name fallback
     let templateCategories = [];
     if (employee.leave_template) {
         templateCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
             leave_template_id: employee.leave_template
-        }, {}, transaction, { company_id: true });
+        }, {}, transaction);
     }
 
     const leaveParamMap = new Map();
@@ -204,7 +204,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         employee_id,
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
-    }, {}, transaction);
+    }, {}, transaction, { company_id: true });
     
     const monthLeaveUsage = {}; // Track usage per category ID for the current month
     const leaveCategoryDetails = {}; // Track usage per category name for leave_details
@@ -311,7 +311,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     let unitWorkingHours = 8;
     let shift = null;
     if (employee.shift_template) {
-        shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, { company_id: true });
+        shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
     }
     if (shift) {
         if (parseFloat(shift.total_payable_hours) > 0) {
@@ -894,7 +894,7 @@ const formatPayslipToSummary = async (payslip) => {
         employee_id: payslip.employee_id,
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
-    });
+    }, {}, transaction, { company_id: true });
 
     const overtimeHistory = attendanceRecords
         .filter(day => parseFloat(day.overtime_minutes || 0) > 0 || parseFloat(day.overtime_amount || 0) > 0)
@@ -2377,7 +2377,7 @@ exports.getEmployeesByMonthYear = async (req, res) => {
         }, {
             attributes: [[sequelize.fn('DISTINCT', sequelize.col('employee_id')), 'employee_id']],
             raw: true
-        });
+        }, null, { company_id: true });
 
         // 2. Get unique employee_ids from Payslip for the given month/year
         const payslipEmployees = await commonQuery.findAllRecords(Payslip, {
