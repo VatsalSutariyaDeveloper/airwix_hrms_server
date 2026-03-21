@@ -1353,6 +1353,17 @@ exports.registerFace = async (req, res) => {
     try {
         const { id } = req.body;
 
+        if(req.user.access == "attendance device"){
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
+            if (!device) {
+                return res.status(401).json({
+                    success: false,
+                    error: "UNAUTHORIZED",
+                    message: "Device not Exist."
+                });
+            }
+        }
+
         // Check if image file exists
         if (!req.files || (!req.files.image && !req.files['image'])) {
             await transaction.rollback();
@@ -1412,8 +1423,43 @@ exports.registerFace = async (req, res) => {
             } else {
                 throw new Error(aiResponse.data.message);
             }
+
+            // 2.1 Unique Face Check
+            const threshold = process.env.FACE_MATCH_THRESHOLD || 0.4;
+            const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
+                status: 0,
+                face_descriptor: { [Op.ne]: null },
+                id: { [Op.ne]: id } 
+            }, {
+                attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+                raw: true
+            }, null, { company_id: true });
+
+            for (const emp of employeesWithFaces) {
+                let storedVector = emp.face_descriptor;
+                if (typeof storedVector === 'string') {
+                    try {
+                        storedVector = JSON.parse(storedVector);
+                    } catch (e) { continue; }
+                }
+                if (!Array.isArray(storedVector)) continue;
+
+                const dist = calculateCosineDistance(faceDescriptor, storedVector);
+                if (dist < threshold) {
+                    const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
+                    const branchName = branch?.branch_name || "N/A";
+                    
+                    await transaction.rollback();
+                    // Clean up the uploaded file since the process failed validation
+                    try { fs.unlinkSync(fullFilePath); } catch (e) { }
+
+                    return res.error(constants.VALIDATION_ERROR, { 
+                        message: `${emp.first_name} already exist in ${branchName}` 
+                    });
+                }
+            }
         } catch (aiError) {
-            await transaction.rollback();
+            if (!transaction.finished) await transaction.rollback();
             // Optional: Delete the file we just wrote since the process failed
             try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
@@ -1460,6 +1506,17 @@ exports.facePunch = async (req, res) => {
             upload: 0, 
             total: 0 
         };
+
+        if(req.user.access == "attendance device"){
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
+            if (!device) {
+                return res.status(401).json({
+                    success: false,
+                    error: "UNAUTHORIZED",
+                    message: "Device not Exist."
+                });
+            }
+        }
 
         const files = req.files.image || req.files['image'];
         if (!files || files.length === 0) {
