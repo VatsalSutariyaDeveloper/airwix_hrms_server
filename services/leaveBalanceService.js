@@ -497,7 +497,7 @@ class LeaveBalanceService {
 
         const t = transaction || (await sequelize.transaction());
         try {
-            const emp = employee || await commonQuery.findOneRecord(Employee, employeeId, {}, t);
+            const emp = employee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, false, { company_id: true });
             if (!emp) throw new Error("Employee not found");
 
             // Determine the correct cycle/year

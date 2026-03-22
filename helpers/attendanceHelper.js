@@ -72,7 +72,7 @@ async function getOrCreateAttendanceDay(employeeId, date, meta = {}, transaction
   // 0. Fetch employee to get correct company/branch if not provided in meta
   const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
     attributes: ['id', 'company_id', 'branch_id']
-  }, transaction, false, false); // Skip tenant check to fetch basic info if needed
+  }, transaction, false, { comapany_id: true }); // Skip tenant check to fetch basic info if needed
 
   const existingDay = await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
@@ -141,7 +141,7 @@ async function punch(employeeId, meta, transaction = null) {
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
       { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
     ],
-  }, transaction);
+  }, transaction, false, { company_id: true });
 
   if (!employee) throw new Error("Employee not found");
 
@@ -343,7 +343,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
       { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
     ],
-  }, transaction);
+  }, transaction, false, { company_id: true });
   if (!employee) return;
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
 
@@ -1739,7 +1739,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
       { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
     ],
-  }, transaction);
+  }, transaction, false, { comapany_id: true });
 
   const commonMeta = {
     user_id: meta.user_id || 0,
@@ -2037,7 +2037,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
         { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
       ],
-    }, transaction);
+    }, transaction, false, { comapany_id: true });
   }
 
   if (employee) {
