@@ -1348,7 +1348,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         attributes: ['id', 'branch_name']
       }],
       order: [["punch_time", "ASC"]]
-    }, t, { company_id: true });
+    }, null, { company_id: true });
 
     const summary = {
       present: 0,
