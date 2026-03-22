@@ -8,7 +8,8 @@ const {
     Payslip,
     CanteenAttendance,
     LeaveTemplate,
-    OnDutyRequest
+    OnDutyRequest,
+    AttendanceRegularization
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize } = require("../../helpers");
 const { Op } = require("sequelize");
@@ -37,11 +38,13 @@ exports.getCounts = async (req, res) => {
 
         let pendingLeaves = 0;
         let authorizedOnDutyRequests = 0;
+        let authorizedAttendanceRegularizationRequests = 0;
 
         if (req.user.is_super_admin) {
             // Optimization for super admins
             pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
+            authorizedAttendanceRegularizationRequests = await commonQuery.countRecords(AttendanceRegularization, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
         } else {
             // Helper function to check authorization
             const isUserAuthorizedForRequest = (request, levelField) => {
@@ -106,9 +109,22 @@ exports.getCounts = async (req, res) => {
                     authorizedOnDutyRequests++;
                 }
             }
+
+            const pendingAttendanceRegularizationRequests = await commonQuery.findAllRecords(AttendanceRegularization,
+                { approval_status: { [Op.in]: [0, 1] }, status: 0 },
+                queryIncludeOptions,
+                null,
+                true
+            );
+
+            for (const request of pendingAttendanceRegularizationRequests) {
+                if (isUserAuthorizedForRequest(request, 'current_level')) {
+                    authorizedAttendanceRegularizationRequests++;
+                }
+            }
         }
 
-        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests;
+        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests + authorizedAttendanceRegularizationRequests;
         
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {

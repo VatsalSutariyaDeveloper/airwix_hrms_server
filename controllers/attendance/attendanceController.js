@@ -416,7 +416,7 @@ exports.updateAttendanceDay = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    });
+    }, t, false, { comapany_id: true });
     const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
     
@@ -944,7 +944,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    }, t);
+    }, t, { comapany_id: true });
     const empMap = new Map(employees.map(e => [e.id, e]));
 
     for (const employee_id of employee_ids) {

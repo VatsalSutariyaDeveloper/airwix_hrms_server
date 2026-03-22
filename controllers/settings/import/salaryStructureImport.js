@@ -155,7 +155,7 @@ const runWorker = async () => {
             employee_code: { [Op.in]: employeeCodesInFile },
             company_id,
             status: { [Op.ne]: 2 }
-        }, { attributes: ['id', 'employee_code', 'first_name'], raw: true }, transaction);
+        }, { attributes: ['id', 'employee_code', 'first_name', 'branch_id'], raw: true }, transaction, { comapany_id: true });
 
         const employeeMap = new Map();
         existingEmployees.forEach(emp => {
@@ -273,7 +273,7 @@ const runWorker = async () => {
                         included_in_ctc: true,
                         is_employer_contribution: comp.component_type === 'EMPLOYER_CONTRIBUTION' || comp.component_category === 'STATUTORY',
                         company_id,
-                        branch_id,
+                        branch_id: employee.branch_id,
                         user_id
                     };
 
@@ -346,7 +346,7 @@ const runWorker = async () => {
                             included_in_ctc: true,
                             is_employer_contribution: false,
                             company_id,
-                            branch_id,
+                            branch_id: employee.branch_id,
                             user_id
                         });
                     }
@@ -390,7 +390,7 @@ const runWorker = async () => {
                             included_in_ctc: true,
                             is_employer_contribution: true,
                             company_id,
-                            branch_id,
+                            branch_id: employee.branch_id,
                             user_id
                         });
                         ctcMonthly += amt;
@@ -433,7 +433,7 @@ const runWorker = async () => {
                     staff_type: 'Regular', salary_type: 'Monthly',
                     ctc_monthly: ctcMonthly, ctc_yearly: ctcMonthly * 12,
                     lwp_calculation_basis: calculationBasis,
-                    statutory_config, company_id, branch_id, user_id, status: 0
+                    statutory_config, company_id, branch_id: employee.branch_id, user_id, status: 0
                 };
 
                 if (template) {
@@ -455,7 +455,7 @@ const runWorker = async () => {
                         status: 1, 
                         approved_by: user_id,
                         company_id, 
-                        branch_id
+                        branch_id: employee.branch_id
                     });
                 }
 
