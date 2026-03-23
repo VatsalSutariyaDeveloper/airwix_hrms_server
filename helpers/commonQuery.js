@@ -7,6 +7,13 @@ const dayjs = require("dayjs");
 
 const DEBUG_SQL = process.env.DEBUG_SQL === "true";
 
+// Capture stack at the entry of these functions to bypass async stack loss
+const captureCaller = () => {
+    const stack = new Error().stack.split("\n");
+    // [0] Error, [1] captureCaller, [2] commonQuery function, [3] ACTUAL CALLER
+    return stack[3] ? stack[3].trim().replace(/^at /, "") : "unknown";
+};
+
 /**
  * ------------------------------------------------------------------
  * HELPERS
@@ -55,11 +62,19 @@ function withDebug(options = {}, transaction = null) {
   const opts = { ...options };
   if (transaction) opts.transaction = transaction;
 
+  // Use pre-captured caller if available, otherwise fallback to current stack
+  let caller = opts.__caller;
+  if (!caller) {
+    const stack = new Error().stack.split("\n");
+    caller = stack[3] ? stack[3].trim().replace(/^at /, "") : "unknown";
+  }
+
   opts.logging = (sql, queryObject) => {
     if (DEBUG_SQL) {
       const bind = queryObject.bind || queryObject.parameters || [];
       const formatted = formatSQL(sql, bind);
       console.log("\x1b[36m[SQL]\x1b[0m", formatted);
+      console.log("\x1b[90m[From]\x1b[0m", caller);
     }
   };
   return opts;
@@ -213,6 +228,7 @@ async function normalizeInclude(includeArray) {
 module.exports = {
   // 1. Create Record
   createRecord: async (model, data, transaction = null, requireTenantFields=true) => {
+    const caller = captureCaller();
     let enrichedData = { ...data }
     let commonData = {
       user_id: data.user_id,
@@ -238,7 +254,7 @@ module.exports = {
       if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
-    const result = await model.create(enrichedData, withDebug({}, transaction));
+    const result = await model.create(enrichedData, withDebug({ __caller: caller }, transaction));
 
     try {
       await logQuery({
@@ -258,6 +274,7 @@ module.exports = {
 
   // 2. Bulk Create
   bulkCreate: async (Model, dataArray, extraFields, transaction = null, requireTenantFields=true) => {
+    const caller = captureCaller();
     if (!Array.isArray(dataArray) || !dataArray.length) return [];
     let enriched = dataArray.map((item) => ({ ...item, ...extraFields }));
     let commonData = {
@@ -300,7 +317,7 @@ module.exports = {
       if (attachBranch && commonData.branch_id === undefined) commonData.branch_id = ctx.branch_id;
     }
 
-    const createdRecords = await Model.bulkCreate(enriched, withDebug({}, transaction));
+    const createdRecords = await Model.bulkCreate(enriched, withDebug({ __caller: caller }, transaction));
 
     if (createdRecords.length) {
       try {
@@ -323,6 +340,7 @@ module.exports = {
 
   // 3. Update Record
   updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true) => {
+    const caller = captureCaller();
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
     let condition = await buildWhere(whereInput, requireTenantFields); 
     
@@ -358,7 +376,7 @@ module.exports = {
     if (!oldRecord) return null;
     const [count] = await model.update(
       safeData,
-      withDebug({ where: condition }, transaction)
+      withDebug({ where: condition, __caller: caller }, transaction)
     );
 
     if (count === 0) return null;
@@ -430,6 +448,7 @@ module.exports = {
 
   // 5. Find All
   findAllRecords: async (model, filters = {}, options = {}, transaction = null, requireTenantFields = true) => {
+    const caller = captureCaller();
     const safeOptions = options || {};
     const where = await buildWhere(filters, requireTenantFields);
 
@@ -437,6 +456,7 @@ module.exports = {
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
     const queryOptions = withDebug({
+      __caller: caller,
       where,
       ...attributesOption,
       ...(safeOptions.skip ? { offset: safeOptions.skip } : {}),
@@ -458,12 +478,14 @@ module.exports = {
 
   // 6. Count
   countRecords: async (model, filters = {}, options = {}, requireTenantFields = true) => {
+    const caller = captureCaller();
     const safeOptions = options || {};
     const where = await buildWhere(filters, requireTenantFields);
     
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
     const result = await model.count(withDebug({
+      __caller: caller,
       where,
       ...(includeOption.length ? { include: includeOption } : {}),
       ...(safeOptions.group ? { group: safeOptions.group } : {}),
@@ -476,6 +498,7 @@ module.exports = {
 
   // 7. Find One
   findOneRecord: async (model, whereInput = {}, options = {}, transaction = null, forceReload = false, requireTenantFields = true) => {
+    const caller = captureCaller();
     const safeOptions = options || {};
     const condition = await buildWhere(whereInput, requireTenantFields);
     
@@ -483,6 +506,7 @@ module.exports = {
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
     const result = await model.findOne(withDebug({
+      __caller: caller,
       where: condition,
       ...attributesOption,
       ...(safeOptions.order ? { order: safeOptions.order } : {}),
@@ -498,14 +522,16 @@ module.exports = {
 
   // 8. Hard Delete
   hardDeleteRecords: async (model, whereInput = {}, transaction = null, requireTenantFields = true) => {
+    const caller = captureCaller();
     const condition = await buildWhere(whereInput, requireTenantFields);
-    return model.destroy(withDebug({ where: condition }, transaction));
+    return model.destroy(withDebug({ where: condition, __caller: caller }, transaction));
   },
 
   // 9. Aggregates
   sumRecords: async (model, field, filters = {}, transaction = null) => {
+    const caller = captureCaller();
     const where = await buildWhere(filters, true);
-    const total = await model.sum(field, withDebug({ where }, transaction));
+    const total = await model.sum(field, withDebug({ where, __caller: caller }, transaction));
     return total || 0;
   },
 
@@ -531,6 +557,7 @@ module.exports = {
 
     // 10. ADVANCED PAGINATION
 async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
+    const caller = captureCaller();
     try {
       const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
         key,
@@ -699,7 +726,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       let data = await module.exports.findAllRecords(
         model,
         filters, 
-        { ...options, skip, limit, order, subQuery: false },
+        { ...options, skip, limit, order, subQuery: false, __caller: caller },
         null,
         requireTenantFields
       );

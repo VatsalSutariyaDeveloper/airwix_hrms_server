@@ -808,7 +808,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // }
 
     await t.commit();
-    return res.success(constants.ATTENDANCE_UPDATED, result);
+    return res.success(constants.ATTENDANCE_UPDATED, day);
   } catch (err) {
     await t.rollback();
     return handleError(err, res, req);

@@ -30,12 +30,16 @@ const parseDateTime = (timeStr, baseDate) => {
  */
 async function findMatchingShift(branchId, companyId, punchTime, transaction) {
     if (!branchId) return null;
-
+    console.log("branchId", branchId);
+    console.log("companyId", companyId);
+    console.log("punchTime", punchTime);
     const shifts = await commonQuery.findAllRecords(ShiftTemplate, {
         branch_id: branchId,
         company_id: companyId,
         status: 0
-    }, {}, transaction);
+    }, {}, transaction, {});
+
+    console.log("shifts", shifts.length);
 
     if (!shifts || shifts.length === 0) return null;
     if (shifts.length === 1) return shifts[0];
@@ -239,10 +243,10 @@ async function punch(employeeId, meta, transaction = null) {
 
   // Store resolved shift_id in AttendanceDay if it matches the current day
   if (shift && attendanceDay && attendanceDay.shift_id !== shift.id) {
-    await commonQuery.updateRecord(AttendanceDay, { 
+    await commonQuery.updateRecordById(AttendanceDay, dayId, { 
       shift_id: shift.id,
-      branch_id: meta.branch_id || attendanceDay.branch_id
-    }, { id: dayId }, transaction, { company_id: true });
+      branch_id: meta.branch_id || attendanceDay.branch_id  
+    }, transaction, true, { company_id: true });
     
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = meta.branch_id || attendanceDay.branch_id;
@@ -364,10 +368,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let shift = null;
 
   const getShift = async (sId) => {
+    console.log("sId", sId);
+    console.log("meta.preFetchedShiftTemplates", meta.preFetchedShiftTemplates);
     if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
       return meta.preFetchedShiftTemplates.get(sId);
     }
-    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction);
+    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, { company_id: true });
   };
 
   if (meta.shift_id) {
@@ -1547,7 +1553,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Determine working status based on punches and worked minutes
   const lastPunchType = punches[punches.length - 1]?.punch_type;
-
+  console.log("lastPunchType", lastPunchType);
   if (lastPunchType === "IN") {
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
@@ -1584,6 +1590,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // Both IN and OUT exist (or at least last is OUT)
     const minHalfDay = shift ? shift.min_half_day_minutes : 240;
     const minFullDay = shift ? shift.min_full_day_minutes : 480;
+    console.log("finalWorkedMinutes >= minFullDay", finalWorkedMinutes, minFullDay)
 
     // Special handling for holidays - if holiday and worked, set HOLIDAY status
     if (meta.isHoliday && overtimeMinutes > 0) {
@@ -1597,35 +1604,37 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status = 0; // PRESENT
     } else if (finalWorkedMinutes >= minHalfDay) {
       status = 1; // HALF_DAY
+      autoAbsentReason = `Auto Half Day: Worked time (${finalWorkedMinutes}m) between half-day (${minHalfDay}m) and full-day (${minFullDay}m) thresholds`;
     } else {
       status = 5; // ABSENT (Worked minutes below half-day threshold)
       autoAbsentReason = `Auto Absent: Worked time (${finalWorkedMinutes}m) below threshold (${minHalfDay}m)`;
     }
   }
+  console.log("status", status);
 
   // OT minutes are already synced within the rule calculation blocks using trimmed values
 
   // Prevent Status Downgrade (User Request: "don't let it to change my status")
   // If existing status is Present/HalfDay, don't revert to Absent/HalfDay just because of minutes calculation
-  const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
-    employee_id: employeeId,
-    attendance_date: date,
-    company_id: employee.company_id,
-  }, { attributes: ['status'] }, transaction, false, { company_id: true });
-
-  if (existingDayForStatus) {
-    // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
-    if (meta.preserveStatus) {
-      status = existingDayForStatus.status;
-    }
-    // Otherwise apply downgrade prevention logic
-    else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
-      status = existingDayForStatus.status; // Keep Present or On Duty
-    } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
-      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
-    }
-  }
-
+  // const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
+  //   employee_id: employeeId,
+  //   attendance_date: date,
+  //   company_id: employee.company_id,
+  // }, { attributes: ['status'] }, transaction, false, { company_id: true });
+  // console.log("existingDayForStatus.status", existingDayForStatus.status);
+  // if (existingDayForStatus) {
+  //   // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
+  //   if (meta.preserveStatus) {
+  //     status = existingDayForStatus.status;
+  //   }
+  //   // Otherwise apply downgrade prevention logic
+  //   else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
+  //     status = existingDayForStatus.status; // Keep Present or On Duty
+  //   } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
+  //     status = existingDayForStatus.status; // Keep Half Day or Half On Duty
+  //   }
+  // }
+  console.log("meta.forcedStatus", meta.forcedStatus);
   if (meta.forcedStatus !== undefined) {
     status = meta.forcedStatus;
     if (meta.overrideAutomationNote) {
@@ -1750,13 +1759,17 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   let shift = null;
   if (meta.shift_id) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, { id: meta.shift_id, company_id: commonMeta.company_id, branch_id: commonMeta.branch_id, status: 0 }, {}, transaction, false, {});
   }
+
+  console.log("commonMeta.branch_id", commonMeta.branch_id);
+  console.log("employee?.branch_id", employee?.branch_id);
 
   if (!shift && commonMeta.branch_id && parseInt(commonMeta.branch_id) !== parseInt(employee?.branch_id)) {
     const pTime = inTime ? parseDateTime(inTime, date) : (outTime ? parseDateTime(outTime, date) : new Date(date));
     shift = await findMatchingShift(commonMeta.branch_id, commonMeta.company_id, pTime, transaction);
   }
+  console.log("shift", shift);
 
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
@@ -1771,13 +1784,14 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     };
   }
   const dayId = attendanceDay.id;
-
+  console.log("attendanceDay.shift_id", attendanceDay.shift_id);
+  console.log("shift.id", shift.id);
   // Update attendance day with the resolved shift and branch
-  if (shift && attendanceDay.shift_id !== shift.id) {
+  if (shift && attendanceDay.shift_id != shift.id) {
     await commonQuery.updateRecordById(AttendanceDay, dayId, { 
         shift_id: shift.id,
         branch_id: commonMeta.branch_id || attendanceDay.branch_id
-    }, transaction, { company_id: true });
+    }, transaction, true, { company_id: true });
     
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = commonMeta.branch_id || attendanceDay.branch_id;
