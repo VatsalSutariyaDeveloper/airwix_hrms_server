@@ -75,6 +75,8 @@ app.use((req, res, next) => {
   next();
 });
 
+const apiLogger = require("./middlewares/apiLogger");
+app.use(apiLogger);
 app.use(responseFormatter);
 app.use("/api/auth", authRoutes);
 
@@ -92,6 +94,8 @@ app.use("/api/canteen-attendance", canteenAttendanceRoutes);
 app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/resignation", require("./routes/resignationRoutes"));
+app.use("/api/onboarding", require("./routes/onboardingRoutes"));
+app.use("/api/system-logs", require("./routes/systemLogRoutes"));
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS

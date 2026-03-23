@@ -30,12 +30,11 @@ const parseDateTime = (timeStr, baseDate) => {
  */
 async function findMatchingShift(branchId, companyId, punchTime, transaction) {
     if (!branchId) return null;
-
     const shifts = await commonQuery.findAllRecords(ShiftTemplate, {
         branch_id: branchId,
         company_id: companyId,
         status: 0
-    }, {}, transaction);
+    }, {}, transaction, {});
 
     if (!shifts || shifts.length === 0) return null;
     if (shifts.length === 1) return shifts[0];
@@ -239,10 +238,10 @@ async function punch(employeeId, meta, transaction = null) {
 
   // Store resolved shift_id in AttendanceDay if it matches the current day
   if (shift && attendanceDay && attendanceDay.shift_id !== shift.id) {
-    await commonQuery.updateRecord(AttendanceDay, { 
+    await commonQuery.updateRecordById(AttendanceDay, dayId, { 
       shift_id: shift.id,
-      branch_id: meta.branch_id || attendanceDay.branch_id
-    }, { id: dayId }, transaction, { company_id: true });
+      branch_id: meta.branch_id || attendanceDay.branch_id  
+    }, transaction, true, { company_id: true });
     
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = meta.branch_id || attendanceDay.branch_id;
@@ -367,7 +366,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
       return meta.preFetchedShiftTemplates.get(sId);
     }
-    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction);
+    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, { company_id: true });
   };
 
   if (meta.shift_id) {
@@ -634,17 +633,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Auto Attendance Status Mapping
     let finalStatus = isHalfDay ? 1 : 6; // 1: Half Day, 6: Leave
-    console.log("rules",rules)
     const overrideStatus = rules.auto_attendance_status;
-    console.log("overrideStatus",overrideStatus)
     if (overrideStatus && overrideStatus !== 'default') {
       finalStatus = parseInt(overrideStatus);
     }
-    console.log("finalStatus",finalStatus)
 
 
     const isSpecialStatus = overrideStatus !== undefined && overrideStatus !== null && overrideStatus !== 'default';
-    console.log("isSpecialStatus",isSpecialStatus)
     if (hasPunches && !isSpecialStatus) {
       // Standard: Cancel leave if employee punches in
       if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
@@ -1236,7 +1231,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               },
               transaction
             });
-            console.log(`[AttendanceDebug] Late Count for month: ${lateCount}. Limit: ${template.late_entry_limit}`);
             if ((lateCount + 1) > (template.late_entry_limit || 0)) {
               if (template.late_entry_fine_type === 'FIXED') {
                 const amount = parseFloat(template.late_entry_fine_value || 0);
@@ -1547,7 +1541,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Determine working status based on punches and worked minutes
   const lastPunchType = punches[punches.length - 1]?.punch_type;
-
   if (lastPunchType === "IN") {
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
@@ -1597,6 +1590,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status = 0; // PRESENT
     } else if (finalWorkedMinutes >= minHalfDay) {
       status = 1; // HALF_DAY
+      autoAbsentReason = `Auto Half Day: Worked time (${finalWorkedMinutes}m) between half-day (${minHalfDay}m) and full-day (${minFullDay}m) thresholds`;
     } else {
       status = 5; // ABSENT (Worked minutes below half-day threshold)
       autoAbsentReason = `Auto Absent: Worked time (${finalWorkedMinutes}m) below threshold (${minHalfDay}m)`;
@@ -1607,25 +1601,24 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Prevent Status Downgrade (User Request: "don't let it to change my status")
   // If existing status is Present/HalfDay, don't revert to Absent/HalfDay just because of minutes calculation
-  const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
-    employee_id: employeeId,
-    attendance_date: date,
-    company_id: employee.company_id,
-  }, { attributes: ['status'] }, transaction, false, { company_id: true });
-
-  if (existingDayForStatus) {
-    // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
-    if (meta.preserveStatus) {
-      status = existingDayForStatus.status;
-    }
-    // Otherwise apply downgrade prevention logic
-    else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
-      status = existingDayForStatus.status; // Keep Present or On Duty
-    } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
-      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
-    }
-  }
-
+  // const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
+  //   employee_id: employeeId,
+  //   attendance_date: date,
+  //   company_id: employee.company_id,
+  // }, { attributes: ['status'] }, transaction, false, { company_id: true });
+  // console.log("existingDayForStatus.status", existingDayForStatus.status);
+  // if (existingDayForStatus) {
+  //   // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
+  //   if (meta.preserveStatus) {
+  //     status = existingDayForStatus.status;
+  //   }
+  //   // Otherwise apply downgrade prevention logic
+  //   else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
+  //     status = existingDayForStatus.status; // Keep Present or On Duty
+  //   } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
+  //     status = existingDayForStatus.status; // Keep Half Day or Half On Duty
+  //   }
+  // }
   if (meta.forcedStatus !== undefined) {
     status = meta.forcedStatus;
     if (meta.overrideAutomationNote) {
@@ -1750,7 +1743,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   let shift = null;
   if (meta.shift_id) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, {}, transaction);
+    shift = await commonQuery.findOneRecord(ShiftTemplate, { id: meta.shift_id, company_id: commonMeta.company_id, branch_id: commonMeta.branch_id, status: 0 }, {}, transaction, false, {});
   }
 
   if (!shift && commonMeta.branch_id && parseInt(commonMeta.branch_id) !== parseInt(employee?.branch_id)) {
@@ -1771,13 +1764,12 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     };
   }
   const dayId = attendanceDay.id;
-
   // Update attendance day with the resolved shift and branch
-  if (shift && attendanceDay.shift_id !== shift.id) {
+  if (shift && attendanceDay.shift_id != shift.id) {
     await commonQuery.updateRecordById(AttendanceDay, dayId, { 
         shift_id: shift.id,
         branch_id: commonMeta.branch_id || attendanceDay.branch_id
-    }, transaction, { company_id: true });
+    }, transaction, true, { company_id: true });
     
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = commonMeta.branch_id || attendanceDay.branch_id;
@@ -1903,34 +1895,29 @@ async function getDayOffInfo(employee, date, transaction) {
   if (!employee) return res;
 
   // Holiday Check
-  if (employee.holiday_template) {
-    const holiday = await commonQuery.findOneRecord(HolidayTransaction, {
-      template_id: employee.holiday_template,
-      date: date,
-      status: 0,
-    }, {}, transaction);
-    if (holiday) {
-      res.isHoliday = true;
-      res.holidayDetails = holiday;
-    }
+  const holiday = await commonQuery.findOneRecord(EmployeeHoliday, {
+    employee_id: employee.id,
+    date: date,
+    status: 0,
+  }, {}, transaction, true, { company_id: true });
+  if (holiday) {
+    res.isHoliday = true;
+    res.holidayDetails = holiday;
   }
-
   // Weekly Off Check
-  if (employee.weekly_off_template) {
-    const d = dayjs(date);
-    const dayOfWeek = d.day();
-    const dayOfMonth = d.date();
-    const weekNo = Math.ceil(dayOfMonth / 7);
+  const d = dayjs(date);
+  const dayOfWeek = d.day();
+  const dayOfMonth = d.date();
+  const weekNo = Math.ceil(dayOfMonth / 7);
 
-    const weeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
-      template_id: employee.weekly_off_template,
-      day_of_week: dayOfWeek,
-      [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
-      is_off: true,
-      status: 0
-    }, {}, transaction);
-    if (weeklyOff) res.isWeeklyOff = true;
-  }
+  const weeklyOff = await commonQuery.findOneRecord(EmployeeWeeklyOff, {
+    employee_id: employee.id,
+    day_of_week: dayOfWeek,
+    [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+    is_off: true,
+    status: 0
+  }, {}, transaction, true, { company_id: true });
+  if (weeklyOff) res.isWeeklyOff = true;
 
   return res;
 }
@@ -1938,7 +1925,7 @@ async function getDayOffInfo(employee, date, transaction) {
 /**
  * Syncs Compensatory Off credits based on working on holidays/weekly offs.
  */
-async function syncCompOffCredit(employee, date, status, transaction) {
+async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
   if (!employee) return;
   const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
@@ -1952,10 +1939,20 @@ async function syncCompOffCredit(employee, date, status, transaction) {
     leave_template_id: employee.leave_template,
     status: 0
   }, {}, transaction);
-
   if (!compOffCategory) return;
 
-  const isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
+  // Determine if it's a working state based on status OR worked time on non-working days
+  let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
+  
+  // Important: If it's a Holiday (4) or Weekly Off (3), check if they actually worked (worked_minutes > 0 or has times)
+  if (!isWorkingStatus && [3, 4].includes(Number(status))) {
+    const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
+    const hasPunches = attendanceDay ? (attendanceDay.first_in || attendanceDay.last_out) : false;
+    if (workedMins > 0 || hasPunches) {
+      isWorkingStatus = true;
+    }
+  }
+
   const employeeId = employee.id;
 
   // Find existing credit record for this date
@@ -2041,7 +2038,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 
   if (employee) {
-    const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction);
+    const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction, newDay || oldDay);
     if (error) return error;
   }
 

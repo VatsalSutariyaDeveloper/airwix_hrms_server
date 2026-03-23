@@ -490,3 +490,33 @@ exports.getMyResignation = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.getTemplateDropdown = async (req, res) => {
+    try {
+        const companyId = req.user.company_id;
+        const data = await commonQuery.findAllRecords(ResignationTemplate, { 
+            status: 0,
+            company_id: companyId 
+        }, {
+            attributes: ['id', 'template_name']
+        });
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getReasonDropdown = async (req, res) => {
+    try {
+        const companyId = req.user.company_id;
+        const data = await commonQuery.findAllRecords(ResignationReason, { 
+            status: 0,
+            company_id: companyId 
+        }, {
+            attributes: ['id', 'reason_name']
+        });
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

@@ -19,7 +19,7 @@ const isTokenBlacklisted = (token) => {
 
 async function authMiddleware(req, res, next) {
   // ✅ Skip auth for specific routes
-  if (SKIP_ROUTES.includes(req.path)) {
+  if (SKIP_ROUTES.includes(req.path) || req.path.startsWith("/api/onboarding/public/")) {
     return next();
   }
 

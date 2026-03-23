@@ -17,6 +17,10 @@ router.get("/reason/:id", reasonController.getReasonById);
 router.put("/reason/:id", reasonController.updateReason);
 router.delete("/reason/:id", reasonController.deleteReason);
 
+// Dropdown Routes
+router.get("/template/dropdown", resignationController.getTemplateDropdown);
+router.get("/reason/dropdown", resignationController.getReasonDropdown);
+
 // Employee Resignation Routes
 router.post("/submit", resignationController.submitResignation);
 router.get("/my-request", resignationController.getMyResignation);

@@ -25,7 +25,8 @@ const {
     DesignationMaster,
     Department,
     HolidayTemplate,
-    ResignationTemplate
+    ResignationTemplate,
+    DeviceMaster
 } = require("../../models");
 
 const {
@@ -771,7 +772,8 @@ exports.getAll = async (req, res) => {
                     "access_branches",
                     "profile_image",
                     "created_at",
-                    "status"
+                    "status",
+                    "is_onboarding_completed"
                 ]
             },
             true,
@@ -1408,16 +1410,16 @@ exports.registerFace = async (req, res) => {
         try {
             const fileBuffer = fs.readFileSync(fullFilePath);
 
-            const formData = new FormData();
-            formData.append('image', fileBuffer, filename);
-            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-                headers: { ...formData.getHeaders() }
-            });
+            // const formData = new FormData();
+            // formData.append('image', fileBuffer, filename);
+            // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+            //     headers: { ...formData.getHeaders() }
+            // });
 
             //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
-            // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
-            //     headers: { 'Content-Type': 'application/octet-stream' }
-            // });
+            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
+                headers: { 'Content-Type': 'application/octet-stream' }
+            });
 
             if (aiResponse.data.status) {
                 faceDescriptor = aiResponse.data.embedding;
@@ -1536,14 +1538,14 @@ exports.facePunch = async (req, res) => {
                 formData.append('image', imageBuffer, originalName);
 
                 debugLog("AI-Call", "Sending to Python...");
-                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-                    headers: { ...formData.getHeaders() }
-                });
+                // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+                //     headers: { ...formData.getHeaders() }
+                // });
 
                 // for face punch python service accepts raw buffer instead of form data to reduce overhead and latency
-                // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
-                //     headers: { 'Content-Type': 'application/octet-stream' }
-                // });
+                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
+                    headers: { 'Content-Type': 'application/octet-stream' }
+                });
 
                 timings.ai = Date.now() - aiStart;
                 if (aiResponse.data.status) {
@@ -1571,7 +1573,7 @@ exports.facePunch = async (req, res) => {
             }, {
                 attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
                 raw: true
-            });
+            }, null, { company_id: true });
             timings.db = Date.now() - dbStart;
             return res;
         })();

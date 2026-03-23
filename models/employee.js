@@ -137,7 +137,10 @@ module.exports = (sequelize, DataTypes) => {
             comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
         },
 
-        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
+        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted, 3: Onboarding" },
+        onboarding_token: { type: DataTypes.STRING, unique: true },
+        onboarding_step: { type: DataTypes.INTEGER, defaultValue: 1 },
+        is_onboarding_completed: { type: DataTypes.BOOLEAN, defaultValue: false },
         user_id: { type: DataTypes.INTEGER, allowNull: true },
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
         access_branches: { type: DataTypes.JSONB, defaultValue: [] },

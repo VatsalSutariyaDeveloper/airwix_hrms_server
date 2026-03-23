@@ -614,130 +614,130 @@ exports.updateAttendanceDay = async (req, res) => {
         { status: 2 }, t);
     }
     */
-     const payload = {
-      employee_id,
-      attendance_date,
-      status,
-      user_id: req.user.id,
-      company_id: req.user.company_id,
-      branch_id: req.body.branch_id || req.user.branch_id
-    };
+    //  const payload = {
+    //   employee_id,
+    //   attendance_date,
+    //   status,
+    //   user_id: req.user.id,
+    //   company_id: req.user.company_id,
+    //   branch_id: req.body.branch_id || req.user.branch_id
+    // };
     
-    if (shift_id) payload.shift_id = shift_id;
+    // if (shift_id) payload.shift_id = shift_id;
 
-    // Clear data for non-working statuses
-    if ([3, 4, 5, 6].includes(status)) {
-        // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
-        const isPunchAllowed = [3, 4].includes(status) && (payload.first_in || payload.last_out || overtime_minutes);
+    // // Clear data for non-working statuses
+    // if ([3, 4, 5, 6].includes(status)) {
+    //     // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
+    //     const isPunchAllowed = [3, 4].includes(status) && (payload.first_in || payload.last_out || overtime_minutes);
 
-        if (!isPunchAllowed) {
-            payload.first_in = null;
-            payload.last_out = null;
-            payload.shift_id = null;
-            payload.worked_minutes = 0;
-            payload.total_break_minutes = 0;
-            payload.overtime_minutes = 0;
-            payload.overtime_data = null;
-            payload.overtime_amount = 0; // Ensure amount is cleared
-        } else {
-             // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
-            if (first_in !== undefined) payload.first_in = first_in;
-            if (last_out !== undefined) payload.last_out = last_out;
-            if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-            if (overtime_data !== undefined) {
-                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-            }
-            if (overtime_amount !== undefined) {
-                payload.overtime_amount = overtime_amount;
-            } else if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-            } else if (payload.overtime_data === null) {
-                payload.overtime_amount = 0;
-            }
-        }
+    //     if (!isPunchAllowed) {
+    //         payload.first_in = null;
+    //         payload.last_out = null;
+    //         payload.shift_id = null;
+    //         payload.worked_minutes = 0;
+    //         payload.total_break_minutes = 0;
+    //         payload.overtime_minutes = 0;
+    //         payload.overtime_data = null;
+    //         payload.overtime_amount = 0; // Ensure amount is cleared
+    //     } else {
+    //          // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
+    //         if (first_in !== undefined) payload.first_in = first_in;
+    //         if (last_out !== undefined) payload.last_out = last_out;
+    //         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+    //         if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+    //         if (overtime_data !== undefined) {
+    //              payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+    //         }
+    //         if (overtime_amount !== undefined) {
+    //             payload.overtime_amount = overtime_amount;
+    //         } else if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+    //             payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+    //         } else if (payload.overtime_data === null) {
+    //             payload.overtime_amount = 0;
+    //         }
+    //     }
 
-        // Always clear these for non-working status
-        payload.late_minutes = 0;
-        payload.early_out_minutes = 0; 
-        payload.early_overtime_minutes = 0;
-        payload.fine_data = null;
-        payload.fine_amount = 0; // Ensure fine amount is cleared
+    //     // Always clear these for non-working status
+    //     payload.late_minutes = 0;
+    //     payload.early_out_minutes = 0; 
+    //     payload.early_overtime_minutes = 0;
+    //     payload.fine_data = null;
+    //     payload.fine_amount = 0; // Ensure fine amount is cleared
         
-        if (status !== 6) {
-            payload.leave_category_id = null;
-            payload.leave_session = null;
-        } else {
-             // For LEAVE (6), we MUST assign the category/session if provided
-             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-             if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-             if (overtime_data !== undefined) {
-                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-                 if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                     payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-                 } else if (payload.overtime_data === null) {
-                     payload.overtime_amount = 0;
-                 }
-             }
-        }
-    } else {
+    //     if (status !== 6) {
+    //         payload.leave_category_id = null;
+    //         payload.leave_session = null;
+    //     } else {
+    //          // For LEAVE (6), we MUST assign the category/session if provided
+    //          if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+    //          if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+    //          if (overtime_data !== undefined) {
+    //              payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+    //              if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+    //                  payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+    //              } else if (payload.overtime_data === null) {
+    //                  payload.overtime_amount = 0;
+    //              }
+    //          }
+    //     }
+    // } else {
 
-        if (first_in !== undefined) payload.first_in = first_in;
-        if (last_out !== undefined) payload.last_out = last_out;
+    //     if (first_in !== undefined) payload.first_in = first_in;
+    //     if (last_out !== undefined) payload.last_out = last_out;
         
-        if (late_minutes !== undefined) payload.late_minutes = late_minutes;
-        if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
-        if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
-        if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
-        if (overtime_data !== undefined) {
-             payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-             if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                 payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-             } else if (payload.overtime_data === null) {
-                 payload.overtime_amount = 0;
-             }
-        }
-        if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-        if (fine_data !== undefined) {
-             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
-             payload.fine_data = finalFineData;
-             if (payload.fine_data && typeof payload.fine_data === 'object' && fine_amount === undefined) {
-                 payload.fine_amount = parseFloat((
-                     parseFloat(payload.fine_data.late_entry?.amount || 0) + 
-                     parseFloat(payload.fine_data.early_exit?.amount || 0) + 
-                     parseFloat(payload.fine_data.excess_breaks?.amount || 0)
-                 ).toFixed(2));
-             }
-             // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
-             if (finalFineData === null && fine_amount === undefined) {
-                 payload.fine_amount = 0;
-             }
-        }
+    //     if (late_minutes !== undefined) payload.late_minutes = late_minutes;
+    //     if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
+    //     if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
+    //     if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+    //     if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+    //     if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+    //     if (overtime_data !== undefined) {
+    //          payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+    //          if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+    //              payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+    //          } else if (payload.overtime_data === null) {
+    //              payload.overtime_amount = 0;
+    //          }
+    //     }
+    //     if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+    //     if (fine_data !== undefined) {
+    //          const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+    //          payload.fine_data = finalFineData;
+    //          if (payload.fine_data && typeof payload.fine_data === 'object' && fine_amount === undefined) {
+    //              payload.fine_amount = parseFloat((
+    //                  parseFloat(payload.fine_data.late_entry?.amount || 0) + 
+    //                  parseFloat(payload.fine_data.early_exit?.amount || 0) + 
+    //                  parseFloat(payload.fine_data.excess_breaks?.amount || 0)
+    //              ).toFixed(2));
+    //          }
+    //          // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
+    //          if (finalFineData === null && fine_amount === undefined) {
+    //              payload.fine_amount = 0;
+    //          }
+    //     }
 
-        if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
-        if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-        if (leave_session !== undefined) payload.leave_session = leave_session;
-    }
+    //     if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
+    //     if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+    //     if (leave_session !== undefined) payload.leave_session = leave_session;
+    // }
 
-    // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
-    if (status !== undefined && ![1, 6, 13].includes(status)) {
-      payload.leave_category_id = null;
-      payload.leave_session = null;
-    }
+    // // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
+    // if (status !== undefined && ![1, 6, 13].includes(status)) {
+    //   payload.leave_category_id = null;
+    //   payload.leave_session = null;
+    // }
 
-    if (is_locked !== undefined) payload.is_locked = is_locked;
-    if (note !== undefined) payload.note = note;
+    // if (is_locked !== undefined) payload.is_locked = is_locked;
+    // if (note !== undefined) payload.note = note;
 
-    // Synchronize leave balance based on status changes (Half Day/Leave)
-    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
-    if (balanceError) {
-      await t.rollback();
-      return res.error(constants.LEAVE_BALANCE_ERROR,balanceError);
-    }
+    // // Synchronize leave balance based on status changes (Half Day/Leave)
+    // const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
+    // if (balanceError) {
+    //   await t.rollback();
+    //   return res.error(constants.LEAVE_BALANCE_ERROR,balanceError);
+    // }
 
-    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
+    // const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
@@ -808,7 +808,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // }
 
     await t.commit();
-    return res.success(constants.ATTENDANCE_UPDATED, result);
+    return res.success(constants.ATTENDANCE_UPDATED, day);
   } catch (err) {
     await t.rollback();
     return handleError(err, res, req);
@@ -1600,7 +1600,6 @@ exports.getLeaveSummary = async (req, res) => {
     // 3. Format Balances
     let totalUsed = 0;
     let totalLeft = 0;
-    console.log("leave balances",balances)
     const formattedBalances = balances.map(b => {
       const used = parseFloat(b.used_leaves || 0);
       const pending = parseFloat(b.pending_leaves || 0);
