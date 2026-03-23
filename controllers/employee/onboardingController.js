@@ -1,0 +1,274 @@
+const { Employee, User, DesignationMaster, Department, sequelize } = require("../../models");
+const { constants, handleError, commonQuery, Op, v4: uuidv4 } = require("../../helpers");
+const crypto = require("crypto");
+const emailService = require("../../services/emailService");
+
+/**
+ * Initiate onboarding for a new candidate
+ */
+exports.initiate = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { first_name, email, mobile_no, joining_date, department_id, designation_id, employee_type, worker_type } = req.body;
+        const companyId = req.user.company_id;
+
+        // Validation
+        if (!first_name || !email || !mobile_no || !joining_date) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
+        }
+
+        // Check if email or mobile already exists
+        const existing = await Employee.findOne({
+            where: {
+                [Op.or]: [{ email }, { mobile_no }],
+                company_id: companyId
+            },
+            transaction
+        });
+
+        if (existing) {
+            await transaction.rollback();
+            return res.error(constants.ALREADY_EXISTS, { message: "Employee with this email or mobile already exists" });
+        }
+
+        // Generate a unique token
+        const onboarding_token = crypto.randomBytes(32).toString('hex');
+
+        // Create Employee record in Onboarding status (3)
+        const employee = await commonQuery.createRecord(Employee, {
+            first_name,
+            email,
+            mobile_no,
+            joining_date,
+            department_id,
+            designation_id,
+            employee_type: employee_type || 1,
+            worker_type: worker_type || null,
+            status: 3, // Onboarding
+            onboarding_token,
+            onboarding_step: 1,
+            company_id: companyId
+        }, transaction);
+
+        // Send Email/WhatsApp with the link
+        const onboardingLink = `${process.env.FRONTEND_URL}/onboarding/form/${onboarding_token}`;
+        await emailService.sendOnboardingInvite(email, first_name, onboardingLink, companyId);
+
+        await transaction.commit();
+        return res.success("Onboarding initiated successfully", { employee_id: employee.id, onboarding_token });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get onboarding details for the candidate (Public API via token)
+ */
+exports.getDetailsByToken = async (req, res) => {
+    try {
+        const { token } = req.params;
+
+        const employee = await Employee.findOne({
+            where: { onboarding_token: token, status: 3, is_onboarding_completed: false },
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] }
+            ]
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Invalid or expired onboarding link" });
+        }
+
+        // Token Validity Check (24 Hours expiry)
+        const twentyFourHoursAgo = new Date(Date.now() - (24 * 60 * 60 * 1000));
+        if (new Date(employee.created_at) < twentyFourHoursAgo) {
+            return res.error(constants.NOT_FOUND, { message: "The onboarding link has expired. Please contact HR for a new one." });
+        }
+
+        return res.ok(employee);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Submit onboarding details by candidate
+ */
+exports.submitDetails = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { token } = req.params;
+        const data = req.body;
+
+        const employee = await Employee.findOne({
+            where: { onboarding_token: token, status: 3 },
+            transaction
+        });
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        // Update employee record with candidate-filled data
+        // Fields allowed to be updated by candidate:
+        const candidateFields = [
+            'gender', 'dob', 'marital_status', 'blood_group', 'physically_challenged',
+            'emergency_contact_mobile', 'father_name', 'mother_name', 'spouse_name',
+            'present_address1', 'present_address2', 'present_city', 'present_state_id', 'present_country_id', 'present_pincode',
+            'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
+            'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
+            'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan'
+        ];
+
+        const updateData = {};
+        candidateFields.forEach(field => {
+            if (data[field] !== undefined) {
+                updateData[field] = data[field];
+            }
+        });
+
+        updateData.onboarding_step = data.onboarding_step || employee.onboarding_step;
+        
+        if (data.is_final_submission) {
+            updateData.is_onboarding_completed = true;
+        }
+
+        await employee.update(updateData, { transaction });
+
+        await transaction.commit();
+        return res.success("Details saved successfully");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Approve onboarding and activate employee (HR Side)
+ */
+exports.approve = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const { employee_code, ...templateData } = req.body;
+
+        const employee = await Employee.findOne({
+            where: { id, status: 3 },
+            transaction
+        });
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        if (!employee_code) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee Code is required for activation" });
+        }
+
+        // Update employee to Active status and assign code/templates
+        await employee.update({
+            status: 0, // Active
+            employee_code,
+            onboarding_token: null, // Clear token
+            ...templateData
+        }, { transaction });
+
+        // TODO: Sync templates and create User if necessary
+        // await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
+
+        await transaction.commit();
+        return res.success("Employee onboarding approved and activated successfully");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * List pending onboardings (HR Side)
+ */
+exports.getPendingList = async (req, res) => {
+    try {
+        const POST = req.body;
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["email", true, true],
+            ["mobile_no", true, false],
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            POST,
+            fieldConfig,
+            {
+                where: { status: 3 },
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] }
+                ],
+                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "is_onboarding_completed", "created_at"]
+            }
+        );
+
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get detailed onboarding record by ID (HR Side)
+ */
+exports.getOnboardingById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const companyId = req.user.company_id;
+
+        const employee = await Employee.findOne({
+            where: { id, status: 3, company_id: companyId },
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] }
+            ]
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        return res.ok(employee);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Resend onboarding invite email
+ */
+exports.resendInvite = async (req, res) => {
+    try {
+        const { id } = req.body;
+        const companyId = req.user.company_id;
+
+        const employee = await Employee.findOne({
+            where: { id, status: 3, company_id: companyId }
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        const onboardingLink = `${process.env.FRONTEND_URL}/onboarding/form/${employee.onboarding_token}`;
+        await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+
+        return res.success("Invitation resent successfully");
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

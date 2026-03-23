@@ -25,7 +25,8 @@ const {
     DesignationMaster,
     Department,
     HolidayTemplate,
-    ResignationTemplate
+    ResignationTemplate,
+    DeviceMaster
 } = require("../../models");
 
 const {
@@ -1571,7 +1572,7 @@ exports.facePunch = async (req, res) => {
             }, {
                 attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
                 raw: true
-            });
+            }, null, { company_id: true });
             timings.db = Date.now() - dbStart;
             return res;
         })();

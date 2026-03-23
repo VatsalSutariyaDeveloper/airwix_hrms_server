@@ -85,9 +85,9 @@ const sendEmailHelper = async (options) => {
   try {
     // 2. Create Transporter
     const transporter = nodemailer.createTransport(transporterConfig);
-
+console.log("transporter",transporter)
     // 4. Send Mail
-    await transporter.sendMail({
+    const res = await transporter.sendMail({
       from: options.from, 
       to: options.email,
       cc: options.cc,
@@ -96,6 +96,7 @@ const sendEmailHelper = async (options) => {
       html: options.message,
       attachments: options.attachments
     });
+    console.log("res",res)
 
   } catch (err) {
     const mappedError = mapNodemailerError(err);

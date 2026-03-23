@@ -92,6 +92,7 @@ app.use("/api/canteen-attendance", canteenAttendanceRoutes);
 app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/resignation", require("./routes/resignationRoutes"));
+app.use("/api/onboarding", require("./routes/onboardingRoutes"));
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS
