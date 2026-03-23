@@ -772,7 +772,8 @@ exports.getAll = async (req, res) => {
                     "access_branches",
                     "profile_image",
                     "created_at",
-                    "status"
+                    "status",
+                    "is_onboarding_completed"
                 ]
             },
             true,

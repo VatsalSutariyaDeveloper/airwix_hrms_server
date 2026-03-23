@@ -103,10 +103,13 @@ exports.submitDetails = async (req, res) => {
         const { token } = req.params;
         const data = req.body;
 
-        const employee = await Employee.findOne({
-            where: { onboarding_token: token, status: 3 },
-            transaction
-        });
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                where: { onboarding_token: token, status: 3 },
+                transaction
+            }
+        );
 
         if (!employee) {
             await transaction.rollback();
@@ -156,10 +159,13 @@ exports.approve = async (req, res) => {
         const { id } = req.params;
         const { employee_code, ...templateData } = req.body;
 
-        const employee = await Employee.findOne({
-            where: { id, status: 3 },
-            transaction
-        });
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                where: { id, status: 3 },
+                transaction
+            }
+        );
 
         if (!employee) {
             await transaction.rollback();
@@ -172,12 +178,16 @@ exports.approve = async (req, res) => {
         }
 
         // Update employee to Active status and assign code/templates
-        await employee.update({
-            status: 0, // Active
-            employee_code,
-            onboarding_token: null, // Clear token
-            ...templateData
-        }, { transaction });
+        await commonQuery.updateRecord(
+            employee,
+            {
+                status: 0, // Active
+                employee_code,
+                onboarding_token: null, // Clear token
+                ...templateData
+            },
+            transaction
+        );
 
         // TODO: Sync templates and create User if necessary
         // await EmployeeTemplateService.syncAllTemplates(employee.id, transaction);
@@ -230,13 +240,16 @@ exports.getOnboardingById = async (req, res) => {
         const { id } = req.params;
         const companyId = req.user.company_id;
 
-        const employee = await Employee.findOne({
-            where: { id, status: 3, company_id: companyId },
-            include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] }
-            ]
-        });
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                where: { id, status: 3, company_id: companyId },
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] }
+                ]
+            }
+        );
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
@@ -256,9 +269,12 @@ exports.resendInvite = async (req, res) => {
         const { id } = req.body;
         const companyId = req.user.company_id;
 
-        const employee = await Employee.findOne({
-            where: { id, status: 3, company_id: companyId }
-        });
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                where: { id, status: 3 }
+            }
+        );
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
