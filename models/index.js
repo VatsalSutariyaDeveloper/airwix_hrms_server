@@ -39,6 +39,7 @@ const OtpVerification = require("./auth/otpVerification")(sequelize, DataTypes);
 const ActivityLog = require("./activityLog")(sequelize, DataTypes);
 const ActivationRequest = require("./activationRequest")(sequelize, DataTypes);
 const EmployeeResignation = require("./employeeResignation")(sequelize, DataTypes);
+const ApiLog = require("./apiLog")(sequelize, DataTypes);
 const Logs = require("./logs")(sequelize, DataTypes);
 
 // Subscription models
@@ -162,6 +163,7 @@ const db = {
   ActivityLog,
   ActivationRequest,
   EmployeeResignation,
+  ApiLog,
   Logs,
 
   // Subscription

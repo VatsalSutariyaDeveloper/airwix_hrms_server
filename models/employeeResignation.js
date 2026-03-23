@@ -8,8 +8,6 @@ module.exports = (sequelize, DataTypes) => {
             approved_lwd: { type: DataTypes.DATEONLY, allowNull: true, comment: "Approved Last Working Day by HR" },
             reason_type_id: { type: DataTypes.INTEGER, allowNull: true },
             reason_description: { type: DataTypes.TEXT, allowNull: true },
-            
-            // Approval Workflow Tracking
             approval_status: { 
                 type: DataTypes.SMALLINT, 
                 defaultValue: 0, 
@@ -17,8 +15,6 @@ module.exports = (sequelize, DataTypes) => {
             },
             current_level: { type: DataTypes.INTEGER, defaultValue: 1 },
             approval_history: { type: DataTypes.JSONB, defaultValue: [] },
-            
-            // Post-Approval Tracking
             exit_interview_notes: { type: DataTypes.TEXT, allowNull: true },
             ff_settlement_status: { 
                 type: DataTypes.SMALLINT, 

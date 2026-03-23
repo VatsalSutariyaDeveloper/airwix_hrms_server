@@ -1,0 +1,55 @@
+const { ApiLog } = require("../models");
+const { requestContext } = require("../utils/requestContext.js");
+
+const apiLogger = async (req, res, next) => {
+  const startTime = Date.now();
+  
+  // To capture the response body, we need to override res.send
+  const originalSend = res.send;
+  let responseBody;
+
+  res.send = function (body) {
+    responseBody = body;
+    return originalSend.apply(res, arguments);
+  };
+
+  res.on("finish", async () => {
+    try {
+      const duration = Date.now() - startTime;
+      const store = requestContext.getStore();
+      
+      // Skip logging the logs retrieval themselves to avoid recursion/spam
+      if (req.originalUrl.includes("/api/logs") || req.originalUrl.includes("/api/activity")) {
+        return;
+      }
+
+      const logData = {
+        company_id: store?.companyId || null,
+        branch_id: store?.branchId || null,
+        user_id: store?.userId || null,
+        method: req.method,
+        url: req.originalUrl,
+        status_code: res.statusCode,
+        ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
+        request_body: req.method !== "GET" ? req.body : null,
+        response_body: responseBody ? (typeof responseBody === "string" ? JSON.parse(responseBody) : responseBody) : null,
+        duration: duration,
+        user_agent: req.headers["user-agent"],
+      };
+
+      // Mask sensitive fields
+      if (logData.request_body) {
+        if (logData.request_body.password) logData.request_body.password = "********";
+        if (logData.request_body.token) logData.request_body.token = "********";
+      }
+
+      await ApiLog.create(logData);
+    } catch (err) {
+      console.error("Failed to save API log:", err.message);
+    }
+  });
+
+  next();
+};
+
+module.exports = apiLogger;
