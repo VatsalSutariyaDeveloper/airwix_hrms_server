@@ -2335,3 +2335,38 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+/**
+ * Get employee holidays by employee ID using commonQuery findAllRecords mode
+ */
+exports.getEmployeeHolidays = async (req, res) => {
+    try {
+        let employeeId = req.params.id;
+        if (!employeeId) {
+            employeeId = req.user.employee_id;
+        }
+
+        if (!employeeId) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
+        }
+
+        // Verify employee exists
+        const employee = await commonQuery.findOneRecord(Employee, employeeId);
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        // Get holidays for the employee using commonQuery findAllRecords
+        const holidays = await commonQuery.findAllRecords(
+            EmployeeHoliday, 
+            {
+                employee_id: employeeId
+            }
+        );
+
+        return res.success("Employee holidays retrieved successfully", { holidays });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
