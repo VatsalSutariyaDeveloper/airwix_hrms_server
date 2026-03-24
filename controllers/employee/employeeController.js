@@ -151,10 +151,14 @@ exports.create = async (req, res) => {
         };
 
         const errors = await validateRequest(POST, requiredFields, {
-            uniqueCheck: {
-                model: Employee,
-                fields: ["email", "mobile_no"],
-            },
+            uniqueCheck: [
+                {
+                    model: Employee,
+                    fields: ["email", "mobile_no"],
+                    excludeCompany: true,
+                    excludeBranch: true,
+                }
+            ]
         }, transaction);
 
         if (req.body.employee_code) {
@@ -276,6 +280,8 @@ exports.update = async (req, res) => {
             uniqueCheck: {
                 model: Employee,
                 fields: ["email", "mobile_no"],
+                excludeCompany: true,
+                excludeBranch: true,
                 excludeId: id
             },
             customFieldConfig: {
@@ -614,13 +620,13 @@ exports.getProfile = async (req, res) => {
                 nationality: plainRecord.nationality || 'Indian',
             },
             general_info: {
-                salary_cycle: plainRecord.salary_type || 'N/A',
+                salary_cycle: plainRecord.employeeSalaryTemplate?.salary_type || 'N/A',
                 weekly_off: plainRecord.weeklyOffTemplate?.name || 'N/A',
                 holiday: plainRecord.holidayTemplate?.name || 'N/A',
                 leave: plainRecord.leaveTemplate?.template_name || 'N/A',
                 shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
-                lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis || 'N/A',
+                lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "DAYS_IN_MONTH" ? "Days in Month" : plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "FIXED_30_DAYS" ? "Fixed 30 Days" : "Working Days",
                 attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
                 reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
@@ -1930,19 +1936,17 @@ exports.inviteUser = async (req, res) => {
 
         await transaction.commit();
 
-        // const setupLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${activation_code}`;
+        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/'}activate?code=${activation_code}`;
 
         // Send WhatsApp Notification (Async)
-        // const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
+        const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
 
-        // return res.success("Invitation generated successfully", {
-        //     setup_link: setupLink,
-        //     user_id: user.id,
-        //     email: user.email,
-        //     whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
-        // });
-
-        return res.success(constants.SUCCESS, "Employee Invited Successfully");
+        return res.success("Invitation generated successfully", {
+            setup_link: setupLink,
+            user_id: user.id,
+            email: user.email,
+            whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
+        });
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -2330,6 +2334,41 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
         }));
 
         return res.success("Employee list fetched successfully", { employees: employeeList });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get employee holidays by employee ID using commonQuery findAllRecords mode
+ */
+exports.getEmployeeHolidays = async (req, res) => {
+    try {
+        let employeeId = req.params.id;
+        if (!employeeId) {
+            employeeId = req.user.employee_id;
+        }
+
+        if (!employeeId) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
+        }
+
+        // Verify employee exists
+        const employee = await commonQuery.findOneRecord(Employee, employeeId);
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        // Get holidays for the employee using commonQuery findAllRecords
+        const holidays = await commonQuery.findAllRecords(
+            EmployeeHoliday, 
+            {
+                employee_id: employeeId
+            }
+        );
+
+        return res.success("Employee holidays retrieved successfully", { holidays });
 
     } catch (err) {
         return handleError(err, res, req);

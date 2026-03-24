@@ -184,6 +184,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.ShiftTemplate, { foreignKey: "shift_template", as: "shiftTemplate" });
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
         Employee.belongsTo(models.DesignationMaster, { foreignKey: "designation_id", as: "designation" });
+        Employee.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
         Employee.belongsTo(models.ResignationTemplate, { foreignKey: "resignation_template_id", as: "resignationTemplate" });
 
         // User-Wise Template Data
@@ -201,6 +202,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.CashVoucher, { foreignKey: "employee_id", as: "cashVouchers" });
         Employee.hasMany(models.Payslip, { foreignKey: "employee_id", as: "payslips" });
         Employee.hasMany(models.EmployeeResignation, { foreignKey: "employee_id", as: "resignations" });
+        Employee.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company" });
     };
 
     return Employee;

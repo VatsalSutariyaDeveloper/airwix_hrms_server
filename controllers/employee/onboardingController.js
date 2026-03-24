@@ -1,7 +1,13 @@
-const { Employee, User, DesignationMaster, Department, sequelize } = require("../../models");
-const { constants, handleError, commonQuery, Op, v4: uuidv4 } = require("../../helpers");
+const { Employee, User, DesignationMaster, Department, sequelize, CompanyMaster } = require("../../models");
+const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
+const { uploadFile } = require("../../helpers/fileUpload");
 const crypto = require("crypto");
 const emailService = require("../../services/emailService");
+
+// Document field constants for onboarding
+const FILE_COLUMNS = [
+    'aadhaar_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
+];
 
 /**
  * Initiate onboarding for a new candidate
@@ -52,8 +58,13 @@ exports.initiate = async (req, res) => {
         }, transaction);
 
         // Send Email/WhatsApp with the link
-        const onboardingLink = `${process.env.FRONTEND_URL}/onboarding/form/${onboarding_token}`;
+        const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
         await emailService.sendOnboardingInvite(email, first_name, onboardingLink, companyId);
+        
+        // Also send on WhatsApp
+        if (mobile_no) {
+            await whatsappService.sendOnboardingInvite(mobile_no, first_name, onboardingLink);
+        }
 
         await transaction.commit();
         return res.success("Onboarding initiated successfully", { employee_id: employee.id, onboarding_token });
@@ -70,16 +81,29 @@ exports.getDetailsByToken = async (req, res) => {
     try {
         const { token } = req.params;
 
-        const employee = await Employee.findOne({
-            where: { onboarding_token: token, status: 3, is_onboarding_completed: false },
-            include: [
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                onboarding_token: token, 
+                status: 3
+            },
+            {include: [
                 { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] }
-            ]
-        });
+                { model: Department, as: 'department', attributes: ['name'] },
+                { model: CompanyMaster, as: 'company', attributes: ['company_name'] }
+            ]},
+            null,
+            true,
+            {}
+        );
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Invalid or expired onboarding link" });
+        }
+
+        // Check if onboarding is already completed
+        if (employee.is_onboarding_completed) {
+            return res.error(constants.ONBOARDING_ALREADY_COMPLETED, { message: "Onboarding already completed" });
         }
 
         // Token Validity Check (24 Hours expiry)
@@ -106,9 +130,13 @@ exports.submitDetails = async (req, res) => {
         const employee = await commonQuery.findOneRecord(
             Employee,
             {
-                where: { onboarding_token: token, status: 3 },
-                transaction
-            }
+                onboarding_token: token,
+                status: 3
+            },
+            [],
+            transaction,
+            false,
+            {}
         );
 
         if (!employee) {
@@ -124,7 +152,8 @@ exports.submitDetails = async (req, res) => {
             'present_address1', 'present_address2', 'present_city', 'present_state_id', 'present_country_id', 'present_pincode',
             'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
             'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
-            'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan'
+            'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan',
+            'aadhaar_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
         ];
 
         const updateData = {};
@@ -134,13 +163,25 @@ exports.submitDetails = async (req, res) => {
             }
         });
 
-        updateData.onboarding_step = data.onboarding_step || employee.onboarding_step;
+        if (req.files && Object.keys(req.files).length > 0) {
+            console.log("Files received:", Object.keys(req.files));
+            const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
+            console.log("Saved files:", savedFiles);
+
+            FILE_COLUMNS.forEach(col => {
+                if (savedFiles[col]) {
+                    updateData[col] = savedFiles[col];
+                    console.log(`Updating ${col} with filename: ${savedFiles[col]}`);
+                }
+            });
+        }
         
         if (data.is_final_submission) {
             updateData.is_onboarding_completed = true;
+            // updateData.onboarding_token = null;
         }
 
-        await employee.update(updateData, { transaction });
+        await commonQuery.updateRecordById(Employee, { id: employee.id }, updateData, transaction, false, {});
 
         await transaction.commit();
         return res.success("Details saved successfully");
@@ -162,9 +203,12 @@ exports.approve = async (req, res) => {
         const employee = await commonQuery.findOneRecord(
             Employee,
             {
-                where: { id, status: 3 },
-                transaction
-            }
+                id,
+                status: 3
+            },
+            {},
+            transaction,
+            false
         );
 
         if (!employee) {
@@ -178,15 +222,17 @@ exports.approve = async (req, res) => {
         }
 
         // Update employee to Active status and assign code/templates
-        await commonQuery.updateRecord(
-            employee,
+        await commonQuery.updateRecordById(
+            Employee,
+            { id: employee.id },
             {
-                status: 0, // Active
+                status: 0,
                 employee_code,
-                onboarding_token: null, // Clear token
+                onboarding_token: null,
                 ...templateData
             },
-            transaction
+            transaction,
+            false
         );
 
         // TODO: Sync templates and create User if necessary
@@ -238,12 +284,14 @@ exports.getPendingList = async (req, res) => {
 exports.getOnboardingById = async (req, res) => {
     try {
         const { id } = req.params;
-        const companyId = req.user.company_id;
 
         const employee = await commonQuery.findOneRecord(
             Employee,
             {
-                where: { id, status: 3, company_id: companyId },
+                id,
+                status: 3
+            },
+            {
                 include: [
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                     { model: Department, as: 'department', attributes: ['name'] }
@@ -272,16 +320,25 @@ exports.resendInvite = async (req, res) => {
         const employee = await commonQuery.findOneRecord(
             Employee,
             {
-                where: { id, status: 3 }
-            }
+                id,
+                status: 3
+            },
+            {},
+            null,
+            false
         );
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
         }
 
-        const onboardingLink = `${process.env.FRONTEND_URL}/onboarding/form/${employee.onboarding_token}`;
+        const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${employee.onboarding_token}`;
         await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+
+        // Also resend on WhatsApp
+        if (employee.mobile_no) {
+            await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
+        }
 
         return res.success("Invitation resent successfully");
     } catch (err) {

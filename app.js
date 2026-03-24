@@ -18,21 +18,18 @@ const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const checkPermission = require("./middlewares/checkPermission");
 const { updateCurrencyRates } = require("./services/currencyUpdateService"); // Adjust path
 const { normalizeNullValues } = require("./middlewares/normalizeNullValues");
-const { archiveAndCleanupLogs } = require('./helpers');
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
 const payrollRoutes = require("./routes/payrollRoutes");
-const LeaveBalanceService = require("./services/leaveBalanceService");
-const ContractorDeactivationService = require("./services/contractorDeactivationService");
 const canteenAttendanceRoutes = require("./routes/canteenAttendanceRoutes");
+const resignationRoutes = require("./routes/resignationRoutes");
+const onboardingRoutes = require("./routes/onboardingRoutes");
+const systemLogRoutes = require("./routes/systemLogRoutes");
 const { initCronJobs } = require("./jobs/cronJobs");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
 
 const app = express();
-const connectMongoDB = require('./config/mongo');
-const decryptMiddleware = require("./middlewares/decryptMiddleware");
-const { decrypt } = require("./helpers/crypto");
 const { authMiddleware } = require("./middlewares/authMiddleware");
 // Create the HTTP server instance using your Express app
 const server = http.createServer(app);
@@ -93,9 +90,9 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/canteen-attendance", canteenAttendanceRoutes);
 app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
-app.use("/api/resignation", require("./routes/resignationRoutes"));
-app.use("/api/onboarding", require("./routes/onboardingRoutes"));
-app.use("/api/system-logs", require("./routes/systemLogRoutes"));
+app.use("/api/resignation", resignationRoutes);
+app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/system-logs", systemLogRoutes);
 app.use(errorHandler);
 
 // FOR PRODUCTION DO NOT REMOVE THIS

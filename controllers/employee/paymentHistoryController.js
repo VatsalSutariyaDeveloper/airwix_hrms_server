@@ -1,6 +1,8 @@
-const { PaymentHistory, Employee, EmployeeAdvance, Payslip, sequelize } = require("../../models");
+const { PaymentHistory, Employee, EmployeeAdvance, Payslip, User, sequelize } = require("../../models");
 const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
+const { createNotification } = require("../../services/notificationService");
+const dayjs = require("dayjs");
 
 const PAYMENT_TYPE = {
     ADVANCE: "Advance",
@@ -44,6 +46,8 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { payment_mode: "Invalid payment mode" });
         }
 
+        let isCreated = false;
+
         if (req.body.payment_type === PAYMENT_TYPE.SALARY && req.body.ref_id) {
             const payslip = await commonQuery.findOneRecord(Payslip, req.body.ref_id, {}, transaction);
             
@@ -63,6 +67,7 @@ exports.create = async (req, res) => {
             }
         
             await commonQuery.createRecord(PaymentHistory, req.body, transaction);
+            isCreated = true;
         
             const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
                 ref_id: req.body.ref_id,
@@ -77,8 +82,33 @@ exports.create = async (req, res) => {
             if (totalPaid >= netPayable && payslip.status !== 3) {
                 await commonQuery.updateRecordById(Payslip, req.body.ref_id, { status: 3 }, transaction);
             }
-
+        } else {
+            // General or Advance payment history creation
+            await commonQuery.createRecord(PaymentHistory, req.body, transaction);
+            isCreated = true;
         }
+
+        if (isCreated) {
+            // 💸 Send Notification to Employee
+            try {
+                const targetUser = await commonQuery.findOneRecord(User, { employee_id: req.body.employee_id }, {}, transaction);
+                if (targetUser) {
+                    const monthName = dayjs().month(parseInt(req.body.month) - 1).format('MMMM');
+                    await createNotification({
+                        user_id: targetUser.id,
+                        title: "Payment Received",
+                        message: `A ${req.body.payment_type} payment of ₹${req.body.amount} has been recorded for ${monthName} ${req.body.year}.`,
+                        type: "PAYROLL",
+                        reference_id: req.body.ref_id,
+                        status_code: 0,
+                        company_id: req.user.company_id,
+                    }, transaction);
+                }
+            } catch (notifyErr) {
+                console.error("Payment History Notification Error:", notifyErr.message);
+            }
+        }
+
         await transaction.commit();
         return res.success(constants.CREATED);
 
@@ -114,34 +144,34 @@ exports.getAllPaymentHistory = async (req, res) => {
 };
 
 exports.paymentHistoryView = async (req, res) => {
-   try{
-    const { payment_history_id } = req.body;
+    try{
+        const { payment_history_id } = req.body;
 
-    if (!payment_history_id) {
-        return res.error(constants.INVALID_ID);
-    }
-
-    const paymentHistory = await commonQuery.findOneRecord(
-        PaymentHistory, 
-        {id: payment_history_id,payment_type: 'Advance'},
-        {
-            include: [
-                {
-                    model: EmployeeAdvance,
-                    as: 'advance',
-                    attributes: ['id', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
-                }
-            ]
+        if (!payment_history_id) {
+            return res.error(constants.INVALID_ID);
         }
-    );
 
-    if (!paymentHistory) {
-        return res.error(constants.NOT_FOUND);
+        const paymentHistory = await commonQuery.findOneRecord(
+            PaymentHistory, 
+            { id: payment_history_id, payment_type: 'Advance' },
+            {
+                include: [
+                    {
+                        model: EmployeeAdvance,
+                        as: 'advance',
+                        attributes: ['id', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
+                    }
+                ]
+            }
+        );
+
+        if (!paymentHistory) {
+            return res.error(constants.NOT_FOUND);
+        }
+
+        return res.ok(paymentHistory);
+    }catch(err){
+        return handleError(err, res, req);
     }
-
-    return res.ok(paymentHistory);
-   }catch(err){
-    return handleError(err, res, req);
-   }
 };
 

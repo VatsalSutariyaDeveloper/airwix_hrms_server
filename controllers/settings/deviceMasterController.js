@@ -21,10 +21,18 @@ exports.create = async (req, res) => {
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
-            uniqueCheck: {
-                model: DeviceMaster,
-                fields: ["device_name", "mobile_no", 'imei_number'],
-            }
+            uniqueCheck: [
+                {
+                    model: DeviceMaster,
+                    fields: ["device_name"],
+                },
+                {
+                    model: DeviceMaster,
+                    fields: ["mobile_no", "imei_number"],
+                    excludeCompany: true,
+                    excludeBranch: true,
+                }
+            ]
         }, transaction);
 
         if (errors) {
@@ -89,11 +97,20 @@ exports.update = async (req, res) => {
             req.body,
             requiredFields,
             {
-                uniqueCheck: {
-                    model: DeviceMaster,
-                    fields: ["device_name", "mobile_no", "imei_number"],
-                    excludeId: req.params.id,
-                }
+                uniqueCheck: [
+                    {
+                        model: DeviceMaster,
+                        fields: ["device_name"],
+                        excludeId: req.params.id,
+                    },
+                    {
+                        model: DeviceMaster,
+                        fields: ["mobile_no", "imei_number"],
+                        excludeId: req.params.id,
+                        excludeCompany: true,
+                        excludeBranch: true,
+                    }
+                ]
             },
             transaction
         );
