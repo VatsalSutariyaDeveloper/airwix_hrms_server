@@ -1,5 +1,5 @@
 const { Employee, User, DesignationMaster, Department, sequelize, CompanyMaster } = require("../../models");
-const { constants, handleError, commonQuery, Op, v4: uuidv4 } = require("../../helpers");
+const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
 const { uploadFile } = require("../../helpers/fileUpload");
 const crypto = require("crypto");
 const emailService = require("../../services/emailService");
@@ -60,6 +60,11 @@ exports.initiate = async (req, res) => {
         // Send Email/WhatsApp with the link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
         await emailService.sendOnboardingInvite(email, first_name, onboardingLink, companyId);
+        
+        // Also send on WhatsApp
+        if (mobile_no) {
+            await whatsappService.sendOnboardingInvite(mobile_no, first_name, onboardingLink);
+        }
 
         await transaction.commit();
         return res.success("Onboarding initiated successfully", { employee_id: employee.id, onboarding_token });
@@ -329,6 +334,11 @@ exports.resendInvite = async (req, res) => {
 
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${employee.onboarding_token}`;
         await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+
+        // Also resend on WhatsApp
+        if (employee.mobile_no) {
+            await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
+        }
 
         return res.success("Invitation resent successfully");
     } catch (err) {

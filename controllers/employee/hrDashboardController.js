@@ -9,7 +9,8 @@ const {
     CanteenAttendance,
     LeaveTemplate,
     OnDutyRequest,
-    AttendanceRegularization
+    AttendanceRegularization,
+    EmployeeResignation
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize } = require("../../helpers");
 const { Op } = require("sequelize");
@@ -39,12 +40,14 @@ exports.getCounts = async (req, res) => {
         let pendingLeaves = 0;
         let authorizedOnDutyRequests = 0;
         let authorizedAttendanceRegularizationRequests = 0;
+        let authorizedEmployeeResignationRequests = 0;
 
         if (req.user.is_super_admin) {
             // Optimization for super admins
             pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedAttendanceRegularizationRequests = await commonQuery.countRecords(AttendanceRegularization, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
+            authorizedEmployeeResignationRequests = await commonQuery.countRecords(EmployeeResignation, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
         } else {
             // Helper function to check authorization
             const isUserAuthorizedForRequest = (request, levelField) => {
@@ -122,9 +125,22 @@ exports.getCounts = async (req, res) => {
                     authorizedAttendanceRegularizationRequests++;
                 }
             }
-        }
 
-        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests + authorizedAttendanceRegularizationRequests;
+            const pendingEmployeeResignationRequests = await commonQuery.findAllRecords(EmployeeResignation,
+                { approval_status: { [Op.in]: [0, 1] }, status: 0 },
+                queryIncludeOptions,
+                null,
+                true
+            );
+
+            for (const request of pendingEmployeeResignationRequests) {
+                if (isUserAuthorizedForRequest(request, 'current_level')) {
+                    authorizedEmployeeResignationRequests++;
+                }
+            }
+        }
+        
+        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
         
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {
@@ -208,7 +224,7 @@ exports.getUpcomingHolidays = async (req, res) => {
 exports.getDepartmentStats = async (req, res) => {
     try {
         const stats = await commonQuery.findAllRecords(Employee,
-            {},
+            { status: 0},
             {
                 attributes: [
                     'department_id',

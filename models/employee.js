@@ -184,6 +184,7 @@ module.exports = (sequelize, DataTypes) => {
         Employee.belongsTo(models.ShiftTemplate, { foreignKey: "shift_template", as: "shiftTemplate" });
         Employee.belongsTo(models.Department, { foreignKey: "department_id", as: "department" });
         Employee.belongsTo(models.DesignationMaster, { foreignKey: "designation_id", as: "designation" });
+        Employee.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
         Employee.belongsTo(models.ResignationTemplate, { foreignKey: "resignation_template_id", as: "resignationTemplate" });
 
         // User-Wise Template Data

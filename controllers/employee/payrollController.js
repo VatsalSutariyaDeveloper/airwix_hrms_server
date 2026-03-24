@@ -2674,7 +2674,30 @@ exports.bulkFinalizePayroll = async (req, res) => {
                 // Check for existing to override
                 const existing = await commonQuery.findOneRecord(Payslip, { employee_id: emp_id, month, year, status: { [Op.in]: [1, 2] } }, {}, transaction);
                 if (!existing) {
-                    await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+                    const newPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+                    
+                    // 💸 Send Notification to Employee
+                    try {
+                        const { User: UserModel } = require("../../models");
+                        const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: emp_id }, {}, transaction);
+                        if (targetUser) {
+                            const monthName = dayjs().month(month - 1).format('MMMM');
+                            const { createNotification } = require("../../services/notificationService");
+                            await createNotification({
+                                user_id: targetUser.id,
+                                title: "Payslip Generated",
+                                message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
+                                type: "PAYROLL",
+                                reference_id: newPayslip.id,
+                                status_code: 0,
+                                company_id: req.user.company_id,
+                                branch_id: payslipPayload.branch_id
+                            }, transaction);
+                        }
+                    } catch (notifyErr) {
+                        console.error("Payslip Notification Error:", notifyErr.message);
+                    }
+
                     results.push({ id: emp_id, success: true });
                 } else {
                     results.push({ id: emp_id, success: false, message: "Already finalized" });
@@ -2734,6 +2757,28 @@ exports.bulkPayPayroll = async (req, res) => {
 
                 if (totalPaid >= parseFloat(payslip.net_salary)) {
                     await commonQuery.updateRecordById(Payslip, payslip.id, { status: 2 }, transaction);
+
+                    // 💸 Send Paid Notification
+                    try {
+                        const { User: UserModel } = require("../../models");
+                        const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: p.employee_id }, {}, transaction);
+                        if (targetUser) {
+                            const { createNotification } = require("../../services/notificationService");
+                            const monthName = dayjs().month(payslip.month - 1).format('MMMM');
+                            await createNotification({
+                                user_id: targetUser.id,
+                                title: "Salary Paid",
+                                message: `Your salary for ${monthName} ${payslip.year} has been marked as paid.`,
+                                type: "PAYROLL",
+                                reference_id: payslip.id,
+                                status_code: 0,
+                                company_id: req.user.company_id,
+                                branch_id: payslip.branch_id
+                            }, transaction);
+                        }
+                    } catch (notifyErr) {
+                        console.error("Paid Notification Error:", notifyErr.message);
+                    }
                 }
                 stats.success++;
             } else {

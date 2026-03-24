@@ -7,6 +7,7 @@ const { constants } = require("./constants");
 const { calculateWorkingAndOffDays } = require("./functions/commonFunctions");
 // LeaveBalanceService is required lazily inside functions to avoid circular dependencies with attendanceHelper
 // const LeaveBalanceService = require("../services/leaveBalanceService");
+const notificationService = require("../services/notificationService");
 
 /**
  * Helper to parse time/datetime
@@ -324,6 +325,27 @@ async function punch(employeeId, meta, transaction = null) {
     punch_time: now,
     ...meta,
   }, transaction, { company_id: true });
+
+  // 4.1 Send Notification
+  try {
+    const { User: UserModel } = require("../models");
+    const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, transaction);
+    
+    if (targetUser) {
+      await notificationService.createNotification({
+        user_id: targetUser.id,
+        title: punchType === "IN" ? "Punch In Success" : "Punch Out Success",
+        message: `Successfully punched ${punchType.toLowerCase()} at ${dayjs(now).format('hh:mm A')}.`,
+        type: "ATTENDANCE",
+        reference_id: newPunch.id,
+        status_code: 0,
+        company_id: meta.company_id,
+        branch_id: meta.branch_id
+      }, transaction);
+    }
+  } catch (err) {
+    console.error("Punch Notification Error:", err.message);
+  }
 
   // 5️⃣ Recalculate day attendance
   if (!meta.skipRebuild) {

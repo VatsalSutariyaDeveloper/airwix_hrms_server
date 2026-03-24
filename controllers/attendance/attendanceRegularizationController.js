@@ -1,4 +1,5 @@
 const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
+const notificationService = require("../../services/notificationService");
 const { constants } = require("../../helpers/constants");
 const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
@@ -321,6 +322,23 @@ exports.updateStatus = async (req, res) => {
             approved_by: req.user.id,
             approval_remark: remarks || ""
         }, transaction);
+
+        // Send Notification to Employee
+        const user = await commonQuery.findOneRecord(User, { employee_id: request.employee_id }, {}, transaction);
+        if (user) {
+            await notificationService.createNotification({
+                user_id: user.id,
+                title: newStatus === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED ? "Attendance Regularization Approved" : (newStatus === constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED ? "Attendance Regularization Rejected" : "Attendance Regularization Updated"),
+                message: newStatus === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED 
+                    ? `Your attendance regularization for ${dayjs(request.attendance_date).format('DD MMM')} has been approved.` 
+                    : `Your attendance regularization has been ${newStatus === constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED ? 'rejected' : 'updated'}. ${remarks ? 'Remarks: ' + remarks : ''}`,
+                type: "REGULARIZATION",
+                reference_id: id,
+                status_code: newStatus === constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED ? 2 : 0,
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
+            }, transaction);
+        }
 
         // Rebuild attendance day if fully approved just like leave-request
         if (Number(newStatus) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED || newStatus === "APPROVED") {

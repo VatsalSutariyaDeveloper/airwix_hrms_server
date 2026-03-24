@@ -13,7 +13,7 @@ module.exports = (sequelize, DataTypes) => {
       response_body: { type: DataTypes.JSONB, allowNull: true },
       duration: { type: DataTypes.INTEGER, allowNull: true, comment: "Duration in milliseconds" },
       user_agent: { type: DataTypes.TEXT, allowNull: true },
-      endpoint: { type: DataTypes.STRING(255), allowNull: true },
+      status: { type: DataTypes.INTEGER, allowNull: true, comment: "0 = Success, 1 = Error" },
     },
     {
       tableName: "api_logs",

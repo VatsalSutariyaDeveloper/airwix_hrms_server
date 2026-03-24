@@ -1,6 +1,7 @@
-const { EmployeeAdvance, Employee, PaymentHistory } = require("../../models");
+const { EmployeeAdvance, Employee, PaymentHistory, User } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
+const { createNotification } = require("../../services/notificationService");
 
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -35,6 +36,26 @@ exports.create = async (req, res) => {
         };
 
         await commonQuery.createRecord(PaymentHistory, paymentHistoryData, transaction);
+
+        // 💸 Send Notification to Employee
+        try {
+            const targetUser = await commonQuery.findOneRecord(User, { employee_id: POST.employee_id }, {}, transaction);
+            if (targetUser) {
+                await createNotification({
+                    user_id: targetUser.id,
+                    title: "Advance Payment Received",
+                    message: `An advance payment of ₹${POST.amount} has been recorded for you for the period ${POST.month}/${POST.year}.`,
+                    type: "PAYROLL",
+                    reference_id: advance.id,
+                    status_code: 0,
+                    company_id: req.user.company_id,
+                    branch_id: POST.branch_id
+                }, transaction);
+            }
+        } catch (notifyErr) {
+            console.error("Advance Notification Error:", notifyErr.message);
+        }
+
         await transaction.commit();
         return res.success(constants.CREATED);
 

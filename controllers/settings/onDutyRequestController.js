@@ -2,6 +2,7 @@ const { validateRequest, commonQuery, handleError, Op } = require("../../helpers
 const { constants } = require("../../helpers/constants");
 const { sequelize, OnDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const dayjs = require("dayjs");
+const notificationService = require("../../services/notificationService");
 
 
 exports.create = async (req, res) => {
@@ -393,6 +394,23 @@ exports.updateStatus = async (req, res) => {
             approved_by: req.user.id,
             approval_remark: remarks || ""
         }, transaction);
+
+        // Send Notification to Employee
+        const user = await commonQuery.findOneRecord(User, { employee_id: onDutyRequest.employee_id }, {}, transaction);
+        if (user) {
+            await notificationService.createNotification({
+                user_id: user.id,
+                title: newStatus === constants.ON_DUTY_STATUS.APPROVED ? "On Duty Approved" : (newStatus === constants.ON_DUTY_STATUS.REJECTED ? "On Duty Rejected" : "On Duty Status Updated"),
+                message: newStatus === constants.ON_DUTY_STATUS.APPROVED 
+                    ? `Your On Duty request from ${dayjs(onDutyRequest.start_date).format('DD MMM')} to ${dayjs(onDutyRequest.end_date).format('DD MMM')} has been approved.` 
+                    : `Your On Duty request has been ${newStatus === constants.ON_DUTY_STATUS.REJECTED ? 'rejected' : 'updated'}. ${remarks ? 'Remarks: ' + remarks : ''}`,
+                type: "ON_DUTY",
+                reference_id: id,
+                status_code: newStatus === constants.ON_DUTY_STATUS.REJECTED ? 2 : 0,
+                company_id: req.user.company_id,
+                branch_id: req.user.branch_id
+            }, transaction);
+        }
 
         await transaction.commit();
         return res.success(constants.UPDATED);

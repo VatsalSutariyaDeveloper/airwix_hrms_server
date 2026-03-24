@@ -690,36 +690,36 @@ exports.generatePin = async (req, res) => {
       }
     }
 
-    // Adjust branch_id based on the selected finalCompanyId
-    const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
-    const currentBranchValid = await BranchMaster.findOne({
-      where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
-      attributes: ['id'],
-      raw: true,
-      transaction
-    });
-
-    if (!currentBranchValid) {
-        // Find a branch that user has access to in that company, or just first active branch
-        const fallbackBranch = await BranchMaster.findOne({
-          where: { 
-            company_id: finalCompanyId, 
-            status: 0,
-            ...(!isDevice && !entity.is_super_admin && entity.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
-          raw: true,
-          transaction
-        });
-        
-        if (fallbackBranch) {
-          entity.branch_id = fallbackBranch.id;
-        }
-    }
-
-
     if(!isDevice && entity.employee_id){
+      // Adjust branch_id based on the selected finalCompanyId
+      const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
+      const currentBranchValid = await BranchMaster.findOne({
+        where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
+        attributes: ['id'],
+        raw: true,
+        transaction
+      });
+
+      if (!currentBranchValid) {
+          // Find a branch that user has access to in that company, or just first active branch
+          const fallbackBranch = await BranchMaster.findOne({
+            where: { 
+              company_id: finalCompanyId, 
+              status: 0,
+              ...(!isDevice && !entity.is_super_admin && entity.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+            },
+            attributes: ['id'],
+            order: [['id', 'ASC']],
+            raw: true,
+            transaction
+          });
+          
+          if (fallbackBranch) {
+            entity.branch_id = fallbackBranch.id;
+          }
+      }
+
+
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
           attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
@@ -947,7 +947,7 @@ exports.pinLogin = async (req, res) => {
       }
     }
 
-    if(!isDevice){
+    if(!isDevice && entity.employee_id){
       // Adjust branch_id based on the selected finalCompanyId
       const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
       const currentBranchValid = await BranchMaster.findOne({
@@ -975,9 +975,7 @@ exports.pinLogin = async (req, res) => {
             entity.branch_id = fallbackBranch.id;
           }
       }
-    }
-
-    if(!isDevice && entity.employee_id){
+  
       const employee = await Employee.findOne({
           where: { id: entity.employee_id },
           attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],

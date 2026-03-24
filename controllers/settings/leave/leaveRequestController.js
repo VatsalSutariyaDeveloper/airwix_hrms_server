@@ -7,6 +7,7 @@ const dayjs = require("dayjs");
 const isSameOrBefore = require("dayjs/plugin/isSameOrBefore");
 dayjs.extend(isSameOrBefore);
 const LeaveBalanceService = require("../../../services/leaveBalanceService");
+const notificationService = require("../../../services/notificationService");
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -260,6 +261,10 @@ exports.create = async (req, res) => {
         }, transaction);
 
         await transaction.commit();
+
+        // Optional: Notify manager (Not explicitly asked but good to have)
+        // ...
+
         return res.success("LEAVE_REQUESTED", leaveRequest);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -631,6 +636,23 @@ exports.updateStatus = async (req, res) => {
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
 
+            // Send Notification to Employee
+            const user = await commonQuery.findOneRecord(User, { employee_id: leaveRequest.employee_id }, {}, transaction);
+            if (user) {
+                await notificationService.createNotification({
+                    user_id: user.id,
+                    title: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED ? "Leave Approved" : "Leave Partially Approved",
+                    message: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED 
+                        ? `Your leave request for ${dayjs(leaveRequest.start_date).format('DD MMM')} to ${dayjs(leaveRequest.end_date).format('DD MMM')} has been approved.` 
+                        : `Your leave request has been partially approved (Stage ${updateData.current_level}).`,
+                    type: "LEAVE",
+                    reference_id: id,
+                    status_code: 0,
+                    company_id: req.user.company_id,
+                    branch_id: req.user.branch_id
+                }, transaction);
+            }
+
             if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
@@ -676,6 +698,21 @@ exports.updateStatus = async (req, res) => {
                 approval_remark: approval_remark || "",
                 approval_history: history
             }, transaction);
+
+            // Send Notification to Employee
+            const user = await commonQuery.findOneRecord(User, { employee_id: leaveRequest.employee_id }, {}, transaction);
+            if (user) {
+                await notificationService.createNotification({
+                    user_id: user.id,
+                    title: `Leave ${approval_status === "REJECTED" ? "Rejected" : "Cancelled"}`,
+                    message: `Your leave request from ${dayjs(leaveRequest.start_date).format('DD MMM')} has been ${approval_status.toLowerCase()}. ${approval_remark ? 'Remarks: ' + approval_remark : ''}`,
+                    type: "LEAVE",
+                    reference_id: id,
+                    status_code: 1, // Warning
+                    company_id: req.user.company_id,
+                    branch_id: req.user.branch_id
+                }, transaction);
+            }
         }
 
         await transaction.commit();

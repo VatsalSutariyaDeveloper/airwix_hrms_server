@@ -9,6 +9,7 @@ exports.getAuditLogs = async (req, res) => {
       ["record_id", true, true],
       ["log_message", true, false],
       ["ip_address", true, true],
+      ["status", true, true],
       ["created_at", false, true],
     ];
 
@@ -17,21 +18,16 @@ exports.getAuditLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
+        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "stack_trace", "ip_address", "status", "created_at"],
         include: [
-          { model: User, as: "user", attributes: ["id", "first_name", "last_name", "email"] },
+          { model: User, as: "user", attributes: ["id", "user_name", "email"] },
         ],
       }
     );
 
     return res.status(200).json({
       success: true,
-      data: result.items,
-      pagination: {
-         total: result.total,
-         currentPage: result.currentPage,
-         pageSize: result.pageSize,
-         totalPages: result.totalPages
-      }
+      data: result,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -54,21 +50,16 @@ exports.getActivityLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
+        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "ip_address", "created_at"],
         include: [
-          { model: User, as: "user", attributes: ["id", "first_name", "last_name", "email"] },
+          { model: User, as: "user", attributes: ["id", "user_name", "email"] },
         ],
       }
     );
 
     return res.status(200).json({
       success: true,
-      data: result.items,
-      pagination: {
-         total: result.total,
-         currentPage: result.currentPage,
-         pageSize: result.pageSize,
-         totalPages: result.totalPages
-      }
+      data: result,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -90,21 +81,16 @@ exports.getApiLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
+        attributes: ["id", "method", "url", "status_code", "ip_address", "request_body", "response_body", "duration", "user_agent", "created_at"],
         include: [
-          { model: User, as: "user", attributes: ["id", "first_name", "last_name", "email"] },
+          { model: User, as: "user", attributes: ["id", "user_name", "email"] },
         ],
       }
     );
 
     return res.status(200).json({
       success: true,
-      data: result.items,
-      pagination: {
-         total: result.total,
-         currentPage: result.currentPage,
-         pageSize: result.pageSize,
-         totalPages: result.totalPages
-      }
+      data: result,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

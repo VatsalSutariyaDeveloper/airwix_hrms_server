@@ -1,6 +1,7 @@
-const { EmployeeIncentive, Employee, IncentiveType } = require("../../models");
+const { EmployeeIncentive, Employee, IncentiveType, User } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
+const { createNotification } = require("../../services/notificationService");
 
 // Create a new record
 exports.create = async (req, res) => {
@@ -22,7 +23,29 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
 
-        await commonQuery.createRecord(EmployeeIncentive, { ...req.body }, transaction);
+        const incentive = await commonQuery.createRecord(EmployeeIncentive, { ...req.body }, transaction);
+
+        // 💸 Send Notification to Employee
+        try {
+            const targetUser = await commonQuery.findOneRecord(User, { employee_id: req.body.employee_id }, {}, transaction);
+            if (targetUser) {
+                const incentiveType = await commonQuery.findOneRecord(IncentiveType, req.body.incentive_type_id, {}, transaction);
+                const typeName = incentiveType?.name || "Incentive";
+                await createNotification({
+                    user_id: targetUser.id,
+                    title: `${typeName} Added`,
+                    message: `A new ${typeName.toLowerCase()} of ₹${req.body.amount} has been recorded for you for the month ${req.body.month}/${req.body.year}.`,
+                    type: "PAYROLL",
+                    reference_id: incentive.id,
+                    status_code: 0,
+                    company_id: req.user.company_id,
+                    branch_id: req.body.branch_id
+                }, transaction);
+            }
+        } catch (notifyErr) {
+            console.error("Incentive Notification Error:", notifyErr.message);
+        }
+
         await transaction.commit();
         return res.success(constants.CREATED);
 

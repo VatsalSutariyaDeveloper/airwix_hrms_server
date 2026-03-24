@@ -55,12 +55,13 @@ const sendInvitationLink = async (employee, setupLink) => {
     const firstName = employee.first_name || "there";
     const message = `Hello ${firstName},
 
-Welcome to Airwix HRMS! Your account has been created.
+Welcome to Airwix Payroll! Your system account has been created.
 
-Please use this link to set up your password and access the portal:
-${setupLink}
+Download our application:
+https://loadly.io/xdxqOYwe
 
-Note: This link is valid for 24 hours.
+Step 1: Login Using Mobile No.
+Step 2: Set PIN For Login
 
 Best regards,
 HR Team`;
@@ -68,7 +69,30 @@ HR Team`;
     return await sendWhatsappMessage(employee.mobile_no, message);
 };
 
+const sendOnboardingInvite = async (mobile_no, firstName, onboardingLink) => {
+    if (!mobile_no) {
+        return { success: false, message: "Missing mobile number." };
+    }
+
+    const name = firstName || "Candidate";
+    const message = `Hello ${name},
+
+Welcome to Airwix Payroll! Your onboarding process has been initiated.
+
+Please complete your details using this link:
+${onboardingLink}
+
+Download our application:
+https://loadly.io/xdxqOYwe
+
+Best regards,
+HR Team`;
+
+    return await sendWhatsappMessage(mobile_no, message);
+};
+
 module.exports = {
     sendWhatsappMessage,
-    sendInvitationLink
+    sendInvitationLink,
+    sendOnboardingInvite
 };

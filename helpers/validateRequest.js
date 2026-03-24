@@ -112,51 +112,59 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
   /* =========================
      UNIQUE CHECK
      ========================= */
-  if (uniqueCheck?.model && Array.isArray(uniqueCheck.fields)) {
-    const { model, fields, excludeId, excludeCompany=false, excludeStatus=false, where: customWhere, errorCode } = uniqueCheck;
-    const { Op } = require("sequelize");
+  const checks = Array.isArray(uniqueCheck) ? uniqueCheck : [uniqueCheck];
 
-    const fieldSets = Array.isArray(fields[0]) ? fields : fields.map((f) => [f]);
+  for (const check of checks) {
+    if (check?.model && Array.isArray(check.fields)) {
+      const { model, fields, excludeId, excludeCompany = false, excludeBranch = false, excludeStatus = false, where: customWhere, errorCode } = check;
+      const { Op } = require("sequelize");
 
-    for (const fieldSet of fieldSets) {
-      const where = {};
+      const fieldSets = Array.isArray(fields[0]) ? fields : fields.map((f) => [f]);
 
-      // Apply custom where conditions first (if provided)
-      if (customWhere && typeof customWhere === 'object') {
-        Object.assign(where, customWhere);
-      }
+      for (const fieldSet of fieldSets) {
+        const where = {};
 
-      // Add all fields in the set
-      fieldSet.forEach((field) => {
-        if (body[field] !== undefined && body[field] !== null) {
-          where[field] = body[field];
+        // Apply custom where conditions first (if provided)
+        if (customWhere && typeof customWhere === 'object') {
+          Object.assign(where, customWhere);
         }
-      });
-      
-      if (Object.keys(where).length === 0) {
-        continue;
-      }
 
-      if(!excludeCompany && ctx.company_id !== undefined){
-        where.company_id = ctx.company_id;
-      }
-
-      if(!excludeStatus){
-        where.status = { [Op.ne]: 2 };
-      }
-
-      if (excludeId) {
-        where.id = Array.isArray(excludeId)
-          ? { [Op.notIn]: excludeId }
-          : { [Op.ne]: excludeId };
-      }
-
-      const exists = await model.findOne({ where, transaction });
-
-      if (exists) {
+        // Add all fields in the set
         fieldSet.forEach((field) => {
-          errors[field] = errorCode || "ALREADY_EXISTS";
+          if (body[field] !== undefined && body[field] !== null) {
+            where[field] = body[field];
+          }
         });
+
+        if (Object.keys(where).length === 0) {
+          continue;
+        }
+
+        if (!excludeCompany && ctx.company_id !== undefined) {
+          where.company_id = ctx.company_id;
+        }
+
+        if (!excludeBranch && ctx.branch_id !== undefined) {
+          where.branch_id = ctx.branch_id;
+        }
+
+        if (!excludeStatus) {
+          where.status = { [Op.ne]: 2 };
+        }
+
+        if (excludeId) {
+          where.id = Array.isArray(excludeId)
+            ? { [Op.notIn]: excludeId }
+            : { [Op.ne]: excludeId };
+        }
+
+        const exists = await model.findOne({ where, transaction });
+
+        if (exists) {
+          fieldSet.forEach((field) => {
+            errors[field] = errorCode || "ALREADY_EXISTS";
+          });
+        }
       }
     }
   }

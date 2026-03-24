@@ -41,6 +41,7 @@ const ActivationRequest = require("./activationRequest")(sequelize, DataTypes);
 const EmployeeResignation = require("./employeeResignation")(sequelize, DataTypes);
 const ApiLog = require("./apiLog")(sequelize, DataTypes);
 const Logs = require("./logs")(sequelize, DataTypes);
+const Notification = require("./notification")(sequelize, DataTypes);
 
 // Subscription models
 const CompanySubscription = require("./subscription/companySubscriptions")(sequelize, DataTypes);
@@ -165,6 +166,7 @@ const db = {
   EmployeeResignation,
   ApiLog,
   Logs,
+  Notification,
 
   // Subscription
   CompanySubscription,

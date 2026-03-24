@@ -29,6 +29,7 @@ const employeeSettingsController = require("../controllers/settings/employeeSett
 const customFieldController = require("../controllers/settings/customFieldController");
 const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
 const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
+const systemLogController = require("../controllers/systemLogController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -314,5 +315,12 @@ router.put("/attendance-regularization/:id", attendanceRegularizationController.
 router.put("/attendance-regularization/status/:id", attendanceRegularizationController.updateStatus);
 router.put("/attendance-regularization/cancel/:id", attendanceRegularizationController.cancel);
 
+
+// ==========================
+// 41. SYSTEM LOG ROUTES
+// ==========================
+router.post("/system-logs/audit", systemLogController.getAuditLogs);
+router.post("/system-logs/activity", systemLogController.getActivityLogs);
+router.post("/system-logs/api", systemLogController.getApiLogs);
 
 module.exports = router;

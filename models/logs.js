@@ -12,6 +12,7 @@ module.exports = (sequelize, DataTypes) => {
       stack_trace: { type: DataTypes.JSONB, allowNull: true, comment: "Error stack trace" }, // ONLY used if action_type == 'ERROR'
       ip_address: { type: DataTypes.STRING(50), allowNull: true },
       is_resolved: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0=Pending, 1=Resolved (For Errors)" },
+      status: { type: DataTypes.INTEGER, allowNull: true, comment: "0 = Success, 1 = Error" },
     },
     {
       tableName: "logs", 
