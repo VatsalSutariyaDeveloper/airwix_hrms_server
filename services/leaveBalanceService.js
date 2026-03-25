@@ -591,15 +591,14 @@ class LeaveBalanceService {
             }, {}, t);
 
             // If a manual request covers this day, we should probably not have an auto-generated one competing.
-            if (manualRequest) {
-                console.log(`[syncLeaveRecord] Manual request found: #${manualRequest.id}`);
+            if (manualRequest && amount > 0) {
+                console.log(`[syncLeaveRecord] Manual request found: #${manualRequest.id}. Preserving manual leave as amount > 0.`);
                 // If we have an auto-generated one, cancel it (manual wins)
                 if (existingAuto) {
                     console.log(`[syncLeaveRecord] Cancelling competing auto-request: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
                 }
-                // We don't create/update any auto-record because manual is already there.
                 if (!transaction) await t.commit();
                 return null;
             }
@@ -616,9 +615,11 @@ class LeaveBalanceService {
                     console.log(`[syncLeaveRecord] Cancelling auto-request because amount is 0: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
                     await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
-                } else if (manualRequest) {
-                    console.log(`[syncLeaveRecord] Checking manual request rejection rule...`);
-                    // [MOD] Check if category has an automation rule marking day as 'Present' (Status 0)
+                } 
+                
+                if (manualRequest) {
+                    console.log(`[syncLeaveRecord] Checking manual request cancellation rule for date ${date}...`);
+                    // Check if category has an automation rule marking day as 'Present' (Status 0)
                     const category = await commonQuery.findOneRecord(LeaveTemplateCategory, manualRequest.leave_category_id, {}, t);
                     const rules = category?.automation_rules ? JSON.parse(category.automation_rules) : {};
                     const isForcedPresent = String(rules.auto_attendance_status) === "0"; 
@@ -628,7 +629,23 @@ class LeaveBalanceService {
                         if (manualRequest.start_date === date && manualRequest.end_date === date) {
                             console.log(`[syncLeaveRecord] Cancelling single-day manual request: #${manualRequest.id}`);
                             await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
-                            await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
+                            await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED }, t);
+                        } else {
+                            // Multi-day request: We can't easily "split" it, but we MUST refund the balance for this day.
+                            console.log(`[syncLeaveRecord] Refunding 1 day from multi-day manual request: #${manualRequest.id}`);
+                            // We determine deduction amount (usually 1.0 but could be 0.5 if it was a half day session? 
+                            // Standardizing on 1.0 for now for simplification, or 0.5 if sessions indicate it.)
+                            let refundAmount = 1.0;
+                            if (manualRequest.start_date === date && manualRequest.start_session !== 0) refundAmount = 0.5;
+                            else if (manualRequest.end_date === date && manualRequest.end_session !== 0) refundAmount = 0.5;
+
+                            await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -refundAmount, t, date, employee);
+                            
+                            // Note: We keep the request but add a note or log it somewhere.
+                            // In a future update, consider splitting the request into before/after segments.
+                            await LeaveRequest.update({ 
+                                note: (manualRequest.note || "") + ` [Day ${date} work-overridden: balance refunded]` 
+                            }, { where: { id: manualRequest.id }, transaction: t });
                         }
                     } else {
                         console.log(`[syncLeaveRecord] Manual request preserved due to 'Forced Present' rule.`);

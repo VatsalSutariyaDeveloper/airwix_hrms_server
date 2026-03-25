@@ -2798,23 +2798,24 @@ exports.getPaymentHistory = async (req, res) => {
     try {
         const { employee_id, month, year } = req.body;
         
-        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
-            employee_id,
-            month,
-            year
-        },
-        {
-            attributes: [
-                "id",
-                "employee_id",
-                "amount",
-                "payment_type",
-                "payment_mode",
-                "payment_date",
-                "status"
-            ]
-        }
-    );
+        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, 
+            {
+                employee_id,
+                month,
+                year
+            },
+            {
+                attributes: [
+                    "id",
+                    "employee_id",
+                    "amount",
+                    "payment_type",
+                    "payment_mode",
+                    "payment_date",
+                    "status"
+                ]
+            }
+        );
         
         // Calculate sum of amounts
         const totalAmount = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);

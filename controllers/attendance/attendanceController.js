@@ -482,25 +482,17 @@ exports.updateAttendanceDay = async (req, res) => {
     let effectiveLastOut = last_out;
     
     // Determine Effective Status (Current DB status if not changing)
-    let effectiveStatus = status !== undefined ? status : day.status;
+    // let effectiveStatus = status !== undefined ? status : day.status;
 
-    // 🛑 Prevent Automatic Status Upgrade (User Request: "don't let it change my status")
-    // If employee is Absent/Leave/Holiday (3,4,5,6) and frontend sends Present/HalfDay (0,1)
-    // We IGNORE the frontend status and keep the existing one UNLESS times are explicitly being updated.
-    const isExistingNonWorking = [3, 4, 5, 6].includes(day.status);
-    const isIncomingWorking = [0, 1, 12, 13].includes(status);
+    // Determine if times are explicitly provided (User modifying Time)
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
-    if (isExistingNonWorking && isIncomingWorking && !isTimeUpdate && isTrackInOutOn) {
-        effectiveStatus = day.status;
-        status = day.status; // Update local variable for payload
-    }
+    // [FIX] If the user explicitly provides a status, we should respect it.
+    // This is a manual update endpoint, so we trust the status sent in req.body.
+    let effectiveStatus = (status !== undefined && status !== null) ? Number(status) : day.status;
 
     // Check if status is non-working (3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE)
     const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
-
-    // Check if Times are explicitly provided (User modifying Time)
-    // isTimeUpdate already calculated above
 
     if (isTimeUpdate) {
         needsPunchUpdate = true;
@@ -594,221 +586,207 @@ exports.updateAttendanceDay = async (req, res) => {
         employee: emp, // Pass pre-fetched employee
         existingDay: day, // Pass pre-fetched day
         punches: req.body.punches, // Pass punches array if provided
+        // forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
         isHoliday: isTodayHoliday // Pass holiday flag to helper
       }, t);
     }
  
-     // Handle manualPunch with status 1,2,3,5 - delete punches for today
-    // Clear punches for non-working status
-    // [MOD] Removed clearing punches for non-working status to allow punches for Half Day, Overtime on WO/Holiday, etc.
-    /*
-    if ([1, 3, 4, 5, 6].includes(req.body.status)) {
-      console.log(`Clearing punches for status ${req.body.status} on ${attendance_date}`);
-      await commonQuery.updateRecordById(
-        AttendancePunch, 
-        {
-          employee_id: employee_id,
-          day_id: day.id,
-          status: 0
-        }, 
-        { status: 2 }, t);
-    }
-    */
-    //  const payload = {
-    //   employee_id,
-    //   attendance_date,
-    //   status,
-    //   user_id: req.user.id,
-    //   company_id: req.user.company_id,
-    //   branch_id: req.body.branch_id || req.user.branch_id
-    // };
+    const payload = {
+      employee_id,
+      attendance_date,
+      status: effectiveStatus,
+      user_id: req.user.id,
+      company_id: req.user.company_id,
+      branch_id: req.body.branch_id || req.user.branch_id
+    };
     
-    // if (shift_id) payload.shift_id = shift_id;
+    if (shift_id) payload.shift_id = shift_id;
 
-    // // Clear data for non-working statuses
-    // if ([3, 4, 5, 6].includes(status)) {
-    //     // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
-    //     const isPunchAllowed = [3, 4].includes(status) && (payload.first_in || payload.last_out || overtime_minutes);
+    // Clear data for non-working statuses
+    if ([3, 4, 5, 6].includes(effectiveStatus)) {
+        // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
+        const isPunchAllowed = [3, 4].includes(effectiveStatus) && (payload.first_in || payload.last_out || overtime_minutes);
 
-    //     if (!isPunchAllowed) {
-    //         payload.first_in = null;
-    //         payload.last_out = null;
-    //         payload.shift_id = null;
-    //         payload.worked_minutes = 0;
-    //         payload.total_break_minutes = 0;
-    //         payload.overtime_minutes = 0;
-    //         payload.overtime_data = null;
-    //         payload.overtime_amount = 0; // Ensure amount is cleared
-    //     } else {
-    //          // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
-    //         if (first_in !== undefined) payload.first_in = first_in;
-    //         if (last_out !== undefined) payload.last_out = last_out;
-    //         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-    //         if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-    //         if (overtime_data !== undefined) {
-    //              payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-    //         }
-    //         if (overtime_amount !== undefined) {
-    //             payload.overtime_amount = overtime_amount;
-    //         } else if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-    //             payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-    //         } else if (payload.overtime_data === null) {
-    //             payload.overtime_amount = 0;
-    //         }
-    //     }
+        if (!isPunchAllowed) {
+            payload.first_in = null;
+            payload.last_out = null;
+            payload.shift_id = null;
+            payload.worked_minutes = 0;
+            payload.total_break_minutes = 0;
+            payload.overtime_minutes = 0;
+            payload.overtime_data = null;
+            payload.overtime_amount = 0; // Ensure amount is cleared
+        } else {
+             // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
+            if (first_in !== undefined) payload.first_in = first_in;
+            if (last_out !== undefined) payload.last_out = last_out;
+            if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+            if (overtime_data !== undefined) {
+                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+            }
+            if (overtime_amount !== undefined) {
+                payload.overtime_amount = overtime_amount;
+            } else if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+                payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+            } else if (payload.overtime_data === null) {
+                payload.overtime_amount = 0;
+            }
+        }
 
-    //     // Always clear these for non-working status
-    //     payload.late_minutes = 0;
-    //     payload.early_out_minutes = 0; 
-    //     payload.early_overtime_minutes = 0;
-    //     payload.fine_data = null;
-    //     payload.fine_amount = 0; // Ensure fine amount is cleared
+        // Always clear these for non-working status
+        payload.late_minutes = 0;
+        payload.early_out_minutes = 0; 
+        payload.early_overtime_minutes = 0;
+        payload.fine_data = null;
+        payload.fine_amount = 0; // Ensure fine amount is cleared
         
-    //     if (status !== 6) {
-    //         payload.leave_category_id = null;
-    //         payload.leave_session = null;
-    //     } else {
-    //          // For LEAVE (6), we MUST assign the category/session if provided
-    //          if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-    //          if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-    //          if (overtime_data !== undefined) {
-    //              payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-    //              if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-    //                  payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-    //              } else if (payload.overtime_data === null) {
-    //                  payload.overtime_amount = 0;
-    //              }
-    //          }
-    //     }
-    // } else {
+        if (effectiveStatus !== 6) {
+            payload.leave_category_id = null;
+            payload.leave_session = null;
+        } else {
+             // For LEAVE (6), we MUST assign the category/session if provided
+             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+             if (leave_session !== undefined) payload.leave_session = leave_session;
+             if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+             if (overtime_data !== undefined) {
+                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+                 if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+                     payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+                 } else if (payload.overtime_data === null) {
+                     payload.overtime_amount = 0;
+                 }
+             }
+        }
+    } else {
 
-    //     if (first_in !== undefined) payload.first_in = first_in;
-    //     if (last_out !== undefined) payload.last_out = last_out;
+        if (first_in !== undefined) payload.first_in = first_in;
+        if (last_out !== undefined) payload.last_out = last_out;
         
-    //     if (late_minutes !== undefined) payload.late_minutes = late_minutes;
-    //     if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
-    //     if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
-    //     if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-    //     if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-    //     if (fine_amount !== undefined) payload.fine_amount = fine_amount;
-    //     if (overtime_data !== undefined) {
-    //          payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-    //          if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-    //              payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-    //          } else if (payload.overtime_data === null) {
-    //              payload.overtime_amount = 0;
-    //          }
-    //     }
-    //     if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-    //     if (fine_data !== undefined) {
-    //          const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
-    //          payload.fine_data = finalFineData;
-    //          if (payload.fine_data && typeof payload.fine_data === 'object' && fine_amount === undefined) {
-    //              payload.fine_amount = parseFloat((
-    //                  parseFloat(payload.fine_data.late_entry?.amount || 0) + 
-    //                  parseFloat(payload.fine_data.early_exit?.amount || 0) + 
-    //                  parseFloat(payload.fine_data.excess_breaks?.amount || 0)
-    //              ).toFixed(2));
-    //          }
-    //          // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
-    //          if (finalFineData === null && fine_amount === undefined) {
-    //              payload.fine_amount = 0;
-    //          }
-    //     }
+        if (late_minutes !== undefined) payload.late_minutes = late_minutes;
+        if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
+        if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
+        if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+        if (overtime_data !== undefined) {
+             payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+             if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+                 payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+             } else if (payload.overtime_data === null) {
+                 payload.overtime_amount = 0;
+             }
+        }
+        if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+        if (fine_data !== undefined) {
+             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+             payload.fine_data = finalFineData;
+             if (payload.fine_data && typeof payload.fine_data === 'object' && fine_amount === undefined) {
+                 payload.fine_amount = parseFloat((
+                     parseFloat(payload.fine_data.late_entry?.amount || 0) + 
+                     parseFloat(payload.fine_data.early_exit?.amount || 0) + 
+                     parseFloat(payload.fine_data.excess_breaks?.amount || 0)
+                 ).toFixed(2));
+             }
+             // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
+             if (finalFineData === null && fine_amount === undefined) {
+                 payload.fine_amount = 0;
+             }
+        }
 
-    //     if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
-    //     if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-    //     if (leave_session !== undefined) payload.leave_session = leave_session;
-    // }
+        if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
+        if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+        if (leave_session !== undefined) payload.leave_session = leave_session;
+    }
 
-    // // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
-    // if (status !== undefined && ![1, 6, 13].includes(status)) {
-    //   payload.leave_category_id = null;
-    //   payload.leave_session = null;
-    // }
+    // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
+    if (effectiveStatus !== undefined && ![1, 6, 13].includes(effectiveStatus)) {
+      payload.leave_category_id = null;
+      payload.leave_session = null;
+    }
 
-    // if (is_locked !== undefined) payload.is_locked = is_locked;
-    // if (note !== undefined) payload.note = note;
+    if (is_locked !== undefined) payload.is_locked = is_locked;
+    if (note !== undefined) payload.note = note;
 
-    // // Synchronize leave balance based on status changes (Half Day/Leave)
-    // const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
-    // if (balanceError) {
-    //   await t.rollback();
-    //   return res.error(constants.LEAVE_BALANCE_ERROR,balanceError);
-    // }
+    // Synchronize leave balance based on status changes (Half Day/Leave)
+    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
+    if (balanceError) {
+      await t.rollback();
+      return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
+    }
 
-    // const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
+    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
-    // if (emp.leave_template) {
-    //     // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
-    //     const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+    if (emp.leave_template) {
+        // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
+        const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
         
-    //     const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
-    //         leave_template_id: emp.leave_template,
-    //         leave_category_name: "Short Leave",
-    //         status: 0
-    //     }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
+        const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+            leave_template_id: emp.leave_template,
+            leave_category_name: "Short Leave",
+            status: 0
+        }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
 
-    //     if (shortLeaveCategory && currentDay) {
-    //         const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
-    //         const currentLateMinutes = currentDay.late_minutes || 0;
-    //         const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
-    //         const currentLastOut = currentDay.last_out;
+        if (shortLeaveCategory && currentDay) {
+            const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
+            const currentLateMinutes = currentDay.late_minutes || 0;
+            const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
+            const currentLastOut = currentDay.last_out;
             
-    //         const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
-    //         const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+            const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
+            const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
 
-    //         const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
-    //             employee_id: employee_id,
-    //             start_date: attendance_date,
-    //             leave_category_id: shortLeaveCategory.id,
-    //             reason: AUTO_REASON_LATE,
-    //             status: 0
-    //         }, {}, t);
+            const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id: employee_id,
+                start_date: attendance_date,
+                leave_category_id: shortLeaveCategory.id,
+                reason: AUTO_REASON_LATE,
+                status: 0
+            }, {}, t);
 
-    //         if (isLateForShortLeave) {
-    //             if (!existingShortLeave) {
-    //                 // Check balance before deducting
-    //                 const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-    //                     employee_id: employee_id,
-    //                     leave_category_id: shortLeaveCategory.id,
-    //                     status: 0
-    //                 }, {}, t, false, { company_id: true });
+            if (isLateForShortLeave) {
+                if (!existingShortLeave) {
+                    // Check balance before deducting
+                    const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+                        employee_id: employee_id,
+                        leave_category_id: shortLeaveCategory.id,
+                        status: 0
+                    }, {}, t, false, { company_id: true });
 
 
-    //                 if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
-    //                     const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
-    //                     if (leaveError) {
-    //                         console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
-    //                         await t.rollback();
-    //                         return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-    //                     }
-    //                     await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
-    //                         where: { 
-    //                             employee_id: employee_id, 
-    //                             start_date: attendance_date, 
-    //                             leave_category_id: shortLeaveCategory.id,
-    //                             reason: "Auto-generated from Attendance"
-    //                         },
-    //                         transaction: t 
-    //                     });
-    //                 } 
-    //             }
-    //         } else if (existingShortLeave) {
-    //             // Reverse deduction if conditions are no longer met
-    //             const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
-    //             if (leaveError) {
-    //                 await t.rollback();
-    //                 return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-    //             }
-    //         }
-    //     }
-    // }
+                    if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
+                        const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
+                        if (leaveError) {
+                            console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
+                            await t.rollback();
+                            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+                        }
+                        await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
+                            where: { 
+                                employee_id: employee_id, 
+                                start_date: attendance_date, 
+                                leave_category_id: shortLeaveCategory.id,
+                                reason: "Auto-generated from Attendance"
+                            },
+                            transaction: t 
+                        });
+                    } 
+                }
+            } else if (existingShortLeave) {
+                // Reverse deduction if conditions are no longer met
+                const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
+                if (leaveError) {
+                    await t.rollback();
+                    return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+                }
+            }
+        }
+    }
 
     await t.commit();
-    return res.success(constants.ATTENDANCE_UPDATED, day);
+    return res.success(constants.ATTENDANCE_UPDATED, result);
   } catch (err) {
     await t.rollback();
     return handleError(err, res, req);
@@ -980,7 +958,8 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
             company_id: req.user.company_id,
             branch_id: req.body.branch_id || req.user.branch_id,
             shift_id: employee_shift_id,
-            employee: emp
+            employee: emp,
+            forcedStatus: status // [NEW] Pass status to ensure leave adjustment during rebuild
           }, t);
           // Refresh after rebuild
           existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
@@ -1240,7 +1219,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1460,6 +1439,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           first_in: attendanceDay.first_in,
           last_out: attendanceDay.last_out,
           worked_minutes: attendanceDay.worked_minutes,
+          total_break_minutes: attendanceDay.total_break_minutes,
           late_minutes: attendanceDay.late_minutes,
           early_out_minutes: attendanceDay.early_out_minutes,
           early_overtime_minutes: attendanceDay.early_overtime_minutes,

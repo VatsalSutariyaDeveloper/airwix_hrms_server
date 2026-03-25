@@ -662,25 +662,29 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
 
     const isSpecialStatus = overrideStatus !== undefined && overrideStatus !== null && overrideStatus !== 'default';
-    if (hasPunches && !isSpecialStatus) {
-      // Standard: Cancel leave if employee punches in
-      if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
-        await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
+    const isWorkingForced = meta.forcedStatus !== undefined && [0, 1, 12, 13].includes(Number(meta.forcedStatus));
+
+    if ((hasPunches || isWorkingForced) && !isSpecialStatus) {
+      if (isHalfDay) {
+        // [MOD] If worked on a half-day leave day, preserve the leave (Status 1: Half Day) 
+        // and do not cancel the leave request.
+        meta.forcedStatus = 1; 
+        meta.leave_category_id = approvedLeave.leave_category_id;
+        meta.leave_session = (approvedLeave.start_date === date) ? approvedLeave.start_session : approvedLeave.end_session;
+        meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
       } else {
-        await LeaveBalanceService.adjustLeaveBalance(employeeId, approvedLeave.leave_category_id, -1, transaction);
-        await commonQuery.updateRecordById(LeaveRequest, approvedLeave.id, {
-          approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
-          note: `Auto-cancelled due to punch on ${date}`
-        }, transaction);
+        // Standard (Full Day): Refund/Cancel leave if employee punches in OR is manually marked as Present
+        // syncLeaveRecord now handles both auto-generated and manual (single/multi-day) requests centrally.
+        await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
       }
-    } else if (isSpecialStatus && hasPunches) {
+    } else if (isSpecialStatus && (hasPunches || isWorkingForced)) {
       // Rule Triggered: Force status but CONTINUE to calculate worked hours
       meta.forcedStatus = finalStatus;
       meta.leave_category_id = approvedLeave.leave_category_id;
       meta.leave_session = approvedLeave.leave_session;
       meta.overrideAutomationNote = `System: Marked via ${category.leave_category_name}`;
-    } else if (!hasPunches) {
-      // Apply Leave or Custom Attendance Status (No Punches)
+    } else if (!hasPunches && !isWorkingForced) {
+      // Apply Leave or Custom Attendance Status (No Punches and No manual override)
       const leavePayload = {
         employee_id: employeeId,
         attendance_date: date,
@@ -792,10 +796,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       company_id: employee.company_id,
     }, { attributes: ['id', 'status', 'worked_minutes', 'late_minutes', 'early_out_minutes', 'overtime_minutes', 'early_overtime_minutes', 'total_break_minutes', 'overtime_amount', 'fine_amount', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction, false, { company_id: true });
 
-    // [MOD] Preserve existing status if it exists. 
-    // This prevents auto-absent logic from overwriting manual updates like "Present" or "Half Day"
-    // especially when Time Tracking is OFF.
-    if (existingDay) {
+    // [FIX] Priority for status: forcedStatus > manualStatus (from existingDay) > defaults
+    // This ensures manual overrides from the controller are respected during rebuild.
+    if (meta.forcedStatus !== undefined && meta.forcedStatus !== null) {
+      emptyStatus = Number(meta.forcedStatus);
+    } else if (existingDay) {
       emptyStatus = existingDay.status;
     }
 
@@ -1821,8 +1826,20 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   // Support for Multiple Punches
   if (meta.punches && Array.isArray(meta.punches)) {
-    // Clear existing punches for this day_id
-    await commonQuery.updateRecordById(AttendancePunch, { day_id: dayId, status: 0 }, { status: 2 }, transaction, false, { company_id: true });
+    // Clear all existing and unassigned punches for this employee on this date to ensure a clean state
+    await commonQuery.hardDeleteRecords(AttendancePunch, { 
+      [Op.or]: [
+        { day_id: dayId },
+        {
+          day_id: null,
+          employee_id: employeeId,
+          punch_time: {
+            [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+          }
+        }
+      ],
+      status: 0 
+    }, transaction, { company_id: true });
 
     // Create new punches from array
     for (const p of meta.punches) {
@@ -1836,6 +1853,24 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
       }, transaction, { company_id: true });
     }
   } else {
+    // [NEW] Clear existing punches if new times are provided, to ensure a clean state
+    if (inTime || outTime) {
+      console.log(`[manualPunch] Clearing all existing and unassigned punches for day ID ${dayId} / Date ${date} before creating new times.`);
+      await commonQuery.hardDeleteRecords(AttendancePunch, { 
+        [Op.or]: [
+          { day_id: dayId },
+          {
+            day_id: null,
+            employee_id: employeeId,
+            punch_time: {
+              [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+            }
+          }
+        ],
+        status: 0 
+      }, transaction, { company_id: true });
+    }
+
     if (inTime && outTime) {
       const inDateObj = parseDateTime(inTime, date);
       const outDateObj = parseDateTime(outTime, date);

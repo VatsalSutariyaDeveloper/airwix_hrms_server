@@ -40,12 +40,12 @@ exports.getAll = async (req, res) => {
     ["role_name", true, true],
   ];
 
-  const company_id = req.user.company_id;
+  // const company_id = req.user.company_id;
   
   
-  if (process.env.NODE_ENV !== 'local') {
-    req.body.filter.is_superadmin = false; 
-  }
+  // if (process.env.NODE_ENV !== 'local') {
+  //   req.body.filter.is_super_admin = false; 
+  // }
   
   // const extraFilters = {
   //   [Op.or]: [
