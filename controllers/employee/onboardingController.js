@@ -102,7 +102,7 @@ exports.getDetailsByToken = async (req, res) => {
         }
 
         // Check if onboarding is already completed
-        if (employee.is_onboarding_completed) {
+        if (employee.onboarding_status === 3) {
             return res.error(constants.ONBOARDING_ALREADY_COMPLETED, { message: "Onboarding already completed" });
         }
 
@@ -177,8 +177,7 @@ exports.submitDetails = async (req, res) => {
         }
         
         if (data.is_final_submission) {
-            updateData.is_onboarding_completed = true;
-            // updateData.onboarding_token = null;
+            updateData.onboarding_status = 1;
         }
 
         await commonQuery.updateRecordById(Employee, { id: employee.id }, updateData, transaction, false, {});
@@ -228,6 +227,7 @@ exports.approve = async (req, res) => {
             {
                 status: 0,
                 employee_code,
+                onboarding_status: 3,
                 onboarding_token: null,
                 ...templateData
             },
@@ -240,6 +240,126 @@ exports.approve = async (req, res) => {
 
         await transaction.commit();
         return res.success("Employee onboarding approved and activated successfully");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Reject onboarding and generate new token for resubmission (HR Side)
+ */
+exports.reject = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const { reject_note } = req.body;
+        const companyId = req.user.company_id;
+
+        if (!reject_note) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Reject note is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                id,
+                status: 3
+            },
+            {},
+            transaction,
+            false
+        );
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        // Generate new token for resubmission
+        const onboarding_token = crypto.randomBytes(32).toString('hex');
+
+        // Update employee to Rejected status with new token
+        await commonQuery.updateRecordById(
+            Employee,
+            { id: employee.id },
+            {
+                onboarding_status: 2,
+                reject_note,
+                onboarding_token,
+            },
+            transaction,
+            false
+        );
+
+        // Send Email/WhatsApp with the new link
+        const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
+        await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+        
+        // Also send on WhatsApp
+        if (employee.mobile_no) {
+            await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
+        }
+
+        await transaction.commit();
+        return res.success("Employee onboarding rejected and new invitation sent successfully");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Resend onboarding token with new link (HR Side)
+ */
+exports.resendToken = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const companyId = req.user.company_id;
+
+        const employee = await commonQuery.findOneRecord(
+            Employee,
+            {
+                id,
+                status: 3
+            },
+            {},
+            transaction,
+            false
+        );
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
+        }
+
+        // Generate new token
+        const onboarding_token = crypto.randomBytes(32).toString('hex');
+
+        // Update only the onboarding_token
+        await commonQuery.updateRecordById(
+            Employee,
+            { id: employee.id },
+            {
+                onboarding_token
+            },
+            transaction,
+            false
+        );
+
+        // Send Email/WhatsApp with the new link
+        const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
+        await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+        
+        // Also send on WhatsApp
+        if (employee.mobile_no) {
+            await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
+        }
+
+        await transaction.commit();
+        return res.success("New onboarding token sent successfully");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -268,7 +388,7 @@ exports.getPendingList = async (req, res) => {
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                     { model: Department, as: 'department', attributes: ['name'] }
                 ],
-                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "is_onboarding_completed", "created_at"]
+                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "onboarding_status", "created_at"]
             }
         );
 

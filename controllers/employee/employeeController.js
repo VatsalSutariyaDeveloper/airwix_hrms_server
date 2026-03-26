@@ -779,7 +779,7 @@ exports.getAll = async (req, res) => {
                     "profile_image",
                     "created_at",
                     "status",
-                    "is_onboarding_completed"
+                    "onboarding_status"
                 ]
             },
             true,

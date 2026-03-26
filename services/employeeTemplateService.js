@@ -385,12 +385,31 @@ class EmployeeTemplateService {
     }
 
     static async bulkSyncHolidayTemplate(employeeIds, templateId, transaction, meta = {}, skipRebuild = false) {
-        // STYLE CHANGE: Transitioning to "Inherit by Default". 
-        // We no longer duplicate HolidayTransaction rows into EmployeeHoliday for every employee.
-        // Instead, we clear any previous individual mappings to ensure the employee follows the Master Template.
-        await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        if (!templateId) {
+            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            return;
+        }
 
-        // 3. Batch rebuild attendance to reflect the new template (Effective Logic remains same)
+        let items = meta.preFetchedMaster || await commonQuery.findAllRecords(HolidayTransaction, { template_id: templateId, status: 0 }, {}, transaction);
+        
+        if (items && items.length > 0) {
+            const employeeHolidayItems = [];
+            for (const empId of employeeIds) {
+                for (const holiday of items) {
+                    const d = holiday.toJSON();
+                    delete d.id; delete d.created_at; delete d.updated_at;
+                    employeeHolidayItems.push({ ...d, employee_id: empId, template_id: templateId });
+                }
+            }
+
+            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            if (employeeHolidayItems.length > 0) {
+                await commonQuery.bulkCreate(EmployeeHoliday, employeeHolidayItems, {}, transaction);
+            }
+        } else {
+            await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        }
+
         if (!skipRebuild) {
             await this.rebuildCurrentMonthAttendance(employeeIds, transaction);
         }

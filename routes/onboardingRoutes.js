@@ -9,6 +9,8 @@ router.post("/list", onboardingController.getPendingList);
 router.get("/detailed/:id", onboardingController.getOnboardingById);
 router.post("/resend-invite", onboardingController.resendInvite);
 router.put("/approve/:id", onboardingController.approve);
+router.put("/reject/:id", onboardingController.reject);
+router.put("/resend-token/:id", onboardingController.resendToken);
 
 // Candidate Side (Skips auth via logic in authMiddleware.js)
 router.get("/public/:token", onboardingController.getDetailsByToken);
