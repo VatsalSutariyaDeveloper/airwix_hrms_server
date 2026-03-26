@@ -159,6 +159,8 @@ exports.getAttendanceSummary = async (req, res) => {
             model: AttendanceDay,
             as: "attendanceDays",
             where: { attendance_date: targetDate, status: {[Op.ne]: 2} },
+            limit: 1,
+            order: [["id", "DESC"]],
             required: false,
             include: [
               {
