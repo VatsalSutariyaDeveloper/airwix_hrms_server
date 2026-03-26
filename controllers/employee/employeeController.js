@@ -779,7 +779,7 @@ exports.getAll = async (req, res) => {
                     "profile_image",
                     "created_at",
                     "status",
-                    "is_onboarding_completed"
+                    "onboarding_status"
                 ]
             },
             true,
@@ -1508,6 +1508,11 @@ exports.registerFace = async (req, res) => {
 exports.facePunch = async (req, res) => {
     try {
         const startTime = Date.now();
+        const now = new Date();
+
+        const time = now.toTimeString().split(' ')[0];
+
+        console.log("start time",time)
         const timings = { 
             ai: 0, 
             db: 0, 
@@ -1561,6 +1566,8 @@ exports.facePunch = async (req, res) => {
                 }
             } catch (error) {
                 const rawError = error.response?.data?.message || error.message;
+                const time = now.toTimeString().split(' ')[0];
+                console.log("end time",time)
                 console.error("❌ AI Service Failed:", rawError);
                 writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
                 
@@ -1662,6 +1669,8 @@ exports.facePunch = async (req, res) => {
                 const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
                 console.log(successMsg);
                 writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
+                const time = now.toTimeString().split(' ')[0];
+                console.log("end time2222",time)
 
                 return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
                     employee_name: bestMatch.first_name,
@@ -1672,6 +1681,9 @@ exports.facePunch = async (req, res) => {
                     // timings: timings
                 });
             } catch (error) {
+                const time = now.toTimeString().split(' ')[0];
+                console.log("end time333",time)
+
                 if (transaction && !transaction.finished) await transaction.rollback();
                 console.error("Error creating attendance records:", error);
                 writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);

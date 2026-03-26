@@ -254,6 +254,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 }
                 break;
         }
+        console.log("day's overtime amount", day.id, day.overtime_amount, day.overtime_minutes);
         totalFine += parseFloat(day.fine_amount || 0);
         totalOTAmount += parseFloat(day.overtime_amount || 0);
         totalOTMins += parseInt(day.overtime_minutes || 0);
@@ -342,9 +343,9 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     
     // Check if Overtime should be included in total earnings based on attendance configuration
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
-    const includeOTInTotal = activeAttendanceTemplate ? activeAttendanceTemplate.include_overtime_in_total : true;
-    
-    const otAmount = totalOTAmount > 0 ? totalOTAmount : (includeOTInTotal ? totalOTAmount : 0);
+    const includeOTInTotal = activeAttendanceTemplate ? (activeAttendanceTemplate.include_overtime_in_total === true || activeAttendanceTemplate.include_overtime_in_total === 'true') : false;
+    console.log("includeOTInTotal", includeOTInTotal);
+    const otAmount = includeOTInTotal ? totalOTAmount : 0;
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
@@ -2798,23 +2799,24 @@ exports.getPaymentHistory = async (req, res) => {
     try {
         const { employee_id, month, year } = req.body;
         
-        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
-            employee_id,
-            month,
-            year
-        },
-        {
-            attributes: [
-                "id",
-                "employee_id",
-                "amount",
-                "payment_type",
-                "payment_mode",
-                "payment_date",
-                "status"
-            ]
-        }
-    );
+        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, 
+            {
+                employee_id,
+                month,
+                year
+            },
+            {
+                attributes: [
+                    "id",
+                    "employee_id",
+                    "amount",
+                    "payment_type",
+                    "payment_mode",
+                    "payment_date",
+                    "status"
+                ]
+            }
+        );
         
         // Calculate sum of amounts
         const totalAmount = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);

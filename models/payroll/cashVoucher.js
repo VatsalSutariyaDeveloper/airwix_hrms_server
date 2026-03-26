@@ -3,14 +3,14 @@ module.exports = (sequelize, DataTypes) => {
     "CashVoucher",
     {
       employee_id: { type: DataTypes.INTEGER, allowNull: false },
-      attendance_day_id: { type: DataTypes.INTEGER, allowNull: false },
-      attendance_date: { type: DataTypes.DATEONLY, allowNull: false },
+      attendance_day_id: { type: DataTypes.INTEGER, allowNull: true },
+      attendance_date: { type: DataTypes.DATEONLY, allowNull: true },
       voucher_type: {
-        type: DataTypes.ENUM("OVERTIME"),
+        type: DataTypes.ENUM("OVERTIME", "SALARY"),
         allowNull: false,
         defaultValue: "OVERTIME",
       },
-      overtime_minutes: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      overtime_minutes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
       overtime_data: { type: DataTypes.JSONB, allowNull: true },
       note: { type: DataTypes.TEXT, allowNull: true },

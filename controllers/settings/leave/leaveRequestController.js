@@ -197,11 +197,10 @@ exports.create = async (req, res) => {
                 }
 
                 if (rules.max_late_early_mins) {
-                    const lateMins = attendance.late_minutes || 0;
-                    const earlyMins = attendance.early_out_minutes || 0;
-                    if (lateMins > rules.max_late_early_mins || earlyMins > rules.max_late_early_mins) {
+                    const fineMins = attendance.fine_minutes || 0;
+                    if (fineMins > rules.max_late_early_mins) {
                         await transaction.rollback();
-                        return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins.` });
+                        return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins. Current: ${fineMins} mins.` });
                     }
                 }
             } else {
@@ -1208,10 +1207,14 @@ exports.getLeaveReport = async (req, res) => {
                 designation: emp.designation?.designation_name || '-',
                 assigned: balancesByEmp[emp.id] || {},
                 total_used: {},
+                pending: {}, // [NEW] Track pending balance
                 months: {}
             };
             
-            allCategories.forEach(c => row.total_used[c] = 0);
+            allCategories.forEach(c => {
+                row.total_used[c] = 0;
+                row.pending[c] = 0;
+            });
             for(let m=1; m<=12; m++) {
                 row.months[m] = {};
                 allCategories.forEach(c => row.months[m][c] = 0);
@@ -1226,7 +1229,7 @@ exports.getLeaveReport = async (req, res) => {
                 let current = lr.start;
                 const spanDays = lr.end.diff(lr.start, 'day') + 1;
                 // If a leave started or ended out of year, total_days might be off, but approximation holds for split
-                const dailyVal = parseFloat(lr.total_days) / spanDays;
+                const dailyVal = parseFloat(lr.total_days || 0) / spanDays;
                 
                 while(current.isSameOrBefore(lr.end, 'day')) {
                     const m = current.month() + 1;
@@ -1267,6 +1270,16 @@ exports.getLeaveReport = async (req, res) => {
                     row.total_used['Week Off'] += 1;
                 }
             }
+
+            // [NEW] Final calculation of rounded pending balances
+            allCategories.forEach(c => {
+                row.total_used[c] = parseFloat(row.total_used[c].toFixed(2));
+                if (row.assigned[c] !== undefined) {
+                    row.pending[c] = parseFloat((row.assigned[c] - row.total_used[c]).toFixed(2));
+                } else {
+                    row.pending[c] = '-'; // For categories like Week Off/Holiday that don't have a fixed allocation
+                }
+            });
 
             return row;
         });

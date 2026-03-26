@@ -313,7 +313,7 @@ async function punch(employeeId, meta, transaction = null) {
   if (lastPunchGlobal) {
     const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
     if (minutesSinceLastPunch < 2) {
-      throw new Err("Please wait 2 minutes between punches");
+      throw new Err("Please wait 2 minutes for next punch");
     }
   }
 
@@ -662,25 +662,29 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
 
     const isSpecialStatus = overrideStatus !== undefined && overrideStatus !== null && overrideStatus !== 'default';
-    if (hasPunches && !isSpecialStatus) {
-      // Standard: Cancel leave if employee punches in
-      if (approvedLeave.start_date === date && approvedLeave.end_date === date) {
-        await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
+    const isWorkingForced = meta.forcedStatus !== undefined && [0, 1, 12, 13].includes(Number(meta.forcedStatus));
+
+    if ((hasPunches || isWorkingForced) && !isSpecialStatus) {
+      if (isHalfDay) {
+        // [MOD] If worked on a half-day leave day, preserve the leave (Status 1: Half Day) 
+        // and do not cancel the leave request.
+        meta.forcedStatus = 1; 
+        meta.leave_category_id = approvedLeave.leave_category_id;
+        meta.leave_session = (approvedLeave.start_date === date) ? approvedLeave.start_session : approvedLeave.end_session;
+        meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
       } else {
-        await LeaveBalanceService.adjustLeaveBalance(employeeId, approvedLeave.leave_category_id, -1, transaction);
-        await commonQuery.updateRecordById(LeaveRequest, approvedLeave.id, {
-          approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
-          note: `Auto-cancelled due to punch on ${date}`
-        }, transaction);
+        // Standard (Full Day): Refund/Cancel leave if employee punches in OR is manually marked as Present
+        // syncLeaveRecord now handles both auto-generated and manual (single/multi-day) requests centrally.
+        await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
       }
-    } else if (isSpecialStatus && hasPunches) {
+    } else if (isSpecialStatus && (hasPunches || isWorkingForced)) {
       // Rule Triggered: Force status but CONTINUE to calculate worked hours
       meta.forcedStatus = finalStatus;
       meta.leave_category_id = approvedLeave.leave_category_id;
       meta.leave_session = approvedLeave.leave_session;
       meta.overrideAutomationNote = `System: Marked via ${category.leave_category_name}`;
-    } else if (!hasPunches) {
-      // Apply Leave or Custom Attendance Status (No Punches)
+    } else if (!hasPunches && !isWorkingForced) {
+      // Apply Leave or Custom Attendance Status (No Punches and No manual override)
       const leavePayload = {
         employee_id: employeeId,
         attendance_date: date,
@@ -790,12 +794,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       employee_id: employeeId,
       attendance_date: date,
       company_id: employee.company_id,
-    }, { attributes: ['id', 'status', 'worked_minutes', 'late_minutes', 'early_out_minutes', 'overtime_minutes', 'early_overtime_minutes', 'total_break_minutes', 'overtime_amount', 'fine_amount', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction, false, { company_id: true });
+    }, { attributes: ['id', 'status', 'worked_minutes', 'fine_minutes', 'overtime_minutes', 'total_break_minutes', 'overtime_amount', 'fine_amount', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction, false, { company_id: true });
 
-    // [MOD] Preserve existing status if it exists. 
-    // This prevents auto-absent logic from overwriting manual updates like "Present" or "Half Day"
-    // especially when Time Tracking is OFF.
-    if (existingDay) {
+    // [FIX] Priority for status: forcedStatus > manualStatus (from existingDay) > defaults
+    // This ensures manual overrides from the controller are respected during rebuild.
+    if (meta.forcedStatus !== undefined && meta.forcedStatus !== null) {
+      emptyStatus = Number(meta.forcedStatus);
+    } else if (existingDay) {
       emptyStatus = existingDay.status;
     }
 
@@ -856,9 +861,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       last_out: existingDay?.last_out || null,
       worked_minutes: finalNoPunchMinutes,
       overtime_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.overtime_minutes || 0) : 0,
-      late_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.late_minutes || 0) : 0,
-      early_out_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.early_out_minutes || 0) : 0,
-      early_overtime_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.early_overtime_minutes || 0) : 0,
+      fine_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.fine_minutes || 0) : 0,
       total_break_minutes: (existingDay && existingDay.status === emptyStatus) ? (existingDay.total_break_minutes || 0) : 0,
       overtime_amount: (existingDay && existingDay.status === emptyStatus) ? (existingDay.overtime_amount || 0) : 0,
       fine_amount: (existingDay && existingDay.status === emptyStatus) ? (existingDay.fine_amount || 0) : 0,
@@ -970,47 +973,64 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // 2. Identify Actual Gaps (Break time between punch pairs)
+  const gapRecords = [];
   for (let i = 0; i < punches.length - 1; i++) {
     if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
-      actualGapsMins += Math.round(dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute", true));
+      const gS = dayjs(punches[i].punch_time);
+      const gE = dayjs(punches[i + 1].punch_time);
+      const duration = Math.round(gE.diff(gS, "minute", true));
+      actualGapsMins += duration;
+      gapRecords.push({ start: gS, end: gE, duration: duration, excludedMins: 0 });
     }
   }
 
-  // 3. Identify Scheduled Breaks (Unpaid intervals defined in shift)
+  // 3. Identify Scheduled Breaks (Unpaid intervals defined in shift) and Categorize
+  let fineableScheduledBreaksMins = 0;
   if (shift && shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks) && firstIn && lastOut) {
     const pIn = dayjs(firstIn.punch_time);
     const pOut = dayjs(lastOut.punch_time);
 
     for (const sb of shift.ShiftBreaks) {
-      if (sb.pay_type === "Unpaid" && sb.break_type === "Intervals") {
-        if (sb.start_time && sb.end_time) {
-          let bStart = dayjs(`${date} ${sb.start_time}`);
-          let bEnd = dayjs(`${date} ${sb.end_time}`);
-          if (bEnd.isBefore(bStart)) bEnd = bEnd.add(1, 'day');
+      if (sb.status !== 2 && sb.start_time && sb.end_time) {
+        let bStart = dayjs(`${date} ${sb.start_time}`);
+        let bEnd = dayjs(`${date} ${sb.end_time}`);
+        if (bEnd.isBefore(bStart)) bEnd = bEnd.add(1, 'day');
 
-          // 🌙 Night Shift Edge Case: Adjust break window for overnight shifts
-          if (bStart.isBefore(pIn.subtract(6, 'hour'))) {
-            bStart = bStart.add(1, 'day');
-            bEnd = bEnd.add(1, 'day');
-          }
+        // 🌙 Night Shift Edge Case: Adjust break window for overnight shifts
+        if (bStart.isBefore(pIn.subtract(6, 'hour'))) {
+          bStart = bStart.add(1, 'day');
+          bEnd = bEnd.add(1, 'day');
+        }
 
-          const intersectStart = dayjs(Math.max(bStart.valueOf(), pIn.valueOf()));
-          const intersectEnd = dayjs(Math.min(bEnd.valueOf(), pOut.valueOf()));
+        const intersectStart = dayjs(Math.max(bStart.valueOf(), pIn.valueOf()));
+        const intersectEnd = dayjs(Math.min(bEnd.valueOf(), pOut.valueOf()));
 
-          if (intersectEnd.isAfter(intersectStart)) {
-            const sbMins = intersectEnd.diff(intersectStart, "minute");
+        if (intersectEnd.isAfter(intersectStart)) {
+          const sbMins = intersectEnd.diff(intersectStart, "minute");
+          const category = (sb.category || "").toLowerCase();
+          const isShiftBreak = category.includes("shift break");
+          const isPaidCasual = category.includes("casual break") && sb.pay_type === "Paid";
+          const isExcludedFromFine = isShiftBreak || isPaidCasual;
 
-            let coveredByGap = 0;
-            for (let i = 0; i < punches.length - 1; i++) {
-              if (punches[i].punch_type === "OUT" && punches[i + 1].punch_type === "IN") {
-                const gS = dayjs(punches[i].punch_time);
-                const gE = dayjs(punches[i + 1].punch_time);
-                const overlapS = dayjs(Math.max(gS.valueOf(), intersectStart.valueOf()));
-                const overlapE = dayjs(Math.min(gE.valueOf(), intersectEnd.valueOf()));
-                if (overlapE.isAfter(overlapS)) coveredByGap += overlapE.diff(overlapS, "minute");
+          let coveredByGap = 0;
+          for (const gap of gapRecords) {
+            const overlapS = dayjs(Math.max(gap.start.valueOf(), intersectStart.valueOf()));
+            const overlapE = dayjs(Math.min(gap.end.valueOf(), intersectEnd.valueOf()));
+            if (overlapE.isAfter(overlapS)) {
+              const overlapMins = overlapE.diff(overlapS, "minute");
+              coveredByGap += overlapMins;
+              if (isExcludedFromFine) {
+                gap.excludedMins += overlapMins;
               }
             }
-            scheduledBreaksMins += Math.max(0, Math.round(sbMins - coveredByGap));
+          }
+
+          if (sb.pay_type === "Unpaid" && sb.break_type === "Intervals") {
+            const remnant = Math.max(0, Math.round(sbMins - coveredByGap));
+            scheduledBreaksMins += remnant;
+            if (!isExcludedFromFine) {
+              fineableScheduledBreaksMins += remnant;
+            }
           }
         }
       }
@@ -1019,14 +1039,21 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   totalBreakMinutes = actualGapsMins + scheduledBreaksMins;
 
-  // 4. Final Break Deduction Logic
-  let breakToDeduct = totalBreakMinutes;
+  // Calculate fineable break minutes (Actual gaps minus excluded overlaps + non-excluded remnants)
+  let fineableActualGapsMins = 0;
+  for (const gap of gapRecords) {
+    fineableActualGapsMins += Math.max(0, gap.duration - gap.excludedMins);
+  }
+  let fineableBreakMinutes = fineableActualGapsMins + fineableScheduledBreaksMins;
+
+  // 4. Final Break Deduction Logic (Fines/Deductions use fineableBreakMinutes)
+  let breakToDeduct = fineableBreakMinutes;
   if (template) {
-    if (template.break_rules?.length > 0) {
-      const rule = template.break_rules.find(r => totalBreakMinutes >= r.from_mins && totalBreakMinutes <= r.to_mins);
-      if (rule) breakToDeduct = Math.max(0, totalBreakMinutes - (parseFloat(rule.value) || 0));
+    if (template.break_rules && template.break_rules.length > 0) {
+      const rule = template.break_rules.find(r => fineableBreakMinutes >= r.from_mins && fineableBreakMinutes <= r.to_mins);
+      if (rule) breakToDeduct = Math.max(0, fineableBreakMinutes - (parseFloat(rule.value) || 0));
     } else if (template.paid_break_duration_mins > 0) {
-      breakToDeduct = Math.max(0, totalBreakMinutes - template.paid_break_duration_mins);
+      breakToDeduct = Math.max(0, fineableBreakMinutes - template.paid_break_duration_mins);
     }
   }
 
@@ -1107,6 +1134,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   let lateMinutes = 0;
   let earlyOutMinutes = 0;
+  let fineMinutes = 0;
   let fineAmount = 0;
   let earlyOvertimeMinutes = Math.min(rawEarlyOT, overtimeMinutes);
   let lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
@@ -1170,11 +1198,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       return rules.find(r => mins >= r.from_mins && mins <= r.to_mins);
     };
     if (template) {
+      let rule = null;
       // Late Entry Fine
       if (lateMinutes > 0) {
         fineData.late_entry.minutes = lateMinutes;
         if (template.late_entry_rules.length > 0) {
-          let rule = getMatchingRule(lateMinutes, template.late_entry_rules);
+          rule = getMatchingRule(lateMinutes, template.late_entry_rules);
           if (rule) {
             // Check Tiered Occurrence Limit
             if (rule.occurrence_limit > 0 && rule.action_after_limit && rule.action_after_limit !== "NONE") {
@@ -1183,7 +1212,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                   employee_id: employeeId,
                   attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
                   company_id: employee.company_id,
-                                      late_minutes: { [Op.gt]: 0 },
+                  [Op.and]: [sequelize.literal(`fine_data->'late_entry' IS NOT NULL`)],
 
                   status: { [Op.ne]: 2 }
                 },
@@ -1248,7 +1277,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 employee_id: employeeId,
                 attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
                 company_id: employee.company_id,
-                late_minutes: { [Op.gt]: 0 },
+                [Op.and]: [sequelize.literal(`fine_data->'late_entry' IS NOT NULL`)],
                 status: { [Op.ne]: 2 }
               },
               transaction
@@ -1279,19 +1308,26 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               }
             }
           }
-        } 
-        // FIx AMOUNT 1x SALARY DEDUCTION WITHOUT RULE
-        // else {
-        //   const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
-        //   fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rateId };
-        //   fineAmount += res.amount;
-        // }
-      }
+        } else {
+          // Default 1x Salary Deduction if no rules match or no rules defined
+          const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
+          fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+          fineAmount += res.amount;
+        }
+        
+        // --- FALLBACK: Default 1x Salary Deduction for Late Entry ---
+        if (lateMinutes > 0 && fineData.late_entry.amount <= 0 && (!rule || rule.type !== 'NONE' || rule.amount > 0)) {
+           const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
+           fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+           fineAmount += res.amount;
+        }
+
+        rule = null;
         // Early Exit Fine
         if (earlyOutMinutes > 0) {
           fineData.early_exit.minutes = earlyOutMinutes;
           if (template.early_exit_rules.length > 0) {
-            let rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
+            rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
             if (rule) {
               // Check Tiered Occurrence Limit
               if (rule.occurrence_limit > 0 && rule.action_after_limit && rule.action_after_limit !== "NONE") {
@@ -1300,7 +1336,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                     employee_id: employeeId,
                     attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
                     company_id: employee.company_id,
-                    early_out_minutes: { [Op.gt]: 0 },
+                    [Op.and]: [sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)],
                     status: { [Op.ne]: 2 }
                   },
                   transaction
@@ -1365,7 +1401,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                   employee_id: employeeId,
                   attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
                   company_id: employee.company_id,
-                  early_out_minutes: { [Op.gt]: 0 },
+                  [Op.and]: [sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)],
                   status: { [Op.ne]: 2 }
                 },
                 transaction
@@ -1397,13 +1433,23 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 }
               }
             }
+          } 
+          
+          // --- FALLBACK: Default 1x Salary Deduction for Early Exit ---
+          if (fineData.early_exit.amount <= 0 && (!rule || (rule.type !== 'NONE' && rule.type !== 'MINUTE_DEDUCTION'))) {
+            const res = getRateIdAndAmount(5, 1, earlyOutMinutes, dailyWage, hourlyWage);
+            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+            fineAmount += res.amount;
           }
+        }
 
-          // Excess Break Fine
-          if (totalBreakMinutes > (template.paid_break_duration_mins || 0)) {
-            const excessMins = totalBreakMinutes - (template.paid_break_duration_mins || 0);
+          rule = null;
+          let excessMins = 0;
+          // Excess Break Fine (using fineableBreakMinutes instead of totalBreakMinutes)
+          if (fineableBreakMinutes > (template.paid_break_duration_mins || 0)) {
+            excessMins = fineableBreakMinutes - (template.paid_break_duration_mins || 0);
             fineData.excess_breaks.minutes = excessMins;
-            const rule = getMatchingRule(excessMins, template.break_rules);
+            rule = getMatchingRule(excessMins, template.break_rules);
             if (rule) {
               if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
                 const amount = parseFloat(rule.value || 0);
@@ -1440,7 +1486,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 fineAmount += res.amount;
               }
             }
+          } 
+          
+          // --- FALLBACK: Default 1x Salary Deduction for Excess Breaks ---
+          if (fineData.excess_breaks.amount <= 0 && (!rule || rule.type !== 'NONE')) {
+            const res = getRateIdAndAmount(5, 1, excessMins, dailyWage, hourlyWage);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+            fineAmount += res.amount;
           }
+        }
           // Shortage Fine (Work hours less than shift hours)
           // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
           //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;
@@ -1522,7 +1576,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         }
       // }
     }
-  }
 
   finalWorkedMinutes = Math.max(0, finalWorkedMinutes);
 
@@ -1623,24 +1676,24 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // Prevent Status Downgrade (User Request: "don't let it to change my status")
   // If existing status is Present/HalfDay, don't revert to Absent/HalfDay just because of minutes calculation
-  // const existingDayForStatus = await commonQuery.findOneRecord(AttendanceDay, {
-  //   employee_id: employeeId,
-  //   attendance_date: date,
-  //   company_id: employee.company_id,
-  // }, { attributes: ['status'] }, transaction, false, { company_id: true });
-  // console.log("existingDayForStatus.status", existingDayForStatus.status);
-  // if (existingDayForStatus) {
-  //   // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
-  //   if (meta.preserveStatus) {
-  //     status = existingDayForStatus.status;
-  //   }
-  //   // Otherwise apply downgrade prevention logic
-  //   else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
-  //     status = existingDayForStatus.status; // Keep Present or On Duty
-  //   } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
-  //     status = existingDayForStatus.status; // Keep Half Day or Half On Duty
-  //   }
-  // }
+  const existingDayForStatus = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
+    employee_id: employeeId,
+    attendance_date: date,
+    company_id: employee.company_id,
+  }, { attributes: ['status'] }, transaction, false, { company_id: true });
+  
+  if (existingDayForStatus) {
+    // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
+    if (meta.preserveStatus) {
+      status = existingDayForStatus.status;
+    }
+    // Otherwise apply downgrade prevention logic
+    else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
+      status = existingDayForStatus.status; // Keep Present or On Duty
+    } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
+      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
+    }
+  }
   if (meta.forcedStatus !== undefined) {
     status = meta.forcedStatus;
     if (meta.overrideAutomationNote) {
@@ -1679,11 +1732,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
     last_out: lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null,
     worked_minutes: Math.floor(finalWorkedMinutes),
-    late_minutes: lateMinutes,
-    early_out_minutes: earlyOutMinutes,
-    early_overtime_minutes: earlyOvertimeMinutes,
+    fine_minutes: (fineData.late_entry?.minutes || 0) + (fineData.early_exit?.minutes || 0) + (fineData.excess_breaks?.minutes || 0),
     total_break_minutes: totalBreakMinutes,
-    overtime_minutes: overtimeMinutes,
+    overtime_minutes: (parseInt(lateOtData.minutes || 0) + parseInt(earlyOtData.minutes || 0)),
     overtime_amount: parseFloat((parseFloat(lateOtData.amount || 0) + parseFloat(earlyOtData.amount || 0)).toFixed(2)),
     overtime_data: (
       (lateOtData.minutes === 0 && lateOtData.amount === 0 && lateOtData.rate === 0) &&
@@ -1821,8 +1872,20 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   // Support for Multiple Punches
   if (meta.punches && Array.isArray(meta.punches)) {
-    // Clear existing punches for this day_id
-    await commonQuery.updateRecordById(AttendancePunch, { day_id: dayId, status: 0 }, { status: 2 }, transaction, false, { company_id: true });
+    // Clear all existing and unassigned punches for this employee on this date to ensure a clean state
+    await commonQuery.hardDeleteRecords(AttendancePunch, { 
+      [Op.or]: [
+        { day_id: dayId },
+        {
+          day_id: null,
+          employee_id: employeeId,
+          punch_time: {
+            [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+          }
+        }
+      ],
+      status: 0 
+    }, transaction, { company_id: true });
 
     // Create new punches from array
     for (const p of meta.punches) {
@@ -1836,6 +1899,24 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
       }, transaction, { company_id: true });
     }
   } else {
+    // [NEW] Clear existing punches if new times are provided, to ensure a clean state
+    if (inTime || outTime) {
+      console.log(`[manualPunch] Clearing all existing and unassigned punches for day ID ${dayId} / Date ${date} before creating new times.`);
+      await commonQuery.hardDeleteRecords(AttendancePunch, { 
+        [Op.or]: [
+          { day_id: dayId },
+          {
+            day_id: null,
+            employee_id: employeeId,
+            punch_time: {
+              [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+            }
+          }
+        ],
+        status: 0 
+      }, transaction, { company_id: true });
+    }
+
     if (inTime && outTime) {
       const inDateObj = parseDateTime(inTime, date);
       const outDateObj = parseDateTime(outTime, date);

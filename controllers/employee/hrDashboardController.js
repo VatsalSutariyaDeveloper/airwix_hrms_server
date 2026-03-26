@@ -36,7 +36,68 @@ exports.getCounts = async (req, res) => {
             attendance_date: today,
             status: 6
         }, {}, false);
+        
+        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
+            {
+                attendance_date: today
+            },
+            {
+                include: [{
+                    model: ShiftTemplate,
+                    as: 'shiftTemplate',
+                    required: false,
+                    attributes: ['start_time', 'grace_minutes']
+                }]
+            },
+            null,
+            false
+        );
+       
+        const lateEntryRecords = lateEntry.filter(record => {
+            if (!record.first_in || !record.shiftTemplate) return false;
+            
+            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+            
+            return firstInTime.isAfter(allowedTime);
+        });
 
+        const lateEntryCount = lateEntryRecords.length;
+
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, {}, null, false);
+        const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
+            date: today
+        }, {}, null, false);
+      
+        // Separate guest and employee data
+        const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
+        const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
+        
+        const guestCount = guestAttendance.length;
+        const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
+        
+        const canteenPresentToday = presentEmployeeIds.length;
+        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
+
+        return res.ok({
+            totalEmployees,
+            presentToday,
+            absentToday,
+            onLeaveToday,
+            lateEntry: lateEntryCount,
+            canteenPresentToday,
+            canteenAbsentToday,
+            guestCount
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getPendingCount = async (req, res) => {
+    try {
         let pendingLeaves = 0;
         let authorizedOnDutyRequests = 0;
         let authorizedAttendanceRegularizationRequests = 0;
@@ -141,62 +202,8 @@ exports.getCounts = async (req, res) => {
         }
         
         const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
-        
-        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
-            {
-                attendance_date: today
-            },
-            {
-                include: [{
-                    model: ShiftTemplate,
-                    as: 'shiftTemplate',
-                    required: false,
-                    attributes: ['start_time', 'grace_minutes']
-                }]
-            },
-            null,
-            false
-        );
-       
-        const lateEntryRecords = lateEntry.filter(record => {
-            if (!record.first_in || !record.shiftTemplate) return false;
-            
-            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
-            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
-            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
-            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
-            
-            return firstInTime.isAfter(allowedTime);
-        });
 
-        const lateEntryCount = lateEntryRecords.length;
-
-        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, {}, null, false);
-        const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
-            date: today
-        }, {}, null, false);
-      
-        // Separate guest and employee data
-        const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
-        const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
-        
-        const guestCount = guestAttendance.length;
-        const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
-        
-        const canteenPresentToday = presentEmployeeIds.length;
-        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
-
-        return res.ok({
-            totalEmployees,
-            presentToday,
-            absentToday,
-            onLeaveToday,
-            pendingGlobalCount,
-            lateEntry: lateEntryCount,
-            canteenPresentToday,
-            canteenAbsentToday,
-            guestCount
-        });
+        return res.ok({pendingCount: pendingGlobalCount});
     } catch (err) {
         return handleError(err, res, req);
     }

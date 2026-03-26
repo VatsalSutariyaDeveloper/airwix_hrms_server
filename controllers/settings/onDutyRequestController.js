@@ -41,6 +41,12 @@ const transaction = await sequelize.transaction();
             return res.error(constants.VALIDATION_ERROR, { message: "On Duty requests are disabled for this employee's template." });
         }
 
+        // Check if on_duty_approval_level is null, then set approval_status to 3 (APPROVED) directly
+        let approvalStatus = constants.ON_DUTY_STATUS.PENDING; // Default to pending
+        if (template && template.on_duty_approval_level === null) {
+            approvalStatus = constants.ON_DUTY_STATUS.APPROVED; // Set to approved (3)
+        }
+
         let { start_date, end_date, start_session, end_session } = req.body;
         const employee_id = req.body.employee_id;
 
@@ -67,7 +73,7 @@ const transaction = await sequelize.transaction();
 
         await commonQuery.createRecord(
             OnDutyRequest,
-            { ...req.body, start_session, end_session },
+            { ...req.body, start_session, end_session, approval_status: approvalStatus },
             transaction
         )
 

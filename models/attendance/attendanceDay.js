@@ -9,9 +9,7 @@ module.exports = (sequelize, DataTypes) => {
         first_in: DataTypes.TIME,
         last_out: DataTypes.TIME,
         worked_minutes: DataTypes.INTEGER,
-        late_minutes: DataTypes.INTEGER,
-        early_out_minutes: DataTypes.INTEGER,
-        early_overtime_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
+        fine_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         total_break_minutes: { type: DataTypes.INTEGER, defaultValue: 0 },
         status: {
             type: DataTypes.SMALLINT,
@@ -42,8 +40,8 @@ module.exports = (sequelize, DataTypes) => {
     AttendanceDay.belongsTo(models.ShiftTemplate, { foreignKey: "shift_id", as: "shiftTemplate" });
     AttendanceDay.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "leaveCategory" });
-    AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "attendancePunches" });
-    AttendanceDay.hasMany(models.CashVoucher, { foreignKey: "attendance_day_id", as: "cashVouchers" });
+    AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "attendancePunches", onDelete: "CASCADE" });
+    AttendanceDay.hasMany(models.CashVoucher, { foreignKey: "attendance_day_id", as: "cashVouchers", onDelete: "CASCADE" });
     AttendanceDay.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
   };
 
