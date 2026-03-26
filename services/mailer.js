@@ -76,10 +76,6 @@ const sendEmailHelper = async (options) => {
       user: smtp_user,
       pass: decryptedPassword,
     },
-
-    connectionTimeout: 10000, // 10 seconds to connect
-    greetingTimeout: 10000,   // 10 seconds to say hello
-    socketTimeout: 15000,     // 15 seconds for data transmission
   };
 
   try {

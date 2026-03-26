@@ -28,7 +28,10 @@ exports.initiate = async (req, res) => {
         const existing = await Employee.findOne({
             where: {
                 [Op.or]: [{ email }, { mobile_no }],
-                company_id: companyId
+                company_id: companyId,
+                status: {
+                    [Op.ne]: 2
+                }
             },
             transaction
         });
