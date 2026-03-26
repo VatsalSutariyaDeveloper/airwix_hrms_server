@@ -312,8 +312,7 @@ exports.getAttendanceSummary = async (req, res) => {
         attributes: [
           'status',
           [sequelize.fn('COUNT', sequelize.col('AttendanceDay.id')), 'count'],
-          [sequelize.fn('SUM', sequelize.col('late_minutes')), 'total_late'],
-          [sequelize.fn('SUM', sequelize.col('early_out_minutes')), 'total_early_out'],
+          [sequelize.fn('SUM', sequelize.col('fine_minutes')), 'total_fine'],
           [sequelize.fn('SUM', sequelize.col('overtime_minutes')), 'total_ot'],
           // Custom logic for short presence (status 5 and first_in exists)
           [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
@@ -367,7 +366,7 @@ exports.getAttendanceSummary = async (req, res) => {
       else if (status === 9) summary.incomplete += count;
       
       totalAccounted += count;
-      totalFineMins += (parseInt(stat.total_late) || 0) + (parseInt(stat.total_early_out) || 0);
+      totalFineMins += (parseInt(stat.total_fine) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
       summary.fineAmount += parseFloat(stat.total_fine_amount || 0);
       summary.overtimeAmount += parseFloat(stat.total_overtime_amount || 0);
@@ -450,11 +449,11 @@ exports.updateAttendanceDay = async (req, res) => {
       status, 
       first_in, 
       last_out, 
-      late_minutes, 
-      early_out_minutes, 
+      fine_minutes,
+      late_minutes,
+      early_out_minutes,
       worked_minutes,
       overtime_minutes,
-      early_overtime_minutes,
       total_break_minutes,
       fine_amount,
       leave_category_id,
@@ -466,6 +465,8 @@ exports.updateAttendanceDay = async (req, res) => {
       note,
     } = req.body;
     
+    // [USER REQUEST] REMOVED AttendanceDay.destroy to preserve existing data (status, punches) if not being explicitly updated.
+
     const day = await getOrCreateAttendanceDay(
       employee_id,
       attendance_date,
@@ -494,7 +495,7 @@ exports.updateAttendanceDay = async (req, res) => {
     // Check if status is non-working (3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE)
     const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
 
-    if (isTimeUpdate) {
+    if (isTimeUpdate || req.body.punches || (status !== undefined && status !== null)) {
         needsPunchUpdate = true;
     }
 
@@ -509,8 +510,9 @@ exports.updateAttendanceDay = async (req, res) => {
         }
     }
 
-    // 🔄 Auto-calculate Times if Overtime/Fine is Adjusted (and Times are NOT explicitly provided)
-    if (!isNonWorkingStatus && !isTimeUpdate && day.shift_id && (overtime_minutes !== undefined || early_overtime_minutes !== undefined || early_out_minutes !== undefined || late_minutes !== undefined)) {
+    // 🔄 Auto-calculate Times if Overtime/Fine is Adjusted (and Times are NOT explicitly provided and Status IS provided)
+    // We only auto-calculate if status is being set/updated as per user request to avoid touching punches on detail-only updates.
+    if (!isNonWorkingStatus && !isTimeUpdate && (status !== undefined && status !== null) && day.shift_id && (overtime_minutes !== undefined || fine_minutes !== undefined)) {
         const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
         if (shift) {
             needsPunchUpdate = true;
@@ -527,18 +529,14 @@ exports.updateAttendanceDay = async (req, res) => {
                 status: 0
             }, { order: [['punch_time', 'DESC']] }, t, true, { company_id: true });
 
-            // 1. EARLY OVERTIME or LATE ENTRY (Affects First In)
-            if (early_overtime_minutes !== undefined) {
+            // 1. LATE ENTRY (Affects First In)
+            if (fine_minutes !== undefined) {
                 const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
-                effectiveFirstIn = baseIn.subtract(early_overtime_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
-            }
-            else if (late_minutes !== undefined) {
-                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
-                effectiveFirstIn = baseIn.add(late_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
+                effectiveFirstIn = baseIn.add(fine_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
             }
 
             // 2. LATE OVERTIME or EARLY EXIT (Affects Last Out)
-            if (overtime_minutes !== undefined || early_out_minutes !== undefined) {
+            if (overtime_minutes !== undefined) {
                 let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
                 if (shift.is_night_shift || shift.end_time < shift.start_time) {
                     shiftEnd = shiftEnd.add(1, 'day');
@@ -547,12 +545,8 @@ exports.updateAttendanceDay = async (req, res) => {
                 let baseOut = lastOutPunch ? dayjs(lastOutPunch.punch_time) : shiftEnd;
 
                 if (overtime_minutes !== undefined) {
-                    const requestEarlyOt = early_overtime_minutes !== undefined ? early_overtime_minutes : (day.early_overtime_minutes || 0);
-                    const lateOvertime = Math.max(0, parseFloat(overtime_minutes || 0) - parseFloat(requestEarlyOt || 0));
+                    const lateOvertime = parseFloat(overtime_minutes || 0);
                     effectiveLastOut = baseOut.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
-                }
-                else if (early_out_minutes !== undefined) {
-                    effectiveLastOut = baseOut.subtract(early_out_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
                 }
             }
         }
@@ -597,7 +591,9 @@ exports.updateAttendanceDay = async (req, res) => {
       status: effectiveStatus,
       user_id: req.user.id,
       company_id: req.user.company_id,
-      branch_id: req.body.branch_id || req.user.branch_id
+      branch_id: req.body.branch_id || req.user.branch_id,
+      late_minutes: late_minutes !== undefined ? late_minutes : (day ? day.late_minutes : 0),
+      early_out_minutes: early_out_minutes !== undefined ? early_out_minutes : (day ? day.early_out_minutes : 0),
     };
     
     if (shift_id) payload.shift_id = shift_id;
@@ -635,9 +631,7 @@ exports.updateAttendanceDay = async (req, res) => {
         }
 
         // Always clear these for non-working status
-        payload.late_minutes = 0;
-        payload.early_out_minutes = 0; 
-        payload.early_overtime_minutes = 0;
+        payload.fine_minutes = 0;
         payload.fine_data = null;
         payload.fine_amount = 0; // Ensure fine amount is cleared
         
@@ -663,9 +657,7 @@ exports.updateAttendanceDay = async (req, res) => {
         if (first_in !== undefined) payload.first_in = first_in;
         if (last_out !== undefined) payload.last_out = last_out;
         
-        if (late_minutes !== undefined) payload.late_minutes = late_minutes;
-        if (early_out_minutes !== undefined) payload.early_out_minutes = early_out_minutes;
-        if (early_overtime_minutes !== undefined) payload.early_overtime_minutes = early_overtime_minutes;
+        if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
         if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
         if (fine_amount !== undefined) payload.fine_amount = fine_amount;
@@ -731,11 +723,10 @@ exports.updateAttendanceDay = async (req, res) => {
 
         if (shortLeaveCategory && currentDay) {
             const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
-            const currentLateMinutes = currentDay.late_minutes || 0;
-            const currentEarlyOutMinutes = currentDay.early_out_minutes || 0;
+            const currentFineMinutes = currentDay.fine_minutes || 0;
             const currentLastOut = currentDay.last_out;
             
-            const totalMissedMinutes = currentLateMinutes + currentEarlyOutMinutes;
+            const totalMissedMinutes = currentFineMinutes;
             const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
 
             const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
@@ -931,7 +922,17 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       // Get shift_id from employee if available
       const employee_shift_id = emp && emp.shift_template ? emp.shift_template : null;
       
-      const existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
+      // [USER REQUEST] Delete existing entry for this specific date first to ensure a fresh start
+      await AttendanceDay.destroy({
+        where: {
+          employee_id: employee_id,
+          attendance_date: attendance_date,
+          company_id: req.user.company_id
+        },
+        transaction: t
+      });
+
+      let existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
         employee_id, 
         attendance_date,
       }, {}, t, false, { company_id: true });
@@ -1388,7 +1389,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           if (fd.excess_breaks?.minutes > 0) dayFinePenaltyMins += parseInt(fd.excess_breaks.minutes) || 0;
         } else if ((parseFloat(attendanceDay.fine_amount) || 0) > 0) {
           // Fallback if fine_data is missing but fine_amount exists
-          dayFinePenaltyMins = (parseInt(attendanceDay.late_minutes) || 0) + (parseInt(attendanceDay.early_out_minutes) || 0);
+          dayFinePenaltyMins = (parseInt(attendanceDay.fine_minutes) || 0);
         }
 
         totalFineMins += dayFinePenaltyMins;
@@ -1440,9 +1441,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           last_out: attendanceDay.last_out,
           worked_minutes: attendanceDay.worked_minutes,
           total_break_minutes: attendanceDay.total_break_minutes,
-          late_minutes: attendanceDay.late_minutes,
-          early_out_minutes: attendanceDay.early_out_minutes,
-          early_overtime_minutes: attendanceDay.early_overtime_minutes,
+          fine_minutes: attendanceDay.fine_minutes,
           overtime_minutes: attendanceDay.overtime_minutes,
           fine_amount: attendanceDay.fine_amount,
           overtime_data: attendanceDay.overtime_data,
@@ -1867,7 +1866,7 @@ exports.getAttendanceReport = async (req, res) => {
            if (dayRecord.first_in) inTime = dayRecord.first_in;
            if (dayRecord.last_out) outTime = dayRecord.last_out;
            workedMins = dayRecord.worked_minutes || 0;
-           lateMins = dayRecord.late_minutes || 0;
+           fineMins = dayRecord.fine_minutes || 0;
            otMins = dayRecord.overtime_minutes || 0;
 
            if (statusId === 0) empData.summary.present += 1;
@@ -1968,7 +1967,7 @@ exports.getLateEntryReport = async (req, res) => {
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
       employee_id: { [Op.in]: employeeIds },
       attendance_date: { [Op.between]: [startDate, endDate] },
-      late_minutes: { [Op.gt]: 0 },
+      [Op.and]: [sequelize.literal(`fine_data->'late_entry' IS NOT NULL`)],
       status: { [Op.ne]: 2 }
     }, {
       order: [['attendance_date', 'ASC']]
@@ -1980,7 +1979,7 @@ exports.getLateEntryReport = async (req, res) => {
       if (!lateDataMap[record.employee_id]) {
          lateDataMap[record.employee_id] = { days: {}, totalLateMins: 0, lateCount: 0 };
       }
-      const lateMins = record.late_minutes || 0;
+      const fineMins = record.fine_minutes || 0;
       lateDataMap[record.employee_id].days[record.attendance_date] = lateMins;
       lateDataMap[record.employee_id].totalLateMins += lateMins;
       lateDataMap[record.employee_id].lateCount += 1;

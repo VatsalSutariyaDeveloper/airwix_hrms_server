@@ -34,14 +34,13 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["first_name", "employee_code"],
+                        attributes: ["first_name", "employee_code", "worker_type"],
                         include: [
                             {
                                 model: EmployeeAttendanceTemplate,
                                 as: "employeeAttendanceTemplate",
-                                where: { include_overtime_in_total: false },
-                                required: true,
-                                attributes:[]
+                                required: false,
+                                attributes: []
                             }
                         ],
                         required: true
@@ -60,7 +59,13 @@ exports.getEmployeesByMonthYear = async (req, res) => {
             },
             true, // requireTenantFields
             "attendance_date", // dateField
-            { overtime_data: { [Op.ne]: null } } // customWhere
+            { 
+                overtime_data: { [Op.ne]: null },
+                [Op.or]: [
+                    { '$employee.worker_type$': 2 },
+                    { '$employee.employeeAttendanceTemplate.include_overtime_in_total$': false }
+                ]
+            } // customWhere
         );
 
         const items = paginatedData.items;
@@ -215,24 +220,27 @@ exports.calculateCashVoucher = async (req, res) => {
                 attendance_date: {
                     [Op.between]: [startDate, endDate]
                 },
-                overtime_data: { [Op.ne]: null }
+                overtime_data: { [Op.ne]: null },
+                [Op.or]: [
+                    { '$employee.worker_type$': 2 },
+                    { '$employee.employeeAttendanceTemplate.include_overtime_in_total$': false }
+                ]
             },
             { // Options
                 include: [
                     {
                         model: Employee,
                         as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "worker_type", "branch_id", "company_id"],
                         include: [
                             {
                                 model: EmployeeAttendanceTemplate,
                                 as: "employeeAttendanceTemplate",
-                                where: { include_overtime_in_total: false },
-                                required: true,
+                                required: false,
                                 attributes: ["id", "name", "include_overtime_in_total"]
                             }
                         ],
-                        required: true,
-                        attributes: ["id", "first_name", "employee_code", "branch_id", "company_id"]
+                        required: true
                     }
                 ],
                 attributes: ["id", "employee_id", "attendance_date", "overtime_minutes", "overtime_data"],

@@ -258,13 +258,13 @@ class EmployeeTemplateService {
         }
 
         // Trigger past data sync for attendance related templates
-        if (!meta.skipRebuild && ['attendance_setting_template', 'holiday_template', 'weekly_off_template'].includes(fieldName)) {
-            await this.syncAttendanceForPastDays(employeeIds, transaction, {
-                user_id: meta.user_id || meta.req?.user?.id || 0,
-                company_id: meta.company_id,
-                branch_id: meta.branch_id
-            });
-        }
+        // if (!meta.skipRebuild && ['holiday_template', 'weekly_off_template'].includes(fieldName)) {
+        //     await this.syncAttendanceForPastDays(employeeIds, transaction, {
+        //         user_id: meta.user_id || meta.req?.user?.id || 0,
+        //         company_id: meta.company_id,
+        //         branch_id: meta.branch_id
+        //     });
+        // }
         return result;
     }
 
