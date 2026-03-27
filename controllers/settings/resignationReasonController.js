@@ -13,8 +13,7 @@ exports.create = async (req, res) => {
 exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
-            ["reason_name", true, true],
-            ["description", true, false],
+            ["reason_name", true, true]
         ];
     
         const data = await commonQuery.fetchPaginatedData(
