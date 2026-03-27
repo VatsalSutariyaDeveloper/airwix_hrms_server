@@ -1094,7 +1094,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
             }
           ],
           required: false,
-          order: [["punch_time", "ASC"]]
+          order: [["id", "ASC"]]
         }
       ]
     }, null, false, { company_id: true });
