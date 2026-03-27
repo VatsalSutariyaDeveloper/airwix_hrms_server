@@ -247,7 +247,7 @@ exports.handleAction = async (req, res) => {
             include: [{ 
                 model: Employee, 
                 as: 'employee',
-                attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id']
+                attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id', 'email', 'company_id']
             }]
         }, transaction);
 
@@ -317,6 +317,7 @@ exports.handleAction = async (req, res) => {
             } else {
                 // Final Approval
                 updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
+                updateData.current_level = currentLevel; // Keep current level for final approval
                 updateData.approved_lwd = approved_lwd || resignation.preferred_lwd;
                 
                 // Update Employee Final Details
@@ -328,6 +329,214 @@ exports.handleAction = async (req, res) => {
             }
 
             await commonQuery.updateRecordById(EmployeeResignation, id, updateData, transaction);
+
+            // Send Email Notification to Approvers
+            try {
+                const nextLevel = updateData.current_level;
+                const emailRecipients = [];
+                
+                // If config is empty but template exists, use default ANYONE config for single level
+                let approvalConfig = config;
+                if (!approvalConfig || approvalConfig.length === 0) {
+                    if (totalLevels === 1) {
+                        approvalConfig = [{"level":1,"type":"ANYONE","label":"First and Final Approval"}];
+                    }
+                }
+                
+                // Get current level approvers based on approval_config (for notifications)
+                const currentStage = approvalConfig.find(c => c.level === currentLevel);
+                
+                // Fallback: If no config, use default logic for level 1
+                if (!currentStage && currentLevel === 1) {
+                    // For level 1, include both reporting manager and attendance supervisor
+                    if (resignation.employee.reporting_manager) {
+                        const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
+                        if (manager?.email && !emailRecipients.includes(manager.email)) {
+                            emailRecipients.push(manager.email);
+                        }
+                    }
+                    
+                    if (resignation.employee.attendance_supervisor) {
+                        const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
+                        if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
+                            emailRecipients.push(supervisor.email);
+                        }
+                    }
+                    
+                    // Also include admins for fallback
+                    const admins = await commonQuery.findAllRecords(User, {
+                        company_id: resignation.employee.company_id,
+                        status: 0,
+                        [Op.or]: [
+                            { is_super_admin: true },
+                            { role_id: constants.ADMIN_ROLE_ID },
+                            { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
+                        ]
+                    }, {
+                        attributes: ['email'],
+                        transaction
+                    });
+                    admins.forEach(admin => {
+                        if (admin.email && !emailRecipients.includes(admin.email)) {
+                            emailRecipients.push(admin.email);
+                        }
+                    });
+                }
+                
+                if (currentStage) {
+                    switch (currentStage.type) {
+                        case 'REPORTING_MANAGER':
+                            if (resignation.employee.reporting_manager) {
+                                const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
+                                if (manager?.email && !emailRecipients.includes(manager.email)) emailRecipients.push(manager.email);
+                            }
+                            break;
+                        case 'ATTENDANCE_SUPERVISOR':
+                            if (resignation.employee.attendance_supervisor) {
+                                const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
+                                if (supervisor?.email && !emailRecipients.includes(supervisor.email)) emailRecipients.push(supervisor.email);
+                            }
+                            break;
+                        case 'ADMIN':
+                        case 'ANYONE':
+                            // For ANYONE type, include ALL possible approvers
+                            
+                            // Add reporting manager
+                            if (resignation.employee.reporting_manager) {
+                                const manager = await commonQuery.findOneRecord(User, { id: resignation.employee.reporting_manager, status: 0 }, { attributes: ['email'] }, transaction);
+                                if (manager?.email && !emailRecipients.includes(manager.email)) {
+                                    emailRecipients.push(manager.email);
+                                }
+                            }
+                            
+                            // Add attendance supervisor
+                            if (resignation.employee.attendance_supervisor) {
+                                const supervisor = await commonQuery.findOneRecord(User, { id: resignation.employee.attendance_supervisor, status: 0 }, { attributes: ['email'] }, transaction);
+                                if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
+                                    emailRecipients.push(supervisor.email);
+                                }
+                            }
+                            
+                            // Add all admin users (super admin, admin, business admin)
+                            const adminConditions = [];
+                            
+                            // Add super admin (role_id = 1)
+                            if (resignation.employee.company_id) {
+                                const superAdminCondition = {
+                                    role_id: 1,
+                                    company_id: resignation.employee.company_id,
+                                    status: 0
+                                };
+                                if (resignation.employee.branch_id) {
+                                    superAdminCondition.branch_id = resignation.employee.branch_id;
+                                }
+                                adminConditions.push(superAdminCondition);
+                            }
+                            
+                            // Add admin (role_id = 2)
+                            if (resignation.employee.company_id) {
+                                const adminCondition = {
+                                    role_id: 2, 
+                                    company_id: resignation.employee.company_id,
+                                    status: 0
+                                };
+                                if (resignation.employee.branch_id) {
+                                    adminCondition.branch_id = resignation.employee.branch_id;
+                                }
+                                adminConditions.push(adminCondition);
+                            }
+                            
+                            // Add business admin conditions only if company_id exists
+                            if (resignation.employee.company_id) {
+                                const businessAdminCondition = {
+                                    role_id: constants.BUSINESS_ADMIN_ROLE_ID,
+                                    company_id: resignation.employee.company_id,
+                                    status: 0
+                                };
+                                if (resignation.employee.branch_id) {
+                                    businessAdminCondition.branch_id = resignation.employee.branch_id;
+                                }
+                                adminConditions.push(businessAdminCondition);
+                            }
+                            
+                            const admins = await commonQuery.findAllRecords(User, {
+                                [Op.or]: adminConditions
+                            }, {
+                                attributes: ['email'],
+                                transaction
+                            });
+                            admins.forEach(admin => {
+                                if (admin.email && !emailRecipients.includes(admin.email)) {
+                                    emailRecipients.push(admin.email);
+                                }
+                            });
+                            break;
+                    }
+                }
+
+                // Get next level approvers based on approval_config (for partial approvals)
+                if (nextLevel <= totalLevels) {
+                    const nextStage = config.find(c => c.level === nextLevel);
+                    if (nextStage) {
+                        switch (nextStage.type) {
+                            case 'REPORTING_MANAGER':
+                                if (resignation.employee.reporting_manager) {
+                                    const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
+                                    if (manager?.email && !emailRecipients.includes(manager.email)) emailRecipients.push(manager.email);
+                                }
+                                break;
+                            case 'ATTENDANCE_SUPERVISOR':
+                                if (resignation.employee.attendance_supervisor) {
+                                    const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
+                                    if (supervisor?.email && !emailRecipients.includes(supervisor.email)) emailRecipients.push(supervisor.email);
+                                }
+                                break;
+                            case 'ADMIN':
+                            case 'ANYONE':
+                                const admins = await commonQuery.findAllRecords(User, {
+                                    company_id: resignation.employee.company_id,
+                                    status: 0,
+                                    [Op.or]: [
+                                        { is_super_admin: true },
+                                        { role_id: constants.ADMIN_ROLE_ID },
+                                        { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
+                                    ]
+                                }, {
+                                    attributes: ['email'],
+                                    transaction
+                                });
+                                admins.forEach(admin => {
+                                    if (admin.email && !emailRecipients.includes(admin.email)) emailRecipients.push(admin.email);
+                                });
+                                break;
+                        }
+                    }
+                }
+
+                // Remove duplicates
+                const uniqueRecipients = [...new Set(emailRecipients)];
+
+                // Always send email notification, even if no recipients found (will go to company email only)
+                if (uniqueRecipients.length > 0 || true) {
+                    await emailService.sendResignationActionNotification({
+                        companyId: resignation.employee.company_id,
+                        employeeName: resignation.employee.first_name,
+                        employeeEmail: resignation.employee.email,
+                        resignationDate: resignation.resignation_date,
+                        action: "APPROVED",
+                        actionBy: req.user.user_name,
+                        remarks: remarks,
+                        level: currentLevel,
+                        totalLevels: totalLevels,
+                        nextLevelApprovers: nextLevel <= totalLevels ? config.find(c => c.level === nextLevel) : null,
+                        approvedLWD: updateData.approved_lwd,
+                        recipients: uniqueRecipients
+                    });
+                }
+            } catch (emailErr) {
+                console.error("Resignation action email failed:", emailErr);
+                // Continue even if email fails
+            }
 
             // Send Notification to Employee
             const user = await commonQuery.findOneRecord(User, { employee_id: resignation.employee_id }, {}, transaction);
@@ -360,6 +569,67 @@ exports.handleAction = async (req, res) => {
                 approval_status: constants.RESIGNATION_APPROVAL_STATUS.REJECTED,
                 approval_history: history
             }, transaction);
+
+            // Send Email Notification to Approvers for Rejection
+            try {
+                const emailRecipients = [];
+                
+                // Get all stakeholders for rejection notification
+                const allStakeholders = await commonQuery.findAllRecords(User, {
+                    company_id: resignation.employee.company_id,
+                    status: 0,
+                    [Op.or]: [
+                        { is_super_admin: true },
+                        { role_id: constants.ADMIN_ROLE_ID },
+                        { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
+                    ]
+                }, {
+                    attributes: ['email'],
+                    transaction
+                });
+
+                allStakeholders.forEach(admin => {
+                    if (admin.email) emailRecipients.push(admin.email);
+                });
+
+                // Also include reporting manager and supervisor if they exist
+                if (resignation.employee.reporting_manager) {
+                    const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
+                    if (manager?.email && !emailRecipients.includes(manager.email)) {
+                        emailRecipients.push(manager.email);
+                    }
+                }
+
+                if (resignation.employee.attendance_supervisor) {
+                    const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
+                    if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
+                        emailRecipients.push(supervisor.email);
+                    }
+                }
+
+                // Remove duplicates
+                const uniqueRecipients = [...new Set(emailRecipients)];
+
+                if (uniqueRecipients.length > 0) {
+                    await emailService.sendResignationActionNotification({
+                        companyId: resignation.employee.company_id,
+                        employeeName: resignation.employee.first_name,
+                        employeeEmail: resignation.employee.email,
+                        resignationDate: resignation.resignation_date,
+                        action: "REJECTED",
+                        actionBy: req.user.user_name,
+                        remarks: remarks,
+                        level: currentLevel,
+                        totalLevels: totalLevels,
+                        nextLevelApprovers: null,
+                        approvedLWD: null,
+                        recipients: uniqueRecipients
+                    });
+                }
+            } catch (emailErr) {
+                console.error("Resignation rejection email failed:", emailErr);
+                // Continue even if email fails
+            }
 
             // Revert Employee Status
             await commonQuery.updateRecordById(Employee, resignation.employee_id, {

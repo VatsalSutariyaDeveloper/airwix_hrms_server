@@ -152,6 +152,7 @@ exports.submitDetails = async (req, res) => {
         const candidateFields = [
             'gender', 'dob', 'marital_status', 'blood_group', 'physically_challenged',
             'emergency_contact_mobile', 'father_name', 'mother_name', 'spouse_name',
+            'same_as_current',
             'present_address1', 'present_address2', 'present_city', 'present_state_id', 'present_country_id', 'present_pincode',
             'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
             'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
@@ -201,6 +202,7 @@ exports.approve = async (req, res) => {
     try {
         const { id } = req.params;
         const { employee_code, ...templateData } = req.body;
+        const companyId = req.user.company_id;
 
         const employee = await commonQuery.findOneRecord(
             Employee,
@@ -208,7 +210,12 @@ exports.approve = async (req, res) => {
                 id,
                 status: 3
             },
-            {},
+            {
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] }
+                ]
+            },
             transaction,
             false
         );
@@ -236,6 +243,20 @@ exports.approve = async (req, res) => {
             },
             transaction,
             false
+        );
+
+        // Send approval email with department and designation names
+        const departmentName = employee.department?.name || 'N/A';
+        const designationName = employee.designation?.designation_name || 'N/A';
+        
+        await emailService.sendOnboardingApproval(
+            employee.email,
+            employee.first_name,
+            employee_code,
+            departmentName,
+            designationName,
+            employee.joining_date,
+            companyId
         );
 
         // TODO: Sync templates and create User if necessary
@@ -298,7 +319,7 @@ exports.reject = async (req, res) => {
 
         // Send Email/WhatsApp with the new link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
-        await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+        await emailService.sendOnboardingRejection(employee.email, employee.first_name, reject_note, onboardingLink, companyId);
         
         // Also send on WhatsApp
         if (employee.mobile_no) {

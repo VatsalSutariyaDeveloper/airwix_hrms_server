@@ -13,7 +13,7 @@ class ResignationService {
             // Find employees with exit_date <= today and status is still Active (0)
             const employeesToDeactivate = await Employee.findAll({
                 where: {
-                    exit_date: { [Op.lt]: today },
+                    exit_date: { [Op.lte]: today },
                     status: 0,
                     resignation_status: 2 // Exited/Inactive marked
                 },
