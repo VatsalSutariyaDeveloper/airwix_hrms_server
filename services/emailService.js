@@ -46,6 +46,109 @@ const emailService = {
         }
     },
 
+    sendOnboardingApproval: async (email, name, employeeCode, departmentName, designationName, joiningDate, companyId) => {
+        try {
+            await sendEmailHelper({
+                company_id: companyId,
+                from: process.env.ADMIN_EMAIL,
+                email: email,
+                subject: `Welcome aboard! Your Onboarding has been Approved`,
+                message: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                        <h2 style="color: #1e293b;">Congratulations ${name}!</h2>
+                        <p style="color: #475569; line-height: 1.6;">
+                            We are pleased to inform you that your onboarding process has been successfully approved. Welcome to the team!
+                        </p>
+                        <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="color: #64748b; padding: 5px 0; width: 40%;"><strong>Employee Code:</strong></td>
+                                    <td style="color: #1e293b;">${employeeCode}</td>
+                                </tr>
+                                <tr>
+                                    <td style="color: #64748b; padding: 5px 0;"><strong>Department:</strong></td>
+                                    <td style="color: #1e293b;">${departmentName}</td>
+                                </tr>
+                                <tr>
+                                    <td style="color: #64748b; padding: 5px 0;"><strong>Designation:</strong></td>
+                                    <td style="color: #1e293b;">${designationName}</td>
+                                </tr>
+                                <tr>
+                                    <td style="color: #64748b; padding: 5px 0;"><strong>Joining Date:</strong></td>
+                                    <td style="color: #1e293b;">${joiningDate}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <p style="color: #475569; line-height: 1.6;">
+                            You are now officially part of our organization. Your HR team will provide you with further information about your orientation schedule, access credentials, and other onboarding activities.
+                        </p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <div style="background-color: #dcfce7; color: #166534; padding: 15px; border-radius: 6px; border-left: 4px solid #22c55e;">
+                                <strong>🎉 Welcome to the Team!</strong>
+                            </div>
+                        </div>
+                        <p style="color: #64748b; font-size: 0.9em; line-height: 1.5;">
+                            If you have any questions, please don't hesitate to reach out to the HR department.
+                        </p>
+                        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+                        <p style="color: #94a3b8; font-size: 0.8em; text-align: center;">
+                            This is an automated message from Airwix HRMS.
+                        </p>
+                    </div>
+                `,
+            });
+            return true;
+        } catch (error) {
+            console.error("Failed to send onboarding approval email:", error);
+            throw error;
+        }
+    },
+
+    sendOnboardingRejection: async (email, name, rejectNote, onboardingLink, companyId) => {
+        try {
+            await sendEmailHelper({
+                company_id: companyId,
+                from: process.env.ADMIN_EMAIL,
+                email: email,
+                subject: `Action Required: Your Onboarding Submission Needs Review`,
+                message: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                        <h2 style="color: #dc2626;">Onboarding Rejection</h2>
+                        <p style="color: #475569; line-height: 1.6;">
+                            Dear ${name},
+                        </p>
+                        <p style="color: #475569; line-height: 1.6;">
+                            Thank you for submitting your onboarding details. Our team has reviewed your submission and found some details that need to be addressed before we can proceed with your activation.
+                        </p>
+                        <div style="padding: 15px; border-radius: 6px; border: 1px solid #dc2626;">
+                            <h3 style="color: #dc2626; margin-top: 0;">Review Comments:</h3>
+                            <p style="color: #374151; margin-bottom: 0;">${rejectNote}</p>
+                        </div>
+                        <p style="color: #475569; line-height: 1.6;">
+                            Please review the comments above and update your information accordingly. You can access your onboarding form using the link below to make the necessary corrections.
+                        </p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="${onboardingLink}" style="background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">
+                                Update Your Information
+                            </a>
+                        </div>
+                        <p style="color: #64748b; font-size: 0.9em; line-height: 1.5;">
+                            If you have any questions about the review comments or need assistance with the update process, please don't hesitate to contact our HR department.
+                        </p>
+                        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+                        <p style="color: #94a3b8; font-size: 0.8em; text-align: center;">
+                            This is an automated message from Airwix HRMS.
+                        </p>
+                    </div>
+                `,
+            });
+            return true;
+        } catch (error) {
+            console.error("Failed to send onboarding rejection email:", error);
+            throw error;
+        }
+    },
+
     /**
      * Send resignation notification to all concerned parties
      */
