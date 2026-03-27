@@ -122,22 +122,24 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                 voucher_type: "OVERTIME"
             },
             {
-                attributes: ["id", "employee_id", "attendance_date"],
+                attributes: ["id", "employee_id", "attendance_date", "status"],
                 raw: true
             },
             null,
             true
         );
 
-        // Create a map of employee_id to voucher_id
+        // Create a map of employee_id to voucher details
         const voucherMap = new Map();
         existingVouchers.forEach(voucher => {
-            voucherMap.set(voucher.employee_id, voucher.id);
+            voucherMap.set(voucher.employee_id, { id: voucher.id, status: voucher.status });
         });
 
-        // Add cash_voucher_id to each employee item
+        // Add cash_voucher_id and status to each employee item
         groupedItems.forEach(item => {
-            item.cash_voucher_id = voucherMap.get(item.employee_id) || null;
+            const voucher = voucherMap.get(item.employee_id);
+            item.cash_voucher_id = voucher ? voucher.id : null;
+            item.cash_voucher_status = voucher ? voucher.status : null;
         });
 
         // Manual Pagination
@@ -237,7 +239,7 @@ exports.calculateCashVoucher = async (req, res) => {
                                 model: EmployeeAttendanceTemplate,
                                 as: "employeeAttendanceTemplate",
                                 required: false,
-                                attributes: ["id", "name", "include_overtime_in_total"]
+                                attributes: ["id", "include_overtime_in_total"]
                             }
                         ],
                         required: true
@@ -293,20 +295,37 @@ exports.calculateCashVoucher = async (req, res) => {
             return res.ok({ message: "No valid overtime records found", voucher: null });
         }
 
-        // Create single CashVoucher record for the month
-        const voucher = await commonQuery.createRecord(
-            CashVoucher, {
-                employee_id,
-                attendance_day_id: attendanceDays[0].id,
-                attendance_date: startDate,
-                voucher_type: "OVERTIME",
-                overtime_minutes: totalOvertimeMinutes,
-                amount: parseFloat(totalAmount.toFixed(2)),
-                overtime_data: overtimeHistory,
+        // Create or Update single CashVoucher record for the month
+        const existingVoucher = await commonQuery.findOneRecord(CashVoucher, {
+            employee_id,
+            attendance_date: startDate,
+            voucher_type: "OVERTIME",
+        }, {}, null, true);
+
+        const voucherPayload = {
+            employee_id,
+            attendance_day_id: attendanceDays[0].id,
+            attendance_date: startDate,
+            voucher_type: "OVERTIME",
+            overtime_minutes: totalOvertimeMinutes,
+            amount: parseFloat(totalAmount.toFixed(2)),
+            overtime_data: overtimeHistory,
+            status: 0
+        };
+
+        let voucherId;
+        if (existingVoucher) {
+            if (existingVoucher.status === 1) {
+                return res.error("Action Prohibited", { message: "Cannot recalculate a settled voucher." });
             }
-        );
+            await commonQuery.updateRecordById(CashVoucher, existingVoucher.id, voucherPayload, null, false, { company_id: true });
+            voucherId = existingVoucher.id;
+        } else {
+            const newVoucher = await commonQuery.createRecord(CashVoucher, voucherPayload);
+            voucherId = newVoucher.id;
+        }
         
-        return res.ok({cash_voucher_id:voucher.id});
+        return res.ok({ cash_voucher_id: voucherId });
     } catch (err) {
         return handleError(err, res, req);
     }
