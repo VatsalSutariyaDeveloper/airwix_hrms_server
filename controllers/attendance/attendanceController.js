@@ -1253,6 +1253,30 @@ exports.getMonthlyAttendance = async (req, res) => {
     }, {
       include: [
         {
+          model: AttendancePunch,
+          as: "attendancePunches",
+          required: false,
+          where: { status: 0 },
+          include: [
+            {
+              model: User,
+              as: 'user',
+              attributes: ['id', 'user_name']
+            },
+            {
+              model: DeviceMaster,
+              as: 'device',
+              attributes: ['id', 'device_name']
+            },
+            {
+              model: BranchMaster,
+              as: 'branch',
+              attributes: ['id', 'branch_name']
+            }
+          ],
+          order: [["id", "ASC"]]
+        },
+        {
           model: ShiftTemplate,
           as: "shiftTemplate"
         },
@@ -1306,32 +1330,6 @@ exports.getMonthlyAttendance = async (req, res) => {
       status: 0
     });
 
-    // 3. Fetch all raw punches for the month with User info
-    const punches = await commonQuery.findAllRecords(AttendancePunch, {
-      employee_id,
-      punch_time: {
-        [Op.between]: [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
-      },
-      status: 0
-    }, {
-      include: [{
-        model: User,
-        as: 'user',
-        attributes: ['id', 'user_name']
-      },
-      {
-        model: DeviceMaster,
-        as: 'device',
-        attributes: ['id', 'device_name']
-      },
-      {
-        model: BranchMaster,
-        as: 'branch',
-        attributes: ['id', 'branch_name']
-      }],
-      order: [["punch_time", "ASC"]]
-    }, null, { company_id: true });
-
     const summary = {
       present: 0,
       halfDay: 0,
@@ -1360,7 +1358,8 @@ exports.getMonthlyAttendance = async (req, res) => {
       if (employee.joining_date && dayObj.isBefore(dayjs(employee.joining_date), 'day')) continue;
       
       const attendanceDay = attendanceDays.find(ad => ad.attendance_date === curDate);
-      const dayPunches = punches.filter(p => dayjs(p.punch_time).format('YYYY-MM-DD') === curDate);
+      // const dayPunches = attendanceDay?.attendancePunches ? [...attendanceDay.attendancePunches].sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time)) : [];
+      const dayPunches = attendanceDay?.attendancePunches || [];
       
       let dayData = {
         date_display: dayObj.format("DD MMM"),

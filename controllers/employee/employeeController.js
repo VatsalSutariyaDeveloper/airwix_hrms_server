@@ -157,6 +157,12 @@ exports.create = async (req, res) => {
                     fields: ["email", "mobile_no"],
                     excludeCompany: true,
                     excludeBranch: true,
+                },
+                {
+                    model: User,
+                    fields: ["email", "mobile_no"],
+                    excludeCompany: true,
+                    excludeBranch: true,
                 }
             ]
         }, transaction);
@@ -277,16 +283,24 @@ exports.update = async (req, res) => {
         };
 
         const errors = await validateRequest(POST, requiredFields, {
-            uniqueCheck: {
+            uniqueCheck: [{
                 model: Employee,
                 fields: ["email", "mobile_no"],
                 excludeCompany: true,
                 excludeBranch: true,
                 excludeId: id
             },
-            customFieldConfig: {
-                // entity_id: ENTITIES.EMPLOYEE.ID,
-            }
+            {
+                model: User,
+                fields: ["email", "mobile_no"],
+                excludeCompany: true,
+                excludeBranch: true,
+                where: {
+                    employee_id: {
+                        [Op.ne]: id
+                    }
+                }
+            }],
         }, transaction);
 
         if (errors) {
