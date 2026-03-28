@@ -221,11 +221,9 @@ const emailService = {
                 employeeEmail, 
                 resignationDate, 
                 action, 
-                actionBy, 
                 remarks, 
                 level, 
                 totalLevels, 
-                nextLevelApprovers,
                 approvedLWD,
                 recipients 
             } = data;
@@ -239,11 +237,7 @@ const emailService = {
 
             const isApproval = action === 'APPROVED';
             const isFinalApproval = level === totalLevels && isApproval;
-            const subject = isFinalApproval 
-                ? `Resignation Approved - ${employeeName}`
-                : isApproval 
-                ? `Resignation Approved (Level ${level}/${totalLevels}) - ${employeeName}`
-                : `Resignation Rejected - ${employeeName}`;
+            const subject = `Resignation Approved - ${employeeName}`;
 
             const message = `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
@@ -251,7 +245,7 @@ const emailService = {
                         ${isFinalApproval ? 'Resignation Approved' : isApproval ? 'Resignation Partially Approved' : 'Resignation Rejected'}
                     </h2>
                     <p style="color: #475569; line-height: 1.6;">
-                        This is to inform that the resignation request for <strong>${employeeName}</strong> has been <strong>${action.toLowerCase()}</strong> by <strong>${actionBy}</strong>.
+                        This is to inform that the resignation request for <strong>${employeeName}</strong> has been <strong>${action.toLowerCase()}</strong>.
                     </p>
                     <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
                         <table style="width: 100%; border-collapse: collapse;">
@@ -266,10 +260,6 @@ const emailService = {
                             <tr>
                                 <td style="color: #64748b; padding: 5px 0;"><strong>Action:</strong></td>
                                 <td style="color: ${isApproval ? '#059669' : '#dc2626'}; font-weight: bold;">${action}</td>
-                            </tr>
-                            <tr>
-                                <td style="color: #64748b; padding: 5px 0;"><strong>Approval Level:</strong></td>
-                                <td style="color: #1e293b;">${level} of ${totalLevels}</td>
                             </tr>
                             ${approvedLWD ? `
                             <tr>
