@@ -313,11 +313,13 @@ const emailService = {
                 </div>
             `;
 
-            await sendEmailHelper({
+             await sendEmailHelper({
                 company_id: companyId,
-                from: employeeEmail, // From the employee
-                email: companyEmail, // To the company email
-                cc: recipients.join(','), // CC to approvers
+                // from: employeeEmail,
+                from: process.env.ADMIN_EMAIL, 
+                replyTo: employeeEmail, 
+                email: companyEmail, 
+                cc: recipients.join(','), 
                 subject: subject,
                 message: message,
             });

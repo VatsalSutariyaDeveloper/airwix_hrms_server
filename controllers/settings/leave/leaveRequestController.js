@@ -704,7 +704,7 @@ exports.updateStatus = async (req, res) => {
                 await notificationService.createNotification({
                     user_id: user.id,
                     title: `Leave ${approval_status === "REJECTED" ? "Rejected" : "Cancelled"}`,
-                    message: `Your leave request from ${dayjs(leaveRequest.start_date).format('DD MMM')} has been ${approval_status.toLowerCase()}. ${approval_remark ? 'Remarks: ' + approval_remark : ''}`,
+                    message: `Your leave request from ${dayjs(leaveRequest.start_date).format('DD MMM')} has been ${approval_status}. ${approval_remark ? 'Remarks: ' + approval_remark : ''}`,
                     type: "LEAVE",
                     reference_id: id,
                     status_code: 1, // Warning
