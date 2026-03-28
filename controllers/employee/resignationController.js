@@ -178,7 +178,7 @@ exports.submitResignation = async (req, res) => {
         // 4. Send Email Notification
         try {
             // Fetch reason name if resignation_reason_id is provided
-            let reasonName = req.body.reason; // Fallback to manual reason text
+            let reasonName = req.body.reason_description; // Fallback to manual reason text
             if (req.body.resignation_reason_id) {
                 const reasonRecord = await commonQuery.findOneRecord(ResignationReason, req.body.resignation_reason_id, { attributes: ['reason_name'] }, transaction);
                 if (reasonRecord) reasonName = reasonRecord.reason_name;
@@ -247,7 +247,8 @@ exports.handleAction = async (req, res) => {
             include: [{ 
                 model: Employee, 
                 as: 'employee',
-                attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id', 'email', 'company_id']
+                attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id', 'email', 'company_id'],
+                include: [{ model: ResignationTemplate, as: 'resignationTemplate' }]
             }]
         }, transaction);
 
@@ -257,288 +258,85 @@ exports.handleAction = async (req, res) => {
         }
 
         // 1. Authorization Check
-        const templateId = resignation.employee.resignation_template_id;
-        const template = await commonQuery.findOneRecord(ResignationTemplate, templateId, {}, transaction);
-        
-        const config = template ? (template.approval_config || []) : [];
-        const totalLevels = template ? template.approval_levels : 1;
         const currentLevel = resignation.current_level;
+        const employee = resignation.employee;
+        const template = employee?.resignationTemplate; 
+        const config = template?.approval_config || [];
+        const totalLevels = template?.approval_levels || 1;
+        const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
 
-        let currentStage = config.find(c => c.level === currentLevel);
-        if (!currentStage) currentStage = { type: "ANYONE" };
-
-        let isAuthorized = false;
-        if (req.user.is_super_admin) {
-            isAuthorized = true;
-        } else {
-            switch (currentStage.type) {
-                case 'REPORTING_MANAGER':
-                    if (resignation.employee.reporting_manager === req.user.employee_id) isAuthorized = true;
-                    break;
-                case 'ATTENDANCE_SUPERVISOR':
-                    if (resignation.employee.attendance_supervisor === req.user.employee_id) isAuthorized = true;
-                    break;
-                case 'ADMIN':
-                    if (req.user.is_admin || req.user.role_id === constants.BUSINESS_ADMIN_ROLE_ID || req.user.role_id === constants.ADMIN_ROLE_ID) isAuthorized = true;
-                    break;
-                case 'ANYONE':
-                    if (resignation.employee.reporting_manager === req.user.employee_id ||
-                        resignation.employee.attendance_supervisor === req.user.employee_id ||
-                        req.user.is_admin) {
-                        isAuthorized = true;
-                    }
-                    break;
-            }
-        }
-
-        if (!isAuthorized) {
+        if (!isUserAuthorizedForResignation(req.user, resignation.employee, currentStage)) {
             await transaction.rollback();
             return res.error(constants.PERMISSION_DENIED, { message: "You are not authorized to approve this request at the current level." });
         }
 
         // 2. Process Action
+        const history = resignation.approval_history || [];
+        const actionType = approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED ? "APPROVED" : "REJECTED";
+        
+        history.push({
+            level: currentLevel,
+            action: actionType,
+            by: req.user.id,
+            user_name: req.user.user_name,
+            at: new Date(),
+            remarks
+        });
+
         if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED) {
-            const history = resignation.approval_history || [];
-            history.push({
-                level: currentLevel,
-                action: "APPROVED",
-                by: req.user.id,
-                user_name: req.user.user_name,
-                at: new Date(),
-                remarks
-            });
-
             const updateData = { approval_history: history };
+            const isSuperAdmin = req.user.role_id === 1 && req.user.is_super_admin;
 
-            if (currentLevel < totalLevels) {
+            if (isSuperAdmin || currentLevel >= totalLevels) {
+                // Final Approval (Super Admin override or last level reached)
+                updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
+                updateData.current_level = totalLevels; 
+                updateData.approved_lwd = approved_lwd || resignation.preferred_lwd;
+                
+                // Update employee status
+                await commonQuery.updateRecordById(Employee, resignation.employee_id, {
+                    exit_date: updateData.approved_lwd,
+                    status: 1, 
+                    resignation_status: 2 
+                }, transaction);
+            } else {
                 // Move to next level
                 updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED;
                 updateData.current_level = currentLevel + 1;
-            } else {
-                // Final Approval
-                updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
-                updateData.current_level = currentLevel; // Keep current level for final approval
-                updateData.approved_lwd = approved_lwd || resignation.preferred_lwd;
-                
-                // Update Employee Final Details
-                await commonQuery.updateRecordById(Employee, resignation.employee_id, {
-                    exit_date: updateData.approved_lwd,
-                    status: 1, // Set Inactive
-                    resignation_status: 2 // Exited
-                }, transaction);
             }
 
             await commonQuery.updateRecordById(EmployeeResignation, id, updateData, transaction);
 
-            // Send Email Notification to Approvers
+            // Notification logic
             try {
                 const nextLevel = updateData.current_level;
-                const emailRecipients = [];
-                
-                // If config is empty but template exists, use default ANYONE config for single level
-                let approvalConfig = config;
-                if (!approvalConfig || approvalConfig.length === 0) {
-                    if (totalLevels === 1) {
-                        approvalConfig = [{"level":1,"type":"ANYONE","label":"First and Final Approval"}];
-                    }
-                }
-                
-                // Get current level approvers based on approval_config (for notifications)
-                const currentStage = approvalConfig.find(c => c.level === currentLevel);
-                
-                // Fallback: If no config, use default logic for level 1
-                if (!currentStage && currentLevel === 1) {
-                    // For level 1, include both reporting manager and attendance supervisor
-                    if (resignation.employee.reporting_manager) {
-                        const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
-                        if (manager?.email && !emailRecipients.includes(manager.email)) {
-                            emailRecipients.push(manager.email);
-                        }
-                    }
-                    
-                    if (resignation.employee.attendance_supervisor) {
-                        const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
-                        if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
-                            emailRecipients.push(supervisor.email);
-                        }
-                    }
-                    
-                    // Also include admins for fallback
-                    const admins = await commonQuery.findAllRecords(User, {
-                        company_id: resignation.employee.company_id,
-                        status: 0,
-                        [Op.or]: [
-                            { is_super_admin: true },
-                            { role_id: constants.ADMIN_ROLE_ID },
-                            { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
-                        ]
-                    }, {
-                        attributes: ['email'],
-                        transaction
-                    });
-                    admins.forEach(admin => {
-                        if (admin.email && !emailRecipients.includes(admin.email)) {
-                            emailRecipients.push(admin.email);
-                        }
-                    });
-                }
-                
-                if (currentStage) {
-                    switch (currentStage.type) {
-                        case 'REPORTING_MANAGER':
-                            if (resignation.employee.reporting_manager) {
-                                const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
-                                if (manager?.email && !emailRecipients.includes(manager.email)) emailRecipients.push(manager.email);
-                            }
-                            break;
-                        case 'ATTENDANCE_SUPERVISOR':
-                            if (resignation.employee.attendance_supervisor) {
-                                const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
-                                if (supervisor?.email && !emailRecipients.includes(supervisor.email)) emailRecipients.push(supervisor.email);
-                            }
-                            break;
-                        case 'ADMIN':
-                        case 'ANYONE':
-                            // For ANYONE type, include ALL possible approvers
-                            
-                            // Add reporting manager
-                            if (resignation.employee.reporting_manager) {
-                                const manager = await commonQuery.findOneRecord(User, { id: resignation.employee.reporting_manager, status: 0 }, { attributes: ['email'] }, transaction);
-                                if (manager?.email && !emailRecipients.includes(manager.email)) {
-                                    emailRecipients.push(manager.email);
-                                }
-                            }
-                            
-                            // Add attendance supervisor
-                            if (resignation.employee.attendance_supervisor) {
-                                const supervisor = await commonQuery.findOneRecord(User, { id: resignation.employee.attendance_supervisor, status: 0 }, { attributes: ['email'] }, transaction);
-                                if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
-                                    emailRecipients.push(supervisor.email);
-                                }
-                            }
-                            
-                            // Add all admin users (super admin, admin, business admin)
-                            const adminConditions = [];
-                            
-                            // Add super admin (role_id = 1)
-                            if (resignation.employee.company_id) {
-                                const superAdminCondition = {
-                                    role_id: 1,
-                                    company_id: resignation.employee.company_id,
-                                    status: 0
-                                };
-                                if (resignation.employee.branch_id) {
-                                    superAdminCondition.branch_id = resignation.employee.branch_id;
-                                }
-                                adminConditions.push(superAdminCondition);
-                            }
-                            
-                            // Add admin (role_id = 2)
-                            if (resignation.employee.company_id) {
-                                const adminCondition = {
-                                    role_id: 2, 
-                                    company_id: resignation.employee.company_id,
-                                    status: 0
-                                };
-                                if (resignation.employee.branch_id) {
-                                    adminCondition.branch_id = resignation.employee.branch_id;
-                                }
-                                adminConditions.push(adminCondition);
-                            }
-                            
-                            // Add business admin conditions only if company_id exists
-                            if (resignation.employee.company_id) {
-                                const businessAdminCondition = {
-                                    role_id: constants.BUSINESS_ADMIN_ROLE_ID,
-                                    company_id: resignation.employee.company_id,
-                                    status: 0
-                                };
-                                if (resignation.employee.branch_id) {
-                                    businessAdminCondition.branch_id = resignation.employee.branch_id;
-                                }
-                                adminConditions.push(businessAdminCondition);
-                            }
-                            
-                            const admins = await commonQuery.findAllRecords(User, {
-                                [Op.or]: adminConditions
-                            }, {
-                                attributes: ['email'],
-                                transaction
-                            });
-                            admins.forEach(admin => {
-                                if (admin.email && !emailRecipients.includes(admin.email)) {
-                                    emailRecipients.push(admin.email);
-                                }
-                            });
-                            break;
-                    }
-                }
+                const nextStage = config.find(c => c.level === nextLevel) || { type: "ANYONE" };
 
-                // Get next level approvers based on approval_config (for partial approvals)
-                if (nextLevel <= totalLevels) {
-                    const nextStage = config.find(c => c.level === nextLevel);
-                    if (nextStage) {
-                        switch (nextStage.type) {
-                            case 'REPORTING_MANAGER':
-                                if (resignation.employee.reporting_manager) {
-                                    const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
-                                    if (manager?.email && !emailRecipients.includes(manager.email)) emailRecipients.push(manager.email);
-                                }
-                                break;
-                            case 'ATTENDANCE_SUPERVISOR':
-                                if (resignation.employee.attendance_supervisor) {
-                                    const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
-                                    if (supervisor?.email && !emailRecipients.includes(supervisor.email)) emailRecipients.push(supervisor.email);
-                                }
-                                break;
-                            case 'ADMIN':
-                            case 'ANYONE':
-                                const admins = await commonQuery.findAllRecords(User, {
-                                    company_id: resignation.employee.company_id,
-                                    status: 0,
-                                    [Op.or]: [
-                                        { is_super_admin: true },
-                                        { role_id: constants.ADMIN_ROLE_ID },
-                                        { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
-                                    ]
-                                }, {
-                                    attributes: ['email'],
-                                    transaction
-                                });
-                                admins.forEach(admin => {
-                                    if (admin.email && !emailRecipients.includes(admin.email)) emailRecipients.push(admin.email);
-                                });
-                                break;
-                        }
-                    }
-                }
+                // Get recipients for current and next stage stakeholders
+                const currentRecipients = await getResignationStakeholderEmails(resignation.employee, currentStage, transaction);
+                const nextRecipients = nextLevel <= totalLevels ? await getResignationStakeholderEmails(resignation.employee, nextStage, transaction) : [];
+                
+                const uniqueRecipients = [...new Set([...currentRecipients, ...nextRecipients])].filter(email => email && email !== resignation.employee.email);
 
-                // Remove duplicates
-                const uniqueRecipients = [...new Set(emailRecipients)];
-
-                // Always send email notification, even if no recipients found (will go to company email only)
-                if (uniqueRecipients.length > 0 || true) {
-                    await emailService.sendResignationActionNotification({
-                        companyId: resignation.employee.company_id,
-                        employeeName: resignation.employee.first_name,
-                        employeeEmail: resignation.employee.email,
-                        resignationDate: resignation.resignation_date,
-                        action: "APPROVED",
-                        actionBy: req.user.user_name,
-                        remarks: remarks,
-                        level: currentLevel,
-                        totalLevels: totalLevels,
-                        nextLevelApprovers: nextLevel <= totalLevels ? config.find(c => c.level === nextLevel) : null,
-                        approvedLWD: updateData.approved_lwd,
-                        recipients: uniqueRecipients
-                    });
-                }
+                await emailService.sendResignationActionNotification({
+                    companyId: resignation.employee.company_id,
+                    employeeName: resignation.employee.first_name,
+                    employeeEmail: resignation.employee.email,
+                    resignationDate: resignation.resignation_date,
+                    action: "APPROVED",
+                    actionBy: req.user.user_name,
+                    remarks: remarks,
+                    level: currentLevel,
+                    totalLevels: totalLevels,
+                    nextLevelApprovers: nextLevel <= totalLevels ? nextStage : null,
+                    approvedLWD: updateData.approved_lwd,
+                    recipients: uniqueRecipients
+                });
             } catch (emailErr) {
-                console.error("Resignation action email failed:", emailErr);
-                // Continue even if email fails
+                console.error("Resignation approval email failed:", emailErr);
             }
 
-            // Send Notification to Employee
+            // Employee Notification
             const user = await commonQuery.findOneRecord(User, { employee_id: resignation.employee_id }, {}, transaction);
             if (user) {
                 await notificationService.createNotification({
@@ -549,86 +347,37 @@ exports.handleAction = async (req, res) => {
                         : `Your resignation request has been moved to the next approval level (Stage ${updateData.current_level}).`,
                     type: "RESIGNATION",
                     reference_id: id,
-                    status_code: 0, // Success
+                    status_code: 0,
                     company_id: req.user.company_id,
                     branch_id: req.user.branch_id
                 }, transaction);
             }
         } else if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.REJECTED) {
-            const history = resignation.approval_history || [];
-            history.push({
-                level: currentLevel,
-                action: "REJECTED",
-                by: req.user.id,
-                user_name: req.user.user_name,
-                at: new Date(),
-                remarks
-            });
-
             await commonQuery.updateRecordById(EmployeeResignation, id, {
                 approval_status: constants.RESIGNATION_APPROVAL_STATUS.REJECTED,
                 approval_history: history
             }, transaction);
 
-            // Send Email Notification to Approvers for Rejection
+            // Notification logic
             try {
-                const emailRecipients = [];
-                
-                // Get all stakeholders for rejection notification
-                const allStakeholders = await commonQuery.findAllRecords(User, {
-                    company_id: resignation.employee.company_id,
-                    status: 0,
-                    [Op.or]: [
-                        { is_super_admin: true },
-                        { role_id: constants.ADMIN_ROLE_ID },
-                        { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
-                    ]
-                }, {
-                    attributes: ['email'],
-                    transaction
+                const recipients = await getResignationStakeholderEmails(resignation.employee, { type: "ANYONE" }, transaction);
+
+                await emailService.sendResignationActionNotification({
+                    companyId: resignation.employee.company_id,
+                    employeeName: resignation.employee.first_name,
+                    employeeEmail: resignation.employee.email,
+                    resignationDate: resignation.resignation_date,
+                    action: "REJECTED",
+                    actionBy: req.user.user_name,
+                    remarks: remarks,
+                    level: currentLevel,
+                    totalLevels: totalLevels,
+                    nextLevelApprovers: null,
+                    approvedLWD: null,
+                    recipients: recipients
                 });
-
-                allStakeholders.forEach(admin => {
-                    if (admin.email) emailRecipients.push(admin.email);
-                });
-
-                // Also include reporting manager and supervisor if they exist
-                if (resignation.employee.reporting_manager) {
-                    const manager = await commonQuery.findOneRecord(Employee, resignation.employee.reporting_manager, { attributes: ['email'] }, transaction);
-                    if (manager?.email && !emailRecipients.includes(manager.email)) {
-                        emailRecipients.push(manager.email);
-                    }
-                }
-
-                if (resignation.employee.attendance_supervisor) {
-                    const supervisor = await commonQuery.findOneRecord(Employee, resignation.employee.attendance_supervisor, { attributes: ['email'] }, transaction);
-                    if (supervisor?.email && !emailRecipients.includes(supervisor.email)) {
-                        emailRecipients.push(supervisor.email);
-                    }
-                }
-
-                // Remove duplicates
-                const uniqueRecipients = [...new Set(emailRecipients)];
-
-                if (uniqueRecipients.length > 0) {
-                    await emailService.sendResignationActionNotification({
-                        companyId: resignation.employee.company_id,
-                        employeeName: resignation.employee.first_name,
-                        employeeEmail: resignation.employee.email,
-                        resignationDate: resignation.resignation_date,
-                        action: "REJECTED",
-                        actionBy: req.user.user_name,
-                        remarks: remarks,
-                        level: currentLevel,
-                        totalLevels: totalLevels,
-                        nextLevelApprovers: null,
-                        approvedLWD: null,
-                        recipients: uniqueRecipients
-                    });
-                }
             } catch (emailErr) {
                 console.error("Resignation rejection email failed:", emailErr);
-                // Continue even if email fails
             }
 
             // Revert Employee Status
@@ -637,7 +386,7 @@ exports.handleAction = async (req, res) => {
                 resignation_status: 0
             }, transaction);
 
-            // Send Notification to Employee
+            // Employee Notification
             const user = await commonQuery.findOneRecord(User, { employee_id: resignation.employee_id }, {}, transaction);
             if (user) {
                 await notificationService.createNotification({
@@ -646,7 +395,7 @@ exports.handleAction = async (req, res) => {
                     message: `Your resignation request has been rejected. Remarks: ${remarks || "No remarks provided."}`,
                     type: "RESIGNATION",
                     reference_id: id,
-                    status_code: 2, // Danger
+                    status_code: 2,
                     company_id: req.user.company_id,
                     branch_id: req.user.branch_id
                 }, transaction);
@@ -700,36 +449,10 @@ exports.getPendingApprovals = async (req, res) => {
 
             const template = employee.resignationTemplate;
             const currentLevel = request.current_level;
-            const config = template ? (template.approval_config || []) : [];
-
-            let currentStage = config.find(c => c.level === currentLevel);
-            if (!currentStage) currentStage = { type: "ANYONE" };
+            const config = template?.approval_config || [];
+            const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
             
-            let isAuthorized = false;
-            if (req.user.is_super_admin) {
-                isAuthorized = true;
-            } else {
-                switch (currentStage.type) {
-                    case 'REPORTING_MANAGER':
-                        if (employee.reporting_manager === req.user.employee_id) isAuthorized = true;
-                        break;
-                    case 'ATTENDANCE_SUPERVISOR':
-                        if (employee.attendance_supervisor === req.user.employee_id) isAuthorized = true;
-                        break;
-                    case 'ADMIN':
-                        if (req.user.is_admin || req.user.role_id === constants.BUSINESS_ADMIN_ROLE_ID || req.user.role_id === constants.ADMIN_ROLE_ID) isAuthorized = true;
-                        break;
-                    case 'ANYONE':
-                        if (employee.reporting_manager === req.user.employee_id ||
-                            employee.attendance_supervisor === req.user.employee_id ||
-                            req.user.is_admin) {
-                            isAuthorized = true;
-                        }
-                        break;
-                }
-            }
-
-            if (isAuthorized) {
+            if (isUserAuthorizedForResignation(req.user, employee, currentStage)) {
                 const raw = request.get({ plain: true });
                 const total = template ? template.approval_levels : 1;
                 raw.tracking_summary = `Stage ${raw.current_level} of ${total}`;
@@ -825,6 +548,74 @@ exports.getAllResignations = async (req, res) => {
     } catch (err) {
         return handleError(err, res, req);
     }
+};
+
+// =========================================================================
+// HELPER FUNCTIONS
+// =========================================================================
+
+/**
+ * Check if a user is authorized to approve/reject at a given stage
+ */
+const isUserAuthorizedForResignation = (user, employee, stage) => {
+    const isSuperAdmin = user.role_id === constants.BUSINESS_ADMIN_ROLE_ID && user.is_super_admin;
+    if (isSuperAdmin) return true;
+    
+    const { type } = stage || { type: "ANYONE" };
+    const employeeId = user.employee_id;
+    const isAdmin = user.role_id === constants.ADMIN_ROLE_ID;
+
+    switch (type) {
+        case 'REPORTING_MANAGER':
+            return employee.reporting_manager === employeeId;
+        case 'ATTENDANCE_SUPERVISOR':
+            return employee.attendance_supervisor === employeeId;
+        case 'ADMIN':
+            return isAdmin;
+        case 'ANYONE':
+            return employee.reporting_manager === employeeId || employee.attendance_supervisor === employeeId || isAdmin;
+        default:
+            return false;
+    }
+};
+
+/**
+ * Get stakeholder emails based on the stage configuration
+ */
+const getResignationStakeholderEmails = async (employee, stage, transaction) => {
+    const emails = [];
+    const { type } = stage || { type: "ANYONE" };
+    
+    if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
+        if (employee.reporting_manager) {
+            const manager = await commonQuery.findOneRecord(User, { id: employee.reporting_manager }, { attributes: ['email'] }, transaction);
+            if (manager?.email) emails.push(manager.email);
+        }
+    }
+
+    if (type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
+        if (employee.attendance_supervisor) {
+            const supervisor = await commonQuery.findOneRecord(User, { id: employee.attendance_supervisor }, { attributes: ['email'] }, transaction);
+            if (supervisor?.email) emails.push(supervisor.email);
+        }
+    }
+
+    if (type === 'ADMIN' || type === 'ANYONE') {
+        const adminFilters = {
+            [Op.or]: [
+                { role_id: constants.BUSINESS_ADMIN_ROLE_ID, is_super_admin: true },
+                { role_id: constants.ADMIN_ROLE_ID }
+            ]
+        };
+        const admins = await commonQuery.findAllRecords(User, adminFilters, {
+            attributes: ['email'],
+            raw: true
+        }, transaction);
+        
+        admins.map(a => a.email).filter(Boolean).forEach(e => emails.push(e));
+    }
+
+    return [...new Set(emails)];
 };
 
 exports.getResignationById = async (req, res) => {

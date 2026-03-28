@@ -371,14 +371,16 @@ exports.updateStatus = async (req, res) => {
             const employee = await commonQuery.findOneRecord(Employee, onDutyRequest.employee_id, {
                 include: [
                     { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-                    { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
                 ]
             }, transaction);
 
-            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
+            const template = employee?.employeeAttendanceTemplate;
             const maxLevel = template ? (template.on_duty_approval_level || 1) : 1;
-
-            if (onDutyRequest.current_on_duty_level < maxLevel) {
+            
+            if (req.user.is_super_admin) {
+                newStatus = constants.ON_DUTY_STATUS.APPROVED;
+                newLevel = maxLevel;
+            } else if (onDutyRequest.current_on_duty_level < maxLevel) {
                 newStatus = constants.ON_DUTY_STATUS.PARTIALLY_APPROVED;
                 newLevel = onDutyRequest.current_on_duty_level + 1;
             }
