@@ -1980,7 +1980,7 @@ exports.getLateEntryReport = async (req, res) => {
       if (!lateDataMap[record.employee_id]) {
          lateDataMap[record.employee_id] = { days: {}, totalLateMins: 0, lateCount: 0 };
       }
-      const fineMins = record.fine_minutes || 0;
+      const lateMins = record.late_minutes || 0;
       lateDataMap[record.employee_id].days[record.attendance_date] = lateMins;
       lateDataMap[record.employee_id].totalLateMins += lateMins;
       lateDataMap[record.employee_id].lateCount += 1;
