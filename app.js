@@ -92,6 +92,7 @@ app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/resignation", resignationRoutes);
 app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/reports", require("./routes/reportsRoutes"));
 app.use("/api/system-logs", systemLogRoutes);
 app.use(errorHandler);
 

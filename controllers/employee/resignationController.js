@@ -550,6 +550,57 @@ exports.getAllResignations = async (req, res) => {
     }
 };
 
+exports.getResignationHistory = async (req, res) => {
+    try {
+
+        const fieldConfig = [
+            ["approval_status", true, true],
+            ["employee.first_name", true, false],
+            ["employee.employee_code", true, false],
+        ];
+        
+        // Add date filtering based on payload
+        let whereClause = {};
+        const leaveFilter = req.body?.leave_filter;
+        
+        if (leaveFilter) {
+            const today = dayjs().toDate();
+            
+            switch (leaveFilter) {
+                case 'previous':
+                    // Previous: ended before today
+                    whereClause.resignation_date = { [Op.lt]: today };
+                    break;
+                case 'upcoming':
+                    // Upcoming: ends today or later
+                    whereClause.resignation_date = { [Op.gte]: today };
+                    break;
+            }
+        }
+        
+        const data = await commonQuery.fetchPaginatedData(
+            EmployeeResignation,
+            req.body,
+            fieldConfig,
+            {
+                include: [
+                    { model: Employee, as: 'employee', attributes: ['first_name', 'employee_code'] },
+                    { model: ResignationReason, as: 'reason_type' },
+                    { model: User, as: 'submitted_by', attributes: ['user_name'] }
+                ],
+                order: [['createdAt', 'DESC']]
+            },
+            true, // requireTenantFields
+            'created_at', // dateField
+            whereClause // customWhere
+        );
+
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
 // =========================================================================
 // HELPER FUNCTIONS
 // =========================================================================

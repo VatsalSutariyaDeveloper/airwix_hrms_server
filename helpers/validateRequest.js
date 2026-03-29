@@ -129,14 +129,21 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
           Object.assign(where, customWhere);
         }
 
-        // Add all fields in the set
+        // Track if any fields from this set were actually provided in the body
+        let fieldsAddedFromSet = 0;
         fieldSet.forEach((field) => {
-          if (body[field] !== undefined && body[field] !== null) {
-            where[field] = body[field];
+          const value = body[field];
+          // Only include field in unique check if it has a non-empty, valid value
+          const isValidValue = value !== undefined && value !== null && value !== "" && value !== "undefined" && value !== "null";
+
+          if (isValidValue) {
+            where[field] = value;
+            fieldsAddedFromSet++;
           }
         });
 
-        if (Object.keys(where).length === 0) {
+        // If no primary unique fields were provided, no need to run the check
+        if (fieldsAddedFromSet === 0) {
           continue;
         }
 

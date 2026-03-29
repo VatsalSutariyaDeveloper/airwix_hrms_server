@@ -25,6 +25,7 @@ router.delete("/reason/:id", reasonController.delete);
 router.post("/submit", resignationController.submitResignation);
 router.get("/my-request", resignationController.getMyResignation);
 router.post("/get-transactions", resignationController.getAllResignations);
+router.post("/get-history", resignationController.getResignationHistory);
 router.post("/pending-approvals", resignationController.getPendingApprovals);
 router.get("/:id", resignationController.getResignationById);
 router.post("/action/:id", resignationController.handleAction); // approval/rejection

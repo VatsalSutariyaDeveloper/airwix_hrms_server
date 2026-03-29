@@ -9,5 +9,6 @@ router.post("/get-generated-payslip-report", reportsController.getGeneratedPaysl
 router.post("/get-pf-report", reportsController.getPFReport);
 router.post("/get-esi-report", reportsController.getESIReport);
 router.post("/get-employee-summary-report", reportsController.getEmployeeSummaryReport);
+router.post("/get-employee-exit-report", reportsController.getEmployeeExitReport);
 
 module.exports = router;

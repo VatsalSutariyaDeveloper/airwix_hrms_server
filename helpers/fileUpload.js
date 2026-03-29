@@ -471,6 +471,52 @@ const uploadExcelToDisk = (fieldName) => {
   };
 };
 
+/**
+ * Saves a base64 encoded file.
+ */
+const uploadBase64File = async (base64Data, subfolder = "", transaction = null, customFilename = null) => {
+  if (!base64Data) return null;
+
+  // Handle data URI format (data:image/jpeg;base64,...)
+  const matches = base64Data.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+  
+  let buffer;
+  let extension;
+
+  if (matches && matches.length === 3) {
+    const mimeType = matches[1];
+    buffer = Buffer.from(matches[2], 'base64');
+    extension = "." + mimeType.split('/')[1].replace('jpeg', 'jpg');
+  } else {
+    // Attempt raw base64 (assume JPG if mime missing)
+    buffer = Buffer.from(base64Data, 'base64');
+    extension = ".jpg";
+  }
+
+  const baseDir = path.join(process.cwd(), "uploads");
+  const targetFolder = path.join(baseDir, cleanSubfolder(subfolder));
+  ensureDir(targetFolder);
+
+  const filename = customFilename 
+    ? (customFilename.endsWith(extension) ? customFilename : customFilename + extension)
+    : `${Date.now()}_sync_${Math.round(Math.random() * 1e9)}${extension}`;
+  
+  const fullPath = path.join(targetFolder, filename);
+
+  try {
+    fs.writeFileSync(fullPath, buffer);
+    attachRollbackHook(transaction, fullPath);
+    return filename;
+  } catch (err) {
+    console.error(`Base64 write failed:`, err);
+    throw {
+      code: responseCodes.FILE_UPLOAD_FAILED.code,
+      status: responseCodes.FILE_UPLOAD_FAILED.status,
+      message: `Failed to upload base64 file`,
+    };
+  }
+};
+
 const fileExists = (folder, fileName) => {
   if (!fileName) return false;
 
@@ -482,6 +528,7 @@ module.exports = {
   bufferImage,
   bufferFile,
   uploadFile,
+  uploadBase64File,
   deleteFile,
   bufferExcel,
   uploadExcelToDisk,

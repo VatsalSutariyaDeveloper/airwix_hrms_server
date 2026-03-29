@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
-const { validateRequest, commonQuery, handleError, uploadFile } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster, Holiday } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -57,6 +57,84 @@ exports.attendancePunch = async (req, res) => {
     
     await t.commit();
     return res.success(constants.ACTION_SUCCESSFUL, result);
+  } catch (err) {
+    await t.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * SYNC PUNCHES (Offline Sync)
+ */
+exports.syncPunches = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { punches } = req.body;
+
+    if (!punches || !Array.isArray(punches)) {
+      await t.rollback();
+      return res.error(constants.VALIDATION_ERROR, "Punches array is required");
+    }
+
+    // Sort punches by time to ensure sequential processing (crucial for auto-toggle logic and night shifts)
+    const sortedPunches = punches
+      .filter(p => p.employee_id && p.punch_time)
+      .sort((a, b) => dayjs(a.punch_time).valueOf() - dayjs(b.punch_time).valueOf());
+
+    const results = [];
+    for (const punchData of sortedPunches) {
+      try {
+        // Handle sync image if provided (usually as base64 in offline sync)
+        let punchImage = null;
+        if (punchData.image) {
+           punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, t);
+        }
+
+        const result = await punch(
+          punchData.employee_id,
+          {
+            ...punchData,
+            user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
+            company_id: req.user.company_id,
+            branch_id: punchData.branch_id || req.user.branch_id,
+            ip_address: punchData.ip_address || req.ip,
+            latitude: punchData.latitude || null,
+            longitude: punchData.longitude || null,
+            device_id: req.user?.access === 'attendance device' ? req.user.id : (punchData.device_id || null),
+            image_name: punchImage,
+            bypassGapCheck: true, // Offline punches are already captured, ignore 2-min validation
+            skipRebuild: false 
+          },
+          t
+        );
+        results.push({ 
+          employee_id: punchData.employee_id, 
+          punch_time: punchData.punch_time, 
+          success: true, 
+          punch_id: result.punchId,
+          type: result.punchType 
+        });
+      } catch (punchErr) {
+        // Log the failure for this specific punch but proceed with the sync
+        results.push({ 
+          employee_id: punchData.employee_id, 
+          punch_time: punchData.punch_time, 
+          success: false, 
+          error: punchErr.message || "Unknown error" 
+        });
+      }
+    }
+
+    await t.commit();
+    return res.success(constants.ACTION_SUCCESSFUL, { 
+      sync_summary: {
+        total_received: punches.length,
+        total_processed: results.length,
+        success_count: results.filter(r => r.success).length,
+        fail_count: results.filter(r => !r.success).length
+      },
+      results 
+    });
   } catch (err) {
     await t.rollback();
     return handleError(err, res, req);
@@ -1463,19 +1541,23 @@ exports.getMonthlyAttendance = async (req, res) => {
              const weekOfMonth = Math.ceil(dayObj.date() / 7);
              return wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth);
           }),
-          punches: dayPunches.map(p => ({
-            id: p.id,
-            time: dayjs(p.punch_time).format("hh:mm a"),
-            date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
-            type: p.punch_type,
-            punch_by: p.user?.user_name || "System",
-            branch_name: p.branch?.branch_name,
-            image_url: p.image_name ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}` : null,
-            latitude: p.latitude || null,
-            longitude: p.longitude || null,
-            ip_address: p.ip_address || null,
-            punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
-          }))
+          punches: dayPunches
+            .sort((a, b) => a.id - b.id) // 🔥 ASC order by ID
+            .map(p => ({
+              id: p.id,
+              time: dayjs(p.punch_time).format("hh:mm a"),
+              date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
+              type: p.punch_type,
+              punch_by: p.user?.user_name || "System",
+              branch_name: p.branch?.branch_name,
+              image_url: p.image_name
+                ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}`
+                : null,
+              latitude: p.latitude || null,
+              longitude: p.longitude || null,
+              ip_address: p.ip_address || null,
+              punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
+            }))
         };
       } else {
         // No attendance record - Check Holiday
@@ -1717,7 +1799,7 @@ exports.updateAttendanceNote = async (req, res) => {
  */
 exports.getAttendanceReport = async (req, res) => {
   try {
-    const { report_type, date, month_year, staff_type, branch_id } = req.body;
+    const { report_type, date, month_year, staff_type, branch_id, department_id } = req.body;
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(constants.VALIDATION_ERROR, "report_type must be either 'daily' or 'monthly'");
@@ -1739,24 +1821,38 @@ exports.getAttendanceReport = async (req, res) => {
       endDate = parsedDate.endOf('month').format('YYYY-MM-DD');
     }
 
-    const employeeWhere = { status: 0, company_id: req.user.company_id };
+    const employeeWhere = { 
+      company_id: req.user.company_id,
+      status: [0, 1],
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: null },
+            { joining_date: { [Op.lte]: endDate } }
+          ]
+        },
+        {
+          [Op.or]: [
+            { exit_date: null },
+            { exit_date: { [Op.gte]: startDate } }
+          ]
+        }
+      ]
+    };
     if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
     if (staff_type) employeeWhere.employee_type = staff_type;
-    
-    // Only include employees who joined on or before the end date of the report (or if joining_date is missing)
-    employeeWhere[Op.or] = [
-        { joining_date: null },
-        { joining_date: { [Op.lte]: endDate } }
-    ];
+    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
 
     // 1. Fetch All Active Employees
     const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date'],
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id'],
       include: [
-        { model: ShiftTemplate, as: "shiftTemplate", attributes: ["id", "shift_name"] }
+        { model: ShiftTemplate, as: "shiftTemplate", attributes: ["id", "shift_name"] },
+        { model: Department, as: "department", attributes: ["name"] },
+        { model: DesignationMaster, as: "designation", attributes: ["designation_name"] }
       ],
       order: [['first_name', 'ASC']]
-    });
+    }, null, { company_id: true, branch_id: true });
 
     if (employees.length === 0) return res.ok([]);
 
@@ -1823,7 +1919,9 @@ exports.getAttendanceReport = async (req, res) => {
         employee_name: emp.first_name.trim(),
         employee_type: emp.employee_type || 'N/A',
         employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
-        worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+        worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || '',
+        department: emp.department?.name || '-',
+        designation: emp.designation?.designation_name || '-',
         shift_name: emp.shiftTemplate?.shift_name || 'N/A',
         days: {},
         summary: {
@@ -1867,7 +1965,7 @@ exports.getAttendanceReport = async (req, res) => {
            if (dayRecord.first_in) inTime = dayRecord.first_in;
            if (dayRecord.last_out) outTime = dayRecord.last_out;
            workedMins = dayRecord.worked_minutes || 0;
-           fineMins = dayRecord.fine_minutes || 0;
+           lateMins = dayRecord.fine_data?.late_entry?.minutes || 0;
            otMins = dayRecord.overtime_minutes || 0;
 
            if (statusId === 0) empData.summary.present += 1;
@@ -1889,7 +1987,7 @@ exports.getAttendanceReport = async (req, res) => {
            } else if (onDutyMap.has(key)) {
                status = "On Duty";
                empData.summary.onDuty += 1;
-           } else if (dayjs(d).isBefore(dayjs(emp.joining_date || dayjs()), 'day')) {
+           } else if (dayjs(d).isBefore(dayjs(emp.joining_date || dayjs()), 'day') || (emp.exit_date && dayjs(d).isAfter(dayjs(emp.exit_date), 'day'))) {
                status = "N/A";
            } else if (dayjs(d).isSame(dayjs(), 'day') || dayjs(d).isAfter(dayjs(), 'day')) {
                status = "Pending";
@@ -1927,9 +2025,179 @@ exports.getAttendanceReport = async (req, res) => {
   }
 };
 
+exports.getPerformanceReport = async (req, res) => {
+  try {
+    const { month, year, branch_id, department_id, staff_type } = req.body;
+    if (!month || !year) return res.badRequest("Month and Year are required");
+
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs(startDate).endOf('month').format('YYYY-MM-DD');
+
+    // 1. Fetch Employees
+    let employeeWhere = { 
+      company_id: req.user.company_id,
+      status: [0, 1],
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: null },
+            { joining_date: { [Op.lte]: endDate } }
+          ]
+        },
+        {
+          [Op.or]: [
+            { exit_date: null },
+            { exit_date: { [Op.gte]: startDate } }
+          ]
+        }
+      ]
+    };
+    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
+    if (staff_type) {
+        const typeMap = { 'Staff': 1, 'Worker': 2 };
+        if (typeMap[staff_type]) employeeWhere.employee_type = typeMap[staff_type];
+    }
+    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+
+    const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
+      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'joining_date', 'exit_date'],
+      include: [
+        { model: Department, as: 'department', attributes: ['name'] },
+        { model: ShiftTemplate, as: 'shiftTemplate', attributes: ['shift_name', 'total_payable_hours'] },
+        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
+      ]
+    }, null, { company_id: true, branch_id: true });
+
+    if (!employees || employees.length === 0) return res.ok({ month, year, items: [] });
+
+    const empIds = employees.map(e => e.id);
+
+    // 2. Fetch Data (Attendance, Leaves, Holidays, Weekly Offs)
+    const [attendanceRows, holidays, weeklyOffs] = await Promise.all([
+      commonQuery.findAllRecords(AttendanceDay, { 
+        employee_id: { [Op.in]: empIds }, 
+        attendance_date: { [Op.between]: [startDate, endDate] } 
+      }),
+      commonQuery.findAllRecords(EmployeeHoliday, { 
+        employee_id: { [Op.in]: empIds }, 
+        date: { [Op.between]: [startDate, endDate] } 
+      }),
+      commonQuery.findAllRecords(EmployeeWeeklyOff, { 
+        employee_id: { [Op.in]: empIds } 
+      })
+    ]);
+
+    const attendanceMap = new Map();
+    attendanceRows.forEach(row => attendanceMap.set(`${row.employee_id}_${row.attendance_date}`, row));
+
+    const daysArray = [];
+    let curr = dayjs(startDate);
+    while (curr.isBefore(endDate) || curr.isSame(endDate, 'day')) {
+        daysArray.push(curr.format('YYYY-MM-DD'));
+        curr = curr.add(1, 'day');
+    }
+
+    const reportData = [];
+
+    // 3. Transform data into performance metrics
+    for (const emp of employees) {
+      let stats = {
+        present: 0, halfDay: 0, absent: 0, leave: 0, holiday: 0, weeklyOff: 0, onDuty: 0,
+        totalWorkedMinutes: 0, totalLateMinutes: 0, totalOvertimeMinutes: 0,
+        scheduledWorkingDays: 0
+      };
+
+      for (const d of daysArray) {
+        const key = `${emp.id}_${d}`;
+        const dayRecord = attendanceMap.get(key);
+        const dayOfWeek = dayjs(d).day();
+        const weekNo = Math.ceil(dayjs(d).date() / 7);
+        const isHoliday = holidays.some(h => h.date === d);
+        const isWeeklyOff = weeklyOffs.some(wo => wo.employee_id === emp.id && wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekNo));
+
+        let sid = null;
+        if (dayRecord) {
+            sid = dayRecord.status;
+        } else if (dayjs(d).isBefore(dayjs(emp.joining_date || dayjs()), 'day') || (emp.exit_date && dayjs(d).isAfter(dayjs(emp.exit_date), 'day'))) {
+            sid = 'N/A';
+        } else if (isHoliday) {
+            sid = 4;
+        } else if (isWeeklyOff) {
+            sid = 3;
+        } else {
+            sid = 5; // Default to Absent for working days with no record
+        }
+
+        if (sid === 'N/A') {
+            // Skip N/A days
+        } else if (sid === 3) {
+            stats.weeklyOff++;
+        } else if (sid === 4) {
+            stats.holiday++;
+        } else {
+            stats.scheduledWorkingDays++;
+            if (sid === 0) stats.present++;
+            else if (sid === 1 || sid === 13) stats.halfDay++;
+            else if (sid === 5) stats.absent++;
+            else if (sid === 6) stats.leave++;
+            else if (sid === 12) stats.onDuty++;
+        }
+
+        if (dayRecord) {
+            stats.totalWorkedMinutes += parseFloat(dayRecord.worked_minutes || 0);
+            
+            // Punctuality reflects all types of fineable minutes
+            const fineData = dayRecord.fine_data || {};
+            const lateInMins = parseFloat(fineData.late_entry?.minutes || 0);
+            const earlyExitMins = parseFloat(fineData.early_exit?.minutes || 0);
+            const excessBreakMins = parseFloat(fineData.excess_breaks?.minutes || 0);
+            
+            stats.totalLateMinutes += (lateInMins + earlyExitMins + excessBreakMins);
+            stats.totalOvertimeMinutes += parseFloat(dayRecord.overtime_minutes || 0);
+        }
+      }
+
+      // KPI Calculations
+      const attendance_ratio = stats.scheduledWorkingDays > 0 ? (stats.present + stats.onDuty + (stats.halfDay * 0.5)) / stats.scheduledWorkingDays : 0;
+      const attendance_score = Math.min(100, attendance_ratio * 100);
+
+      const punctuality_score = stats.present > 0 ? Math.max(0, 100 - (stats.totalLateMinutes / (stats.present * 10)) * 10) : 0;
+      
+      const expected_work_mins = stats.scheduledWorkingDays * (parseFloat(emp.shiftTemplate?.total_payable_hours || 8) * 60);
+      const efficiency_score = expected_work_mins > 0 ? Math.min(100, (stats.totalWorkedMinutes / expected_work_mins) * 100) : 0;
+
+      const overall_score = (attendance_score * 0.4) + (punctuality_score * 0.3) + (efficiency_score * 0.3);
+
+      reportData.push({
+        employee_id: emp.id,
+        employee_code: emp.employee_code,
+        employee_name: emp.first_name,
+        department: emp.department?.name || 'N/A',
+        designation: emp.designation?.designation_name || 'N/A',
+        shift: emp.shiftTemplate?.shift_name || 'N/A',
+        metrics: {
+            attendance_score: parseFloat(attendance_score.toFixed(2)),
+            punctuality_score: parseFloat(punctuality_score.toFixed(2)),
+            efficiency_score: parseFloat(efficiency_score.toFixed(2)),
+            overall_score: parseFloat(overall_score.toFixed(2)),
+            rating: overall_score >= 90 ? 'Excellent' : overall_score >= 75 ? 'Good' : overall_score >= 60 ? 'Average' : 'Below Average'
+        },
+        summary: stats
+      });
+    }
+
+    return res.ok({
+      month, year,
+      items: reportData
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
 exports.getLateEntryReport = async (req, res) => {
   try {
-    const { month, year, branch_id } = req.body;
+    const { month, year, branch_id, department_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -1943,10 +2211,28 @@ exports.getLateEntryReport = async (req, res) => {
         endDate = dayjs().format('YYYY-MM-DD');
     }
 
-    let employeeWhere = { company_id: req.user.company_id, status: { [Op.ne]: 2 } };
+    let employeeWhere = { 
+      company_id: req.user.company_id,
+      status: [0, 1],
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: null },
+            { joining_date: { [Op.lte]: endDate } }
+          ]
+        },
+        {
+          [Op.or]: [
+            { exit_date: null },
+            { exit_date: { [Op.gte]: startDate } }
+          ]
+        }
+      ]
+    };
     if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
       employeeWhere.branch_id = branch_id;
     }
+    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
 
     const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
       attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -1954,36 +2240,65 @@ exports.getLateEntryReport = async (req, res) => {
         { model: Department, as: 'department', attributes: ['name'] },
         { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
       ]
-    });
+    }, null, { company_id: true, branch_id: true });
 
     if (employees.length === 0) return res.ok({ reportData: [] });
 
-    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
-    const branchMap = {};
-    branches.forEach(b => branchMap[b.id] = b.branch_name);
-
     const employeeIds = employees.map(e => e.id);
 
-    // Fetch all attendance records with late minutes > 0
+    // Fetch all attendance records with late minutes OR early exit minutes > 0
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
       employee_id: { [Op.in]: employeeIds },
       attendance_date: { [Op.between]: [startDate, endDate] },
-      [Op.and]: [sequelize.literal(`fine_data->'late_entry' IS NOT NULL`)],
+      [Op.or]: [
+        sequelize.literal(`fine_data->'late_entry' IS NOT NULL`),
+        sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)
+      ],
       status: { [Op.ne]: 2 }
     }, {
       order: [['attendance_date', 'ASC']]
     }, null, { company_id: true });
 
-    // Group late records by employee
-    const lateDataMap = {};
+    // Group punctuality records by employee
+    const punctualityDataMap = {};
     attendanceRecords.forEach(record => {
-      if (!lateDataMap[record.employee_id]) {
-         lateDataMap[record.employee_id] = { days: {}, totalLateMins: 0, lateCount: 0 };
+      if (!punctualityDataMap[record.employee_id]) {
+         punctualityDataMap[record.employee_id] = { 
+           days: {}, 
+           totalLateMins: 0, 
+           totalEarlyMins: 0,
+           lateCount: 0, 
+           earlyCount: 0,
+           totalFineAmount: 0 
+         };
       }
-      const fineMins = record.fine_minutes || 0;
-      lateDataMap[record.employee_id].days[record.attendance_date] = lateMins;
-      lateDataMap[record.employee_id].totalLateMins += lateMins;
-      lateDataMap[record.employee_id].lateCount += 1;
+      
+      const fineData = record.fine_data || {};
+      const lateMins = fineData.late_entry?.minutes || 0;
+      const lateFine = parseFloat(fineData.late_entry?.amount || 0);
+      const earlyMins = fineData.early_exit?.minutes || 0;
+      const earlyFine = parseFloat(fineData.early_exit?.amount || 0);
+      
+      if (lateMins > 0 || earlyMins > 0) {
+        punctualityDataMap[record.employee_id].days[record.attendance_date] = { 
+          lateMins, 
+          lateFine,
+          earlyMins,
+          earlyFine,
+          totalMins: lateMins + earlyMins,
+          totalFine: lateFine + earlyFine
+        };
+        
+        if (lateMins > 0) {
+          punctualityDataMap[record.employee_id].totalLateMins += lateMins;
+          punctualityDataMap[record.employee_id].lateCount += 1;
+        }
+        if (earlyMins > 0) {
+          punctualityDataMap[record.employee_id].totalEarlyMins += earlyMins;
+          punctualityDataMap[record.employee_id].earlyCount += 1;
+        }
+        punctualityDataMap[record.employee_id].totalFineAmount += (lateFine + earlyFine);
+      }
     });
 
     const reportData = [];
@@ -1998,12 +2313,15 @@ exports.getLateEntryReport = async (req, res) => {
     }
 
     employees.forEach(emp => {
-      const lateInfo = lateDataMap[emp.id];
-      if (!lateInfo) return;
+      const pInfo = punctualityDataMap[emp.id];
+      if (!pInfo) return;
 
-      const totalMins = lateInfo.totalLateMins;
-      const hours = Math.floor(totalMins / 60);
-      const mins = totalMins % 60;
+      const totalLateMins = pInfo.totalLateMins || 0;
+      const totalEarlyMins = pInfo.totalEarlyMins || 0;
+      const hoursLate = Math.floor(totalLateMins / 60);
+      const minsLate = totalLateMins % 60;
+      const hoursEarly = Math.floor(totalEarlyMins / 60);
+      const minsEarly = totalEarlyMins % 60;
       
       let row = {
         employee_name: emp.first_name || '-',
@@ -2011,20 +2329,28 @@ exports.getLateEntryReport = async (req, res) => {
         phone_number: emp.mobile_no || '-',
         department: emp.department?.name || '-',
         designation: emp.designation?.designation_name || '-',
-        branch_name: branchMap[emp.branch_id] || '-',
         employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
         worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
-        late_days_count: lateInfo.lateCount,
-        total_late: `${hours > 0 ? hours + 'h ' : ''}${mins}m`,
-        days: {} // Date string to late duration string
+        late_days_count: pInfo.lateCount,
+        early_exit_count: pInfo.earlyCount,
+        total_late: `${hoursLate > 0 ? hoursLate + 'h ' : ''}${minsLate}m`,
+        total_early: `${hoursEarly > 0 ? hoursEarly + 'h ' : ''}${minsEarly}m`,
+        total_fine_amount: pInfo.totalFineAmount.toFixed(2),
+        days: {} 
       };
 
-      Object.keys(lateInfo.days).forEach(dateStr => {
-         const m = lateInfo.days[dateStr];
-         const h = Math.floor(m / 60);
-         const min = m % 60;
+      Object.keys(pInfo.days).forEach(dateStr => {
+         const day = pInfo.days[dateStr];
          const formattedDate = dayjs(dateStr).format('D-MMM-YY');
-         row.days[formattedDate] = `${h > 0 ? h + 'h ' : ''}${min}m`;
+         
+         let detailStr = "";
+         if (day.lateMins > 0) detailStr += `L: ${day.lateMins}m `;
+         if (day.earlyMins > 0) detailStr += `E: ${day.earlyMins}m`;
+         
+         row.days[formattedDate] = {
+            duration: detailStr.trim(),
+            amount: day.totalFine
+         };
       });
 
       reportData.push(row);
@@ -2042,7 +2368,7 @@ exports.getLateEntryReport = async (req, res) => {
 
 exports.getOvertimeReport = async (req, res) => {
   try {
-    const { month, year, branch_id } = req.body;
+    const { month, year, branch_id, department_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -2056,10 +2382,28 @@ exports.getOvertimeReport = async (req, res) => {
         endDate = dayjs().format('YYYY-MM-DD');
     }
 
-    let employeeWhere = { company_id: req.user.company_id, status: { [Op.ne]: 2 } };
+    let employeeWhere = { 
+      company_id: req.user.company_id,
+      status: [0, 1],
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: null },
+            { joining_date: { [Op.lte]: endDate } }
+          ]
+        },
+        {
+          [Op.or]: [
+            { exit_date: null },
+            { exit_date: { [Op.gte]: startDate } }
+          ]
+        }
+      ]
+    };
     if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
       employeeWhere.branch_id = branch_id;
     }
+    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
 
     const employees = await commonQuery.findAllRecords(Employee, employeeWhere, {
       attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -2067,13 +2411,9 @@ exports.getOvertimeReport = async (req, res) => {
         { model: Department, as: 'department', attributes: ['name'] },
         { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
       ]
-    });
+    }, null, { company_id: true, branch_id: true });
 
     if (employees.length === 0) return res.ok({ reportData: [] });
-
-    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
-    const branchMap = {};
-    branches.forEach(b => branchMap[b.id] = b.branch_name);
 
     const employeeIds = employees.map(e => e.id);
 
@@ -2090,12 +2430,14 @@ exports.getOvertimeReport = async (req, res) => {
     const otDataMap = {};
     attendanceRecords.forEach(record => {
       if (!otDataMap[record.employee_id]) {
-         otDataMap[record.employee_id] = { days: {}, totalOTMins: 0 };
+         otDataMap[record.employee_id] = { days: {}, totalOTMins: 0, totalOTAmount: 0 };
       }
       const otMins = record.overtime_minutes || 0;
+      const otAmount = parseFloat(record.overtime_amount || 0);
       if (otMins >= 0) {
-          otDataMap[record.employee_id].days[record.attendance_date] = otMins;
+          otDataMap[record.employee_id].days[record.attendance_date] = { mins: otMins, amount: otAmount };
           otDataMap[record.employee_id].totalOTMins += otMins;
+          otDataMap[record.employee_id].totalOTAmount += otAmount;
       }
     });
 
@@ -2111,7 +2453,7 @@ exports.getOvertimeReport = async (req, res) => {
     }
 
     employees.forEach(emp => {
-      const otInfo = otDataMap[emp.id] || { days: {}, totalOTMins: 0 };
+      const otInfo = otDataMap[emp.id] || { days: {}, totalOTMins: 0, totalOTAmount: 0 };
 
       const totalMins = otInfo.totalOTMins;
       const hours = Math.floor(totalMins / 60);
@@ -2123,20 +2465,24 @@ exports.getOvertimeReport = async (req, res) => {
         phone_number: emp.mobile_no || '-',
         department: emp.department?.name || '-',
         designation: emp.designation?.designation_name || '-',
-        branch_name: branchMap[emp.branch_id] || '-',
         employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
         worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
         total_overtime: `${hours < 10 ? '0'+hours : hours}h ${mins < 10 ? '0'+mins : mins}m`,
+        total_overtime_amount: otInfo.totalOTAmount.toFixed(2),
         days: {} // Date string to overtime duration string
       };
 
       // Populate daily overtime minutes string
       daysArray.forEach(dateStr => {
          const sysDateStr = dayjs(dateStr, 'D-MMM-YY').format('YYYY-MM-DD');
-         const m = otInfo.days[sysDateStr] || 0;
+         const d = otInfo.days[sysDateStr] || { mins: 0, amount: 0 };
+         const m = d.mins;
          const h = Math.floor(m / 60);
          const min = m % 60;
-         row.days[dateStr] = `${h < 10 ? '0'+h : h}h ${min < 10 ? '0'+min : min}m`;
+         row.days[dateStr] = m > 0 ? {
+           duration: `${h < 10 ? '0'+h : h}h ${min < 10 ? '0'+min : min}m`,
+           amount: d.amount.toFixed(2)
+         } : '-';
       });
 
       reportData.push(row);
