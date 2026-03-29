@@ -5,6 +5,7 @@ const { bufferImage } = require("../helpers/fileUpload");
 const attendanceController  = require("../controllers/attendance/attendanceController");
 
 router.post("/punch", bufferImage("image"), attendanceController.attendancePunch);
+router.post("/sync-punches", attendanceController.syncPunches);
 router.post("/summary", attendanceController.getAttendanceSummary);
 router.post("/update-day", attendanceController.updateAttendanceDay);
 router.post("/bulk-update-day", attendanceController.bulkUpdateAttendanceDay);
@@ -17,5 +18,6 @@ router.post("/monthly", attendanceController.getMonthlyAttendance);
 router.post("/update-note", attendanceController.updateAttendanceNote);
 router.post("/leave-summary", attendanceController.getLeaveSummary);
 router.post("/report", attendanceController.getAttendanceReport);
+router.post("/performance-report", attendanceController.getPerformanceReport);
 
 module.exports = router;

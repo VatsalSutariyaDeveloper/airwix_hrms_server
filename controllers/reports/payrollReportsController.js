@@ -1,6 +1,72 @@
-const { Employee, SalaryComponent, Payslip, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, DesignationMaster, Department, BranchMaster, PaymentHistory } = require("../../models");
+const { Employee, SalaryComponent, Payslip, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, DesignationMaster, Department, BranchMaster, PaymentHistory, EmployeeResignation, ResignationReason } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const { Op } = require("sequelize");
+
+exports.getEmployeeExitReport = async (req, res) => {
+    try {
+        const { start_date, end_date, branch_id, department_id } = req.body;
+        
+        let where = { 
+            company_id: req.user.company_id,
+        };
+
+        if (start_date && end_date) {
+            where.exit_date = { [Op.between]: [start_date, end_date] };
+        } else {
+            where[Op.or] = [
+                { exit_date: { [Op.ne]: null } },
+                { status: 1 }, 
+                { resignation_status: { [Op.gt]: 0 } }
+            ];
+        }
+
+        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+            where.branch_id = branch_id;
+        }
+        if (department_id && department_id !== 'All' && department_id !== 0 && department_id !== '0') {
+            where.department_id = department_id;
+        }
+
+        const employees = await commonQuery.findAllRecords(Employee, where, {
+            attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'exit_date', 'resignation_status', 'status'],
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] },
+                { 
+                    model: EmployeeResignation, 
+                    as: 'resignations', 
+                    where: { status: 0 }, 
+                    required: false,
+                    include: [{ model: ResignationReason, as: 'reason_type', attributes: ['reason_name'] }],
+                    order: [['created_at', 'DESC']],
+                }
+            ],
+            order: [['exit_date', 'DESC']]
+        }, null, { company_id: true, branch_id: true });
+
+        const reportData = employees.map(emp => {
+            const latestResignation = emp.resignations?.[0];
+            return {
+                id: emp.id,
+                employee_name: emp.first_name,
+                employee_code: emp.employee_code,
+                department: emp.department?.name || 'N/A',
+                designation: emp.designation?.designation_name || 'N/A',
+                joining_date: emp.joining_date,
+                exit_date: emp.exit_date || latestResignation?.approved_lwd || latestResignation?.preferred_lwd || '-',
+                resignation_date: latestResignation?.resignation_date || '-',
+                reason: latestResignation?.reason_type?.reason_name || latestResignation?.reason_description || 'N/A',
+                exit_type: latestResignation ? 'Resignation' : (emp.exit_date ? 'Terminated/Other' : 'N/A'),
+                status: emp.resignation_status === 1 ? 'On Notice' : (emp.status === 1 ? 'Exited' : 'Active'),
+                ff_status: latestResignation?.ff_settlement_status === 2 ? 'Settled' : (latestResignation?.ff_settlement_status === 1 ? 'In Progress' : 'Pending')
+            };
+        });
+
+        return res.ok(reportData);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
 
 exports.getTDSDeductionReport = async (req, res) => {
     return res.ok([]);
@@ -164,7 +230,7 @@ exports.getCTCBreakdownReport = async (req, res) => {
                     }]
                 }
             ]
-        }, null, { company_id: true });
+        }, null, { company_id: true, branch_id: true });
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
         const branchMap = {};
@@ -253,7 +319,7 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                     ]
                 }
             ]
-        }, null, { company_id: true });
+        }, null, { company_id: true, branch_id: true });
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
         const branchMap = {};
@@ -410,7 +476,7 @@ exports.getPFReport = async (req, res) => {
                     attributes: ['first_name', 'employee_code', 'uan_number', 'pf_number', 'branch_id', 'employee_type', 'worker_type']
                 }
             ]
-        }, null, { company_id: true });
+        }, null, { company_id: true, branch_id: true });
         // payslips = payslips.get({ plain: true });
         // Filter out employees without PF
         // We consider someone in PF if they have UAN/PF OR if there's any PF amount in statutory/employer details.
@@ -609,7 +675,7 @@ exports.getESIReport = async (req, res) => {
                     attributes: ['first_name', 'employee_code', 'esi_number', 'branch_id', 'employee_type', 'worker_type']
                 }
             ]
-        }, null, { company_id: true });
+        }, null, { company_id: true, branch_id: true });
 
         let reportData = [];
 

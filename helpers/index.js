@@ -2,7 +2,7 @@ const sequelize = require("../config/database");
 const Op = require("sequelize").Op;
 const validateRequest = require("./validateRequest");
 const commonQuery = require("./commonQuery");
-const { uploadFile, deleteFile, fileExists } = require("./fileUpload");
+const { uploadFile, uploadBase64File, deleteFile, fileExists } = require("./fileUpload");
 const { handleError } = require("./functions/errorFunctions");
 const { getExpDateByItem, convertStock } = require("./functions/helperFunction");
 const { updateItemCurrentStock } = require("./functions/inventoryFunctions");
@@ -21,6 +21,7 @@ const { getContext } = require("../utils/requestContext");
     validateRequest,
     commonQuery,
     uploadFile,
+    uploadBase64File,
     deleteFile,
     fileExists,
     handleError,

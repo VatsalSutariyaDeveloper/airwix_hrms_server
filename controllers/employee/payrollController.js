@@ -895,7 +895,7 @@ const formatPayslipToSummary = async (payslip) => {
         employee_id: payslip.employee_id,
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
-    }, {}, transaction, { company_id: true });
+    }, {}, null, { company_id: true });
 
     const overtimeHistory = attendanceRecords
         .filter(day => parseFloat(day.overtime_minutes || 0) > 0 || parseFloat(day.overtime_amount || 0) > 0)

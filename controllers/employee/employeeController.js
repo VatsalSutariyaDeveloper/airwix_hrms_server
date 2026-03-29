@@ -2355,6 +2355,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             id: emp.id,
             employee_name: emp.first_name,
             employee_code: emp.employee_code,
+            face_descriptor: emp.face_descriptor,
             has_face_descriptor: !!emp.face_descriptor,
             profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` : null
         }));

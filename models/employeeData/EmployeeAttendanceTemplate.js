@@ -23,6 +23,7 @@ module.exports = (sequelize, DataTypes) => {
     early_exit_rules: { type: DataTypes.JSON, defaultValue: [] },
 
     // Overtime
+    auto_calculate_overtime: { type: DataTypes.BOOLEAN, defaultValue: true },
     overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
     min_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     max_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
