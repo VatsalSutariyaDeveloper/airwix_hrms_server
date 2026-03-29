@@ -58,7 +58,7 @@ const sendInvitationLink = async (employee, setupLink) => {
 Welcome to Airwix Payroll! Your system account has been created.
 
 Download our application:
-https://loadly.io/xdxqOYwe
+https://loadly.io/airwix-payroll
 
 Step 1: Login Using Mobile No.
 Step 2: Set PIN For Login
@@ -83,7 +83,7 @@ Please complete your details using this link:
 ${onboardingLink}
 
 Download our application:
-https://loadly.io/xdxqOYwe
+https://loadly.io/airwix-payroll
 
 Best regards,
 HR Team`;

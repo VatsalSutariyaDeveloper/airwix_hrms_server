@@ -246,6 +246,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 break;
             case 6: 
                 if (catInfo) {
+console.log(day)
+
                     if (!catInfo.is_paid) unpaidLeaveDays++;
                     else if (catInfo.is_compoff) compoffLeaveDays++;
                     else leaveDays++;
@@ -254,7 +256,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 }
                 break;
         }
-        console.log("day's overtime amount", day.id, day.overtime_amount, day.overtime_minutes);
         totalFine += parseFloat(day.fine_amount || 0);
         totalOTAmount += parseFloat(day.overtime_amount || 0);
         totalOTMins += parseInt(day.overtime_minutes || 0);

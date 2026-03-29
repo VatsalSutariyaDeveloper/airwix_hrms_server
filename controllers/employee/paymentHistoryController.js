@@ -153,7 +153,7 @@ exports.paymentHistoryView = async (req, res) => {
 
         const paymentHistory = await commonQuery.findOneRecord(
             PaymentHistory, 
-            { id: payment_history_id, payment_type: 'Advance' },
+            { id: payment_history_id },
             {
                 include: [
                     {

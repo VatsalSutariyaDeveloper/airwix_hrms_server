@@ -1962,7 +1962,7 @@ exports.inviteUser = async (req, res) => {
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/'}activate?code=${activation_code}`;
+        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/airwix-payroll/'}activate?code=${activation_code}`;
 
         // Send WhatsApp Notification (Async)
         const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
