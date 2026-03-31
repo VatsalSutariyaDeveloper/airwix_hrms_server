@@ -1146,7 +1146,7 @@ exports.getLeaveReport = async (req, res) => {
 
         // Prepare categories
         const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { company_id: req.user.company_id, branch_id: req.user.branch_id, status: 0 });
-        const leaveCatNames = allLeaveCategories.map(c => c.leave_category_name);
+        const leaveCatNames = [...new Set(allLeaveCategories.map(c => c.leave_category_name))];
         const allCategories = ['Week Off', 'Holiday', ...leaveCatNames];
 
         // Fetch leaves, weekoffs, holidays
