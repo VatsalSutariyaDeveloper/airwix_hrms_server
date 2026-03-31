@@ -1211,18 +1211,18 @@ exports.assignTemplate = async (req, res) => {
 
         // 5. Trigger Background Rebuild (Fire and Forget)
         // Only necessary for templates that affect attendance calculations: Shift, Holiday, WeeklyOff
-        if (['shift_template', 'holiday_template', 'weekly_off_template'].includes(field_name)) {
-            (async () => {
-                try {
-                    console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
-                    // We process rebuilds in bulk using the optimized method
-                    await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIdsToRebuild, null);
-                    console.log(`[Background] Completed attendance rebuild.`);
-                } catch (err) {
-                    console.error("[Background] Global error in attendance rebuild task:", err);
-                }
-            })();
-        }
+        // if (['shift_template', 'holiday_template', 'weekly_off_template'].includes(field_name)) {
+        //     (async () => {
+        //         try {
+        //             console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
+        //             // We process rebuilds in bulk using the optimized method
+        //             await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIdsToRebuild, null);
+        //             console.log(`[Background] Completed attendance rebuild.`);
+        //         } catch (err) {
+        //             console.error("[Background] Global error in attendance rebuild task:", err);
+        //         }
+        //     })();
+        // }
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();

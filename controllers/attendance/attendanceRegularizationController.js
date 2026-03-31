@@ -125,6 +125,7 @@ exports.getAll = async (req, res) => {
     try {
         const fieldConfig = [
             ["employee_id", true, true],
+            ["employee.first_name", true, true],
             ["attendance_date", true, true],
             ["approval_status", true, true],
         ];
@@ -183,19 +184,20 @@ exports.getAll = async (req, res) => {
 exports.getPendingApprovals = async (req, res) => {
     try {
         // Fetch all pending attendance regularization  requests with employee and template details
-        const requests = await commonQuery.findAllRecords(
-            AttendanceRegularization , 
-            {
-                approval_status: { [Op.in]: [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING, constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED] },
-                status: 0
-            },
+        const fieldConfig = [
+            ["employee.first_name", true, false]
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            AttendanceRegularization,
+            req.body,
+            fieldConfig,
             {
                 include: [
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "leave_template"],
-                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                        attributes: ["id", "first_name", "employee_code"],
                     },
                     {
                         model: User,
@@ -204,12 +206,18 @@ exports.getPendingApprovals = async (req, res) => {
                         required: false
                     }
                 ]
-            }
+            },
+            true, // requireTenantFields
+            'created_at',
+            {
+                approval_status: { [Op.in]: [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING, constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            },
         );
 
         // Apply authorization logic - only return requests user can approve
         const pendingForUser = [];
-        for (const request of requests) {
+        for (const request of data.items) {
             const employee = request.employee;
             if (!employee) continue;
 
@@ -223,10 +231,6 @@ exports.getPendingApprovals = async (req, res) => {
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
-            
-            console.log("Attendance Regularization  Request:", request.id, "Employee:", employee.id, 
-                       "User ID:", req.user.id, "Role:", req.user.role_id,
-                       "Stage:", currentStage.type, "Config:", currentStage);
             
             if (req.user.is_super_admin) {
                 isAuthorized = true;

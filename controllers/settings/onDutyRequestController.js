@@ -262,12 +262,12 @@ exports.update = async (req, res) => {
 exports.getPendingApprovals = async (req, res) => {
     try {
         // Fetch all pending on-duty requests with employee and template details
-        const requests = await commonQuery.findAllRecords(
+        const requests = await commonQuery.fetchPaginatedData(
             OnDutyRequest, 
-            {
-                approval_status: { [Op.in]: [constants.ON_DUTY_STATUS.PENDING, constants.ON_DUTY_STATUS.PARTIALLY_APPROVED] },
-                status: 0
-            },
+            req.body,
+            [
+                ["employee.first_name", true, true],
+            ],
             {
                 include: [
                     {
@@ -283,12 +283,18 @@ exports.getPendingApprovals = async (req, res) => {
                         required: false
                     }
                 ]
+            },
+            true,
+            'created_at',
+            {
+                approval_status: { [Op.in]: [constants.ON_DUTY_STATUS.PENDING, constants.ON_DUTY_STATUS.PARTIALLY_APPROVED] },
+                status: 0
             }
         );
 
         // Apply authorization logic - only return requests user can approve
         const pendingForUser = [];
-        for (const request of requests) {
+        for (const request of requests.items) {
             const employee = request.employee;
             if (!employee) continue;
 

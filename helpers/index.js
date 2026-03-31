@@ -1,4 +1,4 @@
-const sequelize = require("../config/database");
+const { sequelize } = require("../models");
 const Op = require("sequelize").Op;
 const validateRequest = require("./validateRequest");
 const commonQuery = require("./commonQuery");
