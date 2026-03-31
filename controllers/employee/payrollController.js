@@ -1,12 +1,12 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster } = require("../../models");
 const { commonQuery, handleError, fail } = require("../../helpers");
-const { Op, QueryTypes, where } = require("sequelize");
+const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
-const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 const { handleExport } = require("../../helpers/functions/excelService");
+const employee = require("../../models/employee");
 
 
 /**
@@ -846,14 +846,10 @@ const formatPayslipToSummary = async (payslip) => {
     const advanceAmount = getSum(deductionDetails, ['advance', 'loan']);
 
     // 6. Payment History
-    const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
-        employee_id: payslip.employee_id,
-        month: payslip.month,
-        year: payslip.year,
-        status: { [Op.ne]: 2 }
-    }, {
-        attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
-    });
+    const paymentHistories = payslip.payment_history?.advances_adjusted || [];
+
+    console.log("payslip.payment_history-------------------------------",payslip.payment_history);
+    
 
     // 7. Lunch History
     const lunchRecords = await commonQuery.findAllRecords(CanteenAttendance, {
@@ -971,26 +967,20 @@ const formatPayslipToSummary = async (payslip) => {
         },
         payment_history: {
             salary: {
-                history: (paymentHistories || []).filter(ph => ph.payment_type === 'Salary').map(ph => ({
-                    id: ph.id,
-                    amount: ph.amount,
-                    payment_mode: ph.payment_mode,
-                    payment_date: ph.payment_date,
-                    payment_type: ph.payment_type
-                })),
-                sum: (paymentHistories || []).filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                history: payslip.payment_history?.salary_payments || [],
+                sum: (payslip.payment_history?.salary_payments || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
             advance: {
-                history: (paymentHistories || []).filter(ph => ph.payment_type === 'Advance').map(ph => ({
-                    id: ph.id,
+                history: (paymentHistories || []).map(ph => ({
+                    id: ph.advance_id,
                     amount: ph.amount,
                     payment_mode: ph.payment_mode,
                     payment_date: ph.payment_date,
-                    payment_type: ph.payment_type
+                    notes: ph.notes
                 })),
-                sum: (paymentHistories || []).filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                sum: (paymentHistories || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
-            grand_total: (paymentHistories || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+            grand_total: ((payslip.payment_history?.salary_payments || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0) + (paymentHistories || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0)).toFixed(2)
         },
         overtime_history: overtimeHistory,
         employee_incentive_history: employeeIncentiveHistory,
@@ -1087,6 +1077,9 @@ exports.finalizeMonthlySalary = async (req, res) => {
             }, {}),
             statutory_details: summary.breakdown.statutory || {},
             employer_details: summary.breakdown.employer || {},
+            payment_history: {
+                advances_adjusted: []
+            },
 
             // Summary Totals
             fixed_gross: summary.salary.ctc_monthly,
@@ -1106,6 +1099,53 @@ exports.finalizeMonthlySalary = async (req, res) => {
             finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
         } else {
             finalizedPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+        }
+
+        // Find and update employee advances for this month/year
+        const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
+            employee_id,
+            month,
+            year,
+            status: 0, // Only pending advances
+            adjusted_in_payroll: false
+        }, {}, transaction);
+
+        const advances_adjusted = [];
+        if (employeeAdvances.length > 0) {
+            // Update all advances to mark them as adjusted in payroll
+            await EmployeeAdvance.update(
+                { adjusted_in_payroll: true, status: 1 }, // status 1 = Adjusted
+                {
+                    where: {
+                        employee_id,
+                        month,
+                        year,
+                        status: 0,
+                        adjusted_in_payroll: false
+                    },
+                    transaction
+                }
+            );
+
+            // Collect advance details for payment history
+            employeeAdvances.forEach(advance => {
+                advances_adjusted.push({
+                    advance_id: advance.id,
+                    amount: advance.amount,
+                    payment_date: advance.payment_date,
+                    payment_mode: advance.payment_mode,
+                    notes: advance.notes
+                });
+            });
+        }
+
+        // Update payslip payment history with adjusted advances
+        if (advances_adjusted.length > 0) {
+            await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
+                payment_history: {
+                    advances_adjusted: advances_adjusted
+                }
+            }, transaction);
         }
 
         // Lock Attendance Records
@@ -1178,7 +1218,6 @@ exports.deletePayslip = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
 
 exports.calculateBatchMonthlySalary = async (req, res) => {
     try {
@@ -2291,76 +2330,6 @@ exports.generatePayslipPdf = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-/**
- * Get detailed TDS Deduction report across employees for a specific period
- */
-exports.getTDSDeductionReport = async (req, res) => {
-    return res.ok([]);
-    /*
-    try {
-        const { month, year, branch_id } = req.body;
-        if (!month || !year) {
-            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
-        }
-
-        const where = {
-            month: parseInt(month),
-            year: parseInt(year),
-            status: { [Op.in]: [1, 2] } // Finalized or Paid
-        };
-
-        if (branch_id) {
-            where.branch_id = branch_id;
-        }
-
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [{
-                model: Employee,
-                as: "employee",
-                attributes: ['id', 'first_name', 'employee_code', 'pan_number'],
-                include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
-            }],
-            order: [['employee_id', 'ASC']]
-        });
-
-        const reportData = [];
-
-        payslips.forEach(payslip => {
-            const tdsData = payslip.tds_calculation_data || {};
-            const actualTds = parseFloat(payslip.statutory_details?.['Income Tax (TDS)'] || 0);
-
-            reportData.push({
-                    id: payslip.id,
-                    employee_id: payslip.employee_id,
-                    employee_name: payslip.employee?.first_name,
-                    employee_code: payslip.employee?.employee_code,
-                    pan_number: payslip.employee?.pan_number,
-                    designation: payslip.employee?.designation?.designation_name,
-
-                    // Detailed tax data from stored snapshot
-                    annual_gross: tdsData.annualGross || 0,
-                    standard_deduction: tdsData.standardDeduction || 0,
-                    taxable_income: tdsData.taxableIncome || 0,
-                    regime: tdsData.regime || 'new_regime',
-                    annual_tax: tdsData.annualTax || 0,
-                    tax_paid_already: tdsData.taxPaidAlready || 0,
-                    monthly_tds: tdsData.monthlyTDS || 0,
-                    percentage: tdsData.percentage || 0,
-                    exemption_amount: parseFloat(tdsData.exemptions || 0),
-                    total_deduction: payslip.total_deduction || 0,
-
-                    // What was actually deducted in the finalized payslip
-                    actual_tds_deducted: actualTds,
-                    status: payslip.status
-                });
-        });
-
-        return res.ok(reportData);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-    */
-};
 
 exports.getEmployeesByMonthYear = async (req, res) => {
     try {
@@ -2832,574 +2801,136 @@ exports.getPaymentHistory = async (req, res) => {
     }
 };
 
-exports.getEmployerContributionReport = async (req, res) => {
+exports.getPayrollSummary = async (req, res) => {
+    const POST = req.body;
     try {
-        const { month, year, branch_id } = req.body;
+        const { month, year, ...employeeFilter } = POST;
+        
+        // Validate month and year
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        const where = {
-            month,
-            year,
-            status: { [Op.in]: [1, 3] } // Finalized or Paid
+       const employee = await commonQuery.findAllRecords(
+        Employee,
+        employeeFilter,
+        {
+                include: [
+                    {
+                        model: Payslip,
+                        as: "payslips",
+                        where: {
+                            month: month,
+                            year: year
+                        },
+                        required: true
+                    },
+                    {
+                        model: PaymentHistory,
+                        as: "paymentHistories",
+                        where: {
+                            month: month,
+                            year: year
+                        },
+                        required: false
+                    }
+                ]
+            }
+       )
+
+        // Initialize summary object
+        const summary = {
+            total_employees: 0,
+            total_payable_amount: 0,
+            total_paid_amount: 0,
+            total_pending_amount: 0,
+            total_earnings: {},
+            total_deductions_breakdown: {},
+            total_statutory: {}
         };
 
-        if (branch_id) {
-            where.branch_id = branch_id;
-        }
+        // Process each employee and accumulate totals
+        employee.forEach(emp => {
+            const payslips = emp.payslips || [];
+            const paymentHistories = emp.paymentHistories || [];
+            
+            // Count employees
+            summary.total_employees += 1;
+            
+            payslips.forEach(payslip => {
+                summary.total_payable_amount += parseFloat(payslip.net_salary || 0);
 
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['id', 'first_name', 'employee_code'],
-                    include: [
-                        {
-                            model: DesignationMaster,
-                            as: 'designation',
-                            attributes: ['designation_name']
+                // Process earnings breakdown
+                if (payslip.break_down && payslip.break_down.earnings) {
+                    payslip.break_down.earnings.forEach(earning => {
+                        const name = earning.name.trim();
+                        const amount = parseFloat(earning.actual_amount || 0);
+                        
+                        if (!summary.total_earnings[name]) {
+                            summary.total_earnings[name] = { amount: 0, count: 0 };
                         }
-                    ]
-                }
-            ]
-        });
-
-        const report = payslips.map(ps => {
-            const employerDetails = ps.employer_details || {};
-            let totalContribution = 0;
-            const contributionMap = {};
-
-            // Extract values and calculate total
-            Object.entries(employerDetails).forEach(([key, value]) => {
-                const val = parseFloat(value || 0);
-                contributionMap[key] = val;
-                totalContribution += val;
-            });
-
-            return {
-                id: ps.id,
-                employee_id: ps.employee?.id,
-                employee_name: ps.employee?.first_name,
-                employee_code: ps.employee?.employee_code,
-                designation: ps.employee?.designation?.designation_name,
-                contribution: contributionMap,
-                total_contribution: parseFloat(totalContribution.toFixed(2))
-            };
-        });
-
-        return res.ok({
-            report,
-            month,
-            year
-        });
-
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.getCTCBreakdownReport = async (req, res) => {
-    try {
-        const { branch_id } = req.body;
-        
-        let where = { status: 0, company_id: req.user.company_id };
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
-        }
-
-        const employees = await commonQuery.findAllRecords(Employee, where, {
-            attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
-            include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] },
-                { 
-                    model: EmployeeSalaryTemplate, 
-                    as: 'employeeSalaryTemplate',
-                    include: [{
-                        separate: true,
-                        model: EmployeeSalaryTemplateTransaction,
-                        as: 'employeeSalaryTemplateTransactions',
-                        include: [{ model: SalaryComponent, as: 'component', attributes: ['component_name'] }]
-                    }]
-                }
-            ]
-        }, null, { company_id: true, branch_id: true });
-
-        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
-        const branchMap = {};
-        branches.forEach(b => branchMap[b.id] = b.branch_name);
-
-        let allComponentNames = new Set();
-        let reportData = [];
-
-        employees.forEach(emp => {
-            const template = emp.employeeSalaryTemplate;
-            if (!template) return;
-
-            let row = {
-                employee_name: emp.first_name || '-',
-                designation: emp.designation?.designation_name || '-',
-                employee_code: emp.employee_code || '-',
-                branch: branchMap[emp.branch_id] || '-',
-                department: emp.department?.name || '-',
-                ctc: parseFloat(template.ctc_monthly || 0),
-                salary_type: template.salary_type || 'Monthly',
-                components: {}
-            };
-
-            const sc = template.statutory_config || {};
-            if (sc.employee_pf?.enabled) { row.components['Employee PF Contribution'] = sc.employee_pf.amount; allComponentNames.add('Employee PF Contribution'); }
-            if (sc.employee_esi?.enabled) { row.components['Employee ESI Contribution'] = sc.employee_esi.amount; allComponentNames.add('Employee ESI Contribution'); }
-            if (sc.pt?.enabled) { row.components['Professional Tax'] = sc.pt.amount; allComponentNames.add('Professional Tax'); }
-            if (sc.employee_lwf?.enabled) { row.components['Employee LWF Contribution'] = sc.employee_lwf.amount; allComponentNames.add('Employee LWF Contribution'); }
-            if (sc.employer_pf?.enabled) { row.components['Employer PF Contribution'] = sc.employer_pf.amount; allComponentNames.add('Employer PF Contribution'); }
-            if (sc.employer_esi?.enabled) { row.components['Employer ESI Contribution'] = sc.employer_esi.amount; allComponentNames.add('Employer ESI Contribution'); }
-            if (sc.employer_lwf?.enabled) { row.components['Employer LWF Contribution'] = sc.employer_lwf.amount; allComponentNames.add('Employer LWF Contribution'); }
-            if (sc.pf_edli_admin?.enabled) { row.components['PF EDLI & Admin Charges'] = sc.pf_edli_admin.amount; allComponentNames.add('PF EDLI & Admin Charges'); }
-
-            const trans = template.employeeSalaryTemplateTransactions || [];
-            trans.forEach(tr => {
-                if (tr.component?.component_name) {
-                    const name = tr.component.component_name;
-                    row.components[name] = parseFloat(tr.monthly_amount || 0);
-                    allComponentNames.add(name);
-                }
-            });
-
-            reportData.push(row);
-        });
-
-        // make sure basic salary is always first if it exists
-        let cols = Array.from(allComponentNames);
-        const basicIndex = cols.findIndex(c => c.toLowerCase() === 'basic salary' || c.toLowerCase() === 'basic');
-        if (basicIndex > 0) {
-            const b = cols.splice(basicIndex, 1)[0];
-            cols.unshift(b);
-        }
-
-        return res.ok({
-            categories: cols,
-            reportData
-        });
-
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.getGeneratedPayslipReport = async (req, res) => {
-    try {
-        const { month, year, branch_id } = req.body;
-        
-        if (!month || !year) {
-            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
-        }
-
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; // not deleted
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
-        }
-
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'joining_date', 'pan_number', 'uan_number', 'pf_number', 'branch_id'],
-                    include: [
-                        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                        { model: Department, as: 'department', attributes: ['name'] }
-                    ]
-                }
-            ]
-        }, null, { company_id: true });
-
-        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
-        const branchMap = {};
-        branches.forEach(b => branchMap[b.id] = b.branch_name);
-
-        let dynamicEarnings = new Set();
-        let dynamicDeductions = new Set();
-        let dynamicStatutory = new Set();
-
-        let reportData = [];
-
-        payslips.forEach(ps => {
-            const emp = ps.employee || {};
-            const bd = ps.break_down || {};
-            const sal = bd.salary || {};
-
-            let row = {
-                employee_name: emp.first_name || '-',
-                employee_code: emp.employee_code || '-',
-                branch_name: branchMap[emp.branch_id] || '-',
-                department: emp.department?.name || '-',
-                designation: emp.designation?.designation_name || '-',
-                joining_date: emp.joining_date || '-',
-                pan_number: emp.pan_number || '-',
-                uan_number: emp.uan_number || '-',
-                pf_number: emp.pf_number || '-',
-                
-                salary_amount: parseFloat(sal.ctc_monthly || ps.fixed_gross || 0),
-                salary_type: 'Monthly',
-                
-                days_in_month: ps.total_days || 0,
-                payable_days: ps.pd_days || 0,
-                present_days: ps.present_days || 0,
-                half_days: parseFloat(ps.half_days) || 0,
-                absent_days: ps.absent_days || 0,
-                holidays: ps.ph_days || 0,
-                week_offs: ps.wo_days || 0,
-                paid_leaves: ps.lp_days || 0,
-                unpaid_leaves: ps.ul_days || 0,
-                
-                total_payable_days: ps.pd_days || 0,
-                total_paid_days: ps.pd_days || 0,
-                actual_payable_days: ps.pd_days || 0,
-                paid_leave_amount: 0, 
-
-                base_salary: 0,
-                overtime: 0,
-                overtime_amount: 0,
-                
-                earnings: {},
-                deductions: {},
-                statutory: {},
-                
-                net_salary: parseFloat(ps.net_salary || 0)
-            };
-
-            let earningsArr = ps.earning_details || (bd.breakdown?.earnings || []);
-            if (!Array.isArray(earningsArr)) {
-                earningsArr = Object.entries(earningsArr).map(([name, amount]) => ({ name, amount }));
-            }
-            
-            earningsArr.forEach(e => {
-                const name = e.name;
-                const amt = parseFloat(e.amount || 0);
-                if (name.toLowerCase().includes('basic') || name.toLowerCase().includes('base')) {
-                    row.base_salary += amt;
-                } else if (name.toLowerCase().includes('overtime')) {
-                    row.overtime_amount += amt;
-
-                    row.overtime = 0;
-                } else {
-                    dynamicEarnings.add(name);
-                    row.earnings[name] = (row.earnings[name] || 0) + amt;
-                }
-            });
-
-            let dedArr = ps.deduction_details || (bd.breakdown?.deductions || []);
-            if (!Array.isArray(dedArr)) {
-                // If it's an object from DB, check against statutory_details keys for is_statutory flag
-                const statObj = ps.statutory_details || (bd.breakdown?.statutory || {});
-                dedArr = Object.entries(dedArr).map(([name, amount]) => ({ 
-                    name, 
-                    amount,
-                    is_statutory: statObj.hasOwnProperty(name)
-                }));
-            }
-
-            dedArr.forEach(d => {
-                const name = d.name;
-                const amt = parseFloat(d.amount || 0);
-                // Exclude statutory items duplicated in deductions
-                if (!d.is_statutory) {
-                     dynamicDeductions.add(name);
-                     row.deductions[name] = (row.deductions[name] || 0) + amt;
-                }
-            });
-
-            // Fallback for statutory if it's stored in statutory_details directly
-            const statObj = ps.statutory_details || (bd.breakdown?.statutory || {});
-            Object.keys(statObj).forEach(k => {
-                const amt = parseFloat(statObj[k] || 0);
-                dynamicStatutory.add(k);
-                row.statutory[k] = amt;
-            });
-
-            // Extract statutory from deductions array if it has is_statutory flag
-            dedArr.forEach(d => {
-                if (d.is_statutory) {
-                    const name = d.name;
-                    const amt = parseFloat(d.amount || 0);
-                    dynamicStatutory.add(name);
-                    row.statutory[name] = amt;
-                }
-            });
-
-            reportData.push(row);
-        });
-
-        // Convert sets to arrays
-        const earningColumns = Array.from(dynamicEarnings);
-        const deductionColumns = Array.from(dynamicDeductions);
-        const statutoryColumns = Array.from(dynamicStatutory);
-
-        return res.ok({
-            earningColumns,
-            deductionColumns,
-            statutoryColumns,
-            reportData
-        });
-
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.getPFReport = async (req, res) => {
-    try {
-        const { month, year, branch_id } = req.body;
-        
-        if (!month || !year) {
-            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
-        }
-
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
-        }
-
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'uan_number', 'pf_number', 'branch_id', 'employee_type', 'worker_type']
-                }
-            ]
-        }, null, { company_id: true });
-        // payslips = payslips.get({ plain: true });
-        // Filter out employees without PF
-        // We consider someone in PF if they have UAN/PF OR if there's any PF amount in statutory/employer details.
-        
-        let reportData = [];
-        payslips.forEach(ps => {
-            const emp = ps.employee || {};
-            const bd = ps.break_down || {};
-            
-            // Extraction helper to handle both Array and Object formats in JSON fields
-            // It normalizes key names (trim + case-insensitive) since legacy data sometimes includes extra spaces
-            const getValueFromJSON = (data, keys) => {
-                // eslint-disable-next-line no-console
-                console.log("Extracting PF value from data:", data, "with keys:", keys);
-                if (!data) return 0;
-
-                const normalizedKeys = (keys || []).map(k => (typeof k === 'string' ? k.trim().toLowerCase() : k));
-
-                if (Array.isArray(data)) {
-                    const found = data.find(item => {
-                        const name = typeof item?.name === 'string' ? item.name.trim().toLowerCase() : '';
-                        return normalizedKeys.includes(name);
+                        summary.total_earnings[name].amount += amount;
+                        summary.total_earnings[name].count += 1;
                     });
-                    return found ? parseFloat(found.amount || 0) : 0;
                 }
 
-                // Normalize object keys to allow matching keys with extra spaces/case differences
-                const normalizedData = {};
-                Object.entries(data).forEach(([k, v]) => {
-                    if (typeof k === 'string') {
-                        normalizedData[k.trim().toLowerCase()] = v;
+                // Process deductions breakdown
+                if (payslip.break_down && payslip.break_down.deductions) {
+                    payslip.break_down.deductions.forEach(deduction => {
+                        const name = deduction.name.trim();
+                        const amount = parseFloat(deduction.amount || 0);
+                        
+                        if (!summary.total_deductions_breakdown[name]) {
+                            summary.total_deductions_breakdown[name] = { amount: 0, count: 0 };
+                        }
+                        summary.total_deductions_breakdown[name].amount += amount;
+                        summary.total_deductions_breakdown[name].count += 1;
+                    });
+                }
+
+                // Process statutory deductions
+                if (payslip.break_down && payslip.break_down.statutory) {
+                    Object.entries(payslip.break_down.statutory).forEach(([key, value]) => {
+                        const name = key.trim();
+                        const amount = parseFloat(value || 0);
+                        
+                        if (amount > 0) {
+                            if (!summary.total_statutory[name]) {
+                                summary.total_statutory[name] = { amount: 0, count: 0 };
+                            }
+                            summary.total_statutory[name].amount += amount;
+                            summary.total_statutory[name].count += 1;
+                        }
+                    });
+                }
+            });
+
+            // Calculate paid amount from payment histories
+            paymentHistories.forEach(ph => {
+                summary.total_paid_amount += parseFloat(ph.amount || 0);
+            });
+        });
+
+        summary.total_pending_amount = summary.total_payable_amount - summary.total_paid_amount;
+
+        // Round all monetary values to 2 decimal places
+        Object.keys(summary).forEach(key => {
+            if (typeof summary[key] === 'number') {
+                summary[key] = Math.round(summary[key] * 100) / 100;
+            } else if (typeof summary[key] === 'object' && summary[key] !== null) {
+                Object.keys(summary[key]).forEach(subKey => {
+                    if (typeof summary[key][subKey] === 'object' && summary[key][subKey] !== null) {
+                        if (typeof summary[key][subKey].amount === 'number') {
+                            summary[key][subKey].amount = Math.round(summary[key][subKey].amount * 100) / 100;
+                        }
                     }
                 });
-
-                for (const nk of normalizedKeys) {
-                    if (normalizedData[nk] !== undefined) return parseFloat(normalizedData[nk] || 0);
-                }
-
-                return 0;
-            };
-
-            // 1. Extract Employee PF (from statutory or deductions)
-            const statData = ps.statutory_details || (bd.breakdown?.statutory || {});
-            const dedData = ps.deduction_details || (bd.breakdown?.deductions || {});
-            const pfKeys = ['Employee PF', 'PF', 'EPF', 'Provident Fund'];
-            let employee_pf = getValueFromJSON(statData, pfKeys);
-            if (employee_pf === 0) {
-                employee_pf = getValueFromJSON(dedData, pfKeys);
             }
-
-            // 2. Extract Employer PF
-            const employerData = ps.employer_details || (bd.breakdown?.employer || {});
-            const empPfKeys = ['Employer PF', 'EPF Employer', 'Employer Contribution PF'];
-            let employer_pf = getValueFromJSON(employerData, empPfKeys);
-            
-            // 3. Extract Basic Salary (often used as base for PF)
-            const earnData = ps.earning_details || (bd.breakdown?.earnings || {});
-            const basicKeys = ['Basic Salary', 'Basic', 'BASIC', 'Basic Pay'];
-            let basic_salary = getValueFromJSON(earnData, basicKeys);
-
-            let pf_edli_admin = getValueFromJSON(employerData, ['PF EDLI/Admin', 'EDLI', 'Admin Charges']);
-            
-            // If they have no PF deduction or contribution, skip them (unless they have pf config active)
-            // Or just include all for now to let admin see zeroes if unconfigured
-            
-            // Indian PF logic rough calculation for PF wages if not saved explicitly
-            // PF Wages is usually the base (Basic+DA) capped at 15000 or the actual base
-            let pf_wages = 0;
-            if (employee_pf > 0) {
-                pf_wages = Math.round(employee_pf / 0.12);
-            } else if (basic_salary > 0 && (emp.pf_number || emp.uan_number)) {
-                // If PF is configured but deduction was 0 (maybe skipped or lwp), we might still want to show base
-                pf_wages = basic_salary;
-            }
-            
-            // In ECR, EPS (Pension) is 8.33% of PF Wages (Capped at 15000 usually)
-            // EPF Diff is 3.67% of PF Wages
-            let eps_wages = pf_wages > 15000 ? 15000 : pf_wages;
-            let eps_contribution = Math.round(eps_wages * 0.0833);
-            let epf_eps_diff = Math.round(employee_pf - eps_contribution);
-            
-            // If EPS is not enabled or different, rely on whatever data we have, but usually we just calculate ECR standard here
-            
-            // NCP Days (Non-contributing period) is basically LWP days
-            const lwp_days = parseFloat(ps.wp_days || 0) < parseFloat(ps.total_days || 0) 
-                             ? parseFloat(ps.total_days || 0) - parseFloat(ps.wp_days || 0) 
-                             : 0;
-
-            let row = {
-                uan: emp.uan_number || '-',
-                member_name: emp.first_name || '-',
-                gross_wages: parseFloat((ps.fixed_gross || bd.salary?.ctc_monthly || 0)).toFixed(2),
-                epf_wages: pf_wages,
-                eps_wages: eps_wages,
-                edli_wages: eps_wages, 
-                epf_contri_remitted: Math.round(employee_pf), // 12%
-                eps_contri_remitted: eps_contribution, // 8.33%
-                epf_eps_diff_remitted: epf_eps_diff, // 3.67%
-                ncp_days: lwp_days,
-                refund_of_advances: 0,
-                employee_code: emp.employee_code || '-',
-                employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
-                worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
-                pf_number: emp.pf_number || '-'
-            };
-
-            // Only include employees who actually have PF configured or deducted
-            if (row.epf_contri_remitted > 0 || row.uan !== '-') {
-                reportData.push(row);
-            }
-            
         });
 
-        return res.ok({
-            reportData
-        });
-
+        return res.ok(summary);
     } catch (err) {
         return handleError(err, res, req);
     }
 };
 
-exports.getESIReport = async (req, res) => {
-    try {
-        const { month, year, branch_id } = req.body;
-        
-        if (!month || !year) {
-            return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
-        }
-
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
-        }
-
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'esi_number', 'branch_id', 'employee_type', 'worker_type']
-                }
-            ]
-        }, null, { company_id: true });
-
-        let reportData = [];
-
-        payslips.forEach(ps => {
-            const emp = ps.employee || {};
-            const bd = ps.break_down || {};
-            
-            // Extraction helper to handle both Array and Object formats in JSON fields
-            // It normalizes key names (trim + case-insensitive) since legacy data sometimes includes extra spaces
-            const getValueFromJSON = (data, keys) => {
-                if (!data) return 0;
-
-                const normalizedKeys = (keys || []).map(k => (typeof k === 'string' ? k.trim().toLowerCase() : k));
-
-                if (Array.isArray(data)) {
-                    const found = data.find(item => {
-                        const name = typeof item?.name === 'string' ? item.name.trim().toLowerCase() : '';
-                        return normalizedKeys.includes(name);
-                    });
-                    return found ? parseFloat(found.amount || 0) : 0;
-                }
-
-                const normalizedData = {};
-                Object.entries(data).forEach(([k, v]) => {
-                    if (typeof k === 'string') {
-                        normalizedData[k.trim().toLowerCase()] = v;
-                    }
-                });
-
-                for (const nk of normalizedKeys) {
-                    if (normalizedData[nk] !== undefined) return parseFloat(normalizedData[nk] || 0);
-                }
-
-                return 0;
-            };
-
-            // 1. Extract Employee ESI
-            const statData = ps.statutory_details || (bd.breakdown?.statutory || {});
-            const dedData = ps.deduction_details || (bd.breakdown?.deductions || {});
-            const esiKeys = ['Employee ESI', 'ESI', 'ESIC'];
-
-            let employee_esi = getValueFromJSON(statData, esiKeys);
-            if (employee_esi === 0) {
-                employee_esi = getValueFromJSON(dedData, esiKeys);
-            }
-
-            // 2. Extract Employer ESI
-            const employerData = ps.employer_details || (bd.breakdown?.employer || {});
-            let employer_esi = getValueFromJSON(employerData, ['Employer ESI', 'ESI Employer', 'Employer Contribution ESI']);
-            
-            // ESI calculation logic rough deduction check
-            // Employee pays 0.75%, Employer pays 3.25% of gross wages usually.
-            // Let's rely on actual total_earnings to determine ESI wages (which it usually is, capped or not depending on settings but normally ESIC requires actual Gross during return)
-            const gross_earnings = parseFloat(ps.paid_gross || bd.salary?.takeHomeEarnings || 0).toFixed(2);
-            
-            const total_worked_days = parseFloat(ps.present_days || 0);
-
-            let row = {
-                ip_number: emp.esi_number || '-',
-                ip_name: emp.first_name || '-',
-                no_of_days_worked: total_worked_days,
-                total_monthly_wages: gross_earnings,
-                employee_share: employee_esi,
-                employer_share: employer_esi,
-                total_contribution: parseFloat((employee_esi + employer_esi).toFixed(2)),
-                // reason_code_for_zero_working_days: total_worked_days === 0 ? 'LWD' : '-', // Provide a generic dummy reason e.g., Leave Without Pay if 0 days
-                // last_working_day: '-',
-                employee_code: emp.employee_code || '-',
-                employee_type_label: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
-                worker_type_label: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
-            };
-
-            // Only include employees who actually have ESI configured or deducted
-            if (row.employee_share > 0 || row.employer_share > 0 || (row.ip_number && row.ip_number !== '-')) {
-                reportData.push(row);
-            }
-            
-        });
-
-        return res.ok({
-            reportData
-        });
-
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};

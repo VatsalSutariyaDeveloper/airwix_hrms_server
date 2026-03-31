@@ -71,14 +71,16 @@ const emailService = {
                                     <td style="color: #64748b; padding: 5px 0; width: 40%;"><strong>Employee Code:</strong></td>
                                     <td style="color: #1e293b;">${employeeCode}</td>
                                 </tr>
+                                ${departmentName ? `
                                 <tr>
                                     <td style="color: #64748b; padding: 5px 0;"><strong>Department:</strong></td>
                                     <td style="color: #1e293b;">${departmentName}</td>
-                                </tr>
+                                </tr>` : ''}
+                                ${designationName ? `
                                 <tr>
                                     <td style="color: #64748b; padding: 5px 0;"><strong>Designation:</strong></td>
                                     <td style="color: #1e293b;">${designationName}</td>
-                                </tr>
+                                </tr>` : ''}
                                 <tr>
                                     <td style="color: #64748b; padding: 5px 0;"><strong>Joining Date:</strong></td>
                                     <td style="color: #1e293b;">${joiningDate}</td>

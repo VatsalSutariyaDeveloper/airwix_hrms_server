@@ -66,9 +66,30 @@ exports.create = async (req, res) => {
                 });
             }
         
-            await commonQuery.createRecord(PaymentHistory, req.body, transaction);
+            const createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
             isCreated = true;
-        
+
+            // Update payslip payment_history with salary entry
+            const currentPaymentHistory = payslip.payment_history || { advances_adjusted: [] };
+            const salaryPayment = {
+                id: createdPayment.id,
+                amount: req.body.amount,
+                payment_mode: req.body.payment_mode,
+                payment_date: req.body.payment_date,
+                payment_type: req.body.payment_type
+            };
+            
+            // Initialize salary_payments array if it doesn't exist
+            if (!currentPaymentHistory.salary_payments) {
+                currentPaymentHistory.salary_payments = [];
+            }
+            currentPaymentHistory.salary_payments.push(salaryPayment);
+            
+            // Update payslip with new payment history
+            await commonQuery.updateRecordById(Payslip, req.body.ref_id, {
+                payment_history: currentPaymentHistory
+            }, transaction);
+
             const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
                 ref_id: req.body.ref_id,
                 payment_type: PAYMENT_TYPE.SALARY

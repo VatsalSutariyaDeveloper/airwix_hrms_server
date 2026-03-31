@@ -25,6 +25,7 @@ module.exports = (sequelize, DataTypes) => {
     deduction_details: { type: DataTypes.JSON, allowNull: true },
     statutory_details: { type: DataTypes.JSON, allowNull: true },
     employer_details: { type: DataTypes.JSON, allowNull: true },
+    payment_history: { type: DataTypes.JSON, allowNull: true },
 
     // Summary Totals
     fixed_gross: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },

@@ -1,72 +1,6 @@
-const { Employee, SalaryComponent, Payslip, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, DesignationMaster, Department, BranchMaster, PaymentHistory, EmployeeResignation, ResignationReason } = require("../../models");
+const { Employee, SalaryComponent, Payslip, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, DesignationMaster, Department, BranchMaster, PaymentHistory } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const { Op } = require("sequelize");
-
-exports.getEmployeeExitReport = async (req, res) => {
-    try {
-        const { start_date, end_date, branch_id, department_id } = req.body;
-        
-        let where = { 
-            company_id: req.user.company_id,
-        };
-
-        if (start_date && end_date) {
-            where.exit_date = { [Op.between]: [start_date, end_date] };
-        } else {
-            where[Op.or] = [
-                { exit_date: { [Op.ne]: null } },
-                { status: 1 }, 
-                { resignation_status: { [Op.gt]: 0 } }
-            ];
-        }
-
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
-        }
-        if (department_id && department_id !== 'All' && department_id !== 0 && department_id !== '0') {
-            where.department_id = department_id;
-        }
-
-        const employees = await commonQuery.findAllRecords(Employee, where, {
-            attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'exit_date', 'resignation_status', 'status'],
-            include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] },
-                { 
-                    model: EmployeeResignation, 
-                    as: 'resignations', 
-                    where: { status: 0 }, 
-                    required: false,
-                    include: [{ model: ResignationReason, as: 'reason_type', attributes: ['reason_name'] }],
-                    order: [['created_at', 'DESC']],
-                }
-            ],
-            order: [['exit_date', 'DESC']]
-        }, null, { company_id: true, branch_id: true });
-
-        const reportData = employees.map(emp => {
-            const latestResignation = emp.resignations?.[0];
-            return {
-                id: emp.id,
-                employee_name: emp.first_name,
-                employee_code: emp.employee_code,
-                department: emp.department?.name || 'N/A',
-                designation: emp.designation?.designation_name || 'N/A',
-                joining_date: emp.joining_date,
-                exit_date: emp.exit_date || latestResignation?.approved_lwd || latestResignation?.preferred_lwd || '-',
-                resignation_date: latestResignation?.resignation_date || '-',
-                reason: latestResignation?.reason_type?.reason_name || latestResignation?.reason_description || 'N/A',
-                exit_type: latestResignation ? 'Resignation' : (emp.exit_date ? 'Terminated/Other' : 'N/A'),
-                status: emp.resignation_status === 1 ? 'On Notice' : (emp.status === 1 ? 'Exited' : 'Active'),
-                ff_status: latestResignation?.ff_settlement_status === 2 ? 'Settled' : (latestResignation?.ff_settlement_status === 1 ? 'In Progress' : 'Pending')
-            };
-        });
-
-        return res.ok(reportData);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
 
 exports.getTDSDeductionReport = async (req, res) => {
     return res.ok([]);
@@ -136,7 +70,6 @@ exports.getTDSDeductionReport = async (req, res) => {
     */
 };
 
-
 exports.getEmployerContributionReport = async (req, res) => {
     try {
         const { month, year, branch_id } = req.body;
@@ -154,7 +87,16 @@ exports.getEmployerContributionReport = async (req, res) => {
             where.branch_id = branch_id;
         }
 
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
+        ];
+
+        const payslips = await commonQuery.fetchPaginatedData(
+            Payslip,
+            {where, ...req.body},
+            fieldConfig,
+            {
             include: [
                 {
                     model: Employee,
@@ -165,13 +107,22 @@ exports.getEmployerContributionReport = async (req, res) => {
                             model: DesignationMaster,
                             as: 'designation',
                             attributes: ['designation_name']
+                        },
+                        {
+                            model: Department,
+                            as: 'department',
+                            attributes: ['name']
                         }
                     ]
-                }
+                },
+                
             ]
         });
 
-        const report = payslips.map(ps => {
+        let allContributionColumns = new Set();
+        let report = [];
+
+        payslips.items.forEach(ps => {
             const employerDetails = ps.employer_details || {};
             let totalContribution = 0;
             const contributionMap = {};
@@ -181,21 +132,34 @@ exports.getEmployerContributionReport = async (req, res) => {
                 const val = parseFloat(value || 0);
                 contributionMap[key] = val;
                 totalContribution += val;
+                allContributionColumns.add(key);
             });
 
-            return {
+            report.push({
                 id: ps.id,
                 employee_id: ps.employee?.id,
                 employee_name: ps.employee?.first_name,
                 employee_code: ps.employee?.employee_code,
                 designation: ps.employee?.designation?.designation_name,
+                department: ps.employee?.department?.name,
                 contribution: contributionMap,
                 total_contribution: parseFloat(totalContribution.toFixed(2))
-            };
+            });
         });
 
+        const contributionColumns = Array.from(allContributionColumns);
+
         return res.ok({
-            report,
+            contributionColumns,
+            items: report,
+            total: payslips.total,
+            totals: payslips.totals,
+            currentPage: payslips.currentPage,
+            pageSize: payslips.pageSize,
+            totalPages: payslips.totalPages,
+            hasNextPage: payslips.hasNextPage,
+            hasPreviousPage: payslips.hasPreviousPage,
+            appliedFilters: payslips.appliedFilters,
             month,
             year
         });
@@ -214,23 +178,35 @@ exports.getCTCBreakdownReport = async (req, res) => {
             where.branch_id = branch_id;
         }
 
-        const employees = await commonQuery.findAllRecords(Employee, where, {
-            attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
-            include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] },
-                { 
-                    model: EmployeeSalaryTemplate, 
-                    as: 'employeeSalaryTemplate',
-                    include: [{
-                        separate: true,
-                        model: EmployeeSalaryTemplateTransaction,
-                        as: 'employeeSalaryTemplateTransactions',
-                        include: [{ model: SalaryComponent, as: 'component', attributes: ['component_name'] }]
-                    }]
-                }
-            ]
-        }, null, { company_id: true, branch_id: true });
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
+        ];
+
+        const employees = await commonQuery.fetchPaginatedData(
+            Employee,
+            { where, ...req.body },
+            fieldConfig,
+            {
+                attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] },
+                    { 
+                        model: EmployeeSalaryTemplate, 
+                        as: 'employeeSalaryTemplate',
+                        include: [{
+                            separate: true,
+                            model: EmployeeSalaryTemplateTransaction,
+                            as: 'employeeSalaryTemplateTransactions',
+                            include: [{ model: SalaryComponent, as: 'component', attributes: ['component_name'] }]
+                        }]
+                    }
+                ]
+            },
+            {},
+            { company_id: true, branch_id: true }
+        );
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
         const branchMap = {};
@@ -239,7 +215,7 @@ exports.getCTCBreakdownReport = async (req, res) => {
         let allComponentNames = new Set();
         let reportData = [];
 
-        employees.forEach(emp => {
+        employees.items.forEach(emp => {
             const template = emp.employeeSalaryTemplate;
             if (!template) return;
 
@@ -286,7 +262,15 @@ exports.getCTCBreakdownReport = async (req, res) => {
 
         return res.ok({
             categories: cols,
-            reportData
+            items: reportData,
+            total: employees.total,
+            totals: employees.totals,
+            currentPage: employees.currentPage,
+            pageSize: employees.pageSize,
+            totalPages: employees.totalPages,
+            hasNextPage: employees.hasNextPage,
+            hasPreviousPage: employees.hasPreviousPage,
+            appliedFilters: employees.appliedFilters
         });
 
     } catch (err) {
@@ -307,19 +291,31 @@ exports.getGeneratedPayslipReport = async (req, res) => {
             where.branch_id = branch_id;
         }
 
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'joining_date', 'pan_number', 'uan_number', 'pf_number', 'branch_id'],
-                    include: [
-                        { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                        { model: Department, as: 'department', attributes: ['name'] }
-                    ]
-                }
-            ]
-        }, null, { company_id: true, branch_id: true });
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
+        ];
+
+        const payslips = await commonQuery.fetchPaginatedData(
+            Payslip,
+            { where, ...req.body },
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['first_name', 'employee_code', 'joining_date', 'pan_number', 'uan_number', 'pf_number', 'branch_id'],
+                        include: [
+                            { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                            { model: Department, as: 'department', attributes: ['name'] }
+                        ]
+                    }
+                ]
+            },
+            {},
+            { company_id: true, branch_id: true }
+        );
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
         const branchMap = {};
@@ -331,7 +327,7 @@ exports.getGeneratedPayslipReport = async (req, res) => {
 
         let reportData = [];
 
-        payslips.forEach(ps => {
+        payslips.items.forEach(ps => {
             const emp = ps.employee || {};
             const bd = ps.break_down || {};
             const sal = bd.salary || {};
@@ -447,7 +443,15 @@ exports.getGeneratedPayslipReport = async (req, res) => {
             earningColumns,
             deductionColumns,
             statutoryColumns,
-            reportData
+            items: reportData,
+            total: payslips.total,
+            totals: payslips.totals,
+            currentPage: payslips.currentPage,
+            pageSize: payslips.pageSize,
+            totalPages: payslips.totalPages,
+            hasNextPage: payslips.hasNextPage,
+            hasPreviousPage: payslips.hasPreviousPage,
+            appliedFilters: payslips.appliedFilters
         });
 
     } catch (err) {
@@ -468,21 +472,33 @@ exports.getPFReport = async (req, res) => {
             where.branch_id = branch_id;
         }
 
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'uan_number', 'pf_number', 'branch_id', 'employee_type', 'worker_type']
-                }
-            ]
-        }, null, { company_id: true, branch_id: true });
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
+        ];
+
+        const payslips = await commonQuery.fetchPaginatedData(
+            Payslip,
+            { where, ...req.body },
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['first_name', 'employee_code', 'uan_number', 'pf_number', 'branch_id', 'employee_type', 'worker_type']
+                    }
+                ]
+            },
+            {},
+            { company_id: true, branch_id: true }
+        );
         // payslips = payslips.get({ plain: true });
         // Filter out employees without PF
         // We consider someone in PF if they have UAN/PF OR if there's any PF amount in statutory/employer details.
         
         let reportData = [];
-        payslips.forEach(ps => {
+        payslips.items.forEach(ps => {
             const emp = ps.employee || {};
             const bd = ps.break_down || {};
             
@@ -591,7 +607,15 @@ exports.getPFReport = async (req, res) => {
         });
 
         return res.ok({
-            reportData
+            items: reportData,
+            total: payslips.total,
+            totals: payslips.totals,
+            currentPage: payslips.currentPage,
+            pageSize: payslips.pageSize,
+            totalPages: payslips.totalPages,
+            hasNextPage: payslips.hasNextPage,
+            hasPreviousPage: payslips.hasPreviousPage,
+            appliedFilters: payslips.appliedFilters
         });
 
     } catch (err) {
@@ -612,9 +636,15 @@ exports.getEmployeeSummaryReport = async (req, res) => {
         const paymentHistoryWhere = { year };
         if (month) paymentHistoryWhere.month = month;
 
-        const employees = await commonQuery.findAllRecords(
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["employee_code", true, true],
+        ];
+
+        const employees = await commonQuery.fetchPaginatedData(
             Employee,
-            { ...employeeFilter, company_id: req.user.company_id },
+            { ...employeeFilter, company_id: req.user.company_id, ...req.body },
+            fieldConfig,
             {
                 include: [
                     {
@@ -630,10 +660,12 @@ exports.getEmployeeSummaryReport = async (req, res) => {
                         required: false
                     }
                 ]
-            }
+            },
+            {},
+            { company_id: true }
         );
 
-        const report = employees.map(emp => {
+        const report = employees.items.map(emp => {
             const netPayable = (emp.payslips || []).reduce((acc, p) => acc + parseFloat(p.net_salary || 0), 0);
             const paidAmount = (emp.paymentHistories || []).reduce((acc, ph) => acc + parseFloat(ph.amount || 0), 0);
             const pendingAmount = netPayable - paidAmount;
@@ -648,7 +680,17 @@ exports.getEmployeeSummaryReport = async (req, res) => {
             };
         });
 
-        return res.ok(report);
+        return res.ok({
+            items: report,
+            total: employees.total,
+            totals: employees.totals,
+            currentPage: employees.currentPage,
+            pageSize: employees.pageSize,
+            totalPages: employees.totalPages,
+            hasNextPage: employees.hasNextPage,
+            hasPreviousPage: employees.hasPreviousPage,
+            appliedFilters: employees.appliedFilters
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -667,19 +709,31 @@ exports.getESIReport = async (req, res) => {
             where.branch_id = branch_id;
         }
 
-        const payslips = await commonQuery.findAllRecords(Payslip, where, {
-            include: [
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['first_name', 'employee_code', 'esi_number', 'branch_id', 'employee_type', 'worker_type']
-                }
-            ]
-        }, null, { company_id: true, branch_id: true });
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
+        ];
+
+        const payslips = await commonQuery.fetchPaginatedData(
+            Payslip,
+            { where, ...req.body },
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['first_name', 'employee_code', 'esi_number', 'branch_id', 'employee_type', 'worker_type']
+                    }
+                ]
+            },
+            {},
+            { company_id: true, branch_id: true }
+        );
 
         let reportData = [];
 
-        payslips.forEach(ps => {
+        payslips.items.forEach(ps => {
             const emp = ps.employee || {};
             const bd = ps.break_down || {};
             
@@ -756,7 +810,15 @@ exports.getESIReport = async (req, res) => {
         });
 
         return res.ok({
-            reportData
+            items: reportData,
+            total: payslips.total,
+            totals: payslips.totals,
+            currentPage: payslips.currentPage,
+            pageSize: payslips.pageSize,
+            totalPages: payslips.totalPages,
+            hasNextPage: payslips.hasNextPage,
+            hasPreviousPage: payslips.hasPreviousPage,
+            appliedFilters: payslips.appliedFilters
         });
 
     } catch (err) {

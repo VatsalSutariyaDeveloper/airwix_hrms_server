@@ -26,6 +26,7 @@ const resignationRoutes = require("./routes/resignationRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
 const systemLogRoutes = require("./routes/systemLogRoutes");
 const { initCronJobs } = require("./jobs/cronJobs");
+const reportsRoutes = require("./routes/reportsRoutes");
 // const decryptRequest = require("./middlewares/decryptRequest");
 // const { decryptId } = require('./helpers/cryptoHelper');
 
@@ -93,7 +94,7 @@ app.use("/api/employee", employeeRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/resignation", resignationRoutes);
 app.use("/api/onboarding", onboardingRoutes);
-app.use("/api/reports", require("./routes/reportsRoutes"));
+app.use("/api/reports", reportsRoutes);
 app.use("/api/system-logs", systemLogRoutes);
 app.use(errorHandler);
 
