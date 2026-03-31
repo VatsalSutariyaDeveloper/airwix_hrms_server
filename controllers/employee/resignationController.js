@@ -417,6 +417,8 @@ exports.getPendingApprovals = async (req, res) => {
     try {
         const fieldConfig = [
             ["employee_id", true, true],
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true],
             ["approval_status", true, true],
             ["current_level", true, true],
             ["approval_history", true, false],

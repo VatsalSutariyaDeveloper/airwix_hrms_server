@@ -77,7 +77,7 @@ exports.create = async (req, res) => {
                 raw: true
             }, transaction);
             
-            const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0);
+            const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0) + paymentAmount;
             
             if (totalPaid >= netPayable && payslip.status !== 3) {
                 await commonQuery.updateRecordById(Payslip, req.body.ref_id, { status: 3 }, transaction);
@@ -123,6 +123,8 @@ exports.create = async (req, res) => {
 exports.getAllPaymentHistory = async (req, res) => {
     try {
         const fieldConfig = [
+            ["employee.first_name", true, false],
+            ["employee.employee_code", true, false],
             ["payment_date", true, true],
             ["amount", true, true]
         ];
@@ -160,6 +162,21 @@ exports.paymentHistoryView = async (req, res) => {
                         model: EmployeeAdvance,
                         as: 'advance',
                         attributes: ['id', 'amount', 'payment_date', 'payment_mode', 'status', 'adjusted_in_payroll']
+                    },
+                    {
+                        model: Payslip,
+                        as: 'payslip',
+                        attributes: ['id', 'month', 'year', 'net_salary', 'status']
+                    },
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['id', 'employee_code', 'first_name', 'mobile_no']
+                    },
+                    {
+                        model: User,
+                        as: 'user',
+                        attributes: ['id', 'user_name', 'email', 'mobile_no']
                     }
                 ]
             }

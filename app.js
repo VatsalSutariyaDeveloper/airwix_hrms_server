@@ -7,7 +7,7 @@ const os = require("os");
 dotenv.config({ path: ".env" });
 // const { initSocket } = require('./socket');
 const db = require("./models");
-// const cron = require('node-cron');
+const { tenantMiddleware } = require("./middlewares/tenantMiddleware");
 const responseFormatter = require("./middlewares/responseFormatter");
 const errorHandler = require("./middlewares/errorHandler");
 const settingsRoutes = require("./routes/settingsRoutes");
@@ -38,6 +38,7 @@ const server = http.createServer(app);
 // initSocket(server);
 
 app.use(responseFormatter);
+app.use(tenantMiddleware);
 app.use(cors());
 app.use(express.json());
 // Catch and handle JSON parsing errors
@@ -123,16 +124,27 @@ const startServer = () => {
 const DB_SYNC_ENABLED = process.env.DB_SYNC === "true";
 
 if (DB_SYNC_ENABLED) {
-  console.log("🛠️  DB_SYNC is ENABLED. Checking for missing tables...");
-  // CRITICAL: We explicitly set alter: false and force: false to prevent data loss or schema changes
-  db.sequelize.sync()
+  const { createConnectionByPrefix } = require("./config/database");
+  
+  // Find all prefixes that have a _DB_NAME entry in env
+  const prefixes = Object.keys(process.env)
+    .filter(key => key.endsWith('_DB_NAME'))
+    .map(key => key.replace('_DB_NAME', ''));
+
+  // Always include the default (no prefix) if it exists
+  if (process.env.DB_NAME && !prefixes.includes('')) {
+    prefixes.push('');
+  }
+
+  console.log(`🛠️  DB_SYNC is ENABLED. Syncing ${prefixes.length} database environments: ${prefixes.join(', ') || 'Default'}`);
+
+  Promise.all(prefixes.map(prefix => createConnectionByPrefix(prefix).sync()))
     .then(() => {
-      console.log("✅ Database check complete (new tables created if they were missing)");
+      console.log("✅ All database checks complete (new tables created if missing)");
       startServer();
     })
     .catch((err) => {
       console.error("❌ Database sync failed:", err.message);
-      // We still try to start the server even if sync fails (optional, depends on requirement)
       process.exit(1);
     });
 } else {

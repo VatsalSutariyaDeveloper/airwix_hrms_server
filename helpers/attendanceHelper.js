@@ -99,43 +99,7 @@ async function punch(employeeId, meta, transaction = null) {
   const now = meta.punch_time ? parseDateTime(meta.punch_time, baseDate) : new Date();
   const today = dayjs(now).format("YYYY-MM-DD");
 
-  // 0️⃣ Get Last Global Punch (Crucial for night shifts and 24h rules)
-  const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
-    employee_id: employeeId,
-    company_id: meta.company_id,
-    status: 0,
-  }, {
-    order: [["punch_time", "DESC"]],
-  }, transaction, true, { company_id: true });
-
-  let hoursSinceLast = 999;
-  if (lastPunchGlobal) {
-    hoursSinceLast = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "hour", true));
-  }
-
-  // Determine punch type (IN / OUT) 
-  let punchType = meta.punch_type || "IN";
-  if (!meta.punch_type) {
-    if (lastPunchGlobal && lastPunchGlobal.punch_type === "IN" && hoursSinceLast < 24) {
-      punchType = "OUT";
-    }
-  }
-
-  // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
-  let targetDayDate = today;
-  if (punchType === "OUT" && lastPunchGlobal && hoursSinceLast < 24) {
-    const lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
-      id: lastPunchGlobal.day_id,
-      company_id: meta.company_id
-    }, {}, transaction, false, { company_id: true });
-    if (lastInDay) targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
-  }
-
-  // 0️⃣.B Ensure AttendanceDay Exists (Required for day_id)
-  const attendanceDay = await getOrCreateAttendanceDay(employeeId, targetDayDate, meta, transaction);
-  const dayId = attendanceDay.id;
-
-  // 0️⃣.C Fetch Employee with Attendance Template
+  // 1️⃣.0 Fetch Employee with Attendance Template (Needed for rules)
   const employee = await commonQuery.findOneRecord(Employee, employeeId, {
     include: [
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
@@ -152,8 +116,70 @@ async function punch(employeeId, meta, transaction = null) {
       throw new Err("You do not have access to punch in this branch.");
     }
   }
-
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+
+  // 1️⃣.1 Check for last punch (to determine toggle and gap)
+  const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
+    employee_id: employeeId,
+    company_id: meta.company_id || (employee ? employee.company_id : undefined),
+    status: 0,
+  }, {
+    order: [["punch_time", "DESC"]],
+  }, transaction, true, { company_id: true });
+
+  let hoursSinceLast = 999;
+  if (lastPunchGlobal) {
+    hoursSinceLast = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "hour", true));
+  }
+
+  // 1️⃣.2 Determine punch type (IN / OUT) 
+  let punchType = meta.punch_type || "IN";
+  if (!meta.punch_type && lastPunchGlobal && lastPunchGlobal.punch_type === "IN" && hoursSinceLast < 24) {
+    // Standard Toggle
+    punchType = "OUT";
+
+    // ✅ Refinement: Check Max Overtime Policy as a "New Day" Cutoff
+    if (template && template.max_overtime_mins > 0) {
+      // Fetch the day record of the last IN to find what shift they were on
+      const lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
+          id: lastPunchGlobal.day_id,
+          company_id: meta.company_id || (employee ? employee.company_id : undefined)
+      }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, { company_id: true });
+
+      if (lastInDay && lastInDay.shift_id) {
+          const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, { 
+            attributes: ['id', 'start_time', 'end_time', 'is_night_shift'] 
+          }, transaction);
+
+          if (lastShift) {
+              let shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+              if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
+                  shiftEnd = shiftEnd.add(1, 'day');
+              }
+              
+              // If current time is past (Shift End + Allowed Max Overtime), consider it a NEW DAY IN
+              const maxOutCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+              if (dayjs(now).isAfter(maxOutCutoff)) {
+                  punchType = "IN";
+              }
+          }
+      }
+    }
+  }
+
+  // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
+  let targetDayDate = today;
+  if (punchType === "OUT" && lastPunchGlobal && hoursSinceLast < 24) {
+    const lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
+      id: lastPunchGlobal.day_id,
+      company_id: meta.company_id || (employee ? employee.company_id : undefined)
+    }, {}, transaction, false, { company_id: true });
+    if (lastInDay) targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
+  }
+
+  // 0️⃣.B Ensure AttendanceDay Exists (Required for day_id)
+  const attendanceDay = await getOrCreateAttendanceDay(employeeId, targetDayDate, { ...meta, employee }, transaction);
+  const dayId = attendanceDay.id;
 
   // 0️⃣.D Check if an active Approved Leave exists for this day
   const approvedLeave = await commonQuery.findOneRecord(LeaveRequest, {
@@ -960,7 +986,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           if (pE.isAfter(shiftEnd)) {
             const lOverlapStart = dayjs(Math.max(pS.valueOf(), shiftEnd.valueOf()));
             if (pE.isAfter(lOverlapStart)) {
-              lateOTMins += pE.diff(lOverlapStart, "minute");
+              const lateOvertimeMins = pE.diff(lOverlapStart, "minute");
+              
+              // [New Logic] If auto-calculate OT is disabled, Late OT in a session that overlaps or ends the shift 
+              // is treated as normal Working Time. A new punch-in session is required to trigger real Overtime.
+              if (template && template.auto_calculate_overtime === false && pS.isBefore(shiftEnd)) {
+                shiftWorkedMins += lateOvertimeMins;
+              } else {
+                lateOTMins += lateOvertimeMins;
+              }
             }
           }
         }
@@ -1692,7 +1726,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       status = existingDayForStatus.status;
     }
     // Otherwise apply downgrade prevention logic
-    else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
+    else if ([12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
       status = existingDayForStatus.status; // Keep Present or On Duty
     } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
       status = existingDayForStatus.status; // Keep Half Day or Half On Duty

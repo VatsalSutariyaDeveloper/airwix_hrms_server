@@ -2925,7 +2925,7 @@ exports.getCTCBreakdownReport = async (req, res) => {
                     }]
                 }
             ]
-        }, null, { company_id: true });
+        }, null, { company_id: true, branch_id: true });
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
         const branchMap = {};

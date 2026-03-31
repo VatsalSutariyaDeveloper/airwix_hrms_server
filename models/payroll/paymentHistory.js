@@ -36,21 +36,23 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: "employee_id",
       as: "employee",
     });
-    
-   PaymentHistory.belongsTo(models.EmployeeAdvance, {
-    foreignKey: "ref_id",
-    constraints: false,
-    as: "advance",
-  });
 
-  PaymentHistory.belongsTo(models.Payslip, {
-    foreignKey: "ref_id",
-    constraints: false,
-    scope: {
-      payment_type: "Salary"
-    },
-    as: "payslip",
-  });
+    PaymentHistory.belongsTo(models.User, {
+      foreignKey: "user_id",
+      as: "user",
+    });
+    
+    PaymentHistory.belongsTo(models.EmployeeAdvance, {
+      foreignKey: "ref_id",
+      constraints: false,
+      as: "advance",
+    });
+
+    PaymentHistory.belongsTo(models.Payslip, {
+      foreignKey: "ref_id",
+      constraints: false,
+      as: "payslip",
+    });
   };
 
   return PaymentHistory;

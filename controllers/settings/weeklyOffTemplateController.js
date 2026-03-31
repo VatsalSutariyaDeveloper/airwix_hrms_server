@@ -184,7 +184,7 @@ exports.update = async (req, res) => {
             }
 
             // 3. FINALLY: Rebuild attendance for all affected employees ONCE
-            await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIds, transaction);
+            // await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIds, transaction);
         }
 
         await transaction.commit();

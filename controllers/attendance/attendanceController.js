@@ -1559,30 +1559,31 @@ exports.getMonthlyAttendance = async (req, res) => {
               punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
             }))
         };
-      } else {
-        // No attendance record - Check Holiday
-        const holiday = employeeHolidays.find(h => h.date === curDate);
-        if (holiday) {
-          dayData.status = holiday.name || "Holiday";
-          dayData.day_status = 4;
-        } else {
-          // Check Weekly Off
-          const dayOfWeek = dayObj.day(); // 0 is Sunday
-          const weekOfMonth = Math.ceil(dayObj.date() / 7);
-          const isWO = employeeWeeklyOffs.find(wo => 
-            wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
-          );
-          if (isWO) {
-            dayData.status = "Weekly Off";
-            dayData.day_status = 3;
-          }
-        }
-        
-        // Count as Absent if explicitly marked as Absent (day_status 5) and not Today/Future
-        if (dayData.day_status === 5 && dayObj.isBefore(dayjs(), 'day')) {
-            summary.absent++;
-        }
       }
+      // else {
+      //   // No attendance record - Check Holiday
+      //   const holiday = employeeHolidays.find(h => h.date === curDate);
+      //   if (holiday) {
+      //     dayData.status = holiday.name || "Holiday";
+      //     dayData.day_status = 4;
+      //   } else {
+      //     // Check Weekly Off
+      //     const dayOfWeek = dayObj.day(); // 0 is Sunday
+      //     const weekOfMonth = Math.ceil(dayObj.date() / 7);
+      //     const isWO = employeeWeeklyOffs.find(wo => 
+      //       wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
+      //     );
+      //     if (isWO) {
+      //       dayData.status = "Weekly Off";
+      //       dayData.day_status = 3;
+      //     }
+      //   }
+        
+      //   // Count as Absent if explicitly marked as Absent (day_status 5) and not Today/Future
+      //   if (dayData.day_status === 5 && dayObj.isBefore(dayjs(), 'day')) {
+      //       summary.absent++;
+      //   }
+      // }
       
       allDays.push(dayData);
     }    

@@ -14,11 +14,14 @@ const emailService = {
      */
     sendOnboardingInvite: async (email, name, link, companyId) => {
         try {
+            const company = await CompanyMaster.findByPk(companyId);
+            const companyName = company?.company_name || 'Our Company';
+
             await sendEmailHelper({
                 company_id: companyId,
-                from: process.env.ADMIN_EMAIL,
+                from: `${process.env.EMAIL_COMPANY_NAME} <${process.env.ADMIN_EMAIL}>`,
                 email: email,
-                subject: `Welcome to the Team! Complete your Onboarding`,
+                subject: `Welcome to ${companyName}! Complete your Onboarding`,
                 message: `
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
                         <h2 style="color: #1e293b;">Hello ${name},</h2>
@@ -49,16 +52,18 @@ const emailService = {
 
     sendOnboardingApproval: async (email, name, employeeCode, departmentName, designationName, joiningDate, companyId) => {
         try {
+            const company = await CompanyMaster.findByPk(companyId);
+            const companyName = company ? company.company_name : 'Airwix Payroll';
             await sendEmailHelper({
                 company_id: companyId,
-                from: process.env.ADMIN_EMAIL,
+                from: `${process.env.EMAIL_COMPANY_NAME} <${process.env.ADMIN_EMAIL}>`,
                 email: email,
                 subject: `Welcome aboard! Your Onboarding has been Approved`,
                 message: `
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
                         <h2 style="color: #1e293b;">Congratulations ${name}!</h2>
                         <p style="color: #475569; line-height: 1.6;">
-                            We are pleased to inform you that your onboarding process has been successfully approved. Welcome to the team!
+                            We are pleased to inform you that your onboarding process has been successfully approved. Welcome to the ${companyName} team!
                         </p>
                         <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
                             <table style="width: 100%; border-collapse: collapse;">
@@ -85,7 +90,7 @@ const emailService = {
                         </p>
                         <div style="text-align: center; margin: 30px 0;">
                             <div style="background-color: #dcfce7; color: #166534; padding: 15px; border-radius: 6px; border-left: 4px solid #22c55e;">
-                                <strong>🎉 Welcome to the Team!</strong>
+                                <strong>🎉 Welcome to the ${companyName} Team!</strong>
                             </div>
                         </div>
                         <p style="color: #64748b; font-size: 0.9em; line-height: 1.5;">
