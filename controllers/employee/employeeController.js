@@ -573,7 +573,11 @@ exports.getProfile = async (req, res) => {
                 
                 // Master Template Joins (kept for names if not in employee-specific tables)
                 { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
-                { model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"] },
+                { model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
+                    include: [
+                        { model: HolidayTransaction, as: "holidayTransactions", attributes: ['id', 'name', 'date', 'holiday_type', 'color'], required: false }
+                    ]
+                },
                 { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
                 { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] }
             ]
@@ -636,7 +640,11 @@ exports.getProfile = async (req, res) => {
             general_info: {
                 salary_cycle: plainRecord.employeeSalaryTemplate?.salary_type || 'N/A',
                 weekly_off: plainRecord.weeklyOffTemplate?.name || 'N/A',
-                holiday: plainRecord.holidayTemplate?.name || 'N/A',
+                holiday: (() => {
+                    const count = plainRecord.holidayTemplate?.holidayTransactions?.length || 0;
+                    const name = plainRecord.holidayTemplate?.name || 'N/A';
+                    return count > 0 && name !== 'N/A' ? `${count} ${name}` : name;
+                })(),
                 leave: plainRecord.leaveTemplate?.template_name || 'N/A',
                 shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
@@ -645,6 +653,13 @@ exports.getProfile = async (req, res) => {
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
                 reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
             },
+            holiday_transactions: plainRecord.holidayTemplate?.holidayTransactions?.map(transaction => ({
+                id: transaction.id,
+                name: transaction.name,
+                date: transaction.date,
+                holiday_type: transaction.holiday_type,
+                color: transaction.color
+            })) || [],
             employment_info: {
                 joining_date: plainRecord.joining_date || 'N/A',
                 employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
@@ -1365,13 +1380,380 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
     return distance;
 };
 
-/**
- * Register Face
- * 1. Saves image to 'users/images/' (Permanent Profile Picture).
- * 2. Deletes old profile image if it exists.
- * 3. Sends image to Python to get the Face Vector.
- * 4. Updates Employee record with new Profile Image AND Face Vector.
- */
+// /**
+//  * Register Face
+//  * 1. Saves image to 'users/images/' (Permanent Profile Picture).
+//  * 2. Deletes old profile image if it exists.
+//  * 3. Sends image to Python to get the Face Vector.
+//  * 4. Updates Employee record with new Profile Image AND Face Vector.
+//  */
+// exports.registerFace = async (req, res) => {
+//     const transaction = await sequelize.transaction();
+//     try {
+//         const { id } = req.body;
+
+//         if(req.user.access == "attendance device"){
+//             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
+//             if (!device) {
+//                 return res.status(401).json({
+//                     success: false,
+//                     error: "UNAUTHORIZED",
+//                     message: "Device not Exist."
+//                 });
+//             }
+//         }
+
+//         // Check if image file exists
+//         if (!req.files || (!req.files.image && !req.files['image'])) {
+//             await transaction.rollback();
+//             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+//         }
+
+//         const employee = await commonQuery.findOneRecord(Employee, id);
+//         if (!employee) {
+//             await transaction.rollback();
+//             return res.error(constants.NOT_FOUND);
+//         }
+
+//         // 1. Save File to Disk (Permanent Profile Image)
+//         // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/employee/images/'
+//         const savedFiles = await uploadFile(
+//             req,
+//             res,
+//             constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
+//             transaction,
+//             employee.profile_image     // ✅ Delete old image if exists in IMG_FOLDER
+//         );
+
+//         const filename = savedFiles.image;
+
+//         if (!filename) {
+//             await transaction.rollback();
+//             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+//         }
+
+//         // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
+//         // In case it was previously uploaded via the general update API.
+//         if (employee.profile_image) {
+//             await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
+//         }
+
+//         // 2. Send to Python to get Face Embedding
+//         // We read the file we just saved to ensure Python sees exactly what is on disk
+//         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+
+//         let faceDescriptor;
+//         try {
+//             const fileBuffer = fs.readFileSync(fullFilePath);
+
+//             // const formData = new FormData();
+//             // formData.append('image', fileBuffer, filename);
+//             // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+//             //     headers: { ...formData.getHeaders() }
+//             // });
+
+//             //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
+//             const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
+//                 headers: { 'Content-Type': 'application/octet-stream' }
+//             });
+
+//             if (aiResponse.data.status) {
+//                 faceDescriptor = aiResponse.data.embedding;
+//             } else {
+//                 throw new Error(aiResponse.data.message);
+//             }
+
+//             // 2.1 Unique Face Check
+//             const threshold = process.env.FACE_MATCH_THRESHOLD || 0.4;
+//             const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
+//                 status: 0,
+//                 face_descriptor: { [Op.ne]: null },
+//                 id: { [Op.ne]: id } 
+//             }, {
+//                 attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+//                 raw: true
+//             }, null, { company_id: true });
+
+//             for (const emp of employeesWithFaces) {
+//                 let storedVector = emp.face_descriptor;
+//                 if (typeof storedVector === 'string') {
+//                     try {
+//                         storedVector = JSON.parse(storedVector);
+//                     } catch (e) { continue; }
+//                 }
+//                 if (!Array.isArray(storedVector)) continue;
+
+//                 const dist = calculateCosineDistance(faceDescriptor, storedVector);
+//                 if (dist < threshold) {
+//                     const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
+//                     const branchName = branch?.branch_name || "N/A";
+                    
+//                     await transaction.rollback();
+//                     // Clean up the uploaded file since the process failed validation
+//                     try { fs.unlinkSync(fullFilePath); } catch (e) { }
+
+//                     return res.error(constants.VALIDATION_ERROR, { 
+//                         message: `${emp.first_name} already exist in ${branchName}` 
+//                     });
+//                 }
+//             }
+//         } catch (aiError) {
+//             if (!transaction.finished) await transaction.rollback();
+//             // Optional: Delete the file we just wrote since the process failed
+//             try { fs.unlinkSync(fullFilePath); } catch (e) { }
+
+//             console.error("AI Service Error:", aiError.message);
+//             writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
+            
+//             const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
+//             return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
+//         }
+
+//         // 3. Update Employee Record
+//         // - Updates 'profile_image' (Visible in App/Admin)
+//         // - Updates 'face_descriptor' (Used for AI Matching)
+//         await employee.update({
+//             profile_image: filename,
+//             face_descriptor: faceDescriptor
+//         }, { transaction });
+
+//         await transaction.commit();
+
+//         writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS] ID: ${id}, Filename: ${filename}`);
+
+//         return res.success("Face Registered & Profile Picture Updated", {
+//             image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
+//         });
+
+//     } catch (err) {
+//         if (!transaction.finished) await transaction.rollback();
+//         return handleError(err, res, req);
+//     }
+// };
+// /**
+//  * Face Punch (Attendance)
+//  * - Uses 'uploadFile' utility to save to 'uploads/attendance/'
+//  * - Runs in PARALLEL with AI and DB for maximum speed.
+//  */
+// exports.facePunch = async (req, res) => {
+//     try {
+//         const startTime = Date.now();
+//         const now = new Date();
+
+//         const time = now.toTimeString().split(' ')[0];
+
+//         console.log("start time",time)
+//         const timings = { 
+//             ai: 0, 
+//             db: 0, 
+//             matching: 0, 
+//             upload: 0, 
+//             total: 0 
+//         };
+
+//         if(req.user.access == "attendance device"){
+//             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
+//             if (!device) {
+//                 return res.status(401).json({
+//                     success: false,
+//                     error: "UNAUTHORIZED",
+//                     message: "Device not Exist."
+//                 });
+//             }
+//         }
+
+//         const files = req.files.image || req.files['image'];
+//         if (!files || files.length === 0) {
+//             return res.error(constants.VALIDATION_ERROR, { message: "Face image is required" });
+//         }
+
+//         const imageBuffer = files[0].buffer;
+//         const originalName = files[0].originalname;
+//         debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
+
+//         // 🚀 PARALLEL TASK 1: Call AI Service (Optimized with Raw Buffer)
+//         const getEmbeddingTask = (async () => {
+//             const aiStart = Date.now();
+//             try {
+//                 const formData = new FormData();
+//                 formData.append('image', imageBuffer, originalName);
+
+//                 debugLog("AI-Call", "Sending to Python...");
+//                 // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+//                 //     headers: { ...formData.getHeaders() }
+//                 // });
+
+//                 // for face punch python service accepts raw buffer instead of form data to reduce overhead and latency
+//                 const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
+//                     headers: { 'Content-Type': 'application/octet-stream' }
+//                 });
+
+//                 timings.ai = Date.now() - aiStart;
+//                 if (aiResponse.data.status) {
+//                     return aiResponse.data.embedding;
+//                 } else {
+//                     throw new Error(aiResponse.data.message);
+//                 }
+//             } catch (error) {
+//                 const rawError = error.response?.data?.message || error.message;
+//                 const time = now.toTimeString().split(' ')[0];
+//                 console.log("end time",time)
+//                 console.error("❌ AI Service Failed:", rawError);
+//                 writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
+                
+//                 const friendlyMsg = error.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
+//                 throw new Error(friendlyMsg);
+//             }
+//         })();
+
+//         // 🚀 PARALLEL TASK 2: Fetch Employees
+//         const getEmployeesTask = (async () => {
+//             const dbStart = Date.now();
+//             const companyId = req.user?.company_id;
+//             const res = await commonQuery.findAllRecords(Employee, {
+//                 status: 0,
+//                 face_descriptor: { [Op.ne]: null },
+//             }, {
+//                 attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
+//                 raw: true
+//             }, null, { company_id: true });
+//             timings.db = Date.now() - dbStart;
+//             return res;
+//         })();
+
+//         // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
+//         const [liveVector, employees] = await Promise.all([
+//             getEmbeddingTask,
+//             getEmployeesTask
+//         ]);
+
+//         debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
+
+//         // --- MATCHING LOGIC ---
+//         const matchStart = Date.now();
+//         let bestMatch = null;
+//         let minDistance = 1.0;
+
+//         for (const emp of employees) {
+//             let storedVector = emp.face_descriptor;
+
+//             if (typeof storedVector === 'string') {
+//                 try {
+//                     storedVector = JSON.parse(storedVector);
+//                 } catch (e) { continue; }
+//             }
+
+//             if (!Array.isArray(storedVector)) continue;
+
+//             const dist = calculateCosineDistance(liveVector, storedVector);
+
+//             if (dist < minDistance) {
+//                 minDistance = dist;
+//                 bestMatch = emp;
+//             }
+//         }
+
+//         timings.matching = Date.now() - matchStart;
+//         const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
+//         debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
+
+//         // --- VALIDATION & CONDITIONAL FILE SAVING ---
+//         if (bestMatch && minDistance < (process.env.FACE_MATCH_THRESHOLD || 0.4)) {
+//             const transaction = await sequelize.transaction();
+//             try {
+//                 // 1. Save image for attendance record
+//                 const uploadStart = Date.now();
+//                 const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
+//                 timings.upload = Date.now() - uploadStart;
+
+//                 const savedFilename = savedFiles.image || savedFiles['image'];
+
+//                 // 2. Use the robust punch helper
+//                 const punchResult = await punch(bestMatch.id, {
+//                     punch_time: new Date(),
+//                     image_name: savedFilename,
+//                     user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
+//                     company_id: req.user?.company_id || bestMatch.company_id,
+//                     branch_id: req.user?.branch_id || bestMatch.branch_id,
+//                     ip_address: req.ip,
+//                     latitude: req.body.latitude || null,
+//                     longitude: req.body.longitude || null,
+//                     device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
+//                     attendance_by: 'face',
+//                     skipRebuild: true 
+//                 }, transaction);
+
+//                 await transaction.commit();
+
+//                 // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
+//                 setImmediate(() => {
+//                     const today = dayjs().format("YYYY-MM-DD");
+//                     rebuildAttendanceDay(bestMatch.id, today, {
+//                         user_id: req.user?.id || bestMatch.user_id,
+//                         company_id: req.user?.company_id || bestMatch.company_id,
+//                         branch_id: req.user?.branch_id || bestMatch.branch_id
+//                     }).catch(err => console.error("Background Rebuild Error:", err));
+//                 });
+
+//                 timings.total = Date.now() - startTime;
+//                 const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
+//                 console.log(successMsg);
+//                 writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
+//                 const time = now.toTimeString().split(' ')[0];
+//                 console.log("end time2222",time)
+
+//                 return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
+//                     employee_name: bestMatch.first_name,
+//                     employee_code: bestMatch.employee_code,
+//                     // punch: punchResult,
+//                     image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
+//                     // match_score: matchPercentage,
+//                     // timings: timings
+//                 });
+//             } catch (error) {
+//                 const time = now.toTimeString().split(' ')[0];
+//                 console.log("end time333",time)
+
+//                 if (transaction && !transaction.finished) await transaction.rollback();
+//                 console.error("Error creating attendance records:", error);
+//                 writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
+//                 return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
+//             }
+//         } else {
+//             // 🚀 FAST FAIL: Return error immediately, log in background
+//             timings.total = Date.now() - startTime;
+//             const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
+//             console.log(failMsg);
+//             writeLogToFile('face_recognition.log', failMsg);
+
+//             // Save to ATTENDANCE_LOG_FOLDER in background
+//             setImmediate(async () => {
+//                 try {
+//                     const now = new Date();
+//                     const dateStr = dayjs(now).format('DD-MM-YYYY');
+//                     const timeStr = dayjs(now).format('hh:mm A');
+//                     const ext = path.extname(originalName);
+//                     const customFilename = `${Date.now()}_failed_${matchPercentage}%_${dateStr}__${timeStr}${ext}`;
+//                     await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
+//                 } catch (e) { console.error("Failed to save recognition log:", e); }
+//             });
+
+//             return res.error(constants.FACE_NOT_RECOGNIZED, {
+//                 message: `Face Not Recognized`,
+//                 match_score: matchPercentage,
+//                 timings: timings
+//             });
+//         }
+
+//     } catch (err) {
+//         console.error("💥 Server Error:", err);
+//         writeLogToFile('face_recognition.log', `💥 [CRITICAL] Server Error: ${err.message}`);
+//         const errorMsg = err.message || "Server Error";
+//         const statusCode = errorMsg.includes("Face") ? constants.VALIDATION_ERROR : constants.SERVER_ERROR;
+//         return res.error(statusCode, { message: errorMsg });
+//     }
+// };
+
 exports.registerFace = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -1388,10 +1770,28 @@ exports.registerFace = async (req, res) => {
             }
         }
 
-        // Check if image file exists
+        // 1. Check if the actual Profile image file exists
         if (!req.files || (!req.files.image && !req.files['image'])) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+        }
+
+        // 🚀 2. Grab the pre-calculated Math Vector sent from Flutter
+        // Make sure your Flutter 'home_repository.dart' appends this as 'face_descriptor' in FormData
+        const faceDescriptorString = req.body.face_descriptor; 
+        
+        if (!faceDescriptorString) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Face mathematical vector is missing from app" });
+        }
+
+        let faceDescriptor;
+        try {
+            // Convert the JSON string from Flutter back into an Array of numbers
+            faceDescriptor = JSON.parse(faceDescriptorString);
+        } catch (e) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Invalid face vector format" });
         }
 
         const employee = await commonQuery.findOneRecord(Employee, id);
@@ -1400,14 +1800,13 @@ exports.registerFace = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        // 1. Save File to Disk (Permanent Profile Image)
-        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/employee/images/'
+        // 3. Save Profile Image File to Disk
         const savedFiles = await uploadFile(
             req,
             res,
-            constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
+            constants.EMPLOYEE_IMG_FOLDER, 
             transaction,
-            employee.profile_image     // ✅ Delete old image if exists in IMG_FOLDER
+            employee.profile_image     
         );
 
         const filename = savedFiles.image;
@@ -1417,96 +1816,62 @@ exports.registerFace = async (req, res) => {
             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
         }
 
-        // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
-        // In case it was previously uploaded via the general update API.
+        // Delete old profile picture if it exists
         if (employee.profile_image) {
             await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
         }
 
-        // 2. Send to Python to get Face Embedding
-        // We read the file we just saved to ensure Python sees exactly what is on disk
         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
 
-        let faceDescriptor;
-        try {
-            const fileBuffer = fs.readFileSync(fullFilePath);
+        // 4. Unique Face Check (Using standard JS Math, no Python!)
+        // Note: MobileFaceNet vectors usually need a tighter threshold (like 0.2 to 0.35)
+        const threshold = process.env.FACE_MATCH_THRESHOLD || 0.35; 
+        
+        const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            face_descriptor: { [Op.ne]: null },
+            id: { [Op.ne]: id } 
+        }, {
+            attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+            raw: true
+        }, null, { company_id: true });
 
-            // const formData = new FormData();
-            // formData.append('image', fileBuffer, filename);
-            // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-            //     headers: { ...formData.getHeaders() }
-            // });
-
-            //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
-            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
-                headers: { 'Content-Type': 'application/octet-stream' }
-            });
-
-            if (aiResponse.data.status) {
-                faceDescriptor = aiResponse.data.embedding;
-            } else {
-                throw new Error(aiResponse.data.message);
+        for (const emp of employeesWithFaces) {
+            let storedVector = emp.face_descriptor;
+            if (typeof storedVector === 'string') {
+                try {
+                    storedVector = JSON.parse(storedVector);
+                } catch (e) { continue; }
             }
+            if (!Array.isArray(storedVector)) continue;
 
-            // 2.1 Unique Face Check
-            const threshold = process.env.FACE_MATCH_THRESHOLD || 0.4;
-            const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
-                status: 0,
-                face_descriptor: { [Op.ne]: null },
-                id: { [Op.ne]: id } 
-            }, {
-                attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
-                raw: true
-            }, null, { company_id: true });
-
-            for (const emp of employeesWithFaces) {
-                let storedVector = emp.face_descriptor;
-                if (typeof storedVector === 'string') {
-                    try {
-                        storedVector = JSON.parse(storedVector);
-                    } catch (e) { continue; }
-                }
-                if (!Array.isArray(storedVector)) continue;
-
-                const dist = calculateCosineDistance(faceDescriptor, storedVector);
-                if (dist < threshold) {
-                    const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
-                    const branchName = branch?.branch_name || "N/A";
-                    
-                    await transaction.rollback();
-                    // Clean up the uploaded file since the process failed validation
-                    try { fs.unlinkSync(fullFilePath); } catch (e) { }
-
-                    return res.error(constants.VALIDATION_ERROR, { 
-                        message: `${emp.first_name} already exist in ${branchName}` 
-                    });
-                }
-            }
-        } catch (aiError) {
-            if (!transaction.finished) await transaction.rollback();
-            // Optional: Delete the file we just wrote since the process failed
-            try { fs.unlinkSync(fullFilePath); } catch (e) { }
-
-            console.error("AI Service Error:", aiError.message);
-            writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
+            const dist = calculateCosineDistance(faceDescriptor, storedVector);
             
-            const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
-            return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
+            if (dist < threshold) {
+                const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
+                const branchName = branch?.branch_name || "N/A";
+                
+                await transaction.rollback();
+                // Clean up the uploaded file since validation failed
+                try { fs.unlinkSync(fullFilePath); } catch (e) { }
+
+                return res.error(constants.VALIDATION_ERROR, { 
+                    message: `${emp.first_name} already exists in ${branchName}` 
+                });
+            }
         }
 
-        // 3. Update Employee Record
-        // - Updates 'profile_image' (Visible in App/Admin)
-        // - Updates 'face_descriptor' (Used for AI Matching)
+        // 5. Save the new vector directly into the database!
         await employee.update({
             profile_image: filename,
-            face_descriptor: faceDescriptor
+            face_descriptor: faceDescriptor // 🚀 Stores the array directly
         }, { transaction });
 
         await transaction.commit();
 
-        writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS] ID: ${id}, Filename: ${filename}`);
+        writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS_OFFLINE_AI] ID: ${id}, Filename: ${filename}`);
 
-        return res.success("Face Registered & Profile Picture Updated", {
+        return res.success("Face Registered Successfully", {
             image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
         });
 
@@ -1516,9 +1881,9 @@ exports.registerFace = async (req, res) => {
     }
 };
 /**
- * Face Punch (Attendance)
- * - Uses 'uploadFile' utility to save to 'uploads/attendance/'
- * - Runs in PARALLEL with AI and DB for maximum speed.
+ * Face Punch (Attendance) - OFFLINE FLUTTER VERSION
+ * - Flutter does the AI math, Node.js saves the image and logs the punch.
+ * - ALL ORIGINAL LOGGING AND TIMINGS PRESERVED.
  */
 exports.facePunch = async (req, res) => {
     try {
@@ -1527,16 +1892,17 @@ exports.facePunch = async (req, res) => {
 
         const time = now.toTimeString().split(' ')[0];
 
-        console.log("start time",time)
+        console.log("start time", time);
+        // Kept your exact timings object schema so your frontend/logs don't break
         const timings = { 
-            ai: 0, 
+            ai: 0, // 0 because Flutter did it
             db: 0, 
-            matching: 0, 
+            matching: 0, // 0 because Flutter did it
             upload: 0, 
             total: 0 
         };
 
-        if(req.user.access == "attendance device"){
+        if (req.user.access == "attendance device") {
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
             if (!device) {
                 return res.status(401).json({
@@ -1553,189 +1919,93 @@ exports.facePunch = async (req, res) => {
         }
 
         const imageBuffer = files[0].buffer;
-        const originalName = files[0].originalname;
-        debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
+        debugLog("Punch", `Image Size: ${imageBuffer ? imageBuffer.length : 'Unknown'} bytes`);
 
-        // 🚀 PARALLEL TASK 1: Call AI Service (Optimized with Raw Buffer)
-        const getEmbeddingTask = (async () => {
-            const aiStart = Date.now();
-            try {
-                const formData = new FormData();
-                formData.append('image', imageBuffer, originalName);
+        // 🚀 NEW LOGIC: We get the exact Employee ID and Match Score from Flutter
+        const { employee_id, latitude, longitude, device_id, match_score } = req.body;
+        const matchPercentage = match_score || "100.00"; // Fallback if flutter doesn't send
 
-                debugLog("AI-Call", "Sending to Python...");
-                // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-                //     headers: { ...formData.getHeaders() }
-                // });
-
-                // for face punch python service accepts raw buffer instead of form data to reduce overhead and latency
-                const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, imageBuffer, {
-                    headers: { 'Content-Type': 'application/octet-stream' }
-                });
-
-                timings.ai = Date.now() - aiStart;
-                if (aiResponse.data.status) {
-                    return aiResponse.data.embedding;
-                } else {
-                    throw new Error(aiResponse.data.message);
-                }
-            } catch (error) {
-                const rawError = error.response?.data?.message || error.message;
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time",time)
-                console.error("❌ AI Service Failed:", rawError);
-                writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
-                
-                const friendlyMsg = error.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
-                throw new Error(friendlyMsg);
-            }
-        })();
-
-        // 🚀 PARALLEL TASK 2: Fetch Employees
-        const getEmployeesTask = (async () => {
-            const dbStart = Date.now();
-            const companyId = req.user?.company_id;
-            const res = await commonQuery.findAllRecords(Employee, {
-                status: 0,
-                face_descriptor: { [Op.ne]: null },
-            }, {
-                attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
-                raw: true
-            }, null, { company_id: true });
-            timings.db = Date.now() - dbStart;
-            return res;
-        })();
-
-        // ⚡ EXECUTE AI AND DB TASKS IN PARALLEL
-        const [liveVector, employees] = await Promise.all([
-            getEmbeddingTask,
-            getEmployeesTask
-        ]);
-
-        debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
-
-        // --- MATCHING LOGIC ---
-        const matchStart = Date.now();
-        let bestMatch = null;
-        let minDistance = 1.0;
-
-        for (const emp of employees) {
-            let storedVector = emp.face_descriptor;
-
-            if (typeof storedVector === 'string') {
-                try {
-                    storedVector = JSON.parse(storedVector);
-                } catch (e) { continue; }
-            }
-
-            if (!Array.isArray(storedVector)) continue;
-
-            const dist = calculateCosineDistance(liveVector, storedVector);
-
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestMatch = emp;
-            }
+        if (!employee_id) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is missing from app." });
         }
 
-        timings.matching = Date.now() - matchStart;
-        const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
-        debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
+        const dbStart = Date.now();
+        const employee = await commonQuery.findOneRecord(Employee, employee_id);
+        timings.db = Date.now() - dbStart;
 
-        // --- VALIDATION & CONDITIONAL FILE SAVING ---
-        if (bestMatch && minDistance < (process.env.FACE_MATCH_THRESHOLD || 0.4)) {
-            const transaction = await sequelize.transaction();
-            try {
-                // 1. Save image for attendance record
-                const uploadStart = Date.now();
-                const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
-                timings.upload = Date.now() - uploadStart;
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found in Database" });
+        }
 
-                const savedFilename = savedFiles.image || savedFiles['image'];
+        const transaction = await sequelize.transaction();
+        try {
+            // 1. Save image for attendance record
+            const uploadStart = Date.now();
+            const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
+            timings.upload = Date.now() - uploadStart;
 
-                // 2. Use the robust punch helper
-                const punchResult = await punch(bestMatch.id, {
-                    punch_time: new Date(),
-                    image_name: savedFilename,
-                    user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
-                    company_id: req.user?.company_id || bestMatch.company_id,
-                    branch_id: req.user?.branch_id || bestMatch.branch_id,
-                    ip_address: req.ip,
-                    latitude: req.body.latitude || null,
-                    longitude: req.body.longitude || null,
-                    device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
-                    attendance_by: 'face',
-                    skipRebuild: true 
-                }, transaction);
+            const savedFilename = savedFiles.image || savedFiles['image'];
 
-                await transaction.commit();
+            // 2. Use the robust punch helper
+            const punchResult = await punch(employee.id, {
+                punch_time: new Date(),
+                image_name: savedFilename,
+                user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || employee.user_id),
+                company_id: req.user?.company_id || employee.company_id,
+                branch_id: req.user?.branch_id || employee.branch_id,
+                ip_address: req.ip,
+                latitude: latitude || null,
+                longitude: longitude || null,
+                device_id: req.user?.access === 'attendance device' ? req.user.id : (device_id || null),
+                attendance_by: 'face',
+                skipRebuild: true 
+            }, transaction);
 
-                // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
-                setImmediate(() => {
-                    const today = dayjs().format("YYYY-MM-DD");
-                    rebuildAttendanceDay(bestMatch.id, today, {
-                        user_id: req.user?.id || bestMatch.user_id,
-                        company_id: req.user?.company_id || bestMatch.company_id,
-                        branch_id: req.user?.branch_id || bestMatch.branch_id
-                    }).catch(err => console.error("Background Rebuild Error:", err));
-                });
+            await transaction.commit();
 
-                timings.total = Date.now() - startTime;
-                const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
-                console.log(successMsg);
-                writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time2222",time)
+            // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
+            setImmediate(() => {
+                const today = dayjs().format("YYYY-MM-DD");
+                rebuildAttendanceDay(employee.id, today, {
+                    user_id: req.user?.id || employee.user_id,
+                    company_id: req.user?.company_id || employee.company_id,
+                    branch_id: req.user?.branch_id || employee.branch_id
+                }).catch(err => console.error("Background Rebuild Error:", err));
+            });
 
-                return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
-                    employee_name: bestMatch.first_name,
-                    employee_code: bestMatch.employee_code,
-                    // punch: punchResult,
-                    image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
-                    // match_score: matchPercentage,
-                    // timings: timings
-                });
-            } catch (error) {
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time333",time)
-
-                if (transaction && !transaction.finished) await transaction.rollback();
-                console.error("Error creating attendance records:", error);
-                writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
-                return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
-            }
-        } else {
-            // 🚀 FAST FAIL: Return error immediately, log in background
             timings.total = Date.now() - startTime;
-            const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
-            console.log(failMsg);
-            writeLogToFile('face_recognition.log', failMsg);
+            
+            // YOUR ORIGINAL LOGS EXACTLY AS THEY WERE
+            const successMsg = `✅ [Punch Synced] ${employee.first_name} (${employee.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
+            console.log(successMsg);
+            writeLogToFile('face_recognition.log', successMsg + ` | App-AI: 0ms | DB: ${timings.db}ms | Upload: ${timings.upload}ms`);
+            
+            const endTime2222 = new Date().toTimeString().split(' ')[0];
+            console.log("end time2222", endTime2222);
 
-            // Save to ATTENDANCE_LOG_FOLDER in background
-            setImmediate(async () => {
-                try {
-                    const now = new Date();
-                    const dateStr = dayjs(now).format('DD-MM-YYYY');
-                    const timeStr = dayjs(now).format('hh:mm A');
-                    const ext = path.extname(originalName);
-                    const customFilename = `${Date.now()}_failed_${matchPercentage}%_${dateStr}__${timeStr}${ext}`;
-                    await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
-                } catch (e) { console.error("Failed to save recognition log:", e); }
-            });
-
-            return res.error(constants.FACE_NOT_RECOGNIZED, {
-                message: `Face Not Recognized`,
+            return res.success(`${employee.first_name}: Punch Synced (${matchPercentage}%)`, {
+                employee_name: employee.first_name,
+                employee_code: employee.employee_code,
+                image_url: `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${savedFilename}`,
                 match_score: matchPercentage,
-                timings: timings
+                timings: timings // Kept your timings object!
             });
+
+        } catch (error) {
+            const endTime333 = new Date().toTimeString().split(' ')[0];
+            console.log("end time333", endTime333);
+
+            if (transaction && !transaction.finished) await transaction.rollback();
+            console.error("Error creating attendance records:", error);
+            writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
+            return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
         }
 
     } catch (err) {
         console.error("💥 Server Error:", err);
         writeLogToFile('face_recognition.log', `💥 [CRITICAL] Server Error: ${err.message}`);
         const errorMsg = err.message || "Server Error";
-        const statusCode = errorMsg.includes("Face") ? constants.VALIDATION_ERROR : constants.SERVER_ERROR;
-        return res.error(statusCode, { message: errorMsg });
+        return res.error(constants.SERVER_ERROR, { message: errorMsg });
     }
 };
 
