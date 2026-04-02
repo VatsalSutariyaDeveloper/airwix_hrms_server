@@ -98,6 +98,7 @@ const FILE_COLUMNS = [
     'bank_proof_doc',
     'pan_doc',
     'aadhaar_doc',
+    'aadhaar_back_doc',
     'passport_doc',
     'profile_image',
     'driving_license_doc',
