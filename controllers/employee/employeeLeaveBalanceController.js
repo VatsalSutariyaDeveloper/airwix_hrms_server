@@ -12,62 +12,96 @@ const LeaveBalanceService = require("../../services/leaveBalanceService");
  */
 exports.getByEmployeeId = async (req, res) => {
     try {
+        const dayjs = require("dayjs");
+
         let employeeId = req.body.employee_id;
-        if(!employeeId){
+        if (!employeeId) {
             employeeId = req.user.employee_id;
         }
 
-        // Fetch employee to get cycle information
+        // Fetch employee with leave template
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         });
 
-        const dayjs = require("dayjs");
         let cycle_info = { start: null, end: null, period: "" };
         let activeYear = null;
-        const referenceDate = req.body.date ? dayjs(req.body.date) : dayjs();
-        
+        let activeMonth = null;
+
+        // Build reference date: prefer req.body.year → req.body.date → today
+        let referenceDate = dayjs();
+        if (req.body.year && employee?.leaveTemplate?.leave_period_start) {
+            // Custom cycle: anchor to the cycle's own start month/day in the requested year
+            const periodStart = dayjs(employee.leaveTemplate.leave_period_start);
+            referenceDate = dayjs(`${req.body.year}-${String(periodStart.month() + 1).padStart(2,'0')}-${String(periodStart.date()).padStart(2,'0')}`);
+        } else if (req.body.year) {
+            // Standard cycles: July 1 of requested year resolves both Calendar & Financial Year correctly
+            referenceDate = dayjs(`${req.body.year}-07-01`);
+        } else if (req.body.date) {
+            referenceDate = dayjs(req.body.date);
+        }
+
+        const cycleType = employee?.leaveTemplate?.leave_policy_cycle || 'CALENDAR_YEAR';
+        const isMonthlyCycle = ['MONTHLY', 'QUARTERLY'].includes(cycleType);
+        const templatePeriod = {
+            leave_period_start: employee?.leaveTemplate?.leave_period_start,
+            leave_period_end: employee?.leaveTemplate?.leave_period_end,
+        };
+
         if (employee && employee.leaveTemplate) {
-            const { start, end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle, referenceDate);
+            const { start, end } = LeaveBalanceService.getCycleDates(
+                employee.joining_date,
+                employee.leaveTemplate.leave_policy_cycle,
+                referenceDate,
+                templatePeriod
+            );
+
             cycle_info.start = start.format('YYYY-MM-DD');
-            cycle_info.end = end.format('YYYY-MM-DD');
-            
+            cycle_info.end   = end.format('YYYY-MM-DD');
+
             if (start.isSame(end, 'month')) {
                 cycle_info.period = start.format('MMM\'YY');
             } else {
                 cycle_info.period = `${start.format('MMM\'YY')} - ${end.format('MMM\'YY')}`;
             }
-            activeYear = end.year();
+
+            activeYear  = end.year();
+            activeMonth = isMonthlyCycle ? end.month() + 1 : null;
+        } else if (req.body.year) {
+            // No template but year explicitly requested — use it directly
+            activeYear = parseInt(req.body.year);
         }
 
-        const cycleType = employee?.leaveTemplate?.leave_policy_cycle || 'CALENDAR_YEAR';
-        const isMonthlyCycle = ['MONTHLY', 'QUARTERLY'].includes(cycleType);
-
-        const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, { 
+        // Build WHERE: always filter by year when known; filter month only for monthly/quarterly cycles
+        const whereClause = {
             employee_id: employeeId,
-            status: 0, // Fetch active balances
-            ...(activeYear ? { year: activeYear } : {}),
-            month: isMonthlyCycle ? dayjs(cycle_info.end).month() + 1 : null
-        }, {
-            order: [['id', 'ASC']]
-        });
+            status: 0,
+            ...(activeYear  ? { year: activeYear }   : {}),
+            ...(isMonthlyCycle
+                    ? { month: activeMonth }   // may be null for quarterly edge cases — still correct
+                    : { month: null }),        // annual cycles always have month = null in DB
+        };
+
+        const leaveBalances = await commonQuery.findAllRecords(
+            EmployeeLeaveBalance,
+            whereClause,
+            { order: [['id', 'ASC']] }
+        );
 
         if (!leaveBalances || leaveBalances.length === 0) {
             return res.error(constants.NOT_FOUND, { message: "No leave balances found for this employee" });
         }
 
-        // Map total_allocated to leave_count for frontend compatibility
+        // Map total_allocated → leave_count for frontend compatibility
         const mappedBalances = leaveBalances.map(b => {
             const data = b.toJSON();
-            return {
-                ...data,
-                leave_count: data.total_allocated
-            };
+            return { ...data, leave_count: data.total_allocated };
         });
 
         return res.success("Employee leave balances fetched successfully", {
             balances: mappedBalances,
-            cycle_info
+            cycle_info,
+            year: activeYear
         });
     } catch (error) {
         return handleError(error, res, req);
@@ -98,8 +132,10 @@ exports.updateByEmployeeId = async (req, res) => {
         if (employee.leave_template) {
             const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
             if (template) {
-                const dayjs = require("dayjs");
-                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(), {
+                    leave_period_start: template.leave_period_start,
+                    leave_period_end: template.leave_period_end
+                });
                 activeYear = end.year();
                 const isMonthlyCycle = ['MONTHLY', 'QUARTERLY'].includes(template.leave_policy_cycle);
                 activeMonth = isMonthlyCycle ? end.month() + 1 : null;
@@ -165,7 +201,10 @@ exports.updateByEmployeeId = async (req, res) => {
                 
                 // Get cycle year
                 const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
-                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle);
+                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(), {
+                    leave_period_start: template.leave_period_start,
+                    leave_period_end: template.leave_period_end
+                });
 
                 await commonQuery.createRecord(EmployeeLeaveBalance, {
                     employee_id: employeeId,

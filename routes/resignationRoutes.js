@@ -30,5 +30,6 @@ router.post("/pending-approvals", resignationController.getPendingApprovals);
 router.get("/:id", resignationController.getResignationById);
 router.post("/action/:id", resignationController.handleAction); // approval/rejection
 router.post("/calculate-ff/:id", resignationController.calculateFF); // Final Settlement calculation preview
+router.delete("/", resignationController.delete);
 
 module.exports = router;

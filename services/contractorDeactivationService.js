@@ -5,10 +5,11 @@ const dayjs = require('dayjs');
 
 
 class ContractorDeactivationService {
-    async deactivateInactiveContractors() {
+    async deactivateInactiveContractors(asOf = null) {
         console.log('🕒 Starting contractor deactivation check...');
         try {
-            const threeMonthsAgo = dayjs().subtract(3, 'month').toDate();
+            const refDate = asOf ? dayjs(asOf) : dayjs();
+            const threeMonthsAgo = refDate.subtract(3, 'month').toDate();
 
             // 1. Find all active contractors (direct query for cron compatibility)
             const contractors = await Employee.findAll({

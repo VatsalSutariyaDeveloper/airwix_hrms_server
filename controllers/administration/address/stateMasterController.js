@@ -1,6 +1,7 @@
 const { StateMaster, CountryMaster } = require("../../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
+const { requestContext } = require("../../../utils/requestContext");
 
 // Create a new state
 exports.create = async (req, res) => {
@@ -65,34 +66,36 @@ exports.getAll = async (req, res) => {
 // Get a list of states for dropdowns with pagination and search
 exports.dropdownList = async (req, res) => {
     try {
-        // key, isSearchable, isSortable
-        const fieldConfig = [
-            ["state_name", true, true],
-        ];
-        
-        if (req.body.country_id) {
-            // Ensure req.body.filter exists before assigning to it
-            if (!req.body.filter) {
-                req.body.filter = {};
+        await requestContext.run({ userId: 0, companyId: 0, branchId: 0 }, async () => {
+            // key, isSearchable, isSortable
+            const fieldConfig = [
+                ["state_name", true, true],
+            ];
+            
+            if (req.body.country_id) {
+                // Ensure req.body.filter exists before assigning to it
+                if (!req.body.filter) {
+                    req.body.filter = {};
+                }
+                req.body.filter.country_id = req.body.country_id;
             }
-            req.body.filter.country_id = req.body.country_id;
-        }
 
-        // 4. Set default sorting for dropdown: Alphabetical by state name.
-        if (!req.body.sortBy) {
-            req.body.sortBy = "state_name";
-            req.body.sortDirection = "ASC";
-        }
+            // 4. Set default sorting for dropdown: Alphabetical by state name.
+            if (!req.body.sortBy) {
+                req.body.sortBy = "state_name";
+                req.body.sortDirection = "ASC";
+            }
 
-        // 5. Call the reusable pagination function.
-        const data = await commonQuery.fetchPaginatedData(
-            StateMaster,
-            { ...req.body, status: 0 },
-            fieldConfig,
-            {attributes: ["id", "state_name"]},
-            false
-        );
-        return res.ok(data);
+            // 5. Call the reusable pagination function.
+            const data = await commonQuery.fetchPaginatedData(
+                StateMaster,
+                { ...req.body, status: 0 },
+                fieldConfig,
+                {attributes: ["id", "state_name"]},
+                false
+            );
+            return res.ok(data);
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
