@@ -1235,7 +1235,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
 
 
-    if (template) {
+    if (template && template.fines_allowed !== false) {
       let rule = null;
       // Late Entry Fine
       if (lateMinutes > 0) {

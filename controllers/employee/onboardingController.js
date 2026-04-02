@@ -6,7 +6,7 @@ const emailService = require("../../services/emailService");
 
 // Document field constants for onboarding
 const FILE_COLUMNS = [
-    'aadhaar_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
+    'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
 ];
 
 /**
@@ -115,6 +115,15 @@ exports.getDetailsByToken = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "The onboarding link has expired. Please contact HR for a new one." });
         }
 
+        const baseUrl = process.env.IMG_URL || `${req.protocol}://${req.get('host')}/`;
+        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'];
+        
+        FILE_COLUMNS.forEach(col => {
+            if (employee[col] && !employee[col].startsWith('http')) {
+                employee[col] = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${employee[col].replace(/^\/+/, '')}`;
+            }
+        });
+
         return res.ok(employee);
     } catch (err) {
         return handleError(err, res, req);
@@ -157,7 +166,7 @@ exports.submitDetails = async (req, res) => {
             'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
             'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
             'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan',
-            'aadhaar_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
+            'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
         ];
 
         const updateData = {};
@@ -429,7 +438,7 @@ exports.getOnboardingById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const employee = await commonQuery.findOneRecord(
+        let employee = await commonQuery.findOneRecord(
             Employee,
             {
                 id,
@@ -446,6 +455,18 @@ exports.getOnboardingById = async (req, res) => {
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
         }
+
+        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'];
+
+        if (employee.get) {
+            employee = employee.get({ plain: true });
+        }
+
+        FILE_COLUMNS.forEach(col => {
+            if (employee[col] && !employee[col].startsWith('http')) {
+                employee[col] = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${employee[col].replace(/^\/+/, '')}`;
+            }
+        });
 
         return res.ok(employee);
     } catch (err) {

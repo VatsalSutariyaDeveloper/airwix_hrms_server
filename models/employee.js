@@ -91,6 +91,7 @@ module.exports = (sequelize, DataTypes) => {
 
         // DOCUMENT UPLOAD
         aadhaar_doc: { type: DataTypes.STRING },
+        aadhaar_back_doc: { type: DataTypes.STRING },
         pan_doc: { type: DataTypes.STRING },
         bank_proof_doc: { type: DataTypes.STRING },
         driving_license_doc: { type: DataTypes.STRING },
