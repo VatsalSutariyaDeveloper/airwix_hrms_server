@@ -445,10 +445,30 @@ class EmployeeTemplateService {
     }
 
     static async bulkSyncWeeklyOffTemplate(employeeIds, templateId, transaction, meta = {}, skipRebuild = false) {
-        // STYLE CHANGE: Transitioning to "Inherit by Default".
-        // Instead of creating multiple rows per employee in employee_weekly_offs, 
-        // we wipe them so that AttendanceHelper correctly falls back to WeeklyOffTemplateDay.
-        await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        if (!templateId) {
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            return;
+        }
+
+        let items = meta.preFetchedMaster || await commonQuery.findAllRecords(WeeklyOffTemplateDay, { template_id: templateId, status: 0 }, {}, transaction);
+        
+        if (items && items.length > 0) {
+            const employeeWeeklyOffItems = [];
+            for (const empId of employeeIds) {
+                for (const item of items) {
+                    const d = item.toJSON ? item.toJSON() : item;
+                    delete d.id; delete d.created_at; delete d.updated_at;
+                    employeeWeeklyOffItems.push({ ...d, employee_id: empId, template_id: templateId });
+                }
+            }
+
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            if (employeeWeeklyOffItems.length > 0) {
+                await commonQuery.bulkCreate(EmployeeWeeklyOff, employeeWeeklyOffItems, {}, transaction);
+            }
+        } else {
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds } }, transaction);
+        }
 
         if (!skipRebuild) {
             await this.rebuildCurrentMonthAttendance(employeeIds, transaction);
@@ -675,10 +695,55 @@ class EmployeeTemplateService {
     }
 
     static async bulkSyncShiftTemplate(employeeIds, templateId, transaction, meta = {}, skipRebuild = false) {
-        // STYLE CHANGE: Transitioning to "Inherit by Default".
-        // Syncing 7 rows per employee into employee_shift was extremely slow. 
-        // Now we just clear any individual overrides, allowing fallback to ShiftTemplate.
+        if (!templateId) {
+            await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: { [Op.in]: employeeIds } }, transaction);
+            return;
+        }
+
+        const master = meta.preFetchedMaster || await commonQuery.findOneRecord(ShiftTemplate, templateId, {}, transaction);
+        if (!master) return;
+
+        let data = master.toJSON ? master.toJSON() : master;
+        data.shift_id = master.id;
+        delete data.id; delete data.created_at; delete data.updated_at;
+
+        // 1. Clear existing day-wise settings for these employees
         await commonQuery.hardDeleteRecords(EmployeeShift, { employee_id: { [Op.in]: employeeIds } }, transaction);
+
+        // 2. Fetch Weekly Offs for these employees to identify "All Week" offs
+        const weeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+            employee_id: { [Op.in]: employeeIds },
+            week_no: 0,
+            is_off: true
+        }, {}, transaction);
+
+        const offDaysMap = {};
+        for (const empId of employeeIds) offDaysMap[empId] = [];
+        weeklyOffs.forEach(wo => {
+            if (!offDaysMap[wo.employee_id]) offDaysMap[wo.employee_id] = [];
+            offDaysMap[wo.employee_id].push(wo.day_of_week);
+        });
+
+        // 3. Create shift settings for all 7 days (0-6), skipping permanent week-offs
+        const payloads = [];
+        for (const empId of employeeIds) {
+            const offDays = offDaysMap[empId] || [];
+            const daysToCreate = [0, 1, 2, 3, 4, 5, 6].filter(day => !offDays.includes(day));
+            
+            for (const day of daysToCreate) {
+                payloads.push({
+                    ...data,
+                    employee_id: empId,
+                    day_of_week: day,
+                    shift_id: templateId || data.shift_id,
+                    company_id: data.company_id || 0,
+                });
+            }
+        }
+
+        if (payloads.length > 0) {
+            await commonQuery.bulkCreate(EmployeeShift, payloads, {}, transaction);
+        }
 
         // 4. Batch rebuild
         if (!skipRebuild) {
