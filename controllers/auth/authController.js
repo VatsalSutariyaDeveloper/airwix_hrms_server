@@ -6,6 +6,7 @@ const otpRateLimit = require("../../helpers/otpRateLimit");
 const moment = require("moment");
 const sendEmailHelper = require("../../services/mailer");
 const { generateToken } = require("../../helpers/tokenHelper");
+const { requestContext } = require("../../utils/requestContext");
 
 // Send OTP for Registration
 exports.sendOtp = async (req, res) => {
@@ -113,38 +114,67 @@ exports.register = async (req, res) => {
       pincode
     } = req.body;
 
-    if (!registration_token) {
-        await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { message: "Missing registration token." });
-    }
+    // if (!registration_token) {
+    //     await transaction.rollback();
+    //     return res.error(constants.VALIDATION_ERROR, { message: "Missing registration token." });
+    // }
 
-    let verifiedMobile;
-    try {
-        const decoded = jwt.verify(registration_token, process.env.JWT_SECRET);
-        if(decoded.scope !== "registration_verification") throw new Error("Invalid token scope");
-        verifiedMobile = decoded.mobile_no;
-    } catch (e) {
-        await transaction.rollback();
-        return res.error("UNAUTHORIZED", { message: "Invalid or expired session." });
-    }
+    // let verifiedMobile;
+    // try {
+    //     const decoded = jwt.verify(registration_token, process.env.JWT_SECRET);
+    //     if(decoded.scope !== "registration_verification") throw new Error("Invalid token scope");
+    //     verifiedMobile = decoded.mobile_no;
+    // } catch (e) {
+    //     await transaction.rollback();
+    //     return res.error("UNAUTHORIZED", { message: "Invalid or expired session." });
+    // }
 
     const requiredFields = {
       company_name: "Company Name",
       user_name: "User Name",
-      // email: "Email", 
-      // password: "Password" 
+      // email: "Email",
+      // password: "Password"
     };
 
-    // ✅ YOUR CODE RESTORED: skipDefaultRequired is preserved
-    const errors = await validateRequest(req.body, requiredFields, {
-      skipDefaultRequired: ["company_id", "branch_id", "user_id"],
-      uniqueCheck: { model: User, fields: ["email"] },
-    }, transaction);
+    // ─── Cross-table uniqueness checks ───────────────────────────────────────
+    const { Employee, DeviceMaster } = require("../../models");
+    const { Op } = require("sequelize");
+    const uniqueErrors = [];
 
-    if (errors) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, errors);
+    if (mobile_no) {
+      const mobileExists =
+        await User.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] }) ||
+        await Employee.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] }) ||
+        await DeviceMaster.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] });
+
+      if (mobileExists) uniqueErrors.push("Mobile number is already registered.");
     }
+
+    if (email) {
+      const emailExists =
+        await User.findOne({ where: { email, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] }) ||
+        await Employee.findOne({ where: { email, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] });
+
+      if (emailExists) uniqueErrors.push("Email is already registered.");
+    }
+
+    if (uniqueErrors.length > 0) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, uniqueErrors);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ✅ Required field validation
+    await requestContext.run({ userId: 0, companyId: 0, branchId: 0 }, async () => {
+      const errors = await validateRequest(req.body, requiredFields, {
+        skipDefaultRequired: ["company_id", "branch_id", "user_id"]
+      }, transaction);
+
+      if (errors) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, errors);
+      }
+    });
 
     // Handle logo image upload
     if (req.files?.logo_image) {
@@ -215,7 +245,7 @@ exports.register = async (req, res) => {
 
     // 2. Create User (Step 1)
     const defaultPermission = await RolePermission.findOne({
-      where: { company_id: -1, status: 0 },
+      where: { id: 1, status: 0 },
       transaction
     });
     
@@ -228,7 +258,7 @@ exports.register = async (req, res) => {
     const newUser = await User.create({
         user_name,
         email,
-        mobile_no: verifiedMobile,
+        mobile_no,
         password: hashedPassword,
         address,
         city,
@@ -256,71 +286,102 @@ exports.register = async (req, res) => {
       { where: { id: newUser.id }, transaction }
     );
 
-    // 5. Create Godown
-    await GodownMaster.create({
-        name: "Main Warehouse", address: city || "Main Location", branch_id: newBranch.id,
-        company_id: newCompany.id, user_id: newUser.id
-    }, { transaction });
-
-    await initializeCompanySettings(newCompany.id, newBranch.id, newUser.id, transaction);
+    // await initializeCompanySettings(newCompany.id, newBranch.id, newUser.id, transaction);
 
     // ---------------------------------------------------------
     // 🆕 NEW LOGIC: START 2-DAY FREE TRIAL
     // ---------------------------------------------------------
-    const trialBasePlan = await SubscriptionPlan.findOne({
-        where: { status: 0 },
-        order: [['price', 'DESC']],
-        transaction
+    // const trialBasePlan = await SubscriptionPlan.findOne({
+    //     where: { status: 0 },
+    //     order: [['price', 'DESC']],
+    //     transaction
+    // });
+
+    // if (trialBasePlan) {
+    //     const startDate = moment().format("YYYY-MM-DD");
+    //     const endDate = moment().add(2, "days").format("YYYY-MM-DD");
+
+    //     const trialSubscriptionData = {
+    //         company_id: newCompany.id,
+    //         subscription_plan_id: trialBasePlan.id,
+    //         amount_paid: 0,
+    //         payment_id: "TRIAL_Start",
+    //         start_date: startDate,
+    //         end_date: endDate,
+    //         duration_days: 2,
+    //         is_trial: true,
+    //         status: 0,
+    //         branch_id: newBranch.id, 
+    //         user_id: newUser.id,
+    //         organization_id: newOrg.id,
+            
+    //         user_limit: trialBasePlan.user_limit,
+    //         companies_limit: trialBasePlan.companies_limit,
+    //         ...trialBasePlan.toJSON(),
+    //     };
+
+    //     delete trialSubscriptionData.id;
+    //     delete trialSubscriptionData.createdAt;
+    //     delete trialSubscriptionData.updatedAt;
+    //     delete trialSubscriptionData.price;
+    //     delete trialSubscriptionData.name;
+
+    //     await CompanySubscription.create(trialSubscriptionData, { transaction });
+        
+    //     console.log(`Trial started for Company ${newCompany.id} until ${endDate}`);
+    // } else {
+    //     console.warn("No Subscription Plans found. Skipping Trial creation.");
+    // }
+
+    // Mark user as logged in (consistent with login flow)
+    await User.update({ is_login: 1 }, { where: { id: newUser.id }, transaction });
+
+    // Fetch permissions for the new user's role (inside transaction)
+    const userPermission = await RolePermission.findOne({
+      where: { id: newUser.role_id },
+      attributes: ["role_name", "permissions"],
+      transaction,
     });
 
-    if (trialBasePlan) {
-        const startDate = moment().format("YYYY-MM-DD");
-        const endDate = moment().add(2, "days").format("YYYY-MM-DD");
-
-        const trialSubscriptionData = {
-            company_id: newCompany.id,
-            subscription_plan_id: trialBasePlan.id,
-            amount_paid: 0,
-            payment_id: "TRIAL_Start",
-            start_date: startDate,
-            end_date: endDate,
-            duration_days: 2,
-            is_trial: true,
-            status: 0,
-            branch_id: newBranch.id, 
-            user_id: newUser.id,
-            organization_id: newOrg.id,
-            
-            user_limit: trialBasePlan.user_limit,
-            companies_limit: trialBasePlan.companies_limit,
-            ...trialBasePlan.toJSON(),
-        };
-
-        delete trialSubscriptionData.id;
-        delete trialSubscriptionData.createdAt;
-        delete trialSubscriptionData.updatedAt;
-        delete trialSubscriptionData.price;
-        delete trialSubscriptionData.name;
-
-        await CompanySubscription.create(trialSubscriptionData, { transaction });
-        
-        console.log(`Trial started for Company ${newCompany.id} until ${endDate}`);
-    } else {
-        console.warn("No Subscription Plans found. Skipping Trial creation.");
-    }
-
-    // ---------------------------------------------------------
-    // 🆕 END NEW LOGIC
-    // ---------------------------------------------------------
-
-    await otpService.cleanupOtp(verifiedMobile, transaction);
+    // await otpService.cleanupOtp(verifiedMobile, transaction);
 
     await transaction.commit();
 
-    newUser.organization_id = newOrg.id;
-    const token = generateToken(newUser, newCompany.id, "web login");
+    const token = generateToken({
+      ...newUser.get({ plain: true }),
+      organization_id: newOrg.id,
+      branch_id: newBranch.id,
+      is_super_admin: newUser.is_super_admin || newUser.role_id == 1,
+    }, newCompany.id, "web login");
 
-    return res.ok({ token, user_id: newUser.id, company_id: newCompany.id, email: newUser.email });
+    const userData = {
+      id: newUser.id,
+      role_id: newUser.role_id,
+      is_super_admin: newUser.is_super_admin || newUser.role_id == 1,
+      user_name: newUser.user_name,
+      email: newUser.email,
+      mobile_no: newUser.mobile_no,
+      address: newUser.address,
+      city_id: newUser.city_id || null,
+      state_id: newUser.state_id || null,
+      country_id: newUser.country_id || null,
+      pincode: newUser.pincode || null,
+      user_key: newUser.user_key || null,
+      profile_image: newUser.profile_image
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${newUser.profile_image}`
+        : null,
+      authorized_signature: newUser.authorized_signature || null,
+      role_name: userPermission?.role_name || null,
+      is_employee: newUser.role_id === 5,
+      permission: userPermission?.permissions || [],
+      is_login: 1,
+      user_id: newUser.user_id || null,
+      branch_id: newBranch.id,
+      company_id: newCompany.id,
+      organization_id: newOrg.id,
+    };
+
+    return res.success(constants.REGISTER_SUCCESS, { token, user: userData, login_method: "REGISTER" });
 
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();

@@ -1,6 +1,7 @@
 const { CountryMaster } = require("../../../models");
 const { sequelize, validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants} = require("../../../helpers/constants");
+const { requestContext } = require("../../../utils/requestContext");
 
 // Create a new country
 exports.create = async (req, res) => {
@@ -58,29 +59,30 @@ exports.getAll = async (req, res) => {
 // Get a list of countries for dropdowns with pagination and search
 exports.dropdownList = async (req, res) => {
     try {
+        await requestContext.run({ userId: 0, companyId: 0, branchId: 0 }, async () => {
+            // key, isSearchable, isSortable
+            const fieldConfig = [
+                ["country_name", true, true],
+                ["country_code", true, true],
+                ["isd_code", true, true],
+            ];
 
-        // key, isSearchable, isSortable
-        const fieldConfig = [
-            ["country_name", true, true],
-            ["country_code", true, true],
-            ["isd_code", true, true],
-        ];
+            // 4. Set default sorting for dropdown: Alphabetical by country name
+            if (!req.body.sortBy) {
+                req.body.sortBy = "country_name";
+                req.body.sortDirection = "ASC";
+            }
 
-        // 4. Set default sorting for dropdown: Alphabetical by country name
-        if (!req.body.sortBy) {
-            req.body.sortBy = "country_name";
-            req.body.sortDirection = "ASC";
-        }
-
-        // 5. Call the reusable pagination function instead of findAllRecords
-        const data = await commonQuery.fetchPaginatedData(
-            CountryMaster,
-            { ...req.body, status: 0 },
-            fieldConfig,
-            {attributes: ["id", "country_name", "isd_code", "country_code", "currency_id", "mask", "digit"]},
-            false
-        );
-        return res.ok(data);
+            // 5. Call the reusable pagination function instead of findAllRecords
+            const data = await commonQuery.fetchPaginatedData(
+                CountryMaster,
+                { ...req.body, status: 0 },
+                fieldConfig,
+                {attributes: ["id", "country_name", "isd_code", "country_code", "currency_id", "mask", "digit"]},
+                false
+            );
+            return res.ok(data);
+        });
     } catch (err) {
         return handleError(err, res, req);
     }

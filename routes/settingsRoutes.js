@@ -201,8 +201,8 @@ router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
 router.post("/leave-request/calculate-days", leaveRequestController.calculateLeaveDays);
-router.post("/leave-request/report", leaveRequestController.getLeaveReport);
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
+router.delete("/leave-request", leaveRequestController.delete);
 
 // ==========================
 // 31. Salary Template ROUTES
@@ -302,6 +302,7 @@ router.put("/onduty-request/:id", onDutyRequestController.update);
 router.put("/onduty-request/status/:id", onDutyRequestController.updateStatus);
 router.put("/onduty-request/cancel/:id", onDutyRequestController.cancelLeave);
 router.post("/onduty-request/summary", onDutyRequestController.getOnDutySummary);
+router.delete("/onduty-request", onDutyRequestController.delete);
 
 // ===============================
 // 40. ATTENDANCE REGULARIZATION  ROUTES
@@ -314,7 +315,7 @@ router.get("/attendance-regularization/:id", attendanceRegularizationController.
 router.put("/attendance-regularization/:id", attendanceRegularizationController.update);
 router.put("/attendance-regularization/status/:id", attendanceRegularizationController.updateStatus);
 router.put("/attendance-regularization/cancel/:id", attendanceRegularizationController.cancel);
-
+router.delete("/attendance-regularization", attendanceRegularizationController.delete);
 
 // ==========================
 // 41. SYSTEM LOG ROUTES

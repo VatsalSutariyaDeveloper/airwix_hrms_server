@@ -5,10 +5,10 @@ class ResignationService {
     /**
      * Nightly job to deactivate employees whose LWD is today or has passed
      */
-    static async processDailyExits() {
+    static async processDailyExits(asOf = null) {
         const transaction = await sequelize.transaction();
         try {
-            const today = dayjs().format('YYYY-MM-DD');
+            const today = asOf ? dayjs(asOf).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
 
             // Find employees with exit_date <= today and status is still Active (0)
             const employeesToDeactivate = await Employee.findAll({

@@ -1,4 +1,4 @@
-const { createConnectionByPrefix, sequelize } = require("../config/database");
+const { createConnectionByPrefix, sequelize, connections } = require("../config/database");
 const masterSequelize = require('../config/master_database');
 const { DataTypes, Sequelize } = require("sequelize");
 const { storage } = require("../middlewares/tenantMiddleware");
@@ -227,15 +227,51 @@ function initModels(prefix) {
 
 // Initial default database setup
 const defaultPrefix = process.env.HRMS_DB_NAME ? 'HRMS' : '';
-initModels(defaultPrefix);
+const defaultDB = initModels(defaultPrefix);
 
-// Multi-tenant proxy
-const dbProxy = new Proxy({}, {
-  get(target, prop) {
-    const prefix = storage.getStore() || (process.env.HRMS_DB_NAME ? 'HRMS' : '');
-    const currentDB = initModels(prefix); // Lazily initialize models for new environments
-    return currentDB[prop];
+// ==========================================
+// THE CONNECTION SWAPPER (MULTI-TENANT MAGIC)
+// Leaves all 100+ controllers untouched!
+// ==========================================
+const defaultSeq = defaultDB.sequelize;
+
+const originalGetConnection = defaultSeq.connectionManager.getConnection;
+const originalReleaseConnection = defaultSeq.connectionManager.releaseConnection;
+
+// 1. Intercept outgoing database requests
+defaultSeq.connectionManager.getConnection = async function(options) {
+  const prefix = storage.getStore() || defaultPrefix;
+
+  // If the user belongs to AIRWIX, intercept!
+  if (prefix && prefix !== defaultPrefix) {
+    // Ensure the tenant's connection pool exists
+    const tenantSeq = connections[prefix] || createConnectionByPrefix(prefix);
+    
+    // Grab a raw Postgres connection from the TENANT'S database pool instead of HRMS
+    const conn = await tenantSeq.connectionManager.getConnection(options);
+    
+    // Tag this connection so we know exactly where to return it when finished
+    conn.__tenantPrefix = prefix; 
+    return conn;
   }
-});
 
-module.exports = dbProxy;
+  // Otherwise, default to HRMS normally
+  return originalGetConnection.call(this, options);
+};
+
+// 2. Intercept returning connections to put them back in the right pool
+defaultSeq.connectionManager.releaseConnection = async function(connection) {
+  // If this connection is tagged as a tenant connection, return it to THEIR pool
+  if (connection.__tenantPrefix && connection.__tenantPrefix !== defaultPrefix) {
+    const tenantSeq = connections[connection.__tenantPrefix];
+    if (tenantSeq) {
+      return tenantSeq.connectionManager.releaseConnection(connection);
+    }
+  }
+  
+  // Otherwise, return to the HRMS pool normally
+  return originalReleaseConnection.call(this, connection);
+};
+
+// Export the standard, un-proxied default database!
+module.exports = defaultDB;

@@ -10,22 +10,17 @@ router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
 router.post("/finalize", payrollController.finalizeMonthlySalary);
 router.post("/delete-payslip", payrollController.deletePayslip);
+router.post("/summary", payrollController.getPayrollSummary);
 
 router.post("/get-employee-payslip", payrollController.getEmployeePayslip);
 router.post("/get-payslip-employeeList", payrollController.getPayslipEmployeeList);
 router.post("/get-payslipview", payrollController.getPayslipView);
 router.post("/export-payslip", payrollController.exportPayrollView);
 router.post("/get-calculation-history", payrollController.getCalculationHistory);
-router.post("/get-tds-report", payrollController.getTDSDeductionReport);
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);
 router.post("/get-payrollEmployee", payrollController.getEmployeesByMonthYear);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
-router.post("/get-employer-contribution-report", payrollController.getEmployerContributionReport);
-router.post("/get-ctc-breakdown-report", payrollController.getCTCBreakdownReport);
-router.post("/get-generated-payslip-report", payrollController.getGeneratedPayslipReport);
-router.post("/get-pf-report", payrollController.getPFReport);
-router.post("/get-esi-report", payrollController.getESIReport);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);
 router.post("/payment-history", payrollController.getPaymentHistory);
 

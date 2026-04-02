@@ -6,167 +6,225 @@ const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
 
-const initCronJobs = () => {
-    // ⏰ Daily Log Cleanup Task
-    // Runs every day at 00:00 AM
-    cron.schedule('0 0 * * *', async () => {
-        console.log('⏰ Running daily log cleanup task...');
-        try {
-            await archiveAndCleanupLogs(90); // Keep 90 days of logs
-            console.log('✅ Log cleanup completed.');
-        } catch (error) {
-            console.error('❌ Log cleanup failed:', error);
-        }
-    });
+// ─────────────────────────────────────────────────────────────────────────────
+// Named job handlers (reusable for both cron schedule & on-demand execution)
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // ⏰ Monthly Leave Accrual Task
-    // Runs on the 1st of every month at 00:05 AM
-    cron.schedule('5 0 1 * *', async () => {
-        console.log('⏰ Running monthly leave accrual task...');
-        try {
-            await LeaveBalanceService.processMonthlyAccruals();
-            console.log('✅ Monthly leave accruals completed.');
-        } catch (error) {
-            console.error('❌ Monthly leave accrual failed:', error);
-        }
-    });
-
-    // ⏰ Year-End Leave Reset Task
-    // Runs every day at 00:10 AM to check if any employee's cycle has ended
-    cron.schedule('10 0 * * *', async () => {
-        console.log('⏰ Checking for year-end leave resets...');
-        try {
-            await LeaveBalanceService.processYearEndReset();
-            console.log('✅ Year-end reset check completed.');
-        } catch (error) {
-            console.error('❌ Year-end reset failed:', error);
-        }
-    });
-
-    // ⏰ Daily Contractor Deactivation Task
-    // Runs every day at 00:15 AM
-    cron.schedule('15 0 * * *', async () => {
-        console.log('⏰ Running daily contractor deactivation task...');
-        try {
-            await ContractorDeactivationService.deactivateInactiveContractors();
-            console.log('✅ Contractor deactivation completed.');
-        } catch (error) {
-            console.error('❌ Contractor deactivation failed:', error);
-        }
-    });
-
-    // ⏰ Daily Resignation/Exit Processing Task
-    // Runs every day at 00:20 AM
-    cron.schedule('20 0 * * *', async () => {
-        console.log('⏰ Running daily resignation/exit processing task...');
-        try {
-            const count = await ResignationService.processDailyExits();
-            console.log(`✅ ${count} employee exits processed.`);
-        } catch (error) {
-            console.error('❌ Resignation processing failed:', error);
-        }
-    });
-
-    // ⏰ Daily Attendance Rebuild Task
-    // Runs every day at 00:01 AM for Yesterday
-    cron.schedule('1 0 * * *', async () => {
-        const { requestContext } = require("../utils/requestContext");
-        
-        // Wrap everything in a System context to satisfy commonQuery/getContext
-        await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true }, async () => {
-            console.log('⏰ Running daily attendance rebuild task...');
-            try {
-                const dayjs = require('dayjs');
-                const { Employee, AttendanceDay } = require("../models");
-                const attendanceHelper = require("../helpers/attendanceHelper");
-                const { commonQuery, Op } = require("../helpers");
-
-                const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-
-                // 1. Fetch all active employees (Pass {} to skip tenant/context check for global fetch)
-                const employees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ['id', 'company_id', 'branch_id'] }, null, {});
-                const employeeIds = employees.map(emp => emp.id);
-
-                // 2. Identify employees who ALREADY have a record for yesterday (usually due to punches)
-                const existingAttendance = await commonQuery.findAllRecords(AttendanceDay, {
-                    attendance_date: yesterday,
-                    status: { [Op.ne]: 2 }
-                }, { attributes: ['employee_id'] }, null, {});
-                
-                const existingEmpIds = existingAttendance.map(a => a.employee_id);
-
-                // 3. Rebuild existing records to finalize calculations
-                console.log(`[Cron] Rebuilding ${existingEmpIds.length} existing attendance records for ${yesterday}...`);
-                for (const empId of existingEmpIds) {
-                    try {
-                        const emp = employees.find(e => e.id === empId);
-                        // Run each rebuild in its own company context for accurate settings/shift fetching
-                        await requestContext.run({ 
-                            userId: 0, 
-                            companyId: emp?.company_id || 0, 
-                            branchId: emp?.branch_id || 0,
-                            is_super_admin: true 
-                        }, async () => {
-                            await attendanceHelper.rebuildAttendanceDay(empId, yesterday, { 
-                                employee: emp,
-                                user_id: 0,
-                                company_id: emp?.company_id,
-                                branch_id: emp?.branch_id
-                            });
-                        });
-                    } catch (err) {
-                        console.error(`[Cron] Rebuild failed for emp ${empId} on ${yesterday}:`, err.message);
-                    }
-                }
-
-                // 4. Create missing records (Mark Absent/Holiday/WeeklyOff/Leave)
-                console.log(`[Cron] Syncing missing attendance records for ${yesterday}...`);
-                // bulkSyncAttendanceDays doesn't currently check context for company_id internally, 
-                // but we run it in super-admin context just in case.
-                await attendanceHelper.bulkSyncAttendanceDays(employeeIds, yesterday, {
-                    user_id: 0,
-                });
-
-                console.log('✅ Daily attendance rebuild completed.');
-            } catch (error) {
-                console.error('❌ Attendance rebuild failed:', error);
-            }
-        });
-    });
-
-    // ⏰ Hourly Payslip PDF Cleanup Task
-    // Runs every hour to delete PDFs older than 24 hours
-    cron.schedule('0 * * * *', async () => {
-        console.log('⏰ Running hourly payslip PDF cleanup task...');
-        try {
-            const payslipDir = path.join(process.cwd(), 'uploads', 'payslips');
-            if (fs.existsSync(payslipDir)) {
-                const files = fs.readdirSync(payslipDir);
-                const now = Date.now();
-                const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
-
-                let deleteCount = 0;
-                files.forEach(file => {
-                    const filePath = path.join(payslipDir, file);
-                    const stats = fs.statSync(filePath);
-                    if (stats.isFile() && stats.mtimeMs < twentyFourHoursAgo) {
-                        fs.unlinkSync(filePath);
-                        deleteCount++;
-                    }
-                });
-                if (deleteCount > 0) {
-                    console.log(`✅ Deleted ${deleteCount} expired payslip PDFs.`);
-                } else {
-                    console.log('ℹ️ No expired payslip PDFs found.');
-                }
-            }
-        } catch (error) {
-            console.error('❌ Payslip PDF cleanup failed:', error);
-        }
-    });
-
-    console.log('🚀 Internal Cron Jobs Initialized');
-
+const jobLogCleanup = async (asOf = null) => {
+    console.log('⏰ Running daily log cleanup task...');
+    await archiveAndCleanupLogs(90);
+    console.log('✅ Log cleanup completed.');
 };
 
-module.exports = { initCronJobs };
+const jobMonthlyLeaveAccrual = async (asOf = null) => {
+    console.log('⏰ Running monthly leave accrual task...');
+    await LeaveBalanceService.processMonthlyAccruals(asOf);
+    console.log('✅ Monthly leave accruals completed.');
+};
+
+const jobYearEndLeaveReset = async (asOf = null) => {
+    console.log('⏰ Checking for year-end leave resets...');
+    await LeaveBalanceService.processYearEndReset(asOf);
+    console.log('✅ Year-end reset check completed.');
+};
+
+const jobContractorDeactivation = async (asOf = null) => {
+    console.log('⏰ Running daily contractor deactivation task...');
+    await ContractorDeactivationService.deactivateInactiveContractors(asOf);
+    console.log('✅ Contractor deactivation completed.');
+};
+
+const jobResignationProcessing = async (asOf = null) => {
+    console.log('⏰ Running daily resignation/exit processing task...');
+    const count = await ResignationService.processDailyExits(asOf);
+    console.log(`✅ ${count} employee exits processed.`);
+};
+
+const jobAttendanceRebuild = async (asOf = null) => {
+    const { requestContext } = require("../utils/requestContext");
+    const dayjs = require('dayjs');
+
+    // If asOf is provided, treat asOf as "today" and rebuild for asOf-1 day (yesterday)
+    // If not provided, rebuild for actual yesterday
+    const refDate = asOf ? dayjs(asOf) : dayjs();
+    const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+
+    await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true }, async () => {
+        console.log(`⏰ Running daily attendance rebuild task for date: ${targetDate}...`);
+        const { Employee, AttendanceDay } = require("../models");
+        const attendanceHelper = require("../helpers/attendanceHelper");
+        const { commonQuery, Op } = require("../helpers");
+
+        const employees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ['id', 'company_id', 'branch_id'] }, null, {});
+        const employeeIds = employees.map(emp => emp.id);
+
+        const existingAttendance = await commonQuery.findAllRecords(AttendanceDay, {
+            attendance_date: targetDate,
+            status: { [Op.ne]: 2 }
+        }, { attributes: ['employee_id'] }, null, {});
+
+        const existingEmpIds = existingAttendance.map(a => a.employee_id);
+
+        console.log(`[Cron] Rebuilding ${existingEmpIds.length} existing attendance records for ${targetDate}...`);
+        for (const empId of existingEmpIds) {
+            try {
+                const emp = employees.find(e => e.id === empId);
+                await requestContext.run({
+                    userId: 0,
+                    companyId: emp?.company_id || 0,
+                    branchId: emp?.branch_id || 0,
+                    is_super_admin: true
+                }, async () => {
+                    await attendanceHelper.rebuildAttendanceDay(empId, targetDate, {
+                        employee: emp,
+                        user_id: 0,
+                        company_id: emp?.company_id,
+                        branch_id: emp?.branch_id
+                    });
+                });
+            } catch (err) {
+                console.error(`[Cron] Rebuild failed for emp ${empId} on ${targetDate}:`, err.message);
+            }
+        }
+
+        console.log(`[Cron] Syncing missing attendance records for ${targetDate}...`);
+        await attendanceHelper.bulkSyncAttendanceDays(employeeIds, targetDate, { user_id: 0 });
+
+        console.log('✅ Daily attendance rebuild completed.');
+    });
+};
+
+const jobPayslipCleanup = async (asOf = null) => {
+    console.log('⏰ Running hourly payslip PDF cleanup task...');
+    const payslipDir = path.join(process.cwd(), 'uploads', 'payslips');
+    if (fs.existsSync(payslipDir)) {
+        const files = fs.readdirSync(payslipDir);
+        const now = Date.now();
+        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+
+        let deleteCount = 0;
+        files.forEach(file => {
+            const filePath = path.join(payslipDir, file);
+            const stats = fs.statSync(filePath);
+            if (stats.isFile() && stats.mtimeMs < twentyFourHoursAgo) {
+                fs.unlinkSync(filePath);
+                deleteCount++;
+            }
+        });
+        console.log(deleteCount > 0
+            ? `✅ Deleted ${deleteCount} expired payslip PDFs.`
+            : 'ℹ️ No expired payslip PDFs found.');
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// All jobs registry (used by runAllNow)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ALL_JOBS = [
+    { name: 'Log Cleanup',              fn: jobLogCleanup },
+    { name: 'Monthly Leave Accrual',    fn: jobMonthlyLeaveAccrual },
+    { name: 'Year-End Leave Reset',     fn: jobYearEndLeaveReset },
+    { name: 'Contractor Deactivation',  fn: jobContractorDeactivation },
+    { name: 'Resignation Processing',   fn: jobResignationProcessing },
+    { name: 'Attendance Rebuild',       fn: jobAttendanceRebuild },
+    { name: 'Payslip PDF Cleanup',      fn: jobPayslipCleanup },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Run all jobs immediately (for testing / manual trigger)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const runAllNow = async (asOf = null) => {
+    const label = asOf ? `[AS OF: ${asOf}]` : '[LIVE DATE]';
+    console.log(`\n🚀 ===== MANUAL CRON RUN STARTED ${label} =====\n`);
+    const results = [];
+
+    for (const job of ALL_JOBS) {
+        console.log(`\n▶️  Starting: ${job.name}`);
+        const start = Date.now();
+        try {
+            await job.fn(asOf);
+            const duration = ((Date.now() - start) / 1000).toFixed(2);
+            results.push({ name: job.name, status: '✅ success', duration: `${duration}s` });
+        } catch (err) {
+            const duration = ((Date.now() - start) / 1000).toFixed(2);
+            console.error(`❌ ${job.name} failed:`, err.message);
+            results.push({ name: job.name, status: '❌ failed', error: err.message, duration: `${duration}s` });
+        }
+    }
+
+    console.log('\n📋 ===== CRON RUN SUMMARY =====');
+    console.table(results);
+    console.log('===================================\n');
+
+    return results;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Run a SINGLE named job immediately (for selective manual trigger)
+// jobKey: one of the keys in ALL_JOBS registry (e.g. 'Attendance Rebuild')
+// ─────────────────────────────────────────────────────────────────────────────
+
+const runJobNow = async (jobKey, asOf = null) => {
+    const job = ALL_JOBS.find(j => j.name.toLowerCase() === jobKey.toLowerCase());
+    if (!job) {
+        throw new Error(`Unknown job: "${jobKey}". Available: ${ALL_JOBS.map(j => j.name).join(', ')}`);
+    }
+    const label = asOf ? ` [AS OF: ${asOf}]` : ' [LIVE DATE]';
+    console.log(`\n▶️  Manual trigger: ${job.name}${label}`);
+    const start = Date.now();
+    try {
+        await job.fn(asOf);
+        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        console.log(`✅ ${job.name} completed in ${duration}s`);
+        return { name: job.name, status: '✅ success', duration: `${duration}s` };
+    } catch (err) {
+        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        console.error(`❌ ${job.name} failed:`, err.message);
+        return { name: job.name, status: '❌ failed', error: err.message, duration: `${duration}s` };
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Register cron schedules — ALL run at 12:00 AM (midnight)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const initCronJobs = () => {
+    // ⏰ Midnight batch — runs all daily jobs sequentially at 00:00 AM
+    // Sequential execution avoids DB contention between jobs
+    cron.schedule('0 0 * * *', async () => {
+        console.log('⏰ [MIDNIGHT CRON] Starting all daily jobs...');
+        await runAllNow(); // uses live date (no asOf)
+    });
+
+    // ⏰ Monthly Leave Accrual — 1st of every month at 00:00 AM
+    // Runs separately so it only fires on the 1st
+    cron.schedule('0 0 1 * *', async () => {
+        console.log('⏰ [MONTHLY CRON] Running leave accrual...');
+        await jobMonthlyLeaveAccrual().catch(e => console.error('❌ Monthly leave accrual failed:', e));
+    });
+
+    // ⏰ Payslip PDF Cleanup — runs every hour (not daily, so kept separate)
+    cron.schedule('0 * * * *', async () => {
+        await jobPayslipCleanup().catch(e => console.error('❌ Payslip PDF cleanup failed:', e));
+    });
+
+    console.log('🚀 Cron Jobs Initialized — All daily jobs scheduled at 12:00 AM midnight');
+};
+
+module.exports = {
+    initCronJobs,
+    runAllNow,
+    runJobNow,
+    ALL_JOBS,
+    // Individual jobs (can be triggered selectively)
+    jobLogCleanup,
+    jobMonthlyLeaveAccrual,
+    jobYearEndLeaveReset,
+    jobContractorDeactivation,
+    jobResignationProcessing,
+    jobAttendanceRebuild,
+    jobPayslipCleanup,
+};
+

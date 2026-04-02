@@ -109,7 +109,7 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(ShiftTemplate, req.params.id, {
-            include: [{ model: ShiftBreak, as: 'ShiftBreaks' }]
+            include: [{ model: ShiftBreak, as: 'ShiftBreaks', where: { status: 0 } }]
         });
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
@@ -164,21 +164,56 @@ exports.update = async (req, res) => {
         }
 
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
-            // Delete old breaks (Soft delete or Hard delete based on preference, here we replace)
-            await commonQuery.softDeleteById(ShiftBreak, { shift_template_id: req.params.id }, transaction);
-            
-            const breaks = req.body.breaks.map(b => ({
-                ...b,
-                start_buffer: b.start_buffer === "" ? null : b.start_buffer,
-                buffer_end: b.buffer_end === "" ? null : b.buffer_end,
-                start_time: b.start_time === "" ? null : b.start_time,
-                end_time: b.end_time === "" ? null : b.end_time,
+            const commonFields = {
                 shift_template_id: req.params.id,
                 user_id: req.user?.id || 0,
                 branch_id: req.user.branch_id || 0,
-                company_id: req.user.company_id || 0
-            }));
-            await commonQuery.bulkCreate(ShiftBreak, breaks, {}, transaction);
+                company_id: req.user.company_id || 0,
+            };
+
+            const incomingIds = req.body.breaks
+                .map(b => b.id)
+                .filter(id => id !== undefined && id !== null && id !== "");
+
+            // Soft-delete breaks that exist in DB but are not present in the request
+            const existingBreaks = await commonQuery.findAllRecords(
+                ShiftBreak,
+                { shift_template_id: req.params.id },
+                { attributes: ['id'] },
+                transaction,
+                {}   // skip tenant filter — filter by shift_template_id is enough
+            );
+            const idsToDelete = existingBreaks
+                .map(b => b.id)
+                .filter(id => !incomingIds.includes(id));
+            
+            if (idsToDelete.length > 0) {
+                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction, {});
+            }
+
+            const toCreate = [];
+            for (const b of req.body.breaks) {
+                const breakData = {
+                    ...b,
+                    ...commonFields,
+                    start_buffer: b.start_buffer === "" ? null : b.start_buffer,
+                    buffer_end: b.buffer_end === "" ? null : b.buffer_end,
+                    start_time: b.start_time === "" ? null : b.start_time,
+                    end_time: b.end_time === "" ? null : b.end_time,
+                };
+
+                if (b.id) {
+                    // Update existing break
+                    await commonQuery.updateRecordById(ShiftBreak, b.id, breakData, transaction);
+                } else {
+                    // Collect new breaks to bulk-create
+                    toCreate.push(breakData);
+                }
+            }
+
+            if (toCreate.length > 0) {
+                await commonQuery.bulkCreate(ShiftBreak, toCreate, {}, transaction);
+            }
         }
 
         // Trigger sync for all employees using this template

@@ -93,10 +93,34 @@ exports.update = async (req, res) => {
 };
 
 exports.delete = async (req, res) => {
+    const transaction = await sequelize.transaction();
     try {
-        await commonQuery.softDeleteById(ResignationTemplate, req.params.id);
+        const requiredFields = {
+            ids: "Select Data"
+        };
+
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+        let { ids } = req.body; // Accept array of ids
+
+        // Validate that ids is an array and not empty
+        if (!Array.isArray(ids) || ids.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_ID);
+        }
+
+        const deleted = await commonQuery.hardDeleteRecords(EmployeeResignation, ids, transaction);
+        if (!deleted) {
+            await transaction.rollback();
+            return res.error(constants.ALREADY_DELETED);
+        }
+        await transaction.commit();
         return res.success(constants.DELETED);
     } catch (err) {
+        await transaction.rollback();
         return handleError(err, res, req);
     }
 };
