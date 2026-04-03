@@ -111,6 +111,7 @@ exports.generateLogMessage = (entityName, actionType, recordData = {}) => {
 
     const actionText = actionTextMap[actionType] || actionType;
     const cleanEntityName = entityName.replace(/([A-Z])/g, ' $1').trim();
+    const employeeInfo = recordData.employee_id ? ` for Employee ID: ${recordData.employee_id}` : '';
 
-    return `${actionText} ${cleanEntityName}: ${identifier}`;
+    return `${actionText} ${cleanEntityName}: ${identifier}${employeeInfo}`;
 };

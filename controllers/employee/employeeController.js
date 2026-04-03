@@ -1538,8 +1538,9 @@ exports.registerFace = async (req, res) => {
  */
 exports.facePunch = async (req, res) => {
     try {
+        const { employee_id, latitude, longitude, device_id, punch_time } = req.body;
+        const now = punch_time ? new Date(punch_time) : new Date();
         const startTime = Date.now();
-        const now = new Date();
 
         const time = now.toTimeString().split(' ')[0];
 
@@ -1679,7 +1680,7 @@ exports.facePunch = async (req, res) => {
 
                 // 2. Use the robust punch helper
                 const punchResult = await punch(bestMatch.id, {
-                    punch_time: new Date(),
+                    punch_time: now,
                     image_name: savedFilename,
                     user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
                     company_id: req.user?.company_id || bestMatch.company_id,
@@ -1696,8 +1697,7 @@ exports.facePunch = async (req, res) => {
 
                 // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
                 setImmediate(() => {
-                    const today = dayjs().format("YYYY-MM-DD");
-                    rebuildAttendanceDay(bestMatch.id, today, {
+                    rebuildAttendanceDay(bestMatch.id, punchResult.targetDayDate, {
                         user_id: (req.user?.id && Number(req.user.id) !== 0) ? req.user.id : null,
                         company_id: req.user?.company_id || bestMatch.company_id,
                         branch_id: req.user?.branch_id || bestMatch.branch_id

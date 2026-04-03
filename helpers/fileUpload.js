@@ -6,6 +6,7 @@ const checkPermission = require("../middlewares/checkPermission");
 const { normalizeValues } = require("../middlewares/normalizeNullValues");
 const { constants } = require("./constants");
 const { requestContext } = require("../utils/requestContext"); // ✅ IMPORT CONTEXT
+const { writeLogToFile } = require("./functions/logFunctions");
 
 // --- UTILITY FUNCTIONS ---
 const ensureDir = (dirPath) => {

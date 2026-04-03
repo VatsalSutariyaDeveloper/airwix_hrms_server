@@ -269,6 +269,8 @@ module.exports = {
         record_id: result.id,
         new_data: result.toJSON ? result.toJSON() : result,
         sql_query: capture.sql,
+        access_type: ctx.access,
+        caller: caller,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
       }, transaction);
@@ -336,6 +338,8 @@ module.exports = {
             entity_name: Model.name,
             record_id: record.id,
             sql_query: capture.sql,
+            access_type: ctx.access,
+            caller: caller,
             ...commonData,
             ip_address: ctx ? ctx.ip : null,
           }, transaction);
@@ -405,6 +409,8 @@ module.exports = {
         old_data: oldRecord,
         new_data: newRecord.toJSON(),
         sql_query: capture.sql,
+        access_type: ctx.access,
+        caller: caller,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
       }, transaction);
@@ -418,6 +424,7 @@ module.exports = {
 
   // 4. Soft Delete
   softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true) => {
+    const caller = captureCaller();
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
     const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
 
@@ -449,6 +456,8 @@ module.exports = {
           record_id: record.id,
           old_data: record,
           sql_query: capture.sql,
+          access_type: ctx.access,
+          caller: caller,
           user_id: ctx.user_id,
           company_id: ctx.company_id,
           branch_id: ctx.branch_id,
@@ -540,8 +549,42 @@ module.exports = {
   // 8. Hard Delete
   hardDeleteRecords: async (model, whereInput = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
+    const ctx = getContext();
     const condition = await buildWhere(whereInput, requireTenantFields);
-    return model.destroy(withDebug({ where: condition, __caller: caller }, transaction));
+
+    // Fetch records before deletion to preserve data for audit log
+    const recordsToDelete = await model.findAll({
+      where: condition,
+      transaction,
+      raw: true
+    });
+
+    if (!recordsToDelete.length) return 0;
+
+    const capture = {};
+    const count = await model.destroy(withDebug({ where: condition, __caller: caller }, transaction, capture));
+
+    try {
+      for (const record of recordsToDelete) {
+        await logQuery({
+          action_type: "DELETE",
+          entity_name: model.name,
+          record_id: record.id,
+          old_data: record,
+          sql_query: capture.sql,
+          access_type: ctx.access,
+          caller: caller,
+          user_id: ctx.user_id,
+          company_id: ctx.company_id,
+          branch_id: ctx.branch_id,
+          ip_address: ctx.ip,
+        }, transaction);
+      }
+    } catch (logErr) {
+      console.error(`Audit log failed for hardDeleteRecords in ${model.name}:`, logErr.message);
+    }
+
+    return count;
   },
 
   // 9. Aggregates

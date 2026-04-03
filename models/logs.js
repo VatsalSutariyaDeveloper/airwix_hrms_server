@@ -14,6 +14,8 @@ module.exports = (sequelize, DataTypes) => {
       ip_address: { type: DataTypes.STRING(50), allowNull: true },
       is_resolved: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0=Pending, 1=Resolved (For Errors)" },
       status: { type: DataTypes.INTEGER, allowNull: true, comment: "0 = Success, 1 = Error" },
+      access_type: { type: DataTypes.STRING(50), allowNull: true, comment: "The source type: 'web login', 'attendance device', etc." },
+      caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
     },
     {
       tableName: "logs", 
@@ -24,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
 
   Logs.associate = (models) => {
     Logs.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
+    Logs.belongsTo(models.DeviceMaster, { foreignKey: "user_id", as: "device" });
     Logs.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company" });
   };
 
