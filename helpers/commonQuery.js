@@ -58,7 +58,7 @@ function formatSQL(sql, bind) {
 }
 
 // Wrapper to inject transaction and logging
-function withDebug(options = {}, transaction = null) {
+function withDebug(options = {}, transaction = null, capture = null) {
   const opts = { ...options };
   if (transaction) opts.transaction = transaction;
 
@@ -70,9 +70,14 @@ function withDebug(options = {}, transaction = null) {
   }
 
   opts.logging = (sql, queryObject) => {
+    const bind = queryObject.bind || queryObject.parameters || [];
+    const formatted = formatSQL(sql, bind);
+    
+    if (capture && typeof capture === 'object') {
+        capture.sql = formatted; 
+    }
+
     if (DEBUG_SQL) {
-      const bind = queryObject.bind || queryObject.parameters || [];
-      const formatted = formatSQL(sql, bind);
       console.log("\x1b[36m[SQL]\x1b[0m", formatted);
       console.log("\x1b[90m[From]\x1b[0m", caller);
     }
@@ -254,7 +259,8 @@ module.exports = {
       if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
-    const result = await model.create(enrichedData, withDebug({ __caller: caller }, transaction));
+    const capture = {};
+    const result = await model.create(enrichedData, withDebug({ __caller: caller }, transaction, capture));
 
     try {
       await logQuery({
@@ -262,9 +268,11 @@ module.exports = {
         entity_name: model.name,
         record_id: result.id,
         new_data: result.toJSON ? result.toJSON() : result,
+        sql_query: capture.sql,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
       }, transaction);
+
     } catch (logErr) {
       console.error("Audit log failed:", logErr.message);
     }
@@ -317,7 +325,8 @@ module.exports = {
       if (attachBranch && commonData.branch_id === undefined) commonData.branch_id = ctx.branch_id;
     }
 
-    const createdRecords = await Model.bulkCreate(enriched, withDebug({ __caller: caller }, transaction));
+    const capture = {};
+    const createdRecords = await Model.bulkCreate(enriched, withDebug({ __caller: caller }, transaction, capture));
 
     if (createdRecords.length) {
       try {
@@ -326,10 +335,12 @@ module.exports = {
             action_type: "BULK CREATE",
             entity_name: Model.name,
             record_id: record.id,
+            sql_query: capture.sql,
             ...commonData,
             ip_address: ctx ? ctx.ip : null,
           }, transaction);
         }
+
       } catch (logErr) {
         console.error("Audit log failed:", logErr.message);
       }
@@ -374,9 +385,10 @@ module.exports = {
       oldRecord = await model.findOne({ where: condition, transaction, raw: true });
     } catch (e) {}
     if (!oldRecord) return null;
+    const capture = {};
     const [count] = await model.update(
       safeData,
-      withDebug({ where: condition, __caller: caller }, transaction)
+      withDebug({ where: condition, __caller: caller }, transaction, capture)
     );
 
     if (count === 0) return null;
@@ -392,9 +404,11 @@ module.exports = {
         record_id: newRecord.id,
         old_data: oldRecord,
         new_data: newRecord.toJSON(),
+        sql_query: capture.sql,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
       }, transaction);
+
     } catch (logErr) {
       console.error(`[commonQuery] Log failed for ${model.name} (Non-fatal):`, logErr.message);
     }
@@ -421,9 +435,10 @@ module.exports = {
 
     if (!recordsToDelete.length) return 0;
 
+    const capture = {};
     const [count] = await model.update(
       { status: 2, user_id: ctx.user_id },
-      withDebug({ where: { id: { [Op.in]: recordsToDelete.map(r => r.id) } } }, transaction)
+      withDebug({ where: { id: { [Op.in]: recordsToDelete.map(r => r.id) } } }, transaction, capture)
     );
 
     try {
@@ -433,12 +448,14 @@ module.exports = {
           entity_name: model.name,
           record_id: record.id,
           old_data: record,
+          sql_query: capture.sql,
           user_id: ctx.user_id,
           company_id: ctx.company_id,
           branch_id: ctx.branch_id,
           ip_address: ctx.ip,
         }, transaction);
       }
+
     } catch (logErr) {
       console.error("Audit log failed:", logErr.message);
     }

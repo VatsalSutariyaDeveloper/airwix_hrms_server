@@ -1477,7 +1477,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0);
 
         const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 12: "On Duty", 13: "Half On Duty" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
@@ -1556,7 +1556,7 @@ exports.getMonthlyAttendance = async (req, res) => {
               latitude: p.latitude || null,
               longitude: p.longitude || null,
               ip_address: p.ip_address || null,
-              punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via Face Scan | ${shiftName} | through ${p.device?.device_name || 'App'}`
+              punch_text: `Punched ${p.punch_type === 'IN' ? 'In' : 'Out'} via ${p.image_name ? 'Face Scan' : 'Manual'} | ${shiftName} | through ${p.device?.device_name || 'App'}`
             }))
         };
       }

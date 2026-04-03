@@ -5,8 +5,8 @@ const path = require('path');
 const { Op } = require("sequelize");
 
 const IGNORED_FIELDS = ["createdAt", "updatedAt", "deletedAt", "password", "token", "otp"];
-const TEXT_LIMIT = 50000;
-const JSON_LIMIT = 100000;
+const TEXT_LIMIT = 1000000;
+const JSON_LIMIT = 1000000;
 
 // --- Helpers ---
 const cleanObject = (obj) => {
@@ -97,7 +97,7 @@ exports.logActivity = async (logData, transaction = null) => {
     await ActivityLog.create({
       entity_name: logData.entity_name,
       action_type: logData.action_type,
-      user_id: logData.user_id,
+      user_id: (logData.user_id && Number(logData.user_id) !== 0) ? logData.user_id : null,
       company_id: logData.company_id,
       branch_id: logData.branch_id,
       record_id: logData.record_id,
@@ -157,13 +157,14 @@ exports.logQuery = async (logData, mainTransaction = null) => {
     const logPayload = {
         entity_name: logData.entity_name,
         action_type: logData.action_type,
-        user_id: logData.user_id,
+        user_id: (logData.user_id && Number(logData.user_id) !== 0) ? logData.user_id : null,
         company_id: logData.company_id,
         branch_id: logData.branch_id,
         record_id: logData.record_id,
         log_message: truncateText(message, TEXT_LIMIT),
         old_data: safeJson(finalOld),
         new_data: safeJson(finalNew),
+        sql_query: logData.sql_query, 
         stack_trace: null,
         ip_address: logData.ip_address,
     };

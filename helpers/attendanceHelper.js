@@ -792,24 +792,24 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     );
     if (lastOut) punches.push(lastOut);
   } else {
-    // Process pairs of IN-OUT from the pre-fetched list (Robust Pairing)
-    let inP = null;
-    for (let i = 0; i < allDayPunches.length; i++) {
-        const p = allDayPunches[i];
-        const pType = (p.punch_type || "").toUpperCase();
-        if (pType === "IN") {
-            inP = p; // Start/Restart a block with the latest IN
-        } else if (pType === "OUT" && inP) {
-            punches.push(inP);
-            punches.push(p);
-            inP = null; // Block completed
-        }
+  // Process pairs of IN-OUT from the pre-fetched list (Robust Pairing)
+  let inP = null;
+  for (let i = 0; i < allDayPunches.length; i++) {
+    const p = allDayPunches[i];
+    const pType = String(p.punch_type || "").toUpperCase();
+    if (pType === "IN") {
+      inP = p; // Start/Restart a block with the latest IN
+    } else if (pType === "OUT" && inP) {
+      punches.push(inP);
+      punches.push(p);
+      inP = null; // Block completed
     }
-    // If an IN is left without an OUT, it might be an open shift.
-    // We add it anyway so 'Incomplete' or 'Currently Working' logic works later.
-    if (inP) {
-        punches.push(inP);
-    }
+  }
+  // If an IN is left without an OUT, it might be an open shift.
+  // We add it anyway so 'Incomplete' or 'Currently Working' logic works later.
+  if (inP) {
+    punches.push(inP);
+  }
 }
 
   // Ensure unique and sorted
@@ -935,8 +935,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // --- REFACTORED WORKED TIME & BREAK CALCULATION ---
-  const firstIn = punches.find(p => (p.punch_type || "").toUpperCase() === "IN");
-  const lastOut = [...punches].reverse().find(p => (p.punch_type || "").toUpperCase() === "OUT");
+  const firstIn = punches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
+  const lastOut = [...punches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
 
   let shiftWorkedMins = 0;
   let earlyOTMins = 0;
@@ -956,7 +956,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // 1. Calculate Gross Minutes in each region (Shift, Early OT, Late OT)
   for (let i = 0; i < punches.length - 1; i++) {
-    if (punches[i].punch_type === "IN" && punches[i + 1].punch_type === "OUT") {
+    if (String(punches[i].punch_type || "").toUpperCase() === "IN" && String(punches[i + 1].punch_type || "").toUpperCase() === "OUT") {
       const pS = dayjs(punches[i].punch_time);
       const pE = dayjs(punches[i + 1].punch_time);
 
@@ -1098,12 +1098,19 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   let totalSpanMinutes = 0;
+  // Total Span calculation (Total duration of all IN-OUT pairs)
   for (let i = 0; i < punches.length - 1; i++) {
-    if (punches[i].punch_type === "IN" && punches[i + 1].punch_type === "OUT") {
+    if (String(punches[i].punch_type || "").toUpperCase() === "IN" && String(punches[i + 1].punch_type || "").toUpperCase() === "OUT") {
       totalSpanMinutes += dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute");
     }
   }
-  let finalWorkedMinutes = Math.max(0, totalSpanMinutes);
+  // [MOD] Deduct unpaid shift breaks (Scheduled Breaks) that occurred while the employee was punched in.
+  // totalSpanMinutes already excludes gaps between pairs, so we only subtract the "stayed punched-in" break portion.
+  let breakDeduction = Math.max(0, scheduledBreaksMins);
+  if (template && template.paid_break_duration_mins > 0) {
+    breakDeduction = Math.max(0, breakDeduction - template.paid_break_duration_mins);
+  }
+  let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakDeduction);
 
   // When no shift is assigned OR it's a holiday/weekly off, set worked minutes to 0 so all time goes to overtime
   // if (!shift || meta.isHoliday || meta.isWeeklyOff) {
@@ -1111,8 +1118,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     finalWorkedMinutes = 0;
   }
 
-  // [MOD] We keep breakToDeduct for OT/Fine calculations but we don't deduct it from finalWorkedMinutes 
-  // because the user wants 'working time show total work time'.
+  // [MOD] breakdownMinutes subtraction from finalWorkedMinutes reflects net working time (Total In-Out - Gaps - Unpaid Breaks)
 
   // --- REFACTORED OVERTIME LOGIC ---
   let rawEarlyOT = earlyOTMins;

@@ -6,6 +6,8 @@ const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
 const { handleExport } = require("../../helpers/functions/excelService");
+const { ensureLatestPayslip } = require("../../services/payrollService");
+const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 const employee = require("../../models/employee");
 
 
@@ -996,13 +998,14 @@ exports.calculateMonthlySalary = async (req, res) => {
         }
 
         // 1. Check if a finalized/paid payslip already exists.
-        // If it does, we show the stored data instead of recalculating (important for Excel imports)
-        const existingPayslip = await commonQuery.findOneRecord(Payslip, {
+        // For multiple payslips, we might return an array or the first one.
+        const existingPayslips = await commonQuery.findAllRecords(Payslip, {
             employee_id,
             month,
             year,
-            status: { [Op.in]: [1, 2] } // Finalized or Paid
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
         }, {
+            order: [['sequence', 'ASC']],
             include: [{
                 model: Employee,
                 as: "employee",
@@ -1010,10 +1013,11 @@ exports.calculateMonthlySalary = async (req, res) => {
                 include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
             }]
         });
-
-        if (existingPayslip) {            
-            const summary = await formatPayslipToSummary(existingPayslip);
-            return res.ok(summary);
+        
+        if (existingPayslips && existingPayslips.length > 0) {
+            // Return all payslips if there are multiple
+            const summaries = await Promise.all(existingPayslips.map(ps => formatPayslipToSummary(ps)));
+            return res.ok(summaries.length === 1 ? summaries[0] : { multiple: true, payslips: summaries });
         }
 
         // 2. Otherwise perform fresh calculation based on attendance and template
@@ -1028,7 +1032,7 @@ exports.calculateMonthlySalary = async (req, res) => {
 exports.finalizeMonthlySalary = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { employee_id, month, year } = req.body;
+        const { employee_id, month, year, generate_additional = false } = req.body;
         if (!employee_id || !month || !year) {
             await transaction.rollback();
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
@@ -1036,14 +1040,23 @@ exports.finalizeMonthlySalary = async (req, res) => {
 
         const summary = await performSalaryCalculation(employee_id, month, year, transaction);  
               
-        // Check if already finalized
-        const existing = await commonQuery.findOneRecord(Payslip, {
-            employee_id, month, year, status: { [Op.in]: [1, 2] }
+        // Check if already finalized (Main sequence)
+        const existingMain = await commonQuery.findOneRecord(Payslip, {
+            employee_id, month, year, sequence: 1, status: { [Op.in]: [1, 3] }
         }, {}, transaction);
 
-        if (existing) {
+        if (existingMain && !generate_additional) {
             await transaction.rollback();
-            return res.error("ALREADY_FINALIZED", { message: "Payroll for this month is already finalized or paid." });
+            return res.error("ALREADY_FINALIZED", { message: "Main payroll for this month is already finalized. Use 'generate_additional' to create a supplementary payslip." });
+        }
+
+        // Logic for setting sequence
+        let targetSequence = 1;
+        if (generate_additional) {
+            const lastPayslip = await commonQuery.findOneRecord(Payslip, {
+                employee_id, month, year
+            }, { order: [['sequence', 'DESC']] }, transaction);
+            targetSequence = (lastPayslip?.sequence || 0) + 1;
         }
 
         // Create or Update Draft
@@ -1090,11 +1103,12 @@ exports.finalizeMonthlySalary = async (req, res) => {
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
             leave_balances: summary.leave_balances,
+            sequence: targetSequence,
             status: 1,
         };
 
         let finalizedPayslip;
-        const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0 }, {}, transaction);
+        const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0, sequence: targetSequence }, {}, transaction);
         if (draft) {
             finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
         } else {

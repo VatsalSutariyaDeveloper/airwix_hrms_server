@@ -125,6 +125,16 @@ const uploadFile = async (
     const fullPath = path.join(targetFolder, filename);
 
     try {
+      if (!file.buffer || file.buffer.length === 0) {
+        console.error(`[Upload] CRITICAL: Buffer is EMPTY for ${file.originalname}`);
+        writeLogToFile("upload_error.log", `Buffer is EMPTY for ${file.originalname}`);
+      } else {
+        console.log(`[Upload] Writing ${file.buffer.length} bytes to ${fullPath}`);
+        // Log individual file write success for attendance-related uploads
+        if (targetFolder.includes('attendance')) {
+           writeLogToFile('face_recognition.log', `💾 [Disk Write] File: ${filename} | Size: ${file.buffer.length} bytes`);
+        }
+      }
       fs.writeFileSync(fullPath, file.buffer);
       savedFilenames[file.fieldname] = filename;
       attachRollbackHook(transaction, fullPath);
