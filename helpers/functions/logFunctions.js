@@ -3,12 +3,18 @@ const { generateLogMessage } = require("./logMessageGenerator"); // Assuming you
 const fs = require('fs');
 const path = require('path');
 const { Op } = require("sequelize");
+const { getContext } = require("../../utils/requestContext");
 
 const IGNORED_FIELDS = ["createdAt", "updatedAt", "deletedAt", "password", "token", "otp"];
-const TEXT_LIMIT = 50000;
-const JSON_LIMIT = 100000;
+const TEXT_LIMIT = 1000000;
+const JSON_LIMIT = 1000000;
 
 // --- Helpers ---
+const sanitizeUserId = (id) => {
+  const num = Number(id);
+  return (id && !isNaN(num) && num > 0) ? num : null;
+};
+
 const cleanObject = (obj) => {
   if (!obj || typeof obj !== "object") return obj;
   const cleaned = { ...obj };
@@ -92,17 +98,23 @@ const truncateText = (text, limit) => {
 // 1. Log User Activity (Simple Table)
 exports.logActivity = async (logData, transaction = null) => {
   try {
+    let ctx = null;
+    try { ctx = getContext(); } catch (e) {}
+
     const message = logData.log_message || `${logData.action_type} on ${logData.entity_name}`;
     
     await ActivityLog.create({
       entity_name: logData.entity_name,
       action_type: logData.action_type,
-      user_id: logData.user_id,
+      user_id: sanitizeUserId(logData.user_id),
       company_id: logData.company_id,
       branch_id: logData.branch_id,
       record_id: logData.record_id,
       log_message: truncateText(message, TEXT_LIMIT), 
       ip_address: logData.ip_address,
+      access_type: logData.access_type || (ctx ? ctx.access : 'system'),
+      sql_query: logData.sql_query,
+      caller: logData.caller
     }, { transaction });
   } catch (err) {
     console.error(`[CRITICAL] Failed to log activity: ${err.message}`);
@@ -154,20 +166,27 @@ exports.logQuery = async (logData, mainTransaction = null) => {
   // STEP 2: PERFORM INSERT WITH SAFEGUARD (SAVEPOINT)
   // ----------------------------------------------------------------
   try {
+    let ctx = null;
+    try { ctx = getContext(); } catch (e) {}
+
     const logPayload = {
         entity_name: logData.entity_name,
         action_type: logData.action_type,
-        user_id: logData.user_id,
+        user_id: sanitizeUserId(logData.user_id),
         company_id: logData.company_id,
         branch_id: logData.branch_id,
         record_id: logData.record_id,
         log_message: truncateText(message, TEXT_LIMIT),
         old_data: safeJson(finalOld),
         new_data: safeJson(finalNew),
+        sql_query: logData.sql_query, 
         stack_trace: null,
         ip_address: logData.ip_address,
+        status: 0,
+        access_type: logData.access_type || (ctx ? ctx.access : 'system'),
+        caller: logData.caller,
     };
-
+console.log("logPayload",logPayload)
     if (mainTransaction) {
         // [MAGIC FIX] Create a Nested Transaction (Savepoint)
         // If this block fails, Sequelize rolls back ONLY this nested part.
@@ -193,28 +212,41 @@ exports.logQuery = async (logData, mainTransaction = null) => {
 
 // 3. Log Errors -> Goes to 'Logs' Table (Unified)
 exports.logError = async (logData, transaction = null) => {
+  const timestamp = new Date().toLocaleString();
+  const errorMsg = logData.error_message || "Unknown error";
+  
   try {
-    // Write to the centralized Logs table
+    let ctx = null;
+    try { ctx = getContext(); } catch (e) {}
+
+    // 1. ALWAYS write to physical file as backup (safety first)
+    const fileLogMessage = `🚨 ERROR: ${errorMsg}\n   Entity: ${logData.entity_name}\n   Body: ${JSON.stringify(logData.request_body || {})}\n   Stack: ${JSON.stringify(logData.stack_trace || {})}`;
+    exports.writeLogToFile("error.log", fileLogMessage);
+
+    // 2. Write to the database
     await Logs.create({
-      entity_name: logData.entity_name,
+      entity_name: logData.entity_name || "SERVER_ERROR",
       action_type: "ERROR",
-      user_id: logData.user_id,
-      company_id: logData.company_id,
-      branch_id: logData.branch_id,
+      user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
+      company_id: logData.company_id || ctx?.company_id,
+      branch_id: logData.branch_id || ctx?.branch_id,
       record_id: null,
-      log_message: truncateText(logData.error_message, TEXT_LIMIT),
+      log_message: truncateText(errorMsg, TEXT_LIMIT),
       old_data: null,
       // Store the request body in 'new_data' column for consistency
       new_data: safeJson(logData.request_body), 
       // Store the technical stack
       stack_trace: safeJson(logData.stack_trace),
-      ip_address: logData.ip_address,
-      is_resolved: 0
+      ip_address: logData.ip_address || ctx?.ip || "127.0.0.1",
+      status: 0,
+      access_type: logData.access_type || (ctx ? ctx.access : 'system'),
+      sql_query: logData.sql_query,
+      caller: logData.caller || ctx?.caller || "unknown"
     }, { transaction });
 
   } catch (err) {
-    console.error(`[CRITICAL] Failed to log error: ${err.message}`);
-    throw err;
+    // If DB log fails, we at least have it in the physical file
+    console.error(`[CRITICAL - ${timestamp}] Database error logging failed, but file log preserved: ${err.message}`);
   }
 };
 

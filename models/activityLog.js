@@ -13,6 +13,9 @@ module.exports = (sequelize, DataTypes) => {
       new_data: { type: DataTypes.JSONB, allowNull: true, comment: "JSON snapshot after create/update" },
       ip_address: { type: DataTypes.STRING(50), allowNull: true },
       status: { type: DataTypes.SMALLINT, defaultValue: 0 },
+      access_type: { type: DataTypes.STRING(50), allowNull: true, comment: "The source type: 'web login', 'attendance device', etc." },
+      sql_query: { type: DataTypes.TEXT, allowNull: true, comment: "The raw SQL query executed" },
+      caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
     },
     {
       tableName: "activity_logs",
@@ -23,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
 
   ActivityLog.associate = (models) => {
     ActivityLog.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
+    ActivityLog.belongsTo(models.DeviceMaster, { foreignKey: "user_id", as: "device" });
     ActivityLog.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company" });
   };
 

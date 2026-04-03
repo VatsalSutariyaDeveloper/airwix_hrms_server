@@ -4,9 +4,22 @@ const requestContext = new AsyncLocalStorage();
 
 function getContext() {
   const store = requestContext.getStore();
+  
+  // Return safe defaults if store is missing (e.g., background job, startup error)
   if (!store) {
-    throw new Error("Request context not available");
+    return {
+      user_id: null,
+      company_id: null,
+      organization_id: null,
+      branch_id: null,
+      branch_access: [],
+      role_id: null,
+      is_super_admin: false,
+      ip: "127.0.0.1",
+      access: "system"
+    };
   }
+  
   return {
     user_id: store.userId,
     company_id: store.companyId,
@@ -15,7 +28,8 @@ function getContext() {
     branch_access: store.branchAccess,
     role_id: store.roleId,
     is_super_admin: store.is_super_admin || false,
-    ip: store.ip
+    ip: store.ip,
+    access: store.access
   };
 }
 

@@ -1,5 +1,6 @@
-const { ActivityLog, ApiLog, Logs, User } = require("../models");
+const { ActivityLog, ApiLog, Logs, User, DeviceMaster } = require("../models");
 const commonQuery = require("../helpers/commonQuery");
+const { handleError } = require("../helpers");
 
 exports.getAuditLogs = async (req, res) => {
   try {
@@ -8,9 +9,11 @@ exports.getAuditLogs = async (req, res) => {
       ["action_type", true, true],
       ["record_id", true, true],
       ["log_message", true, false],
-      ["ip_address", true, true],
-      ["status", true, true],
-      ["created_at", false, true],
+      ["logs.ip_address", true, true],
+      ["logs.access_type", true, true],
+      ["logs.caller", true, true],
+      ["logs.status", true, true],
+      ["logs.created_at", false, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
@@ -18,11 +21,13 @@ exports.getAuditLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
-        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "stack_trace", "ip_address", "status", "created_at"],
+        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "stack_trace", "sql_query", "ip_address", "status", "access_type", "caller", "created_at"],
         include: [
           { model: User, as: "user", attributes: ["id", "user_name", "email"] },
+          { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
-      }
+      },
+      {}
     );
 
     return res.status(200).json({
@@ -30,7 +35,7 @@ exports.getAuditLogs = async (req, res) => {
       data: result,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return handleError(err, res, req);
   }
 };
 
@@ -41,8 +46,10 @@ exports.getActivityLogs = async (req, res) => {
       ["action_type", true, true],
       ["record_id", true, true],
       ["log_message", true, false],
-      ["ip_address", true, true],
-      ["created_at", false, true],
+      ["activity_logs.ip_address", true, true],
+      ["activity_logs.access_type", true, true],
+      ["activity_logs.caller", true, true],
+      ["activity_logs.created_at", false, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
@@ -50,11 +57,13 @@ exports.getActivityLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
-        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "ip_address", "created_at"],
+        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "old_data", "new_data", "sql_query", "ip_address", "access_type", "caller", "created_at"],
         include: [
           { model: User, as: "user", attributes: ["id", "user_name", "email"] },
+          { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
-      }
+      },
+      {}
     );
 
     return res.status(200).json({
@@ -62,7 +71,7 @@ exports.getActivityLogs = async (req, res) => {
       data: result,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return handleError(err, res, req);
   }
 };
 
@@ -72,8 +81,10 @@ exports.getApiLogs = async (req, res) => {
       ["method", true, true],
       ["url", true, true],
       ["status_code", true, true],
-      ["ip_address", true, true],
-      ["created_at", false, true],
+      ["ApiLog.ip_address", true, true],
+      ["access_type", true, true],
+      ["caller", true, true],
+      ["ApiLog.created_at", false, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
@@ -81,11 +92,13 @@ exports.getApiLogs = async (req, res) => {
       req.body,
       fieldConfig,
       {
-        attributes: ["id", "method", "url", "status_code", "ip_address", "request_body", "response_body", "duration", "user_agent", "created_at"],
+        attributes: ["id", "method", "url", "status_code", "ip_address", "request_body", "response_body", "duration", "user_agent", "access_type", "caller", "created_at"],
         include: [
           { model: User, as: "user", attributes: ["id", "user_name", "email"] },
+          { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
-      }
+      },
+      {}
     );
 
     return res.status(200).json({

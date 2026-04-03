@@ -98,8 +98,8 @@ const generateCustomFieldImageUrls = (customFields, folder) => {
     let valArray = Array.isArray(field.value) ? field.value : (field.value ? [field.value] : []);
 
     updatedField.image_urls = valArray.map(v => {
-      // Check if it's already a full URL
-      if (v && (v.startsWith('http://') || v.startsWith('https://'))) {
+      // Check if it's already a full URL (including blob URLs)
+      if (v && (v.startsWith('http://') || v.startsWith('https://') || v.startsWith('blob:'))) {
         return v;
       }
       return `${process.env.FILE_SERVER_URL}${actualImageFolder}${v}`;

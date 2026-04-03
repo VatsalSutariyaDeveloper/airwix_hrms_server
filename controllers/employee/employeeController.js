@@ -1538,8 +1538,9 @@ exports.registerFace = async (req, res) => {
  */
 exports.facePunch = async (req, res) => {
     try {
+        const { employee_id, latitude, longitude, device_id, punch_time } = req.body;
+        const now = punch_time ? new Date(punch_time) : new Date();
         const startTime = Date.now();
-        const now = new Date();
 
         const time = now.toTimeString().split(' ')[0];
 
@@ -1667,11 +1668,19 @@ exports.facePunch = async (req, res) => {
                 const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
                 timings.upload = Date.now() - uploadStart;
 
-                const savedFilename = savedFiles.image || savedFiles['image'];
+                const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
+                
+                if (!savedFilename) {
+                    console.error("❌ [Punch] Image saved, but filename not found in response!", savedFiles);
+                    writeLogToFile('face_recognition.log', `❌ [Punch] Image saved, but filename not found in savedFiles object. Matches found but image reference missing.`);
+                } else {
+                    debugLog("Punch", `Saved Image: ${savedFilename}`);
+                    writeLogToFile('face_recognition.log', `🖼️  [Image Saved] Success Image: ${savedFilename} | Path: ${constants.ATTENDANCE_FOLDER}`);
+                }
 
                 // 2. Use the robust punch helper
                 const punchResult = await punch(bestMatch.id, {
-                    punch_time: new Date(),
+                    punch_time: now,
                     image_name: savedFilename,
                     user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
                     company_id: req.user?.company_id || bestMatch.company_id,
@@ -1688,9 +1697,8 @@ exports.facePunch = async (req, res) => {
 
                 // ⚡ 3. RUN REBUILD IN BACKGROUND (So user doesn't wait)
                 setImmediate(() => {
-                    const today = dayjs().format("YYYY-MM-DD");
-                    rebuildAttendanceDay(bestMatch.id, today, {
-                        user_id: req.user?.id || bestMatch.user_id,
+                    rebuildAttendanceDay(bestMatch.id, punchResult.targetDayDate, {
+                        user_id: (req.user?.id && Number(req.user.id) !== 0) ? req.user.id : null,
                         company_id: req.user?.company_id || bestMatch.company_id,
                         branch_id: req.user?.branch_id || bestMatch.branch_id
                     }).catch(err => console.error("Background Rebuild Error:", err));
@@ -1726,18 +1734,6 @@ exports.facePunch = async (req, res) => {
             const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
             console.log(failMsg);
             writeLogToFile('face_recognition.log', failMsg);
-
-            // Save to ATTENDANCE_LOG_FOLDER in background
-            setImmediate(async () => {
-                try {
-                    const now = new Date();
-                    const dateStr = dayjs(now).format('DD-MM-YYYY');
-                    const timeStr = dayjs(now).format('hh:mm A');
-                    const ext = path.extname(originalName);
-                    const customFilename = `${Date.now()}_failed_${matchPercentage}%_${dateStr}__${timeStr}${ext}`;
-                    await uploadFile(req, res, constants.ATTENDANCE_LOG_FOLDER, null, null, customFilename);
-                } catch (e) { console.error("Failed to save recognition log:", e); }
-            });
 
             return res.error(constants.FACE_NOT_RECOGNIZED, {
                 message: `Face Not Recognized`,

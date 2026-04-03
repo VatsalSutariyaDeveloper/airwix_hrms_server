@@ -57,6 +57,26 @@ router.patch("/branch/status", branchMasterController.updateStatus);
 router.post("/company/", bufferImage(["logo_image", "admin_signature_img"]), companyMasterController.create);
 router.post("/company/get-transactions", companyMasterController.getCompanies);
 router.put("/company/:id", bufferImage(["logo_image", "admin_signature_img"]), companyMasterController.update);
+
+// --- UNIVERSAL ERROR LOGGING TEST ROUTES ---
+// 1. Test Handled Express Error
+router.get("/test/error-express", (req, res, next) => {
+    next(new Error("🧪 TEST ERROR: This is a handled Express error."));
+});
+
+// 2. Test Unhandled Promise Rejection
+router.get("/test/error-rejection", (req, res) => {
+    Promise.reject(new Error("🧪 TEST REJECTION: This is an unhandled promise rejection."));
+    res.json({ success: true, message: "Unhandled rejection triggered. Check logs." });
+});
+
+// 3. Test Uncaught Exception (WARNING: Restarts server)
+router.get("/test/error-exception", (req, res) => {
+    res.json({ success: true, message: "Uncaught exception triggered. Server will restart. Check logs." });
+    setImmediate(() => {
+        throw new Error("🧪 TEST EXCEPTION: This is an uncaught exception.");
+    });
+});
 router.get("/company/", companyMasterController.getAll);
 router.get("/company/:id", companyMasterController.getById);
 router.delete("/company/:id", companyMasterController.delete);
