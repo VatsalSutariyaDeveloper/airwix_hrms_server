@@ -116,7 +116,7 @@ const emailService = {
         try {
             await sendEmailHelper({
                 company_id: companyId,
-                from: process.env.ADMIN_EMAIL,
+                from: `${process.env.EMAIL_COMPANY_NAME} <${process.env.ADMIN_EMAIL}>`,
                 email: email,
                 subject: `Action Required: Your Onboarding Submission Needs Review`,
                 message: `

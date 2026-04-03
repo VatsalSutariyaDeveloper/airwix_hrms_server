@@ -1,13 +1,34 @@
-const { Employee, User, DesignationMaster, Department, sequelize, CompanyMaster } = require("../../models");
+const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
 const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
 const { uploadFile } = require("../../helpers/fileUpload");
 const crypto = require("crypto");
 const emailService = require("../../services/emailService");
+const { MODULES } = require("../../helpers/moduleEntitiesConstants");
+const { generateCustomFieldImageUrls, handleCustomFieldImages } = require("../../helpers/customFieldImageHandler");
 
-// Document field constants for onboarding
+
 const FILE_COLUMNS = [
     'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
 ];
+
+/**
+ * Helper: Parse JSON fields from Multipart/Form-Data
+ */
+const parseJsonFields = (body) => {
+    const fieldsToParse = ["custom_fields"];
+
+    fieldsToParse.forEach((field) => {
+        if (body[field] && typeof body[field] === "string") {
+            try {
+                body[field] = JSON.parse(body[field]);
+            } catch (error) {
+                console.error(`Error parsing JSON for field ${field}:`, error);
+                body[field] = [];
+            }
+        }
+    });
+};
+
 
 /**
  * Initiate onboarding for a new candidate
@@ -63,7 +84,7 @@ exports.initiate = async (req, res) => {
         // Send Email/WhatsApp with the link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
         await emailService.sendOnboardingInvite(email, first_name, onboardingLink, companyId);
-        
+
         // Also send on WhatsApp
         if (mobile_no) {
             await whatsappService.sendOnboardingInvite(mobile_no, first_name, onboardingLink);
@@ -87,18 +108,23 @@ exports.getDetailsByToken = async (req, res) => {
         const employee = await commonQuery.findOneRecord(
             Employee,
             {
-                onboarding_token: token, 
+                onboarding_token: token,
                 status: 3
             },
-            {include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] },
-                { model: CompanyMaster, as: 'company', attributes: ['company_name'] }
-            ]},
+            {
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] },
+                    { model: CompanyMaster, as: 'company', attributes: ['company_name'] }
+                ]
+            },
             null,
             true,
             {}
         );
+
+        const company_id = employee.company_id;
+        const branch_id = employee.branch_id;
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Invalid or expired onboarding link" });
@@ -117,14 +143,62 @@ exports.getDetailsByToken = async (req, res) => {
 
         const baseUrl = process.env.IMG_URL || `${req.protocol}://${req.get('host')}/`;
         const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'];
-        
+
         FILE_COLUMNS.forEach(col => {
             if (employee[col] && !employee[col].startsWith('http')) {
                 employee[col] = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${employee[col].replace(/^\/+/, '')}`;
             }
         });
 
-        return res.ok(employee);
+
+        const customFields = await CustomField.findAll({
+            where: {
+                entity_id: MODULES.EMPLOYEE.ID,
+                company_id: company_id,
+                branch_id: branch_id,
+                status: 0
+            },
+            attributes: ['id', 'field_label', 'field_name', 'field_type', 'is_mandatory', 'is_readonly', 'default_value', 'placeholder', 'options', 'validation_regex', 'priority', 'description', "branch_id", "company_id"],
+            order: [['priority', 'ASC'], ['id', 'ASC']]
+        });
+
+        // Process custom fields to add URL for image type default_values
+        const processedCustomFields = customFields.map(field => {
+            const fieldData = field.toJSON();
+            
+            // If field type is image and has default_value, add URL and folder
+            if (fieldData.field_type === 'image' && fieldData.default_value) {
+                if (!fieldData.default_value.startsWith('http')) {
+                    fieldData.default_value = {
+                        url: `${process.env.FILE_SERVER_URL}${constants.CUSTOM_FIELD_IMG_FOLDER}${fieldData.default_value.replace(/^\/+/, '')}`,
+                        folder: constants.CUSTOM_FIELD_IMG_FOLDER,
+                        filename: fieldData.default_value
+                    };
+                }
+            }
+            
+            return fieldData;
+        });
+
+        // Add custom fields to response
+        const employeeData = employee.toJSON();
+
+        // 1. Process employee's own custom_fields data (JSONB)
+        if (employeeData.custom_fields && Array.isArray(employeeData.custom_fields)) {
+            employeeData.custom_fields = generateCustomFieldImageUrls(
+                employeeData.custom_fields,
+                constants.CUSTOM_FIELD_IMG_FOLDER
+            );
+        }
+
+        // 2. Prepare the final response with separate keys for data and definitions
+        const response = {
+            ...employeeData,
+            custom_field_definitions: processedCustomFields
+        };
+
+
+        return res.ok(response);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -137,7 +211,9 @@ exports.submitDetails = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { token } = req.params;
+        parseJsonFields(req.body);
         const data = req.body;
+
 
         const employee = await commonQuery.findOneRecord(
             Employee,
@@ -166,7 +242,7 @@ exports.submitDetails = async (req, res) => {
             'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
             'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
             'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan',
-            'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
+            'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', "custom_fields"
         ];
 
         const updateData = {};
@@ -188,12 +264,37 @@ exports.submitDetails = async (req, res) => {
                 }
             });
         }
-        
+
         if (data.is_final_submission) {
             updateData.onboarding_status = 1;
         }
 
+        // Handle custom field images (they may consume uploaded files)
+        if (Array.isArray(updateData.custom_fields)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) {
+                    allFilesArray.push(...req.files);
+                } else {
+                    Object.values(req.files).forEach(v => {
+                        if (Array.isArray(v)) allFilesArray.push(...v);
+                        else allFilesArray.push(v);
+                    });
+                }
+            }
+            updateData.custom_fields = await handleCustomFieldImages(
+                req,
+                res,
+                updateData.custom_fields,
+                allFilesArray,
+                constants.CUSTOM_FIELD_IMG_FOLDER,
+                transaction,
+                employee
+            );
+        }
+
         await commonQuery.updateRecordById(Employee, { id: employee.id }, updateData, transaction, false, {});
+
 
         await transaction.commit();
         return res.success("Details saved successfully");
@@ -257,7 +358,7 @@ exports.approve = async (req, res) => {
         // Send approval email with department and designation names
         const departmentName = employee.department?.name || 'N/A';
         const designationName = employee.designation?.designation_name || 'N/A';
-        
+
         await emailService.sendOnboardingApproval(
             employee.email,
             employee.first_name,
@@ -329,7 +430,7 @@ exports.reject = async (req, res) => {
         // Send Email/WhatsApp with the new link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
         await emailService.sendOnboardingRejection(employee.email, employee.first_name, reject_note, onboardingLink, companyId);
-        
+
         // Also send on WhatsApp
         if (employee.mobile_no) {
             await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
@@ -384,8 +485,13 @@ exports.resendToken = async (req, res) => {
 
         // Send Email/WhatsApp with the new link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
-        await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
         
+        if (employee.onboarding_status === 2) {
+            await emailService.sendOnboardingRejection(employee.email, employee.first_name, employee.reject_note, onboardingLink, companyId);
+        } else {
+            await emailService.sendOnboardingInvite(employee.email, employee.first_name, onboardingLink, companyId);
+        }
+
         // Also send on WhatsApp
         if (employee.mobile_no) {
             await whatsappService.sendOnboardingInvite(employee.mobile_no, employee.first_name, onboardingLink);
