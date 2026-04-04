@@ -522,6 +522,7 @@ const ENTITIES = {
 
   // many transactions...
   ATTENDANCE: { ID: 403, NAME: "Attendance" },
+  EMPLOYEE: { ID: 60, NAME: "Employee" },
 };
 
 module.exports = { constants, ENTITIES };

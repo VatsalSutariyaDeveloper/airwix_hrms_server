@@ -315,6 +315,10 @@ class EmployeeTemplateService {
         } else {
             await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
         }
+
+        // Trigger leave balance sync for Comp-Off category
+        const LeaveBalanceService = require("./leaveBalanceService");
+        await LeaveBalanceService.bulkSyncEmployeeAttendancePolicy([employeeId], transaction);
     }
 
     static async bulkSyncAttendanceTemplate(employeeIds, templateId, transaction, meta = {}) {
@@ -353,6 +357,10 @@ class EmployeeTemplateService {
         for (const item of toUpdate) {
             await commonQuery.updateRecordById(EmployeeAttendanceTemplate, item.id, item.payload, transaction);
         }
+
+        // Trigger leave balance sync for Comp-Off category
+        const LeaveBalanceService = require("./leaveBalanceService");
+        await LeaveBalanceService.bulkSyncEmployeeAttendancePolicy(employeeIds, transaction);
     }
 
     static async syncHolidayTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false, meta = {}) {

@@ -1,4 +1,4 @@
-const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, LeaveRequest, sequelize } = require("../models");
+const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, LeaveRequest, AttendanceTemplate, EmployeeAttendanceTemplate, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
 const { constants } = require("../helpers/constants");
 const dayjs = require("dayjs");
@@ -128,7 +128,8 @@ class LeaveBalanceService {
     /**
      * Primary entry point: Assigns/Syncs leaves to an employee.
      */
-    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null) {
+    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}) {
+        const { allowRollover = false } = options;
         const t = transaction || (await sequelize.transaction());
         try {
             const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
@@ -140,6 +141,38 @@ class LeaveBalanceService {
 
             if (!template) throw new Error("Leave template not found or inactive");
 
+            // --- [MOD] Dynamic Comp-Off Logic based on Attendance Policy ---
+            // Fetch attendance template to check holiday policy
+            const attendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate || 
+                await commonQuery.findOneRecord(AttendanceTemplate, employee.attendance_setting_template, {}, t);
+            
+            const isCompOffPolicy = attendanceTemplate && attendanceTemplate.holiday_policy === 'COMP_OFF';
+            
+            // Filter and manage categories
+            let categories = [...(template.categories || [])];
+            if (isCompOffPolicy) {
+                // If policy is COMP_OFF, ensure a Comp-Off category exists in the list
+                if (!categories.some(c => c.is_compoff)) {
+                    const masterCompOff = await commonQuery.findOneRecord(LeaveTemplateCategory, { is_compoff: true, status: 0 }, {}, t);
+                    if (masterCompOff) categories.push(masterCompOff);
+                }
+            } else {
+                // If policy is NOT COMP_OFF, exclude Comp-Off category and soft-delete existing Comp-Off balances
+                categories = categories.filter(c => !c.is_compoff);
+                
+                await EmployeeLeaveBalance.update(
+                    { status: 2 }, 
+                    { 
+                        where: { 
+                            employee_id: employeeId, 
+                            is_compoff: true,
+                            status: { [Op.in]: [0, 1] }
+                        }, 
+                        transaction: t 
+                    }
+                );
+            }
+
             const refDate = asOf ? dayjs(asOf) : dayjs();
             const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, refDate, {
                 leave_period_start: template.leave_period_start,
@@ -147,7 +180,7 @@ class LeaveBalanceService {
             });
             const results = [];
 
-            for (const category of template.categories) {
+            for (const category of categories) {
                 let allocated = 0;
 
                 if (template.accrual_type === 'UPFRONT') {
@@ -214,17 +247,42 @@ class LeaveBalanceService {
                     automation_rules: category.automation_rules,
                 };
 
-                // Upsert balance record
-                const existingBalance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                    employee_id: employeeId,
-                    leave_category_id: category.id,
-                    status: 0
-                }, {}, t);
+                // Upsert balance record - find the latest balance (even if soft-deleted during sync)
+                const existingBalance = await EmployeeLeaveBalance.findOne({
+                    where: {
+                        employee_id: employeeId,
+                        leave_category_id: category.id,
+                        status: { [Op.in]: [0, 1, 2] } 
+                    },
+                    order: [['id', 'DESC']],
+                    transaction: t
+                });
+                
+                let carryForward = 0;
+                let used = 0;
 
-                let balance;
-                // Calculate pending leaves (considering existing usage if applicable)
-                const carryForward = existingBalance ? parseFloat(existingBalance.carry_forward_leaves || 0) : 0;
-                const used = existingBalance ? parseFloat(existingBalance.used_leaves || 0) : 0;
+                if (existingBalance) {
+                    const currentYear = end.year();
+                    const currentMonth = template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null;
+                    
+                    const isSameCycle = existingBalance.year === currentYear && 
+                                       (currentMonth === null || existingBalance.month === currentMonth);
+
+                    if (isSameCycle) {
+                        // Mid-cycle update/sync: preserve already carried and used data
+                        carryForward = parseFloat(existingBalance.carry_forward_leaves || 0);
+                        used = parseFloat(existingBalance.used_leaves || 0);
+                    } else if (allowRollover && (existingBalance.year < currentYear || (currentMonth !== null && existingBalance.year === currentYear && existingBalance.month < currentMonth))) {
+                        // Rollover from previous cycle: only if allowRollover is true
+                        const remaining = parseFloat(existingBalance.pending_leaves || 0);
+                        if (category.unused_leave_rule === 'CARRY_FORWARD') {
+                            const limit = parseFloat(category.carry_forward_limit || 0);
+                            carryForward = Math.min(remaining, limit);
+                        }
+                        used = 0; // New cycle starts with 0 used
+                    }
+                }
+
                 let pending = Math.ceil((allocated + carryForward - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
@@ -232,10 +290,12 @@ class LeaveBalanceService {
                     pending = Math.max(0, pending);
                 }
 
-                if (existingBalance) {
+                if (existingBalance && existingBalance.status !== 2) {
                     balance = await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, {
                         ...metaFields,
                         total_allocated: allocated,
+                        carry_forward_leaves: carryForward,
+                        used_leaves: used,
                         pending_leaves: pending,
                         leave_template_id: templateId,
                         year: end.year(),
@@ -250,6 +310,8 @@ class LeaveBalanceService {
                         month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
                         leave_template_id: templateId,
                         total_allocated: allocated,
+                        carry_forward_leaves: carryForward,
+                        used_leaves: used,
                         pending_leaves: pending,
                         company_id: employee.company_id
                     }, t);
@@ -344,6 +406,36 @@ class LeaveBalanceService {
             if (!transaction) await t.commit();
         } catch (error) {
             if (!transaction && !t.finished) await t.rollback();
+            throw error;
+        }
+    }
+
+    /**
+     * Specifically syncs leave balances when an attendance policy is changed.
+     * This ensures the Comp-Off category is added or removed based on the new policy.
+     */
+    static async bulkSyncEmployeeAttendancePolicy(employeeIds, transaction = null) {
+        if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
+
+        const t = transaction || (await sequelize.transaction());
+        try {
+            const chunkSize = 50;
+            for (let i = 0; i < employeeIds.length; i += chunkSize) {
+                const chunk = employeeIds.slice(i, i + chunkSize);
+                const employees = await commonQuery.findAllRecords(Employee, { 
+                    id: { [Op.in]: chunk },
+                    leave_template: { [Op.ne]: null } // Only sync if they have a leave template
+                }, {}, t);
+
+                for (const emp of employees) {
+                    await this.initializeBalance(emp.id, emp.leave_template, t, emp);
+                }
+            }
+
+            if (!transaction) await t.commit();
+        } catch (error) {
+            if (!transaction && !t.finished) await t.rollback();
+            console.error("❌ Error bulk syncing attendance policy to leave balances:", error);
             throw error;
         }
     }
@@ -496,7 +588,7 @@ class LeaveBalanceService {
                     });
 
                     // 2. Initialize NEW balance for the next cycle (use day after yesterday = today)
-                    await this.initializeBalance(employee.id, template.id, transaction, null, null, today.add(1, 'day').toDate());
+                    await this.initializeBalance(employee.id, template.id, transaction, null, null, today.add(1, 'day').toDate(), { allowRollover: true });
 
                     const { end: newCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, today.add(1, 'day'), {
                         leave_period_start: template.leave_period_start,

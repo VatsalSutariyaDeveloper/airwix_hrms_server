@@ -68,7 +68,7 @@ const transaction = await sequelize.transaction();
 
         if (overlap) {
             await transaction.rollback();
-            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('YYYY-MM-DD')} to ${dayjs(overlap.end_date).format('YYYY-MM-DD')})` });
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
         }
 
         await commonQuery.createRecord(
@@ -239,7 +239,7 @@ exports.update = async (req, res) => {
 
         if (overlap) {
             await transaction.rollback();
-            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('YYYY-MM-DD')} to ${dayjs(overlap.end_date).format('YYYY-MM-DD')})` });
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
         }
 
         const PUT = { 

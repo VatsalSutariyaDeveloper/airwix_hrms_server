@@ -95,7 +95,7 @@ exports.create = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
             }
         }
 
@@ -340,7 +340,7 @@ exports.update = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${overlap.start_date} to ${overlap.end_date})` });
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
             }
         }
 

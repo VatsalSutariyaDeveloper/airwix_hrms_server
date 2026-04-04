@@ -1415,7 +1415,8 @@ exports.getMonthlyAttendance = async (req, res) => {
       leave: 0,
       fine: 0,
       fineAmount: 0,
-      overtime: 0
+      overtime: 0,
+      overtimeAmount: 0
     };
 
     let totalFineMins = 0;
@@ -1443,7 +1444,9 @@ exports.getMonthlyAttendance = async (req, res) => {
         date_display: dayObj.format("DD MMM"),
         day_display: dayObj.format("dddd"),
         attendance_date: curDate,
+        shift_id: null,
         shift_name: "N/A",
+        shift_time: "0:00 Hrs",
         time_range: "0:00 Hrs",
         day_status: 10, // Default Not Marked
         status: "Not Marked",
@@ -1473,10 +1476,23 @@ exports.getMonthlyAttendance = async (req, res) => {
 
         totalFineMins += dayFinePenaltyMins;
         summary.fineAmount += parseFloat(attendanceDay.fine_amount) || 0;
+        summary.overtimeAmount += parseFloat(attendanceDay.overtime_amount) || 0;
         // overtime_minutes is already the total (early + late) from helper, so no need to add early_overtime_minutes again
         totalOvertimeMins += (parseInt(attendanceDay.overtime_minutes) || 0);
 
         const shiftName = attendanceDay.shiftTemplate?.shift_name || "N/A";
+        const shiftStartTime = attendanceDay.shiftTemplate?.start_time || "N/A";
+        const shiftEndTime = attendanceDay.shiftTemplate?.end_time || "N/A";
+
+        let shiftTimeStr = "0:00 Hrs";
+        if (attendanceDay.shiftTemplate) {
+          const start = dayjs(attendanceDay.shiftTemplate.start_time, "HH:mm:ss");
+          let end = dayjs(attendanceDay.shiftTemplate.end_time, "HH:mm:ss");
+          if (end.isBefore(start)) end = end.add(1, 'day');
+          const diffMins = end.diff(start, 'minute');
+          shiftTimeStr = `${Math.floor(diffMins / 60)}:${(diffMins % 60).toString().padStart(2, '0')} Hrs`;
+        }
+
         const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 12: "On Duty", 13: "Half On Duty" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
@@ -1523,6 +1539,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           fine_minutes: attendanceDay.fine_minutes,
           overtime_minutes: attendanceDay.overtime_minutes,
           fine_amount: attendanceDay.fine_amount,
+          overtime_amount: attendanceDay.overtime_amount,
           overtime_data: attendanceDay.overtime_data,
           fine_data: attendanceDay.fine_data,
           branch_name: attendanceDay.branch?.branch_name,
@@ -1530,6 +1547,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           is_locked: attendanceDay.is_locked,
           shift_id: attendanceDay.shift_id,
           shift_name: shiftName,
+          shift_time: shiftTimeStr,
           time_range: timeRange + varianceStr,
           day_status: attendanceDay.status,
           status: statusText,
@@ -1738,6 +1756,7 @@ exports.getLeaveSummary = async (req, res) => {
         id: leave.id,
         date_range: dateRange,
         request_type: leave.request_type || 'DEBIT',
+        applied_date: leave.createdAt ? dayjs(leave.createdAt).format("D MMM, ddd") : "",
         duration_display: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}${typeSuffix}`,
         duration_days: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days`,
         leave_type: `${leave.category?.leave_category_name}${typeSuffix}`,

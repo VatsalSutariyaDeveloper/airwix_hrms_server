@@ -376,12 +376,12 @@ async function punch(employeeId, meta, transaction = null) {
   // So we skip the redundant search for lastPunch here
 
   // 5️⃣ Validation: Minimum 2 minutes gap between any consecutive punches
-  // if (lastPunchGlobal && !meta.bypassGapCheck) {
-  //   const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
-  //   if (minutesSinceLastPunch < 2) {
-  //     throw new Err("Please wait 2 minutes for next punch");
-  //   }
-  // }
+  if (lastPunchGlobal && !meta.bypassGapCheck) {
+    const minutesSinceLastPunch = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "minute", true));
+    if (minutesSinceLastPunch < 2) {
+      throw new Err("Please wait 2 minutes for next punch");
+    }
+  }
 
   // 4️⃣ Save raw punch
   const newPunch = await commonQuery.createRecord(AttendancePunch, {
@@ -1027,14 +1027,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
             const lOverlapStart = dayjs(Math.max(pS.valueOf(), shiftEnd.valueOf()));
             if (pE.isAfter(lOverlapStart)) {
               const lateOvertimeMins = pE.diff(lOverlapStart, "minute");
-              
-              // [New Logic] If auto-calculate OT is disabled, Late OT in a session that overlaps or ends the shift 
-              // is treated as normal Working Time. A new punch-in session is required to trigger real Overtime.
-              if (template && template.auto_calculate_overtime === false && pS.isBefore(shiftEnd)) {
-                shiftWorkedMins += lateOvertimeMins;
-              } else {
-                lateOTMins += lateOvertimeMins;
-              }
+              lateOTMins += lateOvertimeMins;
             }
           }
         }
@@ -1279,7 +1272,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
     // 💸 FINE & BENEFIT CALCULATION
     const monthStart = dayjs(date).startOf('month').format('YYYY-MM-DD');
-
 
     if (template && template.fines_allowed !== false) {
       let rule = null;
@@ -1786,21 +1778,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Override fines and worked minutes for automated approvals (e.g. Short Leave treated as Present)
     if (status === 0 || status === 1) { // 0: Present, 1: Half Day
-      lateMinutes = 0;
-      earlyOutMinutes = 0;
-      fineAmount = 0;
-      fineData = {
-        late_entry: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
-        early_exit: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
-        excess_breaks: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 }
-      };
-
       if (status === 0) {
         finalWorkedMinutes = shift ? (shift.min_full_day_minutes || 480) : 480;
       } else if (status === 1) {
         finalWorkedMinutes = shift ? (shift.min_half_day_minutes || 240) : 240;
       }
     }
+  }
+
+  // [User Request] If status is Half-Day (1), do not calculate or store fines
+  if (status === 1) {
+    lateMinutes = 0;
+    earlyOutMinutes = 0;
+    fineAmount = 0;
+    fineMinutes = 0;
+    fineData = {
+      late_entry: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
+      early_exit: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
+      excess_breaks: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 }
+    };
   }
 
   const existingDay2 = await commonQuery.findOneRecord(AttendanceDay, {
@@ -2121,11 +2117,19 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
   if (!isHoliday && !isWeeklyOff) return;
 
-  const compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+  let compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
     is_compoff: true,
     leave_template_id: employee.leave_template,
     status: 0
   }, {}, transaction);
+
+  if (!compOffCategory) {
+    compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+      is_compoff: true,
+      status: 0
+    }, {}, transaction);
+  }
+
   if (!compOffCategory) return;
 
   // Determine if it's a working state based on status OR worked time on non-working days

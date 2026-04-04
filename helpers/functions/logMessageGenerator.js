@@ -83,6 +83,7 @@ const ENTITYCONFIG_MAP = {
     // Logs
     [ENTITIES.ACTIVITY_LOG.NAME]: { primary: 'record_id', secondary: 'entity_name' },
     [ENTITIES.LOGIN_HISTORY.NAME]: { primary: 'user_id', secondary: 'in_time' },
+    [ENTITIES.EMPLOYEE.NAME]: { primary: 'first_name', secondary: 'employee_code' },
 };
 
 exports.generateLogMessage = (entityName, actionType, recordData = {}) => {
