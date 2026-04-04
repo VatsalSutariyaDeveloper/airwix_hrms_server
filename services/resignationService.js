@@ -1,4 +1,5 @@
-const { Employee, User, EmployeeResignation, sequelize, Op } = require("../models");
+const { Op } = require("../helpers");
+const { Employee, User, EmployeeResignation, sequelize } = require("../models");
 const dayjs = require("dayjs");
 
 class ResignationService {
@@ -29,13 +30,13 @@ class ResignationService {
             console.log(`[ResignationService] Deactivating ${employeeIds.length} employees...`);
 
             // 1. Update Employee Status to Inactive (1)
-            await Employee.update({ status: 1 }, {
+            await Employee.update({ status: 4 }, {
                 where: { id: { [Op.in]: employeeIds } },
                 transaction
             });
 
             // 2. Update linked User Status to Inactive (1)
-            await User.update({ status: 1 }, {
+            await User.update({ status: 4 }, {
                 where: { employee_id: { [Op.in]: employeeIds } },
                 transaction
             });
