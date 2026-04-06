@@ -170,7 +170,94 @@ const ensureLatestPayslip = async (employee_id, month, year, options = {}, trans
     }
 };
 
+/**
+ * Calculate employee weekly offs and holidays for a given month.
+ * Returns both total counts for the full month and "gone" counts (on or before today).
+ * 
+ * @param {number} employee_id
+ * @param {number} month
+ * @param {number} year
+ * @param {object} [transaction]
+ * @returns {{ totalWeeklyOffs, goneWeeklyOffs, totalHolidays, goneHolidays, holidayList, goneHolidayList }}
+ */
+const calculateEmployeeOffDays = async (employee_id, month, year, transaction = null) => {
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+    const today = dayjs().format('YYYY-MM-DD');
+    const monthDaysCount = dayjs(startDate).daysInMonth();
+
+    // Fetch employee weekly off rules
+    const empWeeklyOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
+        employee_id,
+        is_off: true,
+        status: 0
+    }, {}, transaction);
+
+    // Fetch employee holidays for the month
+    const allHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
+        employee_id,
+        date: { [Op.between]: [startDate, endDate] },
+        status: 0
+    }, {}, transaction);
+
+    // Calculate weekly offs
+    let totalWeeklyOffs = 0;
+    let goneWeeklyOffs = 0;
+    const weeklyOffDates = [];
+    const goneWeeklyOffDates = [];
+
+    for (let d = 1; d <= monthDaysCount; d++) {
+        const dateObj = dayjs(startDate).date(d);
+        const dateStr = dateObj.format('YYYY-MM-DD');
+        const dayOfWeek = dateObj.day();
+        const weekNo = Math.ceil(d / 7);
+
+        const isOff = empWeeklyOffs.find(wo =>
+            wo.day_of_week === dayOfWeek &&
+            (wo.week_no === 0 || wo.week_no === weekNo)
+        );
+
+        if (isOff) {
+            totalWeeklyOffs++;
+            weeklyOffDates.push({
+                date: dateStr,
+                day_of_week: dayOfWeek,
+                week_no: weekNo
+            });
+            
+            if (dateStr <= today) {
+                goneWeeklyOffs++;
+                goneWeeklyOffDates.push({
+                    date: dateStr,
+                    day_of_week: dayOfWeek,
+                    week_no: weekNo
+                });
+            }
+        }
+    }
+
+    // Calculate holidays
+    const totalHolidays = allHolidays.length;
+    const goneHolidayList = allHolidays.filter(h => {
+        const hDate = dayjs(h.date).format('YYYY-MM-DD');
+        return hDate <= today;
+    });
+    const goneHolidays = goneHolidayList.length;
+
+    return {
+        totalWeeklyOffs,
+        goneWeeklyOffs,
+        totalHolidays,
+        goneHolidays,
+        holidayList: allHolidays,
+        goneHolidayList,
+        weeklyOffList: weeklyOffDates,
+        goneWeeklyOffList: goneWeeklyOffDates
+    };
+};
+
 module.exports = {
     performSalaryCalculation,
-    ensureLatestPayslip
+    ensureLatestPayslip,
+    calculateEmployeeOffDays
 };

@@ -6,7 +6,7 @@ const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
 const { handleExport } = require("../../helpers/functions/excelService");
-const { ensureLatestPayslip } = require("../../services/payrollService");
+const { ensureLatestPayslip, calculateEmployeeOffDays } = require("../../services/payrollService");
 const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 const employee = require("../../models/employee");
 
@@ -101,21 +101,6 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 }
             },
             {
-                model: EmployeeWeeklyOff,
-                as: "employeeWeeklyOffs",
-                where: { is_off: true, status: 0 },
-                required: false
-            },
-            {
-                model: EmployeeHoliday,
-                as: "employeeHolidays",
-                where: { 
-                    date: { [Op.between]: [startDate, endDate] },
-                    status: 0 
-                },
-                required: false
-            },
-            {
                 model: EmployeeAttendanceTemplate,
                 as: "employeeAttendanceTemplate",
                 where: { status: 0 },
@@ -149,8 +134,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         : (baseSalaryTemplate.salaryTemplateTransactions || []);
 
     // Step A: Aggregate Counts
-    let presentDays = 0, halfDays = 0, uncategorizedHalfDays = 0, absentDays = 0, leaveDays = 0, weeklyOffs = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
+    let presentDays = 0, halfDays = 0, uncategorizedHalfDays = 0, absentDays = 0, leaveDays = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
     let unpaidLeaveDays = 0, compoffLeaveDays = 0;
+
+    // A.0 Calculate Weekly Offs and Holidays using common function
+    const offDays = await calculateEmployeeOffDays(employee_id, month, year, transaction);
+    let weeklyOffs = offDays.goneWeeklyOffs;
 
     // Prefetch leave configurations to identify Unpaid or CompOff status
     const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
@@ -184,23 +173,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         });
     });
 
-    // A.1 Calculate Weekly Offs from EmployeeWeeklyOff
-    const empWeeklyOffs = employee.employeeWeeklyOffs || [];
-    const monthDaysCount = dayjs(startDate).daysInMonth();
-    for (let d = 1; d <= monthDaysCount; d++) {
-        const dateObj = dayjs(startDate).date(d);
-        const dayOfWeek = dateObj.day();
-        const weekNo = Math.ceil(d / 7);
-
-        const isOff = empWeeklyOffs.find(wo => 
-            wo.day_of_week === dayOfWeek && 
-            (wo.week_no === 0 || wo.week_no === weekNo)
-        );
-        if (isOff) weeklyOffs++;
-    }
-
-    // A.2 Calculate Holidays from EmployeeHoliday
-    // holidays = (employee.employeeHolidays || []).length;
+    // A.1 & A.2 - Weekly offs and holidays already calculated via calculateEmployeeOffDays above
 
     const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
         employee_id,
@@ -210,6 +183,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     
     const monthLeaveUsage = {}; // Track usage per category ID for the current month
     const leaveCategoryDetails = {}; // Track usage per category name for leave_details
+    const attendanceHolidayDates = new Set();
     attendanceRecords.forEach(day => {
         const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
         
@@ -228,10 +202,24 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         switch (parseInt(day.status)) {
             case 0: case 12: 
-                presentDays++; 
+                const attendanceDateStr = dayjs(day.attendance_date).format('YYYY-MM-DD');
+                const isWeeklyOff = offDays.weeklyOffList.find(wo => wo.date === attendanceDateStr);
+                const isHoliday = offDays.holidayList.find(h => dayjs(h.date).format('YYYY-MM-DD') === attendanceDateStr);
+                
+                const lwpBasis = employeeSalaryTemplate?.lwp_calculation_basis || 'WORKING_DAYS';
+                
+                if (lwpBasis === 'WORKING_DAYS') {
+                    // Don't count weekly offs and holidays as present
+                    if (!isWeeklyOff && !isHoliday) {
+                        presentDays++; 
+                    }
+                } else {
+                    // For FIXED_30_DAYS and DAYS_IN_MONTH, count all present days including weekly offs and holidays
+                    presentDays++; 
+                }
                 break;
             case 1: case 13: 
-                halfDays++; // Always track total half days for UI
+                halfDays++;
                 if (catInfo) {
                     if (!catInfo.is_paid) unpaidLeaveDays += 0.5;
                     else if (catInfo.is_compoff) compoffLeaveDays += 0.5;
@@ -241,15 +229,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 }
                 break;
             case 4: 
-                holidays++; 
+                holidays++;
+                attendanceHolidayDates.add(dayjs(day.attendance_date).format('YYYY-MM-DD'));
                 break;
             case 5: 
                 absentDays++; 
                 break;
             case 6: 
                 if (catInfo) {
-console.log(day)
-
                     if (!catInfo.is_paid) unpaidLeaveDays++;
                     else if (catInfo.is_compoff) compoffLeaveDays++;
                     else leaveDays++;
@@ -259,9 +246,17 @@ console.log(day)
                 break;
         }
         totalFine += parseFloat(day.fine_amount || 0);
-        totalOTAmount += parseFloat(day.overtime_amount || 0);
+        totalOTAmount += Math.round(parseFloat(day.overtime_amount || 0));
         totalOTMins += parseInt(day.overtime_minutes || 0);
         totalWorkedMins += parseInt(day.worked_minutes || 0);
+    });
+
+    // This ensures if a holiday exists in both attendance (status 4) and template, it's counted only once
+    offDays.goneHolidayList.forEach(h => {
+        const hDate = dayjs(h.date).format('YYYY-MM-DD');
+        if (!attendanceHolidayDates.has(hDate)) {
+            holidays++;
+        }
     });
 
     // Step A.1: Calculate Canteen/Lunch Counts
@@ -298,13 +293,14 @@ console.log(day)
     if (template.lwp_calculation_basis === "FIXED_30_DAYS") {
         daysInCalculation = 30;
     } else if (template.lwp_calculation_basis === "WORKING_DAYS") {
-        daysInCalculation = daysInMonth - weeklyOffs;
+        daysInCalculation = daysInMonth - offDays.totalWeeklyOffs;
     }
 
     const payableDaysValue = totalPresentDays + leaveDays + holidays;
+
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
-        actualDaysValue = daysInMonth - weeklyOffs;
+        actualDaysValue = daysInMonth - offDays.totalWeeklyOffs;
     } else if (template.lwp_calculation_basis === "FIXED_30_DAYS") {
         actualDaysValue = 30;
     } else {
@@ -348,7 +344,7 @@ console.log(day)
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
     const includeOTInTotal = activeAttendanceTemplate ? (activeAttendanceTemplate.include_overtime_in_total === true || activeAttendanceTemplate.include_overtime_in_total === 'true') : false;
     console.log("includeOTInTotal", includeOTInTotal);
-    const otAmount = includeOTInTotal ? totalOTAmount : 0;
+    const otAmount = includeOTInTotal ? Math.round(totalOTAmount) : 0;
 
     // Step E: Use advances and incentives from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
@@ -364,7 +360,7 @@ console.log(day)
             id: day.id,
             date: day.attendance_date,
             minutes: parseInt(day.overtime_minutes || 0),
-            amount: parseFloat(day.overtime_amount || 0),
+            amount: Math.round(parseFloat(day.overtime_amount || 0)),
             note: day.note || '',
             overtime_data: day.overtime_data || null
         }));
@@ -401,8 +397,8 @@ console.log(day)
         earnings.push({
             name: "Leave Encashment",
             // base_amount: encashmentAmount,
-            amount: parseFloat(encashmentAmount.toFixed(2)),
-            actual_amount: parseFloat(encashmentAmount.toFixed(2)),
+            amount: Math.round(encashmentAmount),
+            actual_amount: Math.round(encashmentAmount),
             days: totalEncashedDays,
             is_encashment: true
         });
@@ -520,10 +516,10 @@ console.log(day)
             statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
             if (comp.component_type === "DEDUCTION") {
                 totalDeductions += amount;
-                deductions.push({ name: comp.component_name, amount: amount, is_statutory: true });
+                deductions.push({ name: comp.component_name, amount: Math.round(amount), is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, amount: amount, actual_amount: amount, is_statutory: true });
+                earnings.push({ name: comp.component_name, amount: Math.round(amount), actual_amount: Math.round(amount), is_statutory: true });
             }
             return;
         }        
@@ -532,8 +528,8 @@ console.log(day)
             
             earnings.push({
                 name: comp.component_name,
-                amount: finalAmount,
-                actual_amount: finalAmount
+                amount: Math.round(finalAmount),
+                actual_amount: Math.round(finalAmount)
             });
 
             takeHomeEarnings += finalAmount;
@@ -553,17 +549,17 @@ console.log(day)
             
             deductions.push({
                 name: comp.component_name,
-                amount: actualAmount,
+                amount: Math.round(actualAmount),
                 is_food: isFoodComp,
                 meal_count: lunchCount,
-                rate: rateValue
+                rate: Math.round(rateValue)
             });
             totalDeductions += actualAmount;
         } else if (comp.component_type === "BENEFIT") {
             earnings.push({
                 name: comp.component_name,
-                amount: actualAmount,
-                actual_amount: actualAmount,
+                amount: Math.round(actualAmount),
+                actual_amount: Math.round(actualAmount),
                 is_benefit: true
             });
             takeHomeEarnings += actualAmount;
@@ -573,7 +569,7 @@ console.log(day)
 
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", amount: parseFloat(otAmount.toFixed(2)), actual_amount: parseFloat(otAmount.toFixed(2)), is_ot: true });
+        earnings.push({ name: "Overtime", amount: Math.round(otAmount), actual_amount: Math.round(otAmount), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
@@ -581,7 +577,7 @@ console.log(day)
 
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", amount: parseFloat(totalIncentive.toFixed(2)), actual_amount: parseFloat(totalIncentive.toFixed(2)), is_incentive: true });
+        earnings.push({ name: "Incentive", amount: Math.round(totalIncentive), actual_amount: Math.round(totalIncentive), is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
@@ -593,7 +589,7 @@ console.log(day)
     // });
 
     if (totalFine > 0) {
-        deductions.push({ name: "Fines", amount: parseFloat(totalFine.toFixed(2)), is_fine: true });
+        deductions.push({ name: "Fines", amount: Math.round(totalFine), is_fine: true });
         totalDeductions += totalFine;
     }
 
@@ -734,28 +730,28 @@ console.log(day)
             joining_date: employee.joining_date
         },
         period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
-        attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
+        attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalWeeklyOffs: offDays.totalWeeklyOffs, totalHolidays: offDays.totalHolidays, goneWeeklyOffs: offDays.goneWeeklyOffs, goneHolidays: offDays.goneHolidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
-            ctc_monthly: monthlyGross,
-            perDaySalary: perDaySalary.toFixed(2),
-            lwpDeduction: lwpDeductionTotal.toFixed(2),
-            totalFine: totalFine.toFixed(2),
-            overtimeAmount: otAmount.toFixed(2),
-            incentiveAmount: totalIncentive.toFixed(2),
+            ctc_monthly: Math.round(monthlyGross),
+            perDaySalary: Math.round(perDaySalary),
+            lwpDeduction: Math.round(lwpDeductionTotal),
+            totalFine: Math.round(totalFine),
+            overtimeAmount: Math.round(otAmount),
+            incentiveAmount: Math.round(totalIncentive),
             // advanceAmount: totalAdvance.toFixed(2),
-            encashmentAmount: encashmentAmount.toFixed(2),
+            encashmentAmount: Math.round(encashmentAmount),
             // tdsPercentage: tdsPercentage.toFixed(2),
-            netPayable: netPayable < 0 ? "0.00" : netPayable.toFixed(2),
-            takeHomeEarnings: takeHomeEarnings.toFixed(2),
-            totalDeductions: totalDeductions.toFixed(2)
+            netPayable: netPayable < 0 ? "0" : Math.round(netPayable).toString(),
+            takeHomeEarnings: Math.round(takeHomeEarnings).toString(),
+            totalDeductions: Math.round(totalDeductions).toString()
         },
         breakdown: {
             earnings,
             deductions,
             statutory,
             employer,
-            total_earnings: totalEarningsBreakdown.toFixed(2),
-            total_deductions: totalDeductionsBreakdown.toFixed(2)
+            total_earnings: Math.round(totalEarningsBreakdown).toString(),
+            total_deductions: Math.round(totalDeductionsBreakdown).toString()
         },
         overtime_history: overtimeHistory,
         payment_history: {
@@ -1005,7 +1001,7 @@ exports.calculateMonthlySalary = async (req, res) => {
             year,
             status: { [Op.in]: [1, 3] } // Finalized or Paid
         }, {
-            order: [['sequence', 'ASC']],
+            order: [['id', 'ASC']],
             include: [{
                 model: Employee,
                 as: "employee",

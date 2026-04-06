@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster, Holiday } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -194,32 +194,32 @@ exports.getAttendanceSummary = async (req, res) => {
 
     // 1.5 AUTO-SYNC: Create records for WO/Holiday/Leave if missing
     // This allows them to show up in summary and list immediately.
-    try {
-        const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
-        if (isPastOrToday) {
-            const employeesToSync = await commonQuery.findAllRecords(
-                Employee,
-                employeeWhere,
-                { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
-                null, 
-            );
+    // try {
+    //     const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
+    //     if (isPastOrToday) {
+    //         const employeesToSync = await commonQuery.findAllRecords(
+    //             Employee,
+    //             employeeWhere,
+    //             { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
+    //             null, 
+    //         );
             
 
-            if (employeesToSync.length > 0) {
-              await bulkSyncAttendanceDays(
-                employeesToSync.map(e => e.id),
-                targetDate,
-                { 
-                  user_id: req.user.id, 
-                  company_id: req.user.company_id, 
-                  branch_id: req.user.branch_id 
-                }
-              );
-            }
-        }
-    } catch (syncErr) {
-        console.error("Attendance Auto-Sync Error:", syncErr);
-    }
+    //         if (employeesToSync.length > 0) {
+    //           await bulkSyncAttendanceDays(
+    //             employeesToSync.map(e => e.id),
+    //             targetDate,
+    //             { 
+    //               user_id: req.user.id, 
+    //               company_id: req.user.company_id, 
+    //               branch_id: req.user.branch_id 
+    //             }
+    //           );
+    //         }
+    //     }
+    // } catch (syncErr) {
+    //     console.error("Attendance Auto-Sync Error:", syncErr);
+    // }
 
     const fieldConfig = [
       ["first_name", true, true],
@@ -330,7 +330,7 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('branch_name', day.branch?.branch_name);
           
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 12: "On Duty", 13: "Half On Duty" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
              const h = itemHolidays.find(h => h.employee_id === emp.id);
@@ -443,6 +443,7 @@ exports.getAttendanceSummary = async (req, res) => {
       else if (status === 4) summary.holiday += count;
       else if (status === 6) summary.leave += count;
       else if (status === 5) summary.absent += count;
+      else if (status === 7) summary.present += count; // Overtime Day
       else if (status === 9) summary.incomplete += count;
       
       totalAccounted += count;
@@ -493,9 +494,12 @@ exports.updateAttendanceDay = async (req, res) => {
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
-        { model: ShiftTemplate, as: "shiftTemplate", required: false }
+        { model: ShiftTemplate, as: "shiftTemplate", required: false },
+        { model: EmployeeSalaryTemplate, as: "employeeSalaryTemplate", where: { status: 0 }, required: false },
+        { model: EmployeeWeeklyOff, as: "employeeWeeklyOffs", where: { status: 0, is_off: true }, required: false },
+        { model: EmployeeHoliday, as: "employeeHolidays", where: { status: 0, date: req.body.attendance_date }, required: false }
       ]
-    }, t, false, { comapany_id: true });
+    }, t, false, { company_id: true });
     const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
     
@@ -544,8 +548,6 @@ exports.updateAttendanceDay = async (req, res) => {
       is_locked,
       note,
     } = req.body;
-    
-    // [USER REQUEST] REMOVED AttendanceDay.destroy to preserve existing data (status, punches) if not being explicitly updated.
 
     const day = await getOrCreateAttendanceDay(
       employee_id,
@@ -557,6 +559,93 @@ exports.updateAttendanceDay = async (req, res) => {
       },
       t
     );
+
+    // [OVERTIME LOGIC FOR PRESENT ON HOLIDAY/WEEKLY OFF]
+    const salaryTemplate = emp?.employeeSalaryTemplate;
+    const holidayPolicy = template ? template.holiday_policy : 'BLOCK_ATTENDANCE';
+    const lwpBasis = salaryTemplate ? salaryTemplate.lwp_calculation_basis : 'WORKING_DAYS';
+    const effectiveStatusForOT = (status !== undefined && status !== null) ? Number(status) : day.status;
+
+    if (salaryTemplate && Number(effectiveStatusForOT) === 0) {
+        const isHL = (emp.employeeHolidays || []).length > 0;
+        const targetDateJS = dayjs(attendance_date);
+        const dayOfWeek = targetDateJS.day();
+        const weekNo = Math.ceil(targetDateJS.date() / 7);
+        const isWO = (emp.employeeWeeklyOffs || []).find(wo => 
+            wo.day_of_week === dayOfWeek && 
+            (wo.week_no === 0 || wo.week_no === weekNo)
+        );
+
+        let shouldAddExtraOvertime = false;
+        if (isHL && holidayPolicy === 'ALLOW_NORMAL') {
+            shouldAddExtraOvertime = true;
+        } else if (isWO && ['DAYS_IN_MONTH', 'FIXED_30_DAYS'].includes(lwpBasis)) {
+            shouldAddExtraOvertime = true;
+        }
+
+        if (shouldAddExtraOvertime) {
+            let daySalaryAddress = parseFloat(salaryTemplate.daily_rate || 0);
+            if (daySalaryAddress <= 0) {
+                const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
+                const daysInMonthAtTarget = targetDateJS.daysInMonth();
+                const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : daysInMonthAtTarget;
+                daySalaryAddress = monthlyGross / (daysInCalc || 30);
+            }
+            
+            const currentOvertime = parseFloat(overtime_amount || 0);
+            overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
+        }
+    }
+
+    // [HOLIDAY AND WEEKLY OFF LOGIC BASED ON POLICY]
+    if (status !== undefined && status !== null) {
+        const requestedStatus = Number(status);
+        const targetDateJS = dayjs(attendance_date);
+        const dayOfWeek = targetDateJS.day();
+        const weekNo = Math.ceil(targetDateJS.date() / 7);
+        
+        // Check if it's a holiday
+        const isHL = (emp.employeeHolidays || []).find(h => {
+            const holidayDate = dayjs(h.date).format('YYYY-MM-DD');
+            const currentDateStr = targetDateJS.format('YYYY-MM-DD');
+            return holidayDate === currentDateStr;
+        });
+        
+        // Check if it's a weekly off
+        const isWO = (emp.employeeWeeklyOffs || []).find(wo => 
+            wo.day_of_week === dayOfWeek && 
+            (wo.week_no === 0 || wo.week_no === weekNo)
+        );
+        
+        // Holiday logic
+        if (isHL) {
+            if (holidayPolicy === 'ALLOW_NORMAL' && requestedStatus === 0) {
+                status = 0;
+            } else if (holidayPolicy === 'COMP_OFF' && requestedStatus === 0) {
+                await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
+                status = 0;
+            }
+        }
+        
+        // Weekly off logic
+        if (isWO) {
+            if (holidayPolicy === 'ALLOW_NORMAL') {
+                if (lwpBasis === 'WORKING_DAYS' && requestedStatus === 0) {
+                    status = 0;
+                } else if (['FIXED_30_DAYS', 'DAYS_IN_MONTH'].includes(lwpBasis) && requestedStatus === 0) {
+                    status = 0;
+                }
+            } else if (holidayPolicy === 'COMP_OFF') {
+                if (lwpBasis === 'WORKING_DAYS' && requestedStatus === 0) {
+                    await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
+                    status = 0;
+                } else if (['FIXED_30_DAYS', 'DAYS_IN_MONTH'].includes(lwpBasis) && requestedStatus === 0) {
+                    await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
+                    status = 0;
+                }
+            }
+        }
+    }
 
     let needsPunchUpdate = false;
     let effectiveFirstIn = first_in;

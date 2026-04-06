@@ -2109,6 +2109,7 @@ async function getDayOffInfo(employee, date, transaction) {
  * Syncs Compensatory Off credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
+  console.log("enter in syncCompOffCredit --------------------------------2112");
   if (!employee) return;
   const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
@@ -2127,7 +2128,8 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
     compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
       is_compoff: true,
       status: 0
-    }, {}, transaction);
+    }, {}, transaction, false, {});
+    console.log("compOffCategory-----------------------------------------\n",compOffCategory);
   }
 
   if (!compOffCategory) return;
@@ -2229,6 +2231,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 
   if (employee) {
+    console.log("start processing........................................ 2232");
     const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction, newDay || oldDay);
     if (error) return error;
   }

@@ -212,16 +212,16 @@ class EmployeeTemplateService {
         }
 
         // Trigger past data sync for attendance related templates
-        if (!skipRebuild && ['attendance_setting_template', 'holiday_template', 'weekly_off_template'].includes(fieldName)) {
-            const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['id', 'company_id', 'branch_id'] }, transaction);
-            if (employee) {
-                await this.syncAttendanceForPastDays([employeeId], transaction, {
-                    user_id: meta.user_id || meta.req?.user?.id || 0,
-                    company_id: meta.company_id || employee.company_id,
-                    branch_id: meta.branch_id || employee.branch_id
-                });
-            }
-        }
+        // if (!skipRebuild && ['attendance_setting_template', 'holiday_template', 'weekly_off_template'].includes(fieldName)) {
+        //     const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, { attributes: ['id', 'company_id', 'branch_id'] }, transaction);
+        //     if (employee) {
+        //         await this.syncAttendanceForPastDays([employeeId], transaction, {
+        //             user_id: meta.user_id || meta.req?.user?.id || 0,
+        //             company_id: meta.company_id || employee.company_id,
+        //             branch_id: meta.branch_id || employee.branch_id
+        //         });
+        //     }
+        // }
         return result;
     }
 
@@ -271,6 +271,7 @@ class EmployeeTemplateService {
     // --- ATTENDANCE SYNC HELPERS ---
 
     static async syncAttendanceForPastDays(employeeIds, transaction = null, meta = {}) {
+        console.log("syncAttendanceForPastDays", employeeIds, transaction, meta);
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
         try {
             // Rebuild current month to fill in holidays, weekly offs, and auto-absent
