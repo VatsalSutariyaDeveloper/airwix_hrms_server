@@ -144,7 +144,12 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
       if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
         where.branch_id = ctx.branch_id;
       } else if (!ctx.is_super_admin && ctx.branch_access) {
-        const branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        let branches = [];
+        if (typeof ctx.branch_access === 'string') {
+          branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        } else if (Array.isArray(ctx.branch_access)) {
+          branches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+        }
         if (branches.length > 0) where.branch_id = { [Op.in]: branches };
       }
     }
@@ -160,7 +165,12 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
       if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
         where.branch_id = ctx.branch_id;
       } else if (!ctx.is_super_admin && ctx.branch_access) {
-        const branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        let branches = [];
+        if (typeof ctx.branch_access === 'string') {
+          branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        } else if (Array.isArray(ctx.branch_access)) {
+          branches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+        }
         if (branches.length > 0) where.branch_id = { [Op.in]: branches };
       }
     }

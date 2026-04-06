@@ -359,7 +359,6 @@ class EmployeeTemplateService {
         }
 
         // Trigger leave balance sync for Comp-Off category
-        const LeaveBalanceService = require("./leaveBalanceService");
         await LeaveBalanceService.bulkSyncEmployeeAttendancePolicy(employeeIds, transaction);
     }
 

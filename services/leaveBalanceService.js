@@ -102,7 +102,7 @@ class LeaveBalanceService {
     static calculateProRata(joiningDate, annualTotal, cycleEndDate, rule = 'THRESHOLD_BASED') {
         const join = dayjs(joiningDate);
         const end = dayjs(cycleEndDate);
-        
+        console.log("joiningDate",joiningDate,"annualTotal",annualTotal,"cycleEndDate",cycleEndDate,"rule",rule)
         const monthlyRate = annualTotal / 12;
         const nextMonthStart = join.add(1, 'month').startOf('month');
         let diffMonths = end.isBefore(nextMonthStart) ? 0 : end.diff(nextMonthStart, 'month') + 1;
@@ -120,8 +120,9 @@ class LeaveBalanceService {
             const daysRemaining = daysInMonth - day + 1;
             joinMonthCredit = (daysRemaining / daysInMonth) * monthlyRate;
         }
-
+        console.log("diffMonths",diffMonths,"monthlyRate",monthlyRate,"joinMonthCredit",joinMonthCredit)
         let total = (diffMonths * monthlyRate) + joinMonthCredit;
+        console.log("total",total)
         return Math.ceil(total * 2) / 2;
     }
 
@@ -143,9 +144,7 @@ class LeaveBalanceService {
 
             // --- [MOD] Dynamic Comp-Off Logic based on Attendance Policy ---
             // Fetch attendance template to check holiday policy
-            const attendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate || 
-                await commonQuery.findOneRecord(AttendanceTemplate, employee.attendance_setting_template, {}, t);
-            
+            const attendanceTemplate = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { employee_id: employeeId }, {}, t, true);
             const isCompOffPolicy = attendanceTemplate && attendanceTemplate.holiday_policy === 'COMP_OFF';
             
             // Filter and manage categories
@@ -153,24 +152,19 @@ class LeaveBalanceService {
             if (isCompOffPolicy) {
                 // If policy is COMP_OFF, ensure a Comp-Off category exists in the list
                 if (!categories.some(c => c.is_compoff)) {
-                    const masterCompOff = await commonQuery.findOneRecord(LeaveTemplateCategory, { is_compoff: true, status: 0 }, {}, t);
+                    const masterCompOff = await commonQuery.findOneRecord(LeaveTemplateCategory, { is_compoff: true, status: 0 }, {}, t, false, false);
                     if (masterCompOff) categories.push(masterCompOff);
                 }
             } else {
                 // If policy is NOT COMP_OFF, exclude Comp-Off category and soft-delete existing Comp-Off balances
                 categories = categories.filter(c => !c.is_compoff);
                 
-                await EmployeeLeaveBalance.update(
-                    { status: 2 }, 
+                await commonQuery.hardDeleteRecords(EmployeeLeaveBalance, 
                     { 
-                        where: { 
-                            employee_id: employeeId, 
-                            is_compoff: true,
-                            status: { [Op.in]: [0, 1] }
-                        }, 
-                        transaction: t 
-                    }
-                );
+                        employee_id: employeeId, 
+                        is_compoff: true,
+                        status: { [Op.in]: [0, 1] }
+                    }, t );
             }
 
             const refDate = asOf ? dayjs(asOf) : dayjs();
@@ -183,7 +177,9 @@ class LeaveBalanceService {
             for (const category of categories) {
                 let allocated = 0;
 
-                if (template.accrual_type === 'UPFRONT') {
+                const accrualTypeNormalized = String(template.accrual_type || '').toUpperCase();
+
+                if (accrualTypeNormalized === 'UPFRONT') {
                     const today = refDate;
                     const joinDate = dayjs(employee.joining_date);
 
@@ -206,36 +202,59 @@ class LeaveBalanceService {
                         // Full allocation: template applied at or before cycle start
                         allocated = category.leave_count;
                     }
-                } else if (template.accrual_type === 'MONTHLY') {
+                } else if (accrualTypeNormalized === 'MONTHLY') {
+                    // For MONTHLY accrual, we only grant leaves that have been EARNED.
+                    // This means for the current month (refDate), the allocation is 0.
+                    // We calculate the sum of credits for all COMPLETED months in the current cycle.
+
+                    const today = refDate;
+                    const joinDate = dayjs(employee.joining_date);
+                    
+                    let totalEarned = 0;
+                    let currentPointer = start.startOf('month');
+                    const lastEarnedMonth = today.subtract(1, 'month').startOf('month');
+
+                    // Standard Monthly Rate
                     let monthlyRate = category.leave_count / 12; 
                     if (template.leave_policy_cycle === 'MONTHLY') {
                         monthlyRate = category.leave_count;
                     } else if (template.leave_policy_cycle === 'QUARTERLY') {
-                        monthlyRate = '';
+                        monthlyRate = category.leave_count / 3;
                     }
 
-                    // For MONTHLY accrual on template apply day, use refDate as reference
-                    const today = refDate;
-                    const joinDate = dayjs(employee.joining_date);
-                    // If joining date is future, use join day-of-month; otherwise use refDate's day
-                    const refDay = joinDate.isAfter(today) ? joinDate.date() : today.date();
-
-                    if (template.join_month_rule === 'THRESHOLD_BASED') {
-                        if (refDay <= 7) allocated = monthlyRate;
-                        else if (refDay <= 22) allocated = monthlyRate / 2;
-                        else allocated = 0;
-                    } else if (template.join_month_rule === 'FULL_MONTH') {
-                        allocated = monthlyRate;
-                    } else if (template.join_month_rule === 'PRO_RATA_DAYS') {
-                        const refDate = joinDate.isAfter(today) ? joinDate : today;
-                        const daysInMonth = refDate.daysInMonth();
-                        const daysRemaining = daysInMonth - refDate.date() + 1;
-                        allocated = (daysRemaining / daysInMonth) * monthlyRate;
+                    // Iterate through each month in the cycle up to the last completed month
+                    while (!currentPointer.isAfter(lastEarnedMonth)) {
+                        // Check if employee had already joined in this month
+                        if (!joinDate.isAfter(currentPointer.endOf('month'))) {
+                            let monthCredit = 0;
+                            if (joinDate.isSame(currentPointer, 'month')) {
+                                // Apply join month rule for the first month
+                                const joinDay = joinDate.date();
+                                if (template.join_month_rule === 'THRESHOLD_BASED') {
+                                    if (joinDay <= 7) monthCredit = monthlyRate;
+                                    else if (joinDay <= 22) monthCredit = monthlyRate / 2;
+                                    else monthCredit = 0;
+                                } else if (template.join_month_rule === 'FULL_MONTH') {
+                                    monthCredit = monthlyRate;
+                                } else if (template.join_month_rule === 'PRO_RATA_DAYS') {
+                                    const daysInMonth = joinDate.daysInMonth();
+                                    const daysRemaining = daysInMonth - joinDay + 1;
+                                    monthCredit = (daysRemaining / daysInMonth) * monthlyRate;
+                                }
+                            } else {
+                                // Full credit for subsequent completed months
+                                monthCredit = monthlyRate;
+                            }
+                            totalEarned += monthCredit;
+                        }
+                        currentPointer = currentPointer.add(1, 'month');
                     }
+                    allocated = totalEarned;
                 }
-
+console.log("allocated111111111111111111",allocated)
                 // Apply Rounding to Allocation
                 allocated = Math.ceil(allocated * 2) / 2;
+console.log("allocated222222222222222222",allocated)
 
                 // Metadata to store from template category
                 const metaFields = {
@@ -247,73 +266,94 @@ class LeaveBalanceService {
                     automation_rules: category.automation_rules,
                 };
 
-                // Upsert balance record - find the latest balance (even if soft-deleted during sync)
-                const existingBalance = await EmployeeLeaveBalance.findOne({
+                const currentYear = end.year();
+                const currentMonth = template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null;
+
+                // 1. Fetch any EXISTING balance for the TARGET cycle (Sync check)
+                const targetBalance = await EmployeeLeaveBalance.findOne({
                     where: {
                         employee_id: employeeId,
                         leave_category_id: category.id,
-                        status: { [Op.in]: [0, 1, 2] } 
+                        year: currentYear,
+                        month: currentMonth,
+                        status: 0 // Only sync with active records
                     },
-                    order: [['id', 'DESC']],
                     transaction: t
                 });
-                
+
+                // 2. Fetch the LATEST previous balance for ROLLOVER (Source check)
                 let carryForward = 0;
                 let used = 0;
 
-                if (existingBalance) {
-                    const currentYear = end.year();
-                    const currentMonth = template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null;
-                    
-                    const isSameCycle = existingBalance.year === currentYear && 
-                                       (currentMonth === null || existingBalance.month === currentMonth);
+                if (allowRollover) {
+                    const lastBalance = await EmployeeLeaveBalance.findOne({
+                        where: {
+                            employee_id: employeeId,
+                            leave_category_id: category.id,
+                            status: { [Op.in]: [0, 1] } // Include processed records for rollover
+                        },
+                        order: [['id', 'DESC']],
+                        transaction: t
+                    });
 
-                    if (isSameCycle) {
-                        // Mid-cycle update/sync: preserve already carried and used data
-                        carryForward = parseFloat(existingBalance.carry_forward_leaves || 0);
-                        used = parseFloat(existingBalance.used_leaves || 0);
-                    } else if (allowRollover && (existingBalance.year < currentYear || (currentMonth !== null && existingBalance.year === currentYear && existingBalance.month < currentMonth))) {
-                        // Rollover from previous cycle: only if allowRollover is true
-                        const remaining = parseFloat(existingBalance.pending_leaves || 0);
-                        if (category.unused_leave_rule === 'CARRY_FORWARD') {
-                            const limit = parseFloat(category.carry_forward_limit || 0);
-                            carryForward = Math.min(remaining, limit);
+                    if (lastBalance) {
+                        const isSameCycle = lastBalance.year === currentYear && 
+                                           (currentMonth === null || lastBalance.month === currentMonth);
+
+                        if (isSameCycle) {
+                            carryForward = parseFloat(lastBalance.carry_forward_leaves || 0);
+                            used = parseFloat(lastBalance.used_leaves || 0);
+                        } else {
+                            // Rollover calculation from previous cycle
+                            const remaining = parseFloat(lastBalance.pending_leaves || 0);
+                            if (category.unused_leave_rule === 'CARRY_FORWARD') {
+                                const limit = parseFloat(category.carry_forward_limit || 0);
+                                carryForward = Math.min(remaining, limit);
+                            }
+                            used = 0; // New cycle starts with 0 used
                         }
-                        used = 0; // New cycle starts with 0 used
                     }
+                } else if (targetBalance) {
+                    // Syncing with existing active balance without rollover
+                    carryForward = parseFloat(targetBalance.carry_forward_leaves || 0);
+                    used = parseFloat(targetBalance.used_leaves || 0);
                 }
-
-                let pending = Math.ceil((allocated + carryForward - used) * 2) / 2;
+console.log("allocated",allocated,"carryForward",carryForward,"used",used)
+                let totalAllowance = Math.ceil((allocated + carryForward) * 2) / 2;
+                let pending = Math.ceil((totalAllowance - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
                 if ((!category.is_paid && !category.is_compoff) || pending < 0) {
                     pending = Math.max(0, pending);
                 }
 
-                if (existingBalance && existingBalance.status !== 2) {
-                    balance = await commonQuery.updateRecordById(EmployeeLeaveBalance, existingBalance.id, {
+                let balance;
+                if (targetBalance) {
+                    // Scenario A: Syncing existing active cycle balance
+                    balance = await commonQuery.updateRecordById(EmployeeLeaveBalance, targetBalance.id, {
                         ...metaFields,
-                        total_allocated: allocated,
+                        total_allocated: totalAllowance,
                         carry_forward_leaves: carryForward,
                         used_leaves: used,
                         pending_leaves: pending,
                         leave_template_id: templateId,
-                        year: end.year(),
-                        month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null
+                        // year and month are already correct on targetBalance
                     }, t);
                 } else {
+                    // Scenario B: Creating a NEW cycle balance (even if status 1 records exist elsewhere)
                     balance = await commonQuery.createRecord(EmployeeLeaveBalance, {
                         ...metaFields,
                         employee_id: employeeId,
                         leave_category_id: category.id,
-                        year: end.year(),
-                        month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
+                        year: currentYear,
+                        month: currentMonth,
                         leave_template_id: templateId,
-                        total_allocated: allocated,
+                        total_allocated: totalAllowance,
                         carry_forward_leaves: carryForward,
                         used_leaves: used,
                         pending_leaves: pending,
-                        company_id: employee.company_id
+                        company_id: employee.company_id,
+                        status: 0 // New records are always active
                     }, t);
                 }
                 results.push(balance);
@@ -426,9 +466,10 @@ class LeaveBalanceService {
                     id: { [Op.in]: chunk },
                     leave_template: { [Op.ne]: null } // Only sync if they have a leave template
                 }, {}, t);
-
                 for (const emp of employees) {
-                    await this.initializeBalance(emp.id, emp.leave_template, t, emp);
+                    if(emp.leave_template > 0){
+                        await this.initializeBalance(emp.id, emp.leave_template, t, emp);
+                    }
                 }
             }
 
@@ -445,6 +486,16 @@ class LeaveBalanceService {
      */
     static async processMonthlyAccruals(asOf = null) {
         const refDate = asOf ? dayjs(asOf) : dayjs();
+
+        // Guard: Monthly accruals strictly run on the 1st of the month.
+        // We allow other days ONLY if asOf is provided (for manual testing/triggering).
+        if (!asOf && refDate.date() !== 1) {
+            return;
+        }
+
+        // Logic: On the 1st of Month N, we credit for Month N-1 (the month just completed).
+        const calculationDate = refDate.subtract(1, 'day'); 
+        
         const transaction = await sequelize.transaction();
         try {
             const templates = await LeaveTemplate.findAll({
@@ -470,7 +521,14 @@ class LeaveBalanceService {
                 });
 
                 for (const employee of employees) {
-                    const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, refDate, {
+                    const joinDate = dayjs(employee.joining_date);
+
+                    // Skip if employee joined AFTER the month we are crediting
+                    if (joinDate.isAfter(calculationDate.endOf('month'))) {
+                        continue;
+                    }
+
+                    const { start, end } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, calculationDate, {
                         leave_period_start: template.leave_period_start,
                         leave_period_end: template.leave_period_end
                     });
@@ -481,6 +539,26 @@ class LeaveBalanceService {
                             monthlyRate = category.leave_count;
                         } else if (template.leave_policy_cycle === 'QUARTERLY') {
                             monthlyRate = category.leave_count / 3;
+                        }
+
+                        let creditToApply = 0;
+                        if (joinDate.isSame(calculationDate, 'month')) {
+                            // Apply join month rule if this was their first month
+                            const joinDay = joinDate.date();
+                            if (template.join_month_rule === 'THRESHOLD_BASED') {
+                                if (joinDay <= 7) creditToApply = monthlyRate;
+                                else if (joinDay <= 22) creditToApply = monthlyRate / 2;
+                                else creditToApply = 0;
+                            } else if (template.join_month_rule === 'FULL_MONTH') {
+                                creditToApply = monthlyRate;
+                            } else if (template.join_month_rule === 'PRO_RATA_DAYS') {
+                                const daysInMonth = joinDate.daysInMonth();
+                                const daysRemaining = daysInMonth - joinDay + 1;
+                                creditToApply = (daysRemaining / daysInMonth) * monthlyRate;
+                            }
+                        } else {
+                            // Full month earned
+                            creditToApply = monthlyRate;
                         }
 
                         const balance = await EmployeeLeaveBalance.findOne({
@@ -495,12 +573,12 @@ class LeaveBalanceService {
                         });
 
                         if (balance) {
-                            const newTotal = parseFloat(balance.total_allocated || 0) + monthlyRate;
-                            const newPending = parseFloat(balance.pending_leaves || 0) + monthlyRate;
+                            const newTotal = Math.ceil((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
+                            const newPending = Math.ceil((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
                             
                             await EmployeeLeaveBalance.update({
-                                total_allocated: Math.round(newTotal * 10) / 10,
-                                pending_leaves: Math.round(newPending * 10) / 10
+                                total_allocated: newTotal,
+                                pending_leaves: newPending
                             }, {
                                 where: { id: balance.id },
                                 transaction
@@ -527,7 +605,12 @@ class LeaveBalanceService {
             const employees = await Employee.findAll({
                 where: {
                     status: 0,
-                    leave_template: { [Op.ne]: null }
+                    leave_template: { 
+                        [Op.and]: [
+                            { [Op.ne]: null },
+                            { [Op.ne]: 0 }
+                        ]
+                    }
                 },
                 include: [{
                     model: LeaveTemplate,
@@ -541,6 +624,8 @@ class LeaveBalanceService {
                 transaction
             });
 
+            console.log(`[Year-End] Total Active Employees Found: ${employees.length}`);
+
             for (const employee of employees) {
                 const template = employee.leaveTemplate;
                 if (!template) continue;
@@ -551,7 +636,14 @@ class LeaveBalanceService {
                     leave_period_end: template.leave_period_end
                 });
                 
-                if (!yesterday.isSame(lastCycleEnd, 'day')) continue;
+                console.log(`[Year-End Log] Checking Emp ${employee.id} (${employee.first_name}): Cycle ${template.leave_policy_cycle}, Yesterday ${yesterday.format('YYYY-MM-DD')}, Last Cycle End ${lastCycleEnd.format('YYYY-MM-DD')}`);
+
+                if (!yesterday.isSame(lastCycleEnd, 'day')) {
+                    console.log(`[Year-End Log] Skipping Emp ${employee.id}: Not at cycle end.`);
+                    continue;
+                }
+
+                console.log(`[Year-End Log] >>> Reset Triggered for Emp ${employee.id}! <<<`);
 
                 const lastYear = lastCycleEnd.year();
                 
@@ -567,7 +659,12 @@ class LeaveBalanceService {
                         transaction
                     });
 
-                    if (!lastBalance) continue;
+                    if (!lastBalance) {
+                        console.log(`[Year-End Log] No active balance found for Cat: ${category.leave_category_name} in Year ${lastYear}. Skipping category.`);
+                        continue;
+                    }
+
+                    console.log(`[Year-End Log] Processing Cat: ${category.leave_category_name}. Remaining: ${lastBalance.pending_leaves}, Rule: ${category.unused_leave_rule}, Limit: ${category.carry_forward_limit}`);
 
                     let carryForwardAmount = 0;
                     const remaining = parseFloat(lastBalance.pending_leaves || 0);
@@ -575,11 +672,9 @@ class LeaveBalanceService {
                     if (category.unused_leave_rule === 'CARRY_FORWARD') {
                         const limit = parseFloat(category.carry_forward_limit || 0);
                         carryForwardAmount = Math.min(remaining, limit);
-                    } else if (category.unused_leave_rule === 'ENCASH') {
-                        carryForwardAmount = 0;
-                    } else {
-                        carryForwardAmount = 0;
-                    }
+                    } 
+
+                    console.log(`[Year-End Log] Carry Forward calculated: ${carryForwardAmount}`);
 
                     // 1. Mark OLD balance as processed
                     await EmployeeLeaveBalance.update({ status: 1 }, {
@@ -588,33 +683,11 @@ class LeaveBalanceService {
                     });
 
                     // 2. Initialize NEW balance for the next cycle (use day after yesterday = today)
-                    await this.initializeBalance(employee.id, template.id, transaction, null, null, today.add(1, 'day').toDate(), { allowRollover: true });
-
-                    const { end: newCycleEnd } = this.getCycleDates(employee.joining_date, template.leave_policy_cycle, today.add(1, 'day'), {
-                        leave_period_start: template.leave_period_start,
-                        leave_period_end: template.leave_period_end
-                    });
-                    const newYear = newCycleEnd.year();
-                    const newBalance = await EmployeeLeaveBalance.findOne({
-                        where: {
-                            employee_id: employee.id,
-                            leave_category_id: category.id,
-                            year: newYear,
-                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? newCycleEnd.month() + 1 : null,
-                            status: 0
-                        },
-                        transaction
-                    });
-
-                    if (newBalance) {
-                        await EmployeeLeaveBalance.update({
-                            carry_forward_leaves: carryForwardAmount,
-                            pending_leaves: parseFloat(newBalance.pending_leaves || 0) + carryForwardAmount
-                        }, {
-                            where: { id: newBalance.id },
-                            transaction
-                        });
-                    }
+                    // Passing allowRollover: true will cause initializeBalance to correctly carry over 
+                    // the remaining leaves from lastBalance while respecting category limits.
+                    console.log(`[Year-End Log] Initializing fresh balance for next cycle (Target Date: ${today.format('YYYY-MM-DD')})`);
+                    await this.initializeBalance(employee.id, template.id, transaction, null, null, today.toDate(), { allowRollover: true });
+                    console.log(`[Year-End Log] ✅ Reset Complete for Cat: ${category.leave_category_name}`);
                 }
             }
 

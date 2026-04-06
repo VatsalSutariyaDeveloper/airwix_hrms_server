@@ -1,4 +1,4 @@
-const { ActivityLog, Logs, sequelize } = require("../../models"); 
+const { ActivityLog, Logs, sequelize, Employee } = require("../../models"); 
 const { generateLogMessage } = require("./logMessageGenerator"); // Assuming you have this
 const fs = require('fs');
 const path = require('path');
@@ -130,6 +130,29 @@ exports.logQuery = async (logData, mainTransaction = null) => {
   let message, finalOld, finalNew;
   
   try {
+    const targetData = logData.new_data || logData.old_data;
+    if (targetData && targetData.employee_id && logData.entity_name !== 'Employee' && (!targetData.employee_name && !targetData.first_name)) {
+        try {
+            const emp = await Employee.findOne({ 
+                where: { id: targetData.employee_id }, 
+                attributes: ['first_name', 'employee_code'], 
+                raw: true 
+            });
+            if (emp) {
+                if (logData.new_data) {
+                    logData.new_data.employee_name = emp.first_name;
+                    logData.new_data.employee_code = emp.employee_code;
+                }
+                if (logData.old_data) {
+                    logData.old_data.employee_name = emp.first_name;
+                    logData.old_data.employee_code = emp.employee_code;
+                }
+            }
+        } catch (e) {
+            console.warn(`[LOG_QUERY] Failed to fetch employee info for log suffix: ${e.message}`);
+        }
+    }
+
      message = logData.log_message || generateLogMessage(
         logData.entity_name, 
         logData.action_type, 
@@ -186,7 +209,6 @@ exports.logQuery = async (logData, mainTransaction = null) => {
         access_type: logData.access_type || (ctx ? ctx.access : 'system'),
         caller: logData.caller,
     };
-console.log("logPayload",logPayload)
     if (mainTransaction) {
         // [MAGIC FIX] Create a Nested Transaction (Savepoint)
         // If this block fails, Sequelize rolls back ONLY this nested part.
