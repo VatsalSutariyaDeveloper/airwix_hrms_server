@@ -736,16 +736,25 @@ exports.updateAttendanceDay = async (req, res) => {
             if (first_in !== undefined) payload.first_in = first_in;
             if (last_out !== undefined) payload.last_out = last_out;
             if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+            
+            // Re-calculate Overtime from Data if provided
             if (overtime_data !== undefined) {
-                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-            }
-            if (overtime_amount !== undefined) {
-                payload.overtime_amount = overtime_amount;
-            } else if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-            } else if (payload.overtime_data === null) {
-                payload.overtime_amount = 0;
+                const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+                payload.overtime_data = finalOTData;
+                if (finalOTData && typeof finalOTData === 'object') {
+                    const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+                    const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+                    
+                    // Prioritize calculated values if provided summary is 0/null
+                    payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+                    payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+                } else {
+                    payload.overtime_amount = 0;
+                    payload.overtime_minutes = 0;
+                }
+            } else {
+                if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+                if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
             }
         }
 
@@ -761,14 +770,23 @@ exports.updateAttendanceDay = async (req, res) => {
              // For LEAVE (6), we MUST assign the category/session if provided
              if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
              if (leave_session !== undefined) payload.leave_session = leave_session;
-             if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
              if (overtime_data !== undefined) {
-                 payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-                 if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                     payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-                 } else if (payload.overtime_data === null) {
+                 const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+                 payload.overtime_data = finalOTData;
+                 if (finalOTData && typeof finalOTData === 'object') {
+                     const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+                     const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+                     
+                     // Prioritize calculated values if provided summary is 0/null
+                     payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+                     payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+                 } else {
                      payload.overtime_amount = 0;
+                     payload.overtime_minutes = 0;
                  }
+             } else {
+                 if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+                 if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
              }
         }
     } else {
@@ -777,32 +795,53 @@ exports.updateAttendanceDay = async (req, res) => {
         if (last_out !== undefined) payload.last_out = last_out;
         
         if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+        
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-        if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-        if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+
+        // Re-calculate Overtime from Data if provided
         if (overtime_data !== undefined) {
-             payload.overtime_data = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-             if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-                 payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-             } else if (payload.overtime_data === null) {
-                 payload.overtime_amount = 0;
-             }
+            const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+            payload.overtime_data = finalOTData;
+            if (finalOTData && typeof finalOTData === 'object') {
+                const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+                const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+                
+                // Prioritize calculated values if provided summary is 0/null
+                payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+                payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+            } else {
+                payload.overtime_amount = 0;
+                payload.overtime_minutes = 0;
+            }
+        } else {
+            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+            if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
         }
-        if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+
+        // Re-calculate Fine from Data if provided
         if (fine_data !== undefined) {
-             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
-             payload.fine_data = finalFineData;
-             if (payload.fine_data && typeof payload.fine_data === 'object' && fine_amount === undefined) {
-                 payload.fine_amount = parseFloat((
-                     parseFloat(payload.fine_data.late_entry?.amount || 0) + 
-                     parseFloat(payload.fine_data.early_exit?.amount || 0) + 
-                     parseFloat(payload.fine_data.excess_breaks?.amount || 0)
-                 ).toFixed(2));
-             }
-             // If fine_data is cleared significantly, ensure fine_amount is also cleared if not provided
-             if (finalFineData === null && fine_amount === undefined) {
-                 payload.fine_amount = 0;
-             }
+            const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+            payload.fine_data = finalFineData;
+            if (finalFineData && typeof finalFineData === 'object') {
+                const calcFineAmount = parseFloat((
+                    parseFloat(finalFineData.late_entry?.amount || 0) + 
+                    parseFloat(finalFineData.early_exit?.amount || 0) + 
+                    parseFloat(finalFineData.excess_breaks?.amount || 0)
+                ).toFixed(2));
+                const calcFineMinutes = parseInt(finalFineData.late_entry?.minutes || 0) + 
+                                       parseInt(finalFineData.early_exit?.minutes || 0) + 
+                                       parseInt(finalFineData.excess_breaks?.minutes || 0);
+
+                // Prioritize calculated values if provided summary is 0/null
+                payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
+                payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
+            } else {
+                payload.fine_amount = 0;
+                payload.fine_minutes = 0;
+            }
+        } else {
+            if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+            if (fine_amount !== undefined) payload.fine_amount = fine_amount;
         }
 
         if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
