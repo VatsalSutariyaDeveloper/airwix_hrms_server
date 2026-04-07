@@ -180,13 +180,13 @@ exports.delete = async (req, res) => {
       return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
     }
 
-    const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, null, transaction);
+    const holidayTemplateCount = await commonQuery.softDeleteById(HolidayTemplate, ids, transaction);
     if (holidayTemplateCount === 0) {
       await transaction.rollback();
       return res.error(constants.NO_RECORDS_FOUND);
     }
 
-    await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, null, transaction);
+    await commonQuery.softDeleteById(HolidayTransaction, { template_id: ids }, transaction);
 
     await transaction.commit();
     return res.success(constants.HOLIDAY_TEMPLATE_DELETED);

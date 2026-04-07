@@ -92,7 +92,7 @@ class LeaveBalanceService {
             start = today.startOf('year');
             end = today.endOf('year');
         }
-
+console.log("start",start,"end",end)
         return { start, end };
     }
 
@@ -102,28 +102,26 @@ class LeaveBalanceService {
     static calculateProRata(joiningDate, annualTotal, cycleEndDate, rule = 'THRESHOLD_BASED') {
         const join = dayjs(joiningDate);
         const end = dayjs(cycleEndDate);
-        console.log("joiningDate",joiningDate,"annualTotal",annualTotal,"cycleEndDate",cycleEndDate,"rule",rule)
         const monthlyRate = annualTotal / 12;
         const nextMonthStart = join.add(1, 'month').startOf('month');
         let diffMonths = end.isBefore(nextMonthStart) ? 0 : end.diff(nextMonthStart, 'month') + 1;
         const day = join.date();
         let joinMonthCredit = 0;
 
-        if (rule === 'THRESHOLD_BASED') {
+        const ruleNormalized = String(rule || 'THRESHOLD_BASED').toUpperCase().replace(/ /g, '_');
+        if (ruleNormalized === 'THRESHOLD_BASED') {
             if (day <= 7) joinMonthCredit = monthlyRate;
             else if (day <= 22) joinMonthCredit = monthlyRate / 2;
             else joinMonthCredit = 0;
-        } else if (rule === 'FULL_MONTH') {
+        } else if (ruleNormalized === 'FULL_MONTH') {
             joinMonthCredit = monthlyRate;
-        } else if (rule === 'PRO_RATA_DAYS') {
+        } else if (ruleNormalized === 'PRO_RATA_DAYS') {
             const daysInMonth = join.daysInMonth();
             const daysRemaining = daysInMonth - day + 1;
             joinMonthCredit = (daysRemaining / daysInMonth) * monthlyRate;
         }
-        console.log("diffMonths",diffMonths,"monthlyRate",monthlyRate,"joinMonthCredit",joinMonthCredit)
         let total = (diffMonths * monthlyRate) + joinMonthCredit;
-        console.log("total",total)
-        return Math.ceil(total * 2) / 2;
+        return Math.round(total * 2) / 2;
     }
 
     /**
@@ -203,58 +201,105 @@ class LeaveBalanceService {
                         allocated = category.leave_count;
                     }
                 } else if (accrualTypeNormalized === 'MONTHLY') {
-                    // For MONTHLY accrual, we only grant leaves that have been EARNED.
-                    // This means for the current month (refDate), the allocation is 0.
-                    // We calculate the sum of credits for all COMPLETED months in the current cycle.
 
                     const today = refDate;
                     const joinDate = dayjs(employee.joining_date);
                     
                     let totalEarned = 0;
                     let currentPointer = start.startOf('month');
-                    const lastEarnedMonth = today.subtract(1, 'month').startOf('month');
+                    if (joinDate.isAfter(currentPointer)) {
+                        currentPointer = joinDate.startOf('month');
+                    }
 
-                    // Standard Monthly Rate
-                    let monthlyRate = category.leave_count / 12; 
+                    const lastEarnedMonth = today.subtract(1, 'month').startOf('month');
+                    // const lastEarnedMonth = today.startOf('month');
+                    if (joinDate.isAfter(lastEarnedMonth.endOf('month'))) {
+                        allocated = 0;
+                        continue;
+                    }
+
+                    let monthlyRate = category.leave_count / 12;
+
                     if (template.leave_policy_cycle === 'MONTHLY') {
                         monthlyRate = category.leave_count;
                     } else if (template.leave_policy_cycle === 'QUARTERLY') {
                         monthlyRate = category.leave_count / 3;
                     }
 
-                    // Iterate through each month in the cycle up to the last completed month
+                    console.log("----- MONTHLY ACCRUAL DEBUG -----");
+                    console.log("Employee:", employeeId);
+                    console.log("Category:", category.leave_category_name);
+                    console.log("Start:", start.format('MMM YYYY'));
+                    console.log("Today:", today.format('MMM YYYY'));
+                    console.log("Join Date:", joinDate.format('DD MMM YYYY'));
+                    console.log("Pointer Start:", currentPointer.format('MMM YYYY'));
+                    console.log("Last Earned Month:", lastEarnedMonth.format('MMM YYYY'));
+                    console.log("Monthly Rate:", monthlyRate);
+
                     while (!currentPointer.isAfter(lastEarnedMonth)) {
-                        // Check if employee had already joined in this month
-                        if (!joinDate.isAfter(currentPointer.endOf('month'))) {
-                            let monthCredit = 0;
-                            if (joinDate.isSame(currentPointer, 'month')) {
-                                // Apply join month rule for the first month
-                                const joinDay = joinDate.date();
-                                if (template.join_month_rule === 'THRESHOLD_BASED') {
-                                    if (joinDay <= 7) monthCredit = monthlyRate;
-                                    else if (joinDay <= 22) monthCredit = monthlyRate / 2;
-                                    else monthCredit = 0;
-                                } else if (template.join_month_rule === 'FULL_MONTH') {
-                                    monthCredit = monthlyRate;
-                                } else if (template.join_month_rule === 'PRO_RATA_DAYS') {
-                                    const daysInMonth = joinDate.daysInMonth();
-                                    const daysRemaining = daysInMonth - joinDay + 1;
-                                    monthCredit = (daysRemaining / daysInMonth) * monthlyRate;
-                                }
-                            } else {
-                                // Full credit for subsequent completed months
-                                monthCredit = monthlyRate;
-                            }
-                            totalEarned += monthCredit;
+
+                        console.log(`👉 Processing: ${currentPointer.format('MMM YYYY')}`);
+
+                        // Skip if not joined yet
+                        if (joinDate.isAfter(currentPointer.endOf('month'))) {
+                            console.log("⛔ Not joined yet, skipping");
+                            currentPointer = currentPointer.add(1, 'month');
+                            continue;
                         }
+
+                        let monthCredit = 0;
+
+                        // 👉 JOIN MONTH LOGIC
+                        if (joinDate.isSame(currentPointer, 'month')) {
+
+                            const joinDay = joinDate.date();
+                            const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED')
+                                .toUpperCase()
+                                .replace(/ /g, '_');
+
+                            console.log("Join Month Rule:", ruleNormalized);
+
+                            if (ruleNormalized === 'THRESHOLD_BASED') {
+
+                                if (joinDay <= 7) {
+                                    monthCredit = monthlyRate;
+                                } else if (joinDay <= 22) {
+                                    monthCredit = monthlyRate / 2;
+                                } else {
+                                    monthCredit = 0;
+                                }
+
+                            } else if (ruleNormalized === 'FULL_MONTH') {
+
+                                monthCredit = monthlyRate;
+
+                            } else if (ruleNormalized === 'PRO_RATA_DAYS') {
+
+                                const daysInMonth = currentPointer.daysInMonth();
+                                const daysRemaining = daysInMonth - joinDay + 1;
+
+                                monthCredit = (daysRemaining / daysInMonth) * monthlyRate;
+                            }
+
+                            console.log(`🟡 Join Month Credit: ${monthCredit}`);
+
+                        } else {
+                            // 👉 FULL MONTH CREDIT
+                            monthCredit = monthlyRate;
+                            console.log(`🟢 Full Month Credit: ${monthCredit}`);
+                        }
+
+                        totalEarned += monthCredit;
+
                         currentPointer = currentPointer.add(1, 'month');
                     }
+
+                    console.log("✅ Total Earned:", totalEarned);
+
                     allocated = totalEarned;
                 }
-console.log("allocated111111111111111111",allocated)
                 // Apply Rounding to Allocation
-                allocated = Math.ceil(allocated * 2) / 2;
-console.log("allocated222222222222222222",allocated)
+                allocated = Math.round(allocated * 2) / 2;
 
                 // Metadata to store from template category
                 const metaFields = {
@@ -267,7 +312,7 @@ console.log("allocated222222222222222222",allocated)
                 };
 
                 const currentYear = end.year();
-                const currentMonth = template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null;
+                const currentMonth = (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null;
 
                 // 1. Fetch any EXISTING balance for the TARGET cycle (Sync check)
                 const targetBalance = await EmployeeLeaveBalance.findOne({
@@ -319,8 +364,8 @@ console.log("allocated222222222222222222",allocated)
                     used = parseFloat(targetBalance.used_leaves || 0);
                 }
 console.log("allocated",allocated,"carryForward",carryForward,"used",used)
-                let totalAllowance = Math.ceil((allocated + carryForward) * 2) / 2;
-                let pending = Math.ceil((totalAllowance - used) * 2) / 2;
+                let totalAllowance = Math.round((allocated + carryForward) * 2) / 2;
+                let pending = Math.round((totalAllowance - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
                 if ((!category.is_paid && !category.is_compoff) || pending < 0) {
@@ -488,11 +533,11 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
         const refDate = asOf ? dayjs(asOf) : dayjs();
 
         // Guard: Monthly accruals strictly run on the 1st of the month.
-        // We allow other days ONLY if asOf is provided (for manual testing/triggering).
         if (!asOf && refDate.date() !== 1) {
             return;
         }
 
+        console.log('⏰ Running monthly leave accrual task...');
         // Logic: On the 1st of Month N, we credit for Month N-1 (the month just completed).
         const calculationDate = refDate.subtract(1, 'day'); 
         
@@ -545,13 +590,14 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                         if (joinDate.isSame(calculationDate, 'month')) {
                             // Apply join month rule if this was their first month
                             const joinDay = joinDate.date();
-                            if (template.join_month_rule === 'THRESHOLD_BASED') {
+                            const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED').toUpperCase().replace(/ /g, '_');
+                            if (ruleNormalized === 'THRESHOLD_BASED') {
                                 if (joinDay <= 7) creditToApply = monthlyRate;
                                 else if (joinDay <= 22) creditToApply = monthlyRate / 2;
                                 else creditToApply = 0;
-                            } else if (template.join_month_rule === 'FULL_MONTH') {
+                            } else if (ruleNormalized === 'FULL_MONTH') {
                                 creditToApply = monthlyRate;
-                            } else if (template.join_month_rule === 'PRO_RATA_DAYS') {
+                            } else if (ruleNormalized === 'PRO_RATA_DAYS') {
                                 const daysInMonth = joinDate.daysInMonth();
                                 const daysRemaining = daysInMonth - joinDay + 1;
                                 creditToApply = (daysRemaining / daysInMonth) * monthlyRate;
@@ -573,8 +619,16 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                         });
 
                         if (balance) {
-                            const newTotal = Math.ceil((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
-                            const newPending = Math.ceil((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
+                            // Guard: If it was already updated today (the 1st), skip to prevent double-crediting
+                            // if initializeBalance already ran for this employee today.
+                            const wasUpdatedToday = dayjs(balance.updated_at).isSame(refDate, 'day');
+                            if (wasUpdatedToday && !asOf) {
+                                console.log(`[Accrual Sync] Skipping emp ${employee.id} cat ${category.id} - already updated today.`);
+                                continue;
+                            }
+
+                            const newTotal = Math.round((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
+                            const newPending = Math.round((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
                             
                             await EmployeeLeaveBalance.update({
                                 total_allocated: newTotal,
@@ -624,7 +678,8 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 transaction
             });
 
-            console.log(`[Year-End] Total Active Employees Found: ${employees.length}`);
+            let resetCount = 0;
+            // console.log(`[Year-End] Total Active Employees Found: ${employees.length}`);
 
             for (const employee of employees) {
                 const template = employee.leaveTemplate;
@@ -687,8 +742,13 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                     // the remaining leaves from lastBalance while respecting category limits.
                     console.log(`[Year-End Log] Initializing fresh balance for next cycle (Target Date: ${today.format('YYYY-MM-DD')})`);
                     await this.initializeBalance(employee.id, template.id, transaction, null, null, today.toDate(), { allowRollover: true });
+                    resetCount++;
                     console.log(`[Year-End Log] ✅ Reset Complete for Cat: ${category.leave_category_name}`);
                 }
+            }
+
+            if (resetCount > 0) {
+                console.log(`⏰ [Year-End Reset] Processed resets for ${resetCount} leave categories.`);
             }
 
             await transaction.commit();

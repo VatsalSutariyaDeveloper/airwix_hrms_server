@@ -435,7 +435,6 @@ exports.update = async (req, res) => {
                 employee_id: id,
                 id: { [Op.notIn]: incomingIds }
             },
-            null,
             transaction
         );
 
@@ -744,7 +743,7 @@ exports.delete = async (req, res) => {
         }
 
         // 3. Soft Delete associated Family Members
-        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
+        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, transaction);
 
         // 4. Soft Delete associated Users
         await commonQuery.softDeleteById(User, { employee_id: ids }, transaction);

@@ -191,7 +191,7 @@ exports.update = async (req, res) => {
                 .filter(id => !incomingIds.includes(id));
             
             if (idsToDelete.length > 0) {
-                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction, {});
+                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction);
             }
 
             const toCreate = [];
