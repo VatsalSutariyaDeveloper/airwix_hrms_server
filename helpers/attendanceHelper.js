@@ -941,7 +941,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       fine_data: (existingDay && existingDay.status === emptyStatus) ? (existingDay.fine_data || null) : null,
       leave_category_id: null,
       leave_session: null,
-      note: emptyStatus === 4 ? "System: Holiday restored (No punches found)" : (emptyStatus === 3 ? "System: Weekly Off restored (No punches found)" : (existingDay?.note || null))
+      note: emptyStatus === 4 ? `System: Holiday restored (${holidayDetails?.name || dayjs(date).format('dddd')})` : (emptyStatus === 3 ? `System: Weekly Off restored (${dayjs(date).format('dddd')})` : (existingDay?.note || null))
       // note: (function (note, emptyStatus) {
       //   // If we are now PRESENT/HALF_DAY, ignore negative auto reasons (e.g. from downgrade prevention)
       //   if ([0, 1, 12, 13].includes(emptyStatus) && note) {
@@ -2109,7 +2109,6 @@ async function getDayOffInfo(employee, date, transaction) {
  * Syncs Compensatory Off credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
-  console.log("enter in syncCompOffCredit --------------------------------2112");
   if (!employee) return;
   const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
@@ -2127,9 +2126,9 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   if (!compOffCategory) {
     compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
       is_compoff: true,
+      company_id: -1,
       status: 0
-    }, {}, transaction, false, {});
-    console.log("compOffCategory-----------------------------------------\n",compOffCategory);
+    }, {}, transaction, false, false);
   }
 
   if (!compOffCategory) return;
@@ -2231,7 +2230,6 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 
   if (employee) {
-    console.log("start processing........................................ 2232");
     const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction, newDay || oldDay);
     if (error) return error;
   }

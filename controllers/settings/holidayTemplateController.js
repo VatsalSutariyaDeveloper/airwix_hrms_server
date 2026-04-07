@@ -1,6 +1,7 @@
 const { sequelize, handleError, validateRequest, commonQuery } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { HolidayTemplate, HolidayTransaction, Employee } = require("../../models");
+const { Op } = require("sequelize");
+const { HolidayTemplate, HolidayTransaction, Employee, AttendanceDay, EmployeeWeeklyOff } = require("../../models");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
 
 
@@ -234,6 +235,67 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
 
   // Use existing transactions passed from controller instead of fetching again
   const transactionsToDelete = existingTransactions.filter(att => !incomingIds.includes(att.id));
+  
+  // Clean up AttendanceDay records for removed holidays
+  if (transactionsToDelete.length > 0) {
+    const removedHolidayDates = transactionsToDelete.map(t => t.date);
+    
+    // Find all employees using this holiday template
+    const employeesUsingTemplate = await commonQuery.findAllRecords(Employee, { 
+      holiday_template: templateId, 
+      status: 0 
+    }, { attributes: ['id', 'company_id'] }, transaction);
+    
+    if (employeesUsingTemplate.length > 0) {
+      const today = new Date().toISOString().split('T')[0];
+      
+      for (const employee of employeesUsingTemplate) {
+        for (const holidayDate of removedHolidayDates) {
+          // Only process for today or future dates
+          if (holidayDate < today) continue;
+          const dayOfWeek = new Date(holidayDate).getDay();
+          const dayOfMonth = new Date(holidayDate).getDate();
+          const weekNo = Math.ceil(dayOfMonth / 7);
+          
+          // Check if this date is also a weekly off
+          let isWeeklyOff = false;
+          const weeklyOff = await commonQuery.findOneRecord(EmployeeWeeklyOff, {
+            employee_id: employee.id,
+            day_of_week: dayOfWeek,
+            [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+            is_off: true,
+            status: 0,
+          }, {}, transaction);
+          if (weeklyOff) isWeeklyOff = true;
+          
+          if (isWeeklyOff) {
+            // Update to WEEKLY_OFF status instead of deleting
+            const existingAttendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
+              employee_id: employee.id,
+              attendance_date: holidayDate,
+              status: 4 // Only update HOLIDAY records
+            }, {}, transaction);
+            
+            if (existingAttendanceDay) {
+              await commonQuery.updateRecordById(AttendanceDay, existingAttendanceDay.id, {
+                status: 3, // WEEKLY_OFF
+                shift_id: null,
+                note: `System: Changed from Holiday to Weekly Off (${new Date(holidayDate).toLocaleDateString('en-US', { weekday: 'long' })})`
+              }, transaction);
+            }
+          } else {
+            // Delete the AttendanceDay record if it's not a weekly off
+            await commonQuery.hardDeleteRecords(AttendanceDay, {
+              employee_id: employee.id,
+              attendance_date: holidayDate,
+              status: 4 // Only delete HOLIDAY records
+            }, transaction);
+          }
+        }
+      }
+    }
+  }
+  
   for (const transactionToDelete of transactionsToDelete) {
     await commonQuery.softDeleteById(HolidayTransaction, { id: transactionToDelete.id }, transaction);
   }
@@ -254,6 +316,73 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
     } else {
       // Create new transaction
       await commonQuery.createRecord(HolidayTransaction, dbPayload, transaction);
+      
+      // Handle AttendanceDay updates for new holidays
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Only process for today or future dates
+      if (transactionData.date >= today) {
+        const dayOfWeek = new Date(transactionData.date).getDay();
+        const dayOfMonth = new Date(transactionData.date).getDate();
+        const weekNo = Math.ceil(dayOfMonth / 7);
+        
+        // Find all employees using this holiday template
+        const employeesUsingTemplate = await commonQuery.findAllRecords(Employee, { 
+          holiday_template: templateId, 
+          status: 0 
+        }, { attributes: ['id', 'company_id'] }, transaction);
+        
+        if (employeesUsingTemplate.length > 0) {
+        for (const employee of employeesUsingTemplate) {
+          // Check if this date is also a weekly off
+          let isWeeklyOff = false;
+          const weeklyOff = await commonQuery.findOneRecord(EmployeeWeeklyOff, {
+            employee_id: employee.id,
+            day_of_week: dayOfWeek,
+            [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+            is_off: true,
+            status: 0,
+          }, {}, transaction);
+          if (weeklyOff) isWeeklyOff = true;
+          
+          if (isWeeklyOff) {
+            // Update existing WEEKLY_OFF to HOLIDAY status
+            const existingAttendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
+              employee_id: employee.id,
+              attendance_date: transactionData.date,
+              status: 3 // Only update WEEKLY_OFF records
+            }, {}, transaction);
+            
+            if (existingAttendanceDay) {
+              await commonQuery.updateRecordById(AttendanceDay, existingAttendanceDay.id, {
+                status: 4, // HOLIDAY
+                note: `System: Changed from Weekly Off to Holiday (${transactionData.name || 'Holiday'})`
+              }, transaction);
+            } else {
+              // Create new HOLIDAY record
+              await commonQuery.createRecord(AttendanceDay, {
+                employee_id: employee.id,
+                attendance_date: transactionData.date,
+                status: 4, // HOLIDAY
+                note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
+                created_at: new Date(),
+                updated_at: new Date()
+              }, transaction);
+            }
+          } else {
+            // Not a weekly off, create new HOLIDAY record
+            await commonQuery.createRecord(AttendanceDay, {
+              employee_id: employee.id,
+              attendance_date: transactionData.date,
+              status: 4, // HOLIDAY
+              note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
+              created_at: new Date(),
+              updated_at: new Date()
+            }, transaction);
+          }
+        }
+      }
+      }
     }
   }
 }

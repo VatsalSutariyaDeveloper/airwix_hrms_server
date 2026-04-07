@@ -194,6 +194,7 @@ exports.getAttendanceSummary = async (req, res) => {
 
     // 1.5 AUTO-SYNC: Create records for WO/Holiday/Leave if missing
     // This allows them to show up in summary and list immediately.
+    
     // try {
     //     const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
     //     if (isPastOrToday) {
@@ -560,88 +561,37 @@ exports.updateAttendanceDay = async (req, res) => {
       t
     );
 
-    // [OVERTIME LOGIC FOR PRESENT ON HOLIDAY/WEEKLY OFF]
+    // [COMBINED HOLIDAY AND WEEKLY OFF LOGIC (OVERTIME AND COMP-OFF)]
     const salaryTemplate = emp?.employeeSalaryTemplate;
     const holidayPolicy = template ? template.holiday_policy : 'BLOCK_ATTENDANCE';
     const lwpBasis = salaryTemplate ? salaryTemplate.lwp_calculation_basis : 'WORKING_DAYS';
-    const effectiveStatusForOT = (status !== undefined && status !== null) ? Number(status) : day.status;
+    
+    // Determine effective status evaluating if explicitly passed or inherited
+    const effectiveStatusForProcessing = (status !== undefined && status !== null) ? Number(status) : Number(day.status);
 
-    if (salaryTemplate && Number(effectiveStatusForOT) === 0) {
+    if (effectiveStatusForProcessing === 0) {
+        const targetDateJS = dayjs(attendance_date);
+        const dayOfWeek = targetDateJS.day();
+        const weekNo = Math.ceil(targetDateJS.date() / 7);
+
         const isHL = (emp.employeeHolidays || []).length > 0;
-        const targetDateJS = dayjs(attendance_date);
-        const dayOfWeek = targetDateJS.day();
-        const weekNo = Math.ceil(targetDateJS.date() / 7);
         const isWO = (emp.employeeWeeklyOffs || []).find(wo => 
             wo.day_of_week === dayOfWeek && 
             (wo.week_no === 0 || wo.week_no === weekNo)
         );
 
-        let shouldAddExtraOvertime = false;
-        if (isHL && holidayPolicy === 'ALLOW_NORMAL') {
-            shouldAddExtraOvertime = true;
-        } else if (isWO && ['DAYS_IN_MONTH', 'FIXED_30_DAYS'].includes(lwpBasis)) {
-            shouldAddExtraOvertime = true;
-        }
-
-        if (shouldAddExtraOvertime) {
-            let daySalaryAddress = parseFloat(salaryTemplate.daily_rate || 0);
-            if (daySalaryAddress <= 0) {
-                const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
-                const daysInMonthAtTarget = targetDateJS.daysInMonth();
-                const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : daysInMonthAtTarget;
-                daySalaryAddress = monthlyGross / (daysInCalc || 30);
-            }
-            
-            const currentOvertime = parseFloat(overtime_amount || 0);
-            overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
-        }
-    }
-
-    // [HOLIDAY AND WEEKLY OFF LOGIC BASED ON POLICY]
-    if (status !== undefined && status !== null) {
-        const requestedStatus = Number(status);
-        const targetDateJS = dayjs(attendance_date);
-        const dayOfWeek = targetDateJS.day();
-        const weekNo = Math.ceil(targetDateJS.date() / 7);
-        
-        // Check if it's a holiday
-        const isHL = (emp.employeeHolidays || []).find(h => {
-            const holidayDate = dayjs(h.date).format('YYYY-MM-DD');
-            const currentDateStr = targetDateJS.format('YYYY-MM-DD');
-            return holidayDate === currentDateStr;
-        });
-        
-        // Check if it's a weekly off
-        const isWO = (emp.employeeWeeklyOffs || []).find(wo => 
-            wo.day_of_week === dayOfWeek && 
-            (wo.week_no === 0 || wo.week_no === weekNo)
-        );
-        
-        // Holiday logic
-        if (isHL) {
-            if (holidayPolicy === 'ALLOW_NORMAL' && requestedStatus === 0) {
-                status = 0;
-            } else if (holidayPolicy === 'COMP_OFF' && requestedStatus === 0) {
-                await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
-                status = 0;
-            }
-        }
-        
-        // Weekly off logic
-        if (isWO) {
+        if (isHL || isWO) {
+            // 1. Extra Overtime Logic
             if (holidayPolicy === 'ALLOW_NORMAL') {
-                if (lwpBasis === 'WORKING_DAYS' && requestedStatus === 0) {
-                    status = 0;
-                } else if (['FIXED_30_DAYS', 'DAYS_IN_MONTH'].includes(lwpBasis) && requestedStatus === 0) {
-                    status = 0;
-                }
-            } else if (holidayPolicy === 'COMP_OFF') {
-                if (lwpBasis === 'WORKING_DAYS' && requestedStatus === 0) {
-                    await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
-                    status = 0;
-                } else if (['FIXED_30_DAYS', 'DAYS_IN_MONTH'].includes(lwpBasis) && requestedStatus === 0) {
-                    await syncAttendanceToLeaveBalance(employee_id, null, { employee_id, attendance_date, status: 0 }, t);
-                    status = 0;
+                if (salaryTemplate) {
+                    let daySalaryAddress = parseFloat(salaryTemplate.daily_rate || 0);
+                    if (daySalaryAddress <= 0) {
+                        const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
+                        const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
+                        daySalaryAddress = monthlyGross / (daysInCalc || 30);
+                    }
+                    const currentOvertime = parseFloat(overtime_amount || 0);
+                    overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
                 }
             }
         }
@@ -750,7 +700,7 @@ exports.updateAttendanceDay = async (req, res) => {
         existingDay: day, // Pass pre-fetched day
         punches: req.body.punches, // Pass punches array if provided
         // forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
-        isHoliday: isTodayHoliday // Pass holiday flag to helper
+        isHoliday: (holidayPolicy === 'COMP_OFF') ? false : isTodayHoliday // Don't pass holiday flag for COMP_OFF
       }, t);
     }
  
@@ -1040,6 +990,13 @@ exports.deleteAttendanceDay = async (req, res) => {
         [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
       }
     }, t, { company_id: true });
+
+    // 5. Rebuild attendance day to restore default statuses (Holiday, Weekly Off, etc.)
+    await rebuildAttendanceDay(employee_id, attendance_date, {
+      user_id: req.user.id,
+      company_id: req.user.company_id,
+      branch_id: req.body.branch_id || req.user.branch_id
+    }, t);
 
     await t.commit();
     return res.success(constants.DELETED);

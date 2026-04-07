@@ -265,6 +265,17 @@ class EmployeeTemplateService {
         //         branch_id: meta.branch_id
         //     });
         // }
+
+        // Trigger attendance rebuild for today for attendance related templates
+        if (!meta.skipRebuild && ['holiday_template', 'weekly_off_template'].includes(fieldName)) {
+            const today = new Date().toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
+            
+            await bulkSyncAttendanceDays(employeeIds, today, {
+                user_id: meta.user_id || meta.req?.user?.id || 0,
+                company_id: meta.company_id,
+                branch_id: meta.branch_id
+            }, transaction);
+        }
         return result;
     }
 
@@ -392,7 +403,7 @@ class EmployeeTemplateService {
         }
     }
 
-    static async bulkSyncHolidayTemplate(employeeIds, templateId, transaction, meta = {}, skipRebuild = false) {
+    static async bulkSyncHolidayTemplate(employeeIds, templateId, transaction, meta = {}, skipRebuild = true) {
         if (!templateId) {
             await commonQuery.hardDeleteRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds } }, transaction);
             return;
@@ -423,7 +434,7 @@ class EmployeeTemplateService {
         }
     }
 
-    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild = false, meta = {}) {
+    static async syncWeeklyOffTemplate(employeeId, templateId, manualData, transaction, skipRebuild = true, meta = {}) {
         if (!templateId && !manualData) {
             await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, { employee_id: employeeId }, transaction);
             return;
