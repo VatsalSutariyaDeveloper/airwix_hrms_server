@@ -455,7 +455,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             let actualAmount = amount;
             if (calcType === 'ATTENDANCE_BASED') {
                 actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-            } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
+            } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
                 actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
             }
 
@@ -492,7 +492,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         
         if (calcType === 'ATTENDANCE_BASED') {
             actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-        } else if ((comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
+        } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
             actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
         }
 

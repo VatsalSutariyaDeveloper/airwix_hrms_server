@@ -1868,6 +1868,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   if (existingDay2) {
+    // [User Request] Skip rebuild for past finalized data if automated
+    // Automated/Cron runs use user_id 0 or undefined. We only allow rebuilding if current status is Absent (5) or Incomplete (9).
+    const isCronRun = (meta.user_id === 0 || meta.user_id === undefined);
+    const isSpecialStatus = [5, 9].includes(parseInt(existingDay2.status));
+
+    if (isCronRun && !isSpecialStatus) {
+      console.log(`[rebuildAttendanceDay] Skipping automated rebuild for finalized record ${existingDay2.id} (Status: ${existingDay2.status}) for ${employeeId} on ${date}`);
+      return;
+    }
+
     const error = await syncAttendanceToLeaveBalance(employeeId, existingDay2, attendancePayload, transaction, employee);
     if (error) throw new Err(error);
     await commonQuery.updateRecordById(AttendanceDay, existingDay2.id, attendancePayload, transaction, false, { company_id: true });
