@@ -1038,7 +1038,7 @@ exports.finalizeMonthlySalary = async (req, res) => {
               
         // Check if already finalized (Main sequence)
         const existingMain = await commonQuery.findOneRecord(Payslip, {
-            employee_id, month, year, sequence: 1, status: { [Op.in]: [1, 3] }
+            employee_id, month, year, status: { [Op.in]: [1, 3] }
         }, {}, transaction);
 
         if (existingMain && !generate_additional) {
@@ -1051,8 +1051,8 @@ exports.finalizeMonthlySalary = async (req, res) => {
         if (generate_additional) {
             const lastPayslip = await commonQuery.findOneRecord(Payslip, {
                 employee_id, month, year
-            }, { order: [['sequence', 'DESC']] }, transaction);
-            targetSequence = (lastPayslip?.sequence || 0) + 1;
+            }, { order: [['id', 'DESC']] }, transaction);
+            targetSequence = (lastPayslip?.id || 0) + 1;
         }
 
         // Create or Update Draft
@@ -1099,12 +1099,12 @@ exports.finalizeMonthlySalary = async (req, res) => {
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
             leave_balances: summary.leave_balances,
-            sequence: targetSequence,
+            // sequence: targetSequence,
             status: 1,
         };
 
         let finalizedPayslip;
-        const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0, sequence: targetSequence }, {}, transaction);
+        const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0 }, {}, transaction);
         if (draft) {
             finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
         } else {

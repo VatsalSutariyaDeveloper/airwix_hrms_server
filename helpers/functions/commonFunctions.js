@@ -579,10 +579,10 @@ exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
     // Get the actual number of days in the current month
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     
-    console.log(`\n📅 Weekly Off Calculation for: ${monthNames[month]} ${year}`);
-    console.log(`📊 Total days in month: ${daysInMonth}`);
+    // console.log(`\n📅 Weekly Off Calculation for: ${monthNames[month]} ${year}`);
+    // console.log(`📊 Total days in month: ${daysInMonth}`);
         
-    console.log(`\n🎯 Weekly Off Rules Applied:`);
+    // console.log(`\n🎯 Weekly Off Rules Applied:`);
     days.forEach((day, index) => {
         if (day.is_off && day.status !== 2) {
             const dayName = dayNames[day.day_of_week];
@@ -603,7 +603,7 @@ exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
             
             if (day.week_no === 0) {
                 // All weeks - find all occurrences of this day in the month
-                console.log(`\n🔍 Processing: ${dayName} (All weeks)`);
+                // console.log(`\n🔍 Processing: ${dayName} (All weeks)`);
                 for (let date = 1; date <= daysInMonth; date++) {
                     const currentDate = new Date(year, month, date);
                     const dayOfWeek = currentDate.getDay();
@@ -611,12 +611,12 @@ exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
                     if (dayOfWeek === day.day_of_week) {
                         offDates.add(date);
                         ruleMatches.push(date);
-                        console.log(`   ✅ Matched: ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
+                        // console.log(`   ✅ Matched: ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
                     }
                 }
             } else {
                 // Specific week - find the nth occurrence of this day in the month
-                console.log(`\n🔍 Processing: ${dayName} (${getOrdinal(day.week_no)} week)`);
+                // console.log(`\n🔍 Processing: ${dayName} (${getOrdinal(day.week_no)} week)`);
                 let occurrenceCount = 0;
                 for (let date = 1; date <= daysInMonth; date++) {
                     const currentDate = new Date(year, month, date);
@@ -627,14 +627,14 @@ exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
                         if (occurrenceCount === day.week_no) {
                             offDates.add(date);
                             ruleMatches.push(date);
-                            console.log(`   ✅ Matched: ${getOrdinal(day.week_no)} ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
+                            // console.log(`   ✅ Matched: ${getOrdinal(day.week_no)} ${dayName} on ${getOrdinal(date)} ${monthNames[month]}`);
                             break; // Found the nth occurrence
                         }
                     }
                 }
                 
                 if (ruleMatches.length === 0) {
-                    console.log(`   ❌ No match found: ${getOrdinal(day.week_no)} ${dayName} does not exist in ${monthNames[month]} ${year}`);
+                    // console.log(`   ❌ No match found: ${getOrdinal(day.week_no)} ${dayName} does not exist in ${monthNames[month]} ${year}`);
                 }
             }
             
@@ -650,13 +650,13 @@ exports.calculateWorkingAndOffDays = (days, referenceDate = new Date()) => {
     offDaysCount = offDates.size;
     const workingDays = daysInMonth - offDaysCount;
     
-    console.log(`\n📈 Final Calculation Results:`);
-    console.log(`   🏖️ Total Off Days: ${offDaysCount}`);
-    console.log(`   💼 Working Days: ${workingDays}`);
-    console.log(`   📅 Total Days: ${daysInMonth}`);
-    console.log(`   🎯 Off Dates: [${Array.from(offDates).sort((a, b) => a - b).join(', ')}]`);
-    console.log(`   📊 Working Days Percentage: ${((workingDays / daysInMonth) * 100).toFixed(1)}%`);
-    console.log(`\n${'='.repeat(50)}\n`);
+    // console.log(`\n📈 Final Calculation Results:`);
+    // console.log(`   🏖️ Total Off Days: ${offDaysCount}`);
+    // console.log(`   💼 Working Days: ${workingDays}`);
+    // console.log(`   📅 Total Days: ${daysInMonth}`);
+    // console.log(`   🎯 Off Dates: [${Array.from(offDates).sort((a, b) => a - b).join(', ')}]`);
+    // console.log(`   📊 Working Days Percentage: ${((workingDays / daysInMonth) * 100).toFixed(1)}%`);
+    // console.log(`\n${'='.repeat(50)}\n`);
 
     return {
         working_days: Math.max(0, workingDays),
