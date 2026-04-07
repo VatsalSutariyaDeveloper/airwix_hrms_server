@@ -188,21 +188,29 @@ exports.formatDateTime = (dateInput, format = "DD-MM-YYYY") => {
   const map = {
     D: day,
     DD: String(day).padStart(2, "0"),
-    M: getMonthNameFull(monthIndex),
+    M: monthIndex + 1,
     MM: String(monthIndex + 1).padStart(2, "0"),
     MMM: getMonthNameShort(monthIndex),
+    MMMM: getMonthNameFull(monthIndex),
     YYYY: year,
     YY: String(year).slice(-2),
+    d: date.getDay(),
+    ddd: getDayNameShort(date.getDay()),
+    dddd: getDayNameFull(date.getDay()),
     H: date.getHours(),
     HH: String(date.getHours()).padStart(2, "0"),
+    h: date.getHours() % 12 || 12,
+    hh: String(date.getHours() % 12 || 12).padStart(2, "0"),
     m: date.getMinutes(),
     mm: String(date.getMinutes()).padStart(2, "0"),
     s: date.getSeconds(),
     ss: String(date.getSeconds()).padStart(2, "0"),
+    A: date.getHours() >= 12 ? "PM" : "AM",
+    a: date.getHours() >= 12 ? "pm" : "am",
   };
 
   return format.replace(
-    /YYYY|YY|MMMM|MMM|MM|M|DD|D|HH|H|mm|m|ss|s/g,
+    /YYYY|YY|MMMM|MMM|MM|M|dddd|ddd|d|DD|D|HH|H|hh|h|mm|m|ss|s|A|a/g,
     (match) => map[match]
   );
 
@@ -244,6 +252,30 @@ function getMonthNameFull(index) {
     "October",
     "November",
     "December",
+  ][index];
+}
+
+function getDayNameShort(index) {
+  return [
+    "Sun",
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+  ][index];
+}
+
+function getDayNameFull(index) {
+  return [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
   ][index];
 }
 

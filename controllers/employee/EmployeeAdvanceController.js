@@ -1,5 +1,5 @@
 const { EmployeeAdvance, Employee, PaymentHistory, User } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError, Op } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, Op, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { createNotification } = require("../../services/notificationService");
 
@@ -134,6 +134,16 @@ exports.getAll = async (req, res) => {
         // Attach monthly totals to each record
         if (data.items && Array.isArray(data.items)) {
             data.items.forEach(record => {
+                // Format Payment Date
+                if (record.payment_date) {
+                    const formattedDate = formatDateTime(record.payment_date);
+                    if (record.dataValues) {
+                        record.dataValues.payment_date = formattedDate;
+                    } else {
+                        record.payment_date = formattedDate;
+                    }
+                }
+
                 if (record.month && record.year) {
                     const key = `${record.year}-${record.month.toString().padStart(2, '0')}`;
                     if (totalsMap[key]) {
@@ -157,6 +167,16 @@ exports.getById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(EmployeeAdvance, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
+        
+        // Format Payment Date
+        if (record.payment_date) {
+            if (record.dataValues) {
+                record.dataValues.payment_date = formatDateTime(record.payment_date);
+            } else {
+                record.payment_date = formatDateTime(record.payment_date);
+            }
+        }
+        
         return res.ok(record);
     } catch (err) {
         return handleError(err, res, req);
@@ -366,6 +386,20 @@ exports.advanceView = async (req, res) => {
             'createdAt',
             whereCondition
         );
+
+        // Format Payment Date
+        if (advance.items && Array.isArray(advance.items)) {
+            advance.items.forEach(record => {
+                if (record.payment_date) {
+                    const formattedDate = formatDateTime(record.payment_date);
+                    if (record.dataValues) {
+                        record.dataValues.payment_date = formattedDate;
+                    } else {
+                        record.payment_date = formattedDate;
+                    }
+                }
+            });
+        }
 
         const total_amount = await commonQuery.sumRecords(EmployeeAdvance, 'amount', whereCondition);
         

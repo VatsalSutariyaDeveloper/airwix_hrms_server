@@ -1,5 +1,5 @@
 const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday } = require("../../../models");
-const { validateRequest, commonQuery, handleError, uploadFile, fileExists } = require("../../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
@@ -95,7 +95,7 @@ exports.create = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
             }
         }
 
@@ -340,7 +340,7 @@ exports.update = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
+                return res.error("OVERLAP", { message: `Selected dates overlap with an existing leave request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
             }
         }
 
@@ -642,7 +642,7 @@ exports.updateStatus = async (req, res) => {
                     user_id: user.id,
                     title: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED ? "Leave Approved" : "Leave Partially Approved",
                     message: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED 
-                        ? `Your leave request for ${dayjs(leaveRequest.start_date).format('DD MMM')} to ${dayjs(leaveRequest.end_date).format('DD MMM')} has been approved.` 
+                        ? `Your leave request for ${formatDateTime(leaveRequest.start_date, 'DD MMM')} to ${formatDateTime(leaveRequest.end_date, 'DD MMM')} has been approved.` 
                         : `Your leave request has been partially approved (Stage ${updateData.current_level}).`,
                     type: "LEAVE",
                     reference_id: id,
@@ -704,7 +704,7 @@ exports.updateStatus = async (req, res) => {
                 await notificationService.createNotification({
                     user_id: user.id,
                     title: `Leave ${approval_status === "REJECTED" ? "Rejected" : "Cancelled"}`,
-                    message: `Your leave request from ${dayjs(leaveRequest.start_date).format('DD MMM')} has been ${approval_status}. ${approval_remark ? 'Remarks: ' + approval_remark : ''}`,
+                    message: `Your leave request from ${formatDateTime(leaveRequest.start_date, 'DD MMM')} has been ${approval_status}. ${approval_remark ? 'Remarks: ' + approval_remark : ''}`,
                     type: "LEAVE",
                     reference_id: id,
                     status_code: 1, // Warning

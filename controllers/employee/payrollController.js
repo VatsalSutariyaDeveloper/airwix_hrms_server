@@ -1,5 +1,5 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster } = require("../../models");
-const { commonQuery, handleError, fail } = require("../../helpers");
+const { commonQuery, handleError, fail, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
@@ -253,7 +253,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // This ensures if a holiday exists in both attendance (status 4) and template, it's counted only once
     offDays.goneHolidayList.forEach(h => {
-        const hDate = dayjs(h.date).format('YYYY-MM-DD');
+        const hDate = formatDateTime(h.date, 'DD-MM-YYYY');
         if (!attendanceHolidayDates.has(hDate)) {
             holidays++;
         }
@@ -270,8 +270,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         transaction
     );
     const lunchHistory = lunchRecords.map(r => ({
-        date: dayjs(r.getDataValue('date')).format('YYYY-MM-DD'),
-        time: dayjs(r.getDataValue('created_at')).format('hh:mm A')
+        date: formatDateTime(r.getDataValue('date'), 'DD-MM-YYYY'),
+        time: formatDateTime(r.getDataValue('created_at'), 'hh:mm A')
     }));
     const lunchCount = lunchHistory.length;
 
@@ -729,7 +729,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             designation: employee.designation?.designation_name,
             joining_date: employee.joining_date
         },
-        period: { month, year, daysInMonth, daysInCalculation, monthName: dayjs(startDate).format('MMMM') },
+        period: { month, year, daysInMonth, daysInCalculation, monthName: formatDateTime(new Date(year, month - 1, 1), "MMMM") },
         attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalWeeklyOffs: offDays.totalWeeklyOffs, totalHolidays: offDays.totalHolidays, goneWeeklyOffs: offDays.goneWeeklyOffs, goneHolidays: offDays.goneHolidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
             ctc_monthly: Math.round(monthlyGross),
@@ -823,7 +823,7 @@ const formatPayslipToSummary = async (payslip) => {
 
     // 3. Period
     const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
-    const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+    const monthName = formatDateTime(new Date(payslip.year, parseInt(payslip.month) - 1, 1), "MMMM");
 
     // 4. Salary and Totals
     const fixedGross = parseFloat(payslip.fixed_gross || 0);
@@ -1095,12 +1095,14 @@ exports.finalizeMonthlySalary = async (req, res) => {
             paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
             total_deduction: summary.salary.totalDeductions,
             net_salary: summary.salary.netPayable,
+            paid_amount: parseFloat(summary.payment_history?.grand_total || 0),
+            pending_amount: Math.max(0, parseFloat(summary.salary.netPayable || 0) - parseFloat(summary.payment_history?.grand_total || 0)),
 
             break_down: summary.breakdown,
             tds_calculation_data: summary.tds_calculation_data,
             leave_balances: summary.leave_balances,
             // sequence: targetSequence,
-            status: 1,
+            status: (parseFloat(summary.payment_history?.grand_total || 0) >= (parseFloat(summary.salary.netPayable || 0) - 0.01)) ? 3 : 1,
         };
 
         let finalizedPayslip;
@@ -1282,7 +1284,7 @@ exports.getEmployeePayslip = async (req, res) => {
         });
 
         const formattedList = payslips.map(p => {
-            const monthName = dayjs().month(p.month - 1).format('MMM');
+            const monthName = formatDateTime(new Date(2000, p.month - 1, 1), "MMM");
             return {
                 id: p.id,
                 month: p.month,
@@ -1346,6 +1348,8 @@ const processPayslipData = (payslips) => {
             net_salary: payslip.net_salary,
             earnings_sum: parseFloat(earningsSum.toFixed(2)),
             deductions_sum: parseFloat(totalDeductionsSum.toFixed(2)),
+            paid_amount: parseFloat(payslip.paid_amount || 0),
+            pending_amount: parseFloat(payslip.pending_amount || 0),
             
             // TDS Data
             annual_gross: tdsData.annualGross || 0,
@@ -1538,7 +1542,7 @@ exports.getCalculationHistory = async (req, res) => {
 
         // Format items for the response
         result.items = result.items.map(p => {
-            const monthName = dayjs().month(p.month - 1).format('MMM');
+            const monthName = formatDateTime(new Date(2000, p.month - 1, 1), "MMM");
             const firstName = p.employee?.first_name || "";
 
             return {
@@ -1612,7 +1616,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
 
             const result = sortedPeriods.map(period => {
                 const summary = payslipSummaries.find(ps => parseInt(ps.month) === period.month && parseInt(ps.year) === period.year);
-                const monthName = dayjs().month(period.month - 1).format('MMM');
+                const monthName = formatDateTime(new Date(period.year, period.month - 1, 1), "MMM");
 
                 const statusValue = summary ? parseInt(summary.getDataValue('status')) : 0;
 
@@ -1663,7 +1667,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
         const result = [];
         for (const am of sortedPeriods) {
             const existing = existingPayslips.find(p => p.month === am.month && p.year === am.year);
-            const monthName = dayjs().month(am.month - 1).format('MMM');
+            const monthName = formatDateTime(new Date(am.year, am.month - 1, 1), "MMM");
 
             let ctc = "0.00";
             let net_payable = "0.00";
@@ -1730,7 +1734,7 @@ exports.getPayslipById = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Payslip record is missing month or year data" });
         }
 
-        const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+        const monthName = formatDateTime(new Date(payslip.year, parseInt(payslip.month) - 1, 1), "MMMM");
 
         // Fetch current adjustments to show updated ones if in Draft or just for view
         const year = parseInt(payslip.year);
@@ -1975,7 +1979,7 @@ exports.getSalaryOverview = async (req, res) => {
         const overview = [];
         for (let i = 0; i < monthList.length; i++) {
             const m = monthList[i];
-            const monthName = dayjs().month(m.month - 1).format('MMM');
+            const monthName = formatDateTime(new Date(m.year, m.month - 1, 1), "MMM");
             const yearShort = m.year.toString().slice(-2);
             const isCurrentMonth = m.month === (dayjs().month() + 1) && m.year === dayjs().year();
             const monthStr = `${m.year}-${m.month.toString().padStart(2, '0')}-01`;
@@ -2070,7 +2074,7 @@ exports.getSalaryOverview = async (req, res) => {
                 );
                 const lunchHistory = lunchRecords.map(r => ({
                     date: dayjs(r.getDataValue('date')).format('YYYY-MM-DD'),
-                    time: dayjs(r.getDataValue('created_at')).format('hh:mm A')
+                    time: formatDateTime(r.getDataValue('created_at'), 'hh:mm A')
                 }));
 
                 // Fetch employee incentive history
@@ -2105,7 +2109,7 @@ exports.getSalaryOverview = async (req, res) => {
                     year: m.year,
                     month_label: `${monthName}, ${yearShort}`,
                     due_amount: netPayable.toFixed(2),
-                    date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
+                    date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? formatDateTime(new Date(), "DD MMM'YY") : formatDateTime(dayjs(`${m.year}-${m.month}-01`).endOf('month').toDate(), "DD MMM'YY")}`,
                     net_receivable: netPayable.toFixed(2),
                     payable_days: payableDays % 1 === 0 ? payableDays.toString() : payableDays.toFixed(1),
                     actualDaysValue: daysInMonth,
@@ -2146,7 +2150,7 @@ exports.getSalaryOverview = async (req, res) => {
                         year: m.year,
                         month_label: `${monthName}, ${yearShort}`,
                         due_amount: netPayable.toFixed(2),
-                        date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? dayjs().format("DD MMM'YY") : dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
+                        date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? formatDateTime(new Date(), "DD MMM'YY") : formatDateTime(dayjs(`${m.year}-${m.month}-01`).endOf('month').toDate(), "DD MMM'YY")}`,
                         net_receivable: netPayable.toFixed(2),
                         payable_days: payableDays % 1 === 0 ? payableDays.toString() : payableDays.toFixed(1),
                         actualDaysValue: summary.attendance.actualDaysValue || 0,
@@ -2181,7 +2185,7 @@ exports.getSalaryOverview = async (req, res) => {
                     month: m.month,
                     year: m.year,
                     month_label: `${monthName}, ${yearShort}`,
-                    date_range: `01 ${monthName}'${yearShort} - ${dayjs(`${m.year}-${m.month}-01`).endOf('month').format("DD MMM'YY")}`,
+                    date_range: `01 ${monthName}'${yearShort} - ${formatDateTime(dayjs(`${m.year}-${m.month}-01`).endOf('month').toDate(), "DD MMM'YY")}`,
                     is_loaded: false,
                     is_finalized: false
                 });
@@ -2228,7 +2232,7 @@ exports.generatePayslipPdf = async (req, res) => {
             attributes: ['company_name', 'address', 'logo_image']
         });
 
-        const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+        const monthName = formatDateTime(new Date(payslip.year, parseInt(payslip.month) - 1, 1), "MMMM");
 
         // Granular attendance calculation
         const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
@@ -2287,11 +2291,11 @@ exports.generatePayslipPdf = async (req, res) => {
                     name: payslip.employee?.first_name,
                     code: payslip.employee?.employee_code,
                     designation: payslip.employee?.designation?.designation_name,
-                    joining_date: payslip.employee?.joining_date ? dayjs(payslip.employee.joining_date).format('DD/MM/YYYY') : 'N/A'
+                    joining_date: payslip.employee?.joining_date ? formatDateTime(payslip.employee.joining_date) : 'N/A'
                 },
                 period: {
                     label: `${monthName} ${payslip.year}`,
-                    payDate: dayjs(payslip.created_at).format('DD/MM/YYYY')
+                    payDate: formatDateTime(payslip.created_at)
                 },
                 attendance: {
                     present: presentDays,
@@ -2415,20 +2419,7 @@ exports.getEmployeesByMonthYear = async (req, res) => {
         });
         const payslipMap = new Map(existingPayslips.map(p => [p.employee_id, p]));
 
-        // 6. Fetch PaymentHistory for current page's employees for the given month/year
-        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
-            employee_id: { [Op.in]: filteredEmployeeIds },
-            month,
-            year
-        });
-        
-        const paymentMap = new Map();
-        paymentHistories.forEach(ph => {
-            const currentAmount = paymentMap.get(ph.employee_id) || 0;
-            paymentMap.set(ph.employee_id, currentAmount + parseFloat(ph.amount || 0));
-        });
-
-        // 7. Format Result items
+        // 6. Format Result items
         const items = [];
         for (const emp of paginatedData.items) {
             const existing = payslipMap.get(emp.id);
@@ -2436,34 +2427,37 @@ exports.getEmployeesByMonthYear = async (req, res) => {
             let net_payable = "0.00";
             let payslip_id = null;
             let status = null;
+            let paid_amount = 0;
+            let pending_amount = 0;
 
             if (existing) {
                 ctc = existing.fixed_gross || existing.ctc_monthly || 0;
                 net_payable = existing.net_salary || existing.net_payable || 0;
                 payslip_id = existing.id;
                 status = existing.status;
+                paid_amount = parseFloat(existing.paid_amount || 0);
+                pending_amount = parseFloat(existing.pending_amount || 0);
             } else {
                 try {
                     const sim = await performSalaryCalculation(emp.id, month, year);
                     if (sim && sim.salary) {
                         ctc = sim.salary.ctc_monthly;
                         net_payable = sim.salary.netPayable;
+                        paid_amount = parseFloat(sim.payment_history?.grand_total || 0);
+                        pending_amount = Math.max(0, parseFloat(net_payable) - paid_amount);
                     }
                 } catch (e) {
                     console.error(`Simulation failed for employee ${emp.id}:`, e.message);
                 }
             }
 
-            // Get amount from PaymentHistory
-            const amount = paymentMap.get(emp.id) || 0;
-            const pending_amount = parseFloat(net_payable) - amount;
             items.push({
                 id: emp.id,
                 name: emp.first_name,
                 employee_code: emp.employee_code,
                 ctc,
                 net_payable,
-                amount,
+                amount: paid_amount,
                 pending_amount,
                 payslip_id,
                 status
@@ -2662,7 +2656,7 @@ exports.bulkFinalizePayroll = async (req, res) => {
                         const { User: UserModel } = require("../../models");
                         const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: emp_id }, {}, transaction);
                         if (targetUser) {
-                            const monthName = dayjs().month(month - 1).format('MMMM');
+                            const monthName = formatDateTime(new Date(year, month - 1, 1), "MMMM");
                             const { createNotification } = require("../../services/notificationService");
                             await createNotification({
                                 user_id: targetUser.id,
@@ -2745,7 +2739,7 @@ exports.bulkPayPayroll = async (req, res) => {
                         const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: p.employee_id }, {}, transaction);
                         if (targetUser) {
                             const { createNotification } = require("../../services/notificationService");
-                            const monthName = dayjs().month(payslip.month - 1).format('MMMM');
+                            const monthName = formatDateTime(new Date(payslip.year, payslip.month - 1, 1), "MMMM");
                             await createNotification({
                                 user_id: targetUser.id,
                                 title: "Salary Paid",

@@ -1,4 +1,4 @@
-const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, Op, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { sequelize, OnDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const dayjs = require("dayjs");
@@ -68,7 +68,7 @@ const transaction = await sequelize.transaction();
 
         if (overlap) {
             await transaction.rollback();
-            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
         }
 
         await commonQuery.createRecord(
@@ -239,7 +239,7 @@ exports.update = async (req, res) => {
 
         if (overlap) {
             await transaction.rollback();
-            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${dayjs(overlap.start_date).format('DD-MM-YYYY')} to ${dayjs(overlap.end_date).format('DD-MM-YYYY')})` });
+            return res.error("OVERLAP", { message: `Selected dates overlap with an existing on-duty request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
         }
 
         const PUT = { 
@@ -416,7 +416,7 @@ exports.updateStatus = async (req, res) => {
                 user_id: user.id,
                 title: newStatus === constants.ON_DUTY_STATUS.APPROVED ? "On Duty Approved" : (newStatus === constants.ON_DUTY_STATUS.REJECTED ? "On Duty Rejected" : "On Duty Status Updated"),
                 message: newStatus === constants.ON_DUTY_STATUS.APPROVED 
-                    ? `Your On Duty request from ${dayjs(onDutyRequest.start_date).format('DD MMM')} to ${dayjs(onDutyRequest.end_date).format('DD MMM')} has been approved.` 
+                    ? `Your On Duty request from ${formatDateTime(onDutyRequest.start_date, 'DD MMM')} to ${formatDateTime(onDutyRequest.end_date, 'DD MMM')} has been approved.` 
                     : `Your On Duty request has been ${newStatus === constants.ON_DUTY_STATUS.REJECTED ? 'rejected' : 'updated'}. ${remarks ? 'Remarks: ' + remarks : ''}`,
                 type: "ON_DUTY",
                 reference_id: id,
@@ -511,7 +511,7 @@ exports.getOnDutySummary = async (req, res) => {
     // 2. Group History by Month
     const groupedHistory = [];
     history.forEach(onDuty => {
-      const monthYear = dayjs(onDuty.start_date).format("MMM, YYYY");
+      const monthYear = formatDateTime(onDuty.start_date, "MMM, YYYY");
       let group = groupedHistory.find(g => g.month_label === monthYear);
       
       if (!group) {
@@ -527,7 +527,7 @@ exports.getOnDutySummary = async (req, res) => {
       
       const start = dayjs(onDuty.start_date);
       const end = dayjs(onDuty.end_date);
-      const dateRange = `${start.format("D MMM, ddd")} - ${end.format("D MMM, ddd")}`;
+      const dateRange = `${formatDateTime(onDuty.start_date, "D MMM, ddd")} - ${formatDateTime(onDuty.end_date, "D MMM, ddd")}`;
 
       const statusMap = {
         [constants.ON_DUTY_STATUS.PENDING]: "PENDING",
