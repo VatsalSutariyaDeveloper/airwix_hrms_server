@@ -86,7 +86,7 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const deleted = await commonQuery.softDeleteById(PrintTemplates, req.params.id, { status: 2 }, transaction);
+    const deleted = await commonQuery.softDeleteById(PrintTemplates, req.params.id, transaction);
     if (!deleted) return res.error(constants.ALREADY_DELETED);
     await transaction.commit();
     return res.success(constants.PRINT_MASTER_DELETED);

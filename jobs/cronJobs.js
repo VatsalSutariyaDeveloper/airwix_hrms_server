@@ -23,9 +23,8 @@ const jobMonthlyLeaveAccrual = async (asOf = null) => {
 };
 
 const jobYearEndLeaveReset = async (asOf = null) => {
-    console.log('⏰ Checking for year-end leave resets...');
+    // We moved the logging inside the service to avoid daily terminal noise
     await LeaveBalanceService.processYearEndReset(asOf);
-    console.log('✅ Year-end reset check completed.');
 };
 
 const jobContractorDeactivation = async (asOf = null) => {
@@ -196,13 +195,6 @@ const initCronJobs = () => {
     cron.schedule('0 0 * * *', async () => {
         console.log('⏰ [MIDNIGHT CRON] Starting all daily jobs...');
         await runAllNow(); // uses live date (no asOf)
-    });
-
-    // ⏰ Monthly Leave Accrual — 1st of every month at 00:00 AM
-    // Runs separately so it only fires on the 1st
-    cron.schedule('0 0 1 * *', async () => {
-        console.log('⏰ [MONTHLY CRON] Running leave accrual...');
-        await jobMonthlyLeaveAccrual().catch(e => console.error('❌ Monthly leave accrual failed:', e));
     });
 
     // ⏰ Payslip PDF Cleanup — runs every hour (not daily, so kept separate)

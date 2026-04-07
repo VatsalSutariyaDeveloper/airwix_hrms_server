@@ -1,11 +1,8 @@
 const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
 const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
-const { uploadFile } = require("../../helpers/fileUpload");
-const crypto = require("crypto");
-const emailService = require("../../services/emailService");
-const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const { generateCustomFieldImageUrls, handleCustomFieldImages } = require("../../helpers/customFieldImageHandler");
-
+const { MODULES } = require("../../helpers/moduleEntitiesConstants");
+const emailService = require("../../services/emailService");
 
 const FILE_COLUMNS = [
     'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
@@ -558,6 +555,17 @@ exports.getOnboardingById = async (req, res) => {
             }
         );
 
+        const customFieldDefinitions = await commonQuery.findAllRecords(
+            CustomField,
+            {
+                entity_id: MODULES.EMPLOYEE.ID,
+                status: 0
+            },
+            {
+                attributes: ['id', 'field_label', 'field_name', 'field_type', 'is_mandatory', 'is_readonly', 'default_value', 'placeholder', 'options', 'validation_regex', 'priority', 'description']
+            }
+        );
+
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
         }
@@ -574,7 +582,17 @@ exports.getOnboardingById = async (req, res) => {
             }
         });
 
-        return res.ok(employee);
+        // Process custom fields to add full image URLs
+        if (employee.custom_fields && Array.isArray(employee.custom_fields)) {
+            employee.custom_fields = generateCustomFieldImageUrls(employee.custom_fields, constants.CUSTOM_FIELD_IMG_FOLDER);
+        }
+
+        const response = {
+            employee,
+            custom_field_definitions: customFieldDefinitions
+        };
+
+        return res.ok(response);
     } catch (err) {
         return handleError(err, res, req);
     }

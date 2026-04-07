@@ -510,7 +510,7 @@ exports.delete = async (req, res) => {
 async function syncChildData(Model, newData, companyId, extraFields, transaction) {
   const incomingIds = newData.map((d) => d.id).filter(Boolean);
 
-  await commonQuery.softDeleteById(Model, {company_id: companyId, id: { [Op.notIn]: incomingIds },}, null, transaction);
+  await commonQuery.softDeleteById(Model, {company_id: companyId, id: { [Op.notIn]: incomingIds }}, transaction);
 
   const recordsToCreate = [];
   const recordsToUpdate = [];

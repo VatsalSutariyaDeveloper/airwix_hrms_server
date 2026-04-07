@@ -78,7 +78,7 @@ const runWorker = async () => {
         fixed_conv: ["fixed conv", "fixedconv", "conv", "conveyance", "transport", "fixed conv"],
         fixed_misc: ["fixed misc", "fixedmisc", "misc", "allowance", "medical", "food", "special", "lta", "arrears"],
         fixed_ot_rate: ["fixed ot rate", "fixedotrate", "ot rate"],
-        fixed_gross: ["fixed gross", "fixedgross", "total monthly gross", "monthly gross", "gross", "fixed gross", "ctc"],
+        fixed_gross: ["fixed gross", "fixedgross", "total monthly gross", "monthly gross", "gross", "fixed gross", "ctc", "monthly ctc"],
         // Paid
         paid_basic_da: ["paid basic da", "paidbasicda", "earned basic", "basic", "earned basic da"],
         paid_hra: ["paid hra", "paidhra", "earned hra", "hra"],
@@ -404,7 +404,7 @@ const runWorker = async () => {
             company_id: mockStore.companyId,
             user_id: mockStore.userId,
             branch_id: mockStore.branch_id || 0,
-            status: 1, // Finalized
+            status: 3, // Paid
 
             // Attendance
             pd_days: parseNum(headerMap.pd_days, row),
@@ -432,6 +432,8 @@ const runWorker = async () => {
             paid_gross: parseNum(headerMap.paid_gross, row),
             total_deduction: parseNum(headerMap.total_deduction, row),
             net_salary: parseNum(headerMap.net_salary, row),
+            paid_amount: parseNum(headerMap.net_salary, row),
+            pending_amount: 0,
             
             break_down: breakdown
         };
@@ -444,7 +446,7 @@ const runWorker = async () => {
             updateOnDuplicate: [
                 'pd_days', 'ph_days', 'wo_days', 'wp_days', 'absent_days', 'present_days', 'total_days', 'lunch_count', 'leave_details',
                 'earning_details', 'deduction_details', 'statutory_details', 'employer_details',
-                'fixed_gross', 'paid_gross', 'total_deduction', 'net_salary', 'status', 'break_down'
+                'fixed_gross', 'paid_gross', 'total_deduction', 'net_salary', 'paid_amount', 'pending_amount', 'status', 'break_down'
             ],
             transaction
         });

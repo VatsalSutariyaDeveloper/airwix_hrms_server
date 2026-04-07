@@ -26,7 +26,6 @@ module.exports = (sequelize, DataTypes) => {
     fines_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
 
     // Overtime
-    auto_calculate_overtime: { type: DataTypes.BOOLEAN, defaultValue: true },
     overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
     min_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     max_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0 },

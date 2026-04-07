@@ -38,7 +38,7 @@ const emailService = {
                         </p>
                         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
                         <p style="color: #94a3b8; font-size: 0.8em; text-align: center;">
-                            This is an automated message from Airwix HRMS.
+                            This is an automated message from Airwix Payroll.
                         </p>
                     </div>
                 `,

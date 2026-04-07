@@ -27,7 +27,7 @@ exports.getAuditLogs = async (req, res) => {
           { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
       },
-      {}
+      { company_id: true }
     );
 
     return res.status(200).json({
@@ -63,7 +63,7 @@ exports.getActivityLogs = async (req, res) => {
           { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
       },
-      {}
+      { company_id: true }
     );
 
     return res.status(200).json({
@@ -98,7 +98,7 @@ exports.getApiLogs = async (req, res) => {
           { model: DeviceMaster, as: "device", attributes: ["id", "device_name"] },
         ],
       },
-      {}
+      { company_id: true }
     );
 
     return res.status(200).json({

@@ -1,5 +1,5 @@
 const { parentPort, workerData } = require("worker_threads");
-const { sequelize, commonQuery, constants } = require("../../../helpers");
+const { sequelize, commonQuery, constants, formatDateTime } = require("../../../helpers");
 const {
   Employee,
   AttendanceDay,
@@ -221,7 +221,7 @@ const runWorker = async () => {
     }
 
     const sheetYear = providedYear;
-    const monthName = dayjs().month(providedMonth - 1).format("MMM");
+    const monthName = formatDateTime(new Date(providedYear, providedMonth - 1, 1), "MMM");
 
     const startIdx = daysIdx !== -1 ? daysIdx + 1 : 0;
     for (let i = startIdx; i < formattedHeaders.length; i++) {
@@ -762,8 +762,8 @@ const runWorker = async () => {
                         fine_amount: 0,
                         overtime_data: overtimeData,
                         fine_data: fineData,
-                        first_in: dbFirstIn ? dayjs(dbFirstIn).format("HH:mm:ss") : null,
-                        last_out: dbLastOut ? dayjs(dbLastOut).format("HH:mm:ss") : null,
+                        first_in: dbFirstIn ? formatDateTime(dbFirstIn, "HH:mm:ss") : null,
+                        last_out: dbLastOut ? formatDateTime(dbLastOut, "HH:mm:ss") : null,
                         is_locked: true,
                         note: importedNote,
                         leave_category_id: leaveCategoryId,

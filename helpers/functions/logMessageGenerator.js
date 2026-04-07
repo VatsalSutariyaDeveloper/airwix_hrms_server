@@ -83,6 +83,7 @@ const ENTITYCONFIG_MAP = {
     // Logs
     [ENTITIES.ACTIVITY_LOG.NAME]: { primary: 'record_id', secondary: 'entity_name' },
     [ENTITIES.LOGIN_HISTORY.NAME]: { primary: 'user_id', secondary: 'in_time' },
+    [ENTITIES.EMPLOYEE.NAME]: { primary: 'first_name', secondary: 'employee_code' },
 };
 
 exports.generateLogMessage = (entityName, actionType, recordData = {}) => {
@@ -111,7 +112,21 @@ exports.generateLogMessage = (entityName, actionType, recordData = {}) => {
 
     const actionText = actionTextMap[actionType] || actionType;
     const cleanEntityName = entityName.replace(/([A-Z])/g, ' $1').trim();
-    const employeeInfo = recordData.employee_id ? ` for Employee ID: ${recordData.employee_id}` : '';
+    let employeeInfo = '';
+    if (recordData.employee_id) {
+        const name = recordData.employee_name || recordData.first_name || (recordData.employee && (recordData.employee.first_name || recordData.employee.employee_name));
+        const code = recordData.employee_code || (recordData.employee && recordData.employee.employee_code);
+        
+        if (name && code) {
+            employeeInfo = ` for ${name} (${code})`;
+        } else if (name) {
+            employeeInfo = ` for ${name}`;
+        } else if (code) {
+            employeeInfo = ` for Employee Code: ${code}`;
+        } else {
+            employeeInfo = ` for Employee ID: ${recordData.employee_id}`;
+        }
+    }
 
     return `${actionText} ${cleanEntityName}: ${identifier}${employeeInfo}`;
 };

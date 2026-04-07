@@ -26,7 +26,6 @@ module.exports = (sequelize, DataTypes) => {
     fines_allowed: { type: DataTypes.BOOLEAN, defaultValue: true, comment: 'If true, calculates and applied late entry, early exit and excess break fines' },
 
     // --- OVERTIME RULES ---
-    auto_calculate_overtime: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'If true, time after shift end automatically counts as OT. If false, OT only starts from the next punch session.' },
     overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: true },
     min_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Minimum minutes needed to count as overtime' },
     max_overtime_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Maximum OT allowed per day (0 = Unlimited)' },

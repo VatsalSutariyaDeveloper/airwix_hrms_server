@@ -12,7 +12,7 @@ const {
     AttendanceRegularization,
     EmployeeResignation
 } = require("../../models");
-const { commonQuery, handleError, constants, sequelize } = require("../../helpers");
+const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 
@@ -307,7 +307,7 @@ exports.getPayrollOverview = async (req, res) => {
         }, {}, false);
 
         return res.ok({
-            month: dayjs().format("MMMM YYYY"),
+            month: formatDateTime(new Date(), "MMMM YYYY"),
             totalPayout: payoutStats[0]?.total_payout || 0,
             processedCount: payoutStats[0]?.processed_count || 0,
             draftCount: draftStats

@@ -1,4 +1,4 @@
-const { sequelize, SalaryComponent } = require("../../../models");
+const { sequelize, SalaryComponent, EmployeeSalaryTemplateTransaction } = require("../../../models");
 const { validateRequest, commonQuery, handleError, Op } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
@@ -121,6 +121,22 @@ exports.getAll = async (req, res) => {
       false,
       "created_at"
     );
+
+    if (data.items && Array.isArray(data.items)) {
+            data.items = await Promise.all(
+                data.items.map(async (record) => {
+                    const employeeCount = await commonQuery.countRecords(
+                        EmployeeSalaryTemplateTransaction,
+                        { component_id: record.id, status: 0 }
+                    );
+                    
+                    return {
+                        ...(record.toJSON ? record.toJSON() : record),
+                        employee_count: employeeCount
+                    };
+                })
+            );
+        }
 
     return res.ok(data);
   } catch (err) {

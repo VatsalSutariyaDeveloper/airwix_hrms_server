@@ -1,5 +1,5 @@
 const { PaymentHistory, Employee, EmployeeAdvance, Payslip, User, sequelize } = require("../../models");
-const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError } = require("../../helpers");
+const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { createNotification } = require("../../services/notificationService");
 const dayjs = require("dayjs");
@@ -47,6 +47,7 @@ exports.create = async (req, res) => {
         }
 
         let isCreated = false;
+        let createdPayment = null;
 
         if (req.body.payment_type === PAYMENT_TYPE.SALARY && req.body.ref_id) {
             const payslip = await commonQuery.findOneRecord(Payslip, req.body.ref_id, {}, transaction);
@@ -59,17 +60,31 @@ exports.create = async (req, res) => {
             const netPayable = parseFloat(payslip.net_salary || 0);
             const paymentAmount = parseFloat(req.body.amount || 0);
 
-            if (paymentAmount > netPayable) {
+            // Fetch existing payments to check remaining balance
+            const existingPaidResult = await PaymentHistory.findAll({
+                where: {
+                    employee_id: req.body.employee_id,
+                    month: req.body.month,
+                    year: req.body.year,
+                    status: { [Op.ne]: 2 }
+                },
+                attributes: [[sequelizeInstance.fn('SUM', sequelizeInstance.col('amount')), 'total_paid']],
+                raw: true,
+                transaction
+            });
+            const currentTotalPaid = parseFloat(existingPaidResult[0]?.total_paid || 0);
+
+            if ((currentTotalPaid + paymentAmount) > (netPayable + 0.01)) { // Allow 0.01 margin for float
                 await transaction.rollback();
                 return res.error(constants.VALIDATION_ERROR, { 
-                    amount: `Payment amount (${paymentAmount}) cannot exceed net payable amount (${netPayable})` 
+                    amount: `Total payment (${currentTotalPaid + paymentAmount}) cannot exceed net payable amount (${netPayable})` 
                 });
             }
         
-            const createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
+            createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
             isCreated = true;
 
-            // Update payslip payment_history with salary entry
+            // Update payslip payment_history JSON with salary entry
             const currentPaymentHistory = payslip.payment_history || { advances_adjusted: [] };
             const salaryPayment = {
                 id: createdPayment.id,
@@ -79,42 +94,60 @@ exports.create = async (req, res) => {
                 payment_type: req.body.payment_type
             };
             
-            // Initialize salary_payments array if it doesn't exist
             if (!currentPaymentHistory.salary_payments) {
                 currentPaymentHistory.salary_payments = [];
             }
             currentPaymentHistory.salary_payments.push(salaryPayment);
             
-            // Update payslip with new payment history
             await commonQuery.updateRecordById(Payslip, req.body.ref_id, {
                 payment_history: currentPaymentHistory
             }, transaction);
 
-            const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
-                ref_id: req.body.ref_id,
-                payment_type: PAYMENT_TYPE.SALARY
-            }, {
-                attributes: [[sequelizeInstance.fn('SUM', sequelizeInstance.col('amount')), 'total_paid']],
-                raw: true
-            }, transaction);
-            
-            const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0) + paymentAmount;
-            
-            if (totalPaid >= netPayable && payslip.status !== 3) {
-                await commonQuery.updateRecordById(Payslip, req.body.ref_id, { status: 3 }, transaction);
-            }
         } else {
             // General or Advance payment history creation
-            await commonQuery.createRecord(PaymentHistory, req.body, transaction);
+            createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
             isCreated = true;
         }
 
         if (isCreated) {
+            // --- Synchronize Payslip Totals ---
+            // Find existing Payslip for same employee, month, and year (Finalized or Paid)
+            const targetPayslip = await commonQuery.findOneRecord(Payslip, {
+                employee_id: req.body.employee_id,
+                month: req.body.month,
+                year: req.body.year,
+                status: { [Op.in]: [1, 3] }
+            }, {}, transaction);
+
+            if (targetPayslip) {
+                // Recalculate total paid from ALL types (Salary + Advance) for this period
+                const totalPaidResult = await PaymentHistory.findAll({
+                    where: {
+                        employee_id: req.body.employee_id,
+                        month: req.body.month,
+                        year: req.body.year,
+                        status: { [Op.ne]: 2 }
+                    },
+                    attributes: [[sequelizeInstance.fn('SUM', sequelizeInstance.col('amount')), 'total_paid']],
+                    raw: true,
+                    transaction
+                });
+
+                const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0);
+                const netSalary = parseFloat(targetPayslip.net_salary || 0);
+
+                await commonQuery.updateRecordById(Payslip, targetPayslip.id, {
+                    paid_amount: totalPaid,
+                    pending_amount: Math.max(0, netSalary - totalPaid),
+                    status: (totalPaid >= (netSalary - 0.01)) ? 3 : 1 // Mark as Paid if threshold met
+                }, transaction);
+            }
+
             // 💸 Send Notification to Employee
             try {
                 const targetUser = await commonQuery.findOneRecord(User, { employee_id: req.body.employee_id }, {}, transaction);
                 if (targetUser) {
-                    const monthName = dayjs().month(parseInt(req.body.month) - 1).format('MMMM');
+                    const monthName = formatDateTime(new Date(req.body.year, parseInt(req.body.month) - 1, 1), "MMMM");
                     await createNotification({
                         user_id: targetUser.id,
                         title: "Payment Received",

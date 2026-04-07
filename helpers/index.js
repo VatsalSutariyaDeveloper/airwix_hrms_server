@@ -6,7 +6,7 @@ const { uploadFile, uploadBase64File, deleteFile, fileExists } = require("./file
 const { handleError } = require("./functions/errorFunctions");
 const { getExpDateByItem, convertStock } = require("./functions/helperFunction");
 const { updateItemCurrentStock } = require("./functions/inventoryFunctions");
-const { fixDecimals, fixNum, fixQty, parseDate, initializeCompanySettings } = require("./functions/commonFunctions");
+const { fixDecimals, fixNum, fixQty, parseDate, formatDateTime, initializeCompanySettings } = require("./functions/commonFunctions");
 const { constants, ENTITIES } = require("./constants");
 const { getCompanySetting,clearCompanyCache, getCompanySubscription, clearCompanySubscriptionCache, clearAllCompanySubscriptionCache, reloadCompanyCache, reloadRoutePermissions, getRoutePermissionId, updateSubscriptionCache, reloadCompanySubscriptionCache, reloadCompanySettingsCache } = require("./cache");
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
@@ -33,6 +33,7 @@ const { getContext } = require("../utils/requestContext");
     constants,
     ENTITIES,
     parseDate,
+    formatDateTime,
     convertStock,
     handleImport,
     handleExport,

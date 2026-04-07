@@ -40,17 +40,20 @@ exports.create = async (req, res) => {
         const shifts = await commonQuery.createRecord(ShiftTemplate, req.body, transaction);
 
         if (req.body.breaks && Array.isArray(req.body.breaks)) {
-            const breaks = req.body.breaks.map(b => ({
-                ...b,
-                start_buffer: b.start_buffer === "" ? null : b.start_buffer,
-                buffer_end: b.buffer_end === "" ? null : b.buffer_end,
-                start_time: b.start_time === "" ? null : b.start_time,
-                end_time: b.end_time === "" ? null : b.end_time,
-                shift_template_id: shifts.id,
-                user_id: req.user?.id || 0,
-                branch_id: req.body.branch_id || 0,
-                company_id: req.body.company_id || 0
-            }));
+            const breaks = req.body.breaks.map(b => {
+                const { id, ...breakData } = b; // Remove the id field
+                return {
+                    ...breakData,
+                    start_buffer: breakData.start_buffer === "" ? null : breakData.start_buffer,
+                    buffer_end: breakData.buffer_end === "" ? null : breakData.buffer_end,
+                    start_time: breakData.start_time === "" ? null : breakData.start_time,
+                    end_time: breakData.end_time === "" ? null : breakData.end_time,
+                    shift_template_id: shifts.id,
+                    user_id: req.user?.id || 0,
+                    branch_id: req.body.branch_id || 0,
+                    company_id: req.body.company_id || 0
+                };
+            });
             const commonBreaks = {
                 user_id: req.user?.id || 0,
                 branch_id: req.body.branch_id || 0,
@@ -188,23 +191,29 @@ exports.update = async (req, res) => {
                 .filter(id => !incomingIds.includes(id));
             
             if (idsToDelete.length > 0) {
-                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction, {});
+                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction);
             }
 
             const toCreate = [];
             for (const b of req.body.breaks) {
+                const { id, ...breakWithoutId } = b; // Remove the id field
                 const breakData = {
-                    ...b,
+                    ...breakWithoutId,
                     ...commonFields,
-                    start_buffer: b.start_buffer === "" ? null : b.start_buffer,
-                    buffer_end: b.buffer_end === "" ? null : b.buffer_end,
-                    start_time: b.start_time === "" ? null : b.start_time,
-                    end_time: b.end_time === "" ? null : b.end_time,
+                    start_buffer: breakWithoutId.start_buffer === "" ? null : breakWithoutId.start_buffer,
+                    buffer_end: breakWithoutId.buffer_end === "" ? null : breakWithoutId.buffer_end,
+                    start_time: breakWithoutId.start_time === "" ? null : breakWithoutId.start_time,
+                    end_time: breakWithoutId.end_time === "" ? null : breakWithoutId.end_time,
                 };
 
                 if (b.id) {
-                    // Update existing break
-                    await commonQuery.updateRecordById(ShiftBreak, b.id, breakData, transaction);
+                    // Update existing break - only if it's a valid database ID (not a large timestamp)
+                    if (typeof b.id === 'number' && b.id < 2147483647) {
+                        await commonQuery.updateRecordById(ShiftBreak, b.id, breakData, transaction);
+                    } else {
+                        // Treat large timestamp IDs as new breaks
+                        toCreate.push(breakData);
+                    }
                 } else {
                     // Collect new breaks to bulk-create
                     toCreate.push(breakData);

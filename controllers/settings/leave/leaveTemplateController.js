@@ -40,37 +40,24 @@ exports.create = async (req, res) => {
         // 2. Create Categories if provided
         const finalCategories = categories || [];
         
-        // Ensure Comp Off and Unpaid exist
-        if (!finalCategories.find(c => c.is_compoff)) {
-            finalCategories.push({
-                leave_category_name: "Compensatory Off",
-                leave_count: 0,
-                unused_leave_rule: 'LAPSE',
-                is_paid: true,
-                is_compoff: true
-            });
-        }
-        if (!finalCategories.find(c => !c.is_paid)) {
-            finalCategories.push({
+        // Ensure Unpaid exists and matches the last index
+        let paidCategories = finalCategories.filter(c => c.is_paid !== false);
+        let unpaidCategory = finalCategories.find(c => c.is_paid === false);
+
+        if (!unpaidCategory) {
+            unpaidCategory = {
                 leave_category_name: "Unpaid",
                 leave_count: 0,
                 unused_leave_rule: 'LAPSE',
                 is_paid: false,
                 is_compoff: false
-            });
+            };
         }
-        // if (!finalCategories.find(c => c.leave_category_name === "Short Leave")) {
-        //     finalCategories.push({
-        //         leave_category_name: "Short Leave",
-        //         leave_count: 0,
-        //         unused_leave_rule: 'LAPSE',
-        //         is_paid: true,
-        //         is_compoff: false
-        //     });
-        // }
 
-        if (finalCategories.length > 0) {
-            const categoryData = finalCategories.map(cat => ({
+        const reorderedCategories = [...paidCategories, unpaidCategory];
+        
+        if (reorderedCategories.length > 0) {
+            const categoryData = reorderedCategories.map(cat => ({
                 ...cat,
                 leave_template_id: template.id,
                 company_id: template.company_id
@@ -129,39 +116,26 @@ exports.update = async (req, res) => {
         if (categories && Array.isArray(categories)) {
             const finalCategories = [...categories];
 
-            // Ensure Comp Off and Unpaid exist in finalCategories if not already in DB
+            // Ensure Unpaid exists and move to end if missing from categories but in DB
             const existingCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { leave_template_id: id }, {}, transaction);
             
-            if (!finalCategories.find(c => c.is_compoff) && !existingCategories.find(c => c.is_compoff)) {
-                finalCategories.push({
-                    leave_category_name: "Compensatory Off",
-                    leave_count: 0,
-                    unused_leave_rule: 'LAPSE',
-                    is_paid: true,
-                    is_compoff: true
-                });
-            }
-            if (!finalCategories.find(c => !c.is_paid) && !existingCategories.find(c => !c.is_paid)) {
-                finalCategories.push({
+            let paidCategories = finalCategories.filter(c => c.is_paid !== false);
+            let unpaidCategory = finalCategories.find(c => c.is_paid === false) || existingCategories.find(c => c.is_paid === false);
+
+            if (!unpaidCategory) {
+                unpaidCategory = {
                     leave_category_name: "Unpaid",
                     leave_count: 0,
                     unused_leave_rule: 'LAPSE',
                     is_paid: false,
                     is_compoff: false
-                });
+                };
             }
-            // if (!finalCategories.find(c => c.leave_category_name === "Short Leave") && !existingCategories.find(c => c.leave_category_name === "Short Leave")) {
-            //     finalCategories.push({
-            //         leave_category_name: "Short Leave",
-            //         leave_count: 0,
-            //         unused_leave_rule: 'LAPSE',
-            //         is_paid: true,
-            //         is_compoff: false
-            //     });
-            // }
+
+            const reorderedCategories = [...paidCategories, unpaidCategory];
 
             const existingIds = existingCategories.map(c => c.id);
-            const inputIds = finalCategories.filter(c => c.id).map(c => c.id);
+            const inputIds = reorderedCategories.filter(c => c.id).map(c => c.id);
 
             // Delete categories not in input (Careful: don't delete system categories if hidden)
             const idsToDelete = existingIds.filter(eid => {
@@ -176,7 +150,7 @@ exports.update = async (req, res) => {
             }
 
             // Update or Create
-            for (const cat of finalCategories) {
+            for (const cat of reorderedCategories) {
                 const catData = { ...cat, leave_template_id: id, company_id: updatedTemplate.company_id };
                 if (cat.id) {
                     await commonQuery.updateRecordById(LeaveTemplateCategory, cat.id, catData, transaction);

@@ -89,7 +89,7 @@ exports.getByEmployeeId = async (req, res) => {
         );
 
         if (!leaveBalances || leaveBalances.length === 0) {
-            return res.error(constants.NOT_FOUND, { message: "No leave balances found for this employee" });
+            return res.error(constants.NOT_FOUND, { message: "No leave balances found" });
         }
 
         // Map total_allocated → leave_count for frontend compatibility

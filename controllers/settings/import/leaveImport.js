@@ -12,6 +12,8 @@ const xlsx = require("xlsx");
 const fs = require("fs");
 const { fail } = require('../../../helpers/Err');
 const { requestContext } = require("../../../utils/requestContext");
+const LeaveBalanceService = require("../../../services/leaveBalanceService");
+const dayjs = require("dayjs");
 
 let isCancelled = false;
 let transaction = null;
@@ -47,8 +49,8 @@ const runWorker = async () => {
 
   let fieldMapping = {};
   try { fieldMapping = JSON.parse(body.field_mapping || "{}"); } catch (e) { }
-
-  const currentYear = new Date().getFullYear();
+  
+  const refDate = dayjs(); // Today for import reference
 
   try {
     errorFileStream = fs.createWriteStream(errorLogPath);
@@ -126,7 +128,7 @@ const runWorker = async () => {
         company_id: mockStore.companyId,
         status: { [Op.ne]: 2 }
     }, {
-        attributes: ['id', 'employee_code', 'first_name', 'leave_template', 'branch_id'],
+        attributes: ['id', 'employee_code', 'first_name', 'leave_template', 'branch_id', 'joining_date'],
         raw: true
     }, transaction);
 
@@ -135,25 +137,28 @@ const runWorker = async () => {
         employeeMap.set(cleanStr(emp.employee_code), emp);
     });
 
-    // 4. Pre-fetch existing balances to decide create vs update
     const existingBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
         employee_id: { [Op.in]: employees.map(e => e.id) },
-        year: currentYear,
         status: 0
     }, {
-        attributes: ['id', 'employee_id', 'leave_category_name', 'leave_category_id', 'total_allocated', 'used_leaves'],
+        attributes: ['id', 'employee_id', 'leave_category_name', 'leave_category_id', 'total_allocated', 'used_leaves', 'year', 'month'],
         raw: true
     }, transaction);
 
     const balanceMap = new Map();
     existingBalances.forEach(b => {
-        const key = `${b.employee_id}:${cleanStr(b.leave_category_name)}`;
+        // Key: empId:canonicalCategoryName:year[:month]
+        const key = `${b.employee_id}:${cleanStr(b.leave_category_name)}:${b.year}:${b.month || 'null'}`;
         balanceMap.set(key, b);
     });
 
     // 5. Build Template-Category lookup & Fallback Map
     const templateCategoryMap = new Map();
     const categoryFallbackMap = new Map();
+    const templateMap = new Map();
+    const templateIds = [...new Set(allCategories.map(c => c.leave_template_id))];
+    const templates = await commonQuery.findAllRecords(LeaveTemplate, { id: { [Op.in]: templateIds } }, {}, transaction);
+    templates.forEach(t => templateMap.set(t.id, t));
 
     allCategories.forEach(cat => {
         // Map per template
@@ -213,10 +218,12 @@ const runWorker = async () => {
                 const countVal = record[col.header];
                 if (countVal === undefined || countVal === null || String(countVal).trim() === '') continue;
 
-                const count = parseFloat(countVal);
-                if (isNaN(count)) {
+                // Floor the input from Excel to 0.5
+                const rawCount = parseFloat(countVal);
+                if (isNaN(rawCount)) {
                     fail(`Invalid count '${countVal}' for category '${col.header}'`);
                 }
+                const addedCount = Math.floor(rawCount * 2) / 2;
 
                 // Find the category record: Try employee's template first, then fallback to company-wide
                 let categoryData = employeeCategories ? employeeCategories.get(col.canonicalCleanedName) : null;
@@ -249,17 +256,28 @@ const runWorker = async () => {
                     }
                 }
 
-                const balKey = `${employee.id}:${col.canonicalCleanedName}`;
+                // --- Cycle-Based Year/Month Determination ---
+                const targetTemplate = employeeTemplateId ? templateMap.get(employeeTemplateId) : defaultTemplate;
+                const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, targetTemplate.leave_policy_cycle, refDate, {
+                    leave_period_start: targetTemplate.leave_period_start,
+                    leave_period_end: targetTemplate.leave_period_end
+                });
+
+                const targetYear = end.year();
+                const targetMonth = (targetTemplate.leave_policy_cycle === 'MONTHLY' || targetTemplate.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null;
+
+                const balKey = `${employee.id}:${col.canonicalCleanedName}:${targetYear}:${targetMonth || 'null'}`;
                 const existing = balanceMap.get(balKey);
 
                 const payload = {
                     employee_id: employee.id,
-                    leave_template_id: employeeTemplateId,
+                    leave_template_id: targetTemplate.id,
                     leave_category_id: categoryData.id,
-                    year: currentYear,
+                    year: targetYear,
+                    month: targetMonth,
                     leave_category_name: categoryData.leave_category_name,
-                    total_allocated: count,
-                    pending_leaves: count,
+                    total_allocated: addedCount,
+                    pending_leaves: addedCount,
                     used_leaves: 0,
                     is_paid: categoryData.is_paid,
                     is_compoff: categoryData.is_compoff,
@@ -273,10 +291,9 @@ const runWorker = async () => {
 
                 if (existing) {
                     const currentTotal = parseFloat(existing.total_allocated || 0);
-                    const addedCount = count;
-                    const newTotal = currentTotal + addedCount;
+                    const newTotal = Math.floor((currentTotal + addedCount) * 2) / 2;
                     const used = parseFloat(existing.used_leaves || 0);
-                    const newPending = newTotal - used;
+                    const newPending = Math.floor((newTotal - used) * 2) / 2;
 
                     balancesToUpdate.push({ 
                         ...payload,

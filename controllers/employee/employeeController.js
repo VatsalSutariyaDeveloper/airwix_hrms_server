@@ -435,7 +435,6 @@ exports.update = async (req, res) => {
                 employee_id: id,
                 id: { [Op.notIn]: incomingIds }
             },
-            null,
             transaction
         );
 
@@ -650,7 +649,7 @@ exports.getProfile = async (req, res) => {
                 shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
                 lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "DAYS_IN_MONTH" ? "Days in Month" : plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "FIXED_30_DAYS" ? "Fixed 30 Days" : "Working Days",
-                attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
+                // attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
                 reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
             },
@@ -744,7 +743,7 @@ exports.delete = async (req, res) => {
         }
 
         // 3. Soft Delete associated Family Members
-        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, null, transaction);
+        await commonQuery.softDeleteById(EmployeeFamilyMember, { employee_id: ids }, transaction);
 
         // 4. Soft Delete associated Users
         await commonQuery.softDeleteById(User, { employee_id: ids }, transaction);

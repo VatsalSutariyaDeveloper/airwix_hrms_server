@@ -17,7 +17,8 @@ const {
     handleError, 
     constants,
     sequelize,
-    Op
+    Op,
+    formatDateTime
 } = require("../../helpers");
 const dayjs = require("dayjs");
 const emailService = require("../../services/emailService");
@@ -367,7 +368,7 @@ exports.handleAction = async (req, res) => {
                     user_id: user.id,
                     title: updateData.approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED ? "Resignation Approved" : "Resignation Partially Approved",
                     message: updateData.approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED 
-                        ? `Your resignation has been approved. Your Last Working Day is ${updateData.approved_lwd}.` 
+                        ? `Your resignation has been approved. Your Last Working Day is ${formatDateTime(updateData.approved_lwd)}.` 
                         : `Your resignation request has been moved to the next approval level (Stage ${updateData.current_level}).`,
                     type: "RESIGNATION",
                     reference_id: id,

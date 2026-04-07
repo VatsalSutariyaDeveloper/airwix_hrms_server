@@ -11,6 +11,7 @@ const {
 const { commonQuery, handleError } = require("../../helpers");
 const attendanceHelper = require("../../helpers/attendanceHelper");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
+const LeaveBalanceService = require("../../services/leaveBalanceService");
 const dayjs = require("dayjs");
 
 /**
@@ -245,12 +246,13 @@ const employeeAttendanceController = {
                 await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
             }
 
+            await LeaveBalanceService.bulkSyncEmployeeAttendancePolicy([employeeId], transaction);
             // Sync past attendance data for the current month
-            await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
-                user_id: req.user.id,
-                company_id: req.user.company_id,
-                branch_id: req.user.branch_id
-            });
+            // await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
+            //     user_id: req.user.id,
+            //     company_id: req.user.company_id,
+            //     branch_id: req.user.branch_id
+            // });
 
             await transaction.commit();
             return res.success("Employee attendance template updated successfully");

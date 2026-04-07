@@ -272,7 +272,6 @@ exports.delete = async (req, res) => {
         company_id: id,
         // setting_key: key,
       },
-      {},
       transaction
     );
 
