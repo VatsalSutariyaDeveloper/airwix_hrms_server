@@ -607,9 +607,13 @@ exports.updateAttendanceDay = async (req, res) => {
     // Determine if times are explicitly provided (User modifying Time)
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
-    // [FIX] If the user explicitly provides a status, we should respect it.
-    // This is a manual update endpoint, so we trust the status sent in req.body.
-    let effectiveStatus = (status !== undefined && status !== null) ? Number(status) : day.status;
+    const statusProvided = (status !== undefined && status !== null);
+    const hasPunchesArray = Array.isArray(req.body.punches);
+    // Only preserve/force status when explicitly requested (to allow recalculation on punch updates)
+    const shouldPreserveStatus = statusProvided && req.body.force_status === true;
+
+    // Default: respect provided status; will be recalculated later if not preserved
+    let effectiveStatus = statusProvided ? Number(status) : day.status;
 
     // Check if status is non-working (3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE)
     const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
@@ -673,6 +677,19 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // Only trigger punch update if strictly needed
     if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
+      console.log(
+        "[updateAttendanceDay] manualPunch start",
+        JSON.stringify({
+          employee_id,
+          attendance_date,
+          effectiveFirstIn,
+          effectiveLastOut,
+          statusProvided,
+          preserveStatus: shouldPreserveStatus,
+          hasPunchesArray,
+          force_status: req.body.force_status === true
+        })
+      );
       
       // Check if today is a holiday - if so, store working hours as overtime
       let isTodayHoliday = false;
@@ -689,19 +706,53 @@ exports.updateAttendanceDay = async (req, res) => {
         );
         isTodayHoliday = !!holidayRecord;
       }
+
+      // Check if today is a weekly off
+      let isTodayWeeklyOff = false;
+      const woDateJS = dayjs(attendance_date);
+      const woDayOfWeek = woDateJS.day();
+      const woWeekNo = Math.ceil(woDateJS.date() / 7);
+      if (emp.employeeWeeklyOffs && emp.employeeWeeklyOffs.length > 0) {
+        isTodayWeeklyOff = !!(emp.employeeWeeklyOffs || []).find(wo =>
+          wo.day_of_week === woDayOfWeek &&
+          (wo.week_no === 0 || wo.week_no === woWeekNo)
+        );
+      }
+
+      const isNonWorkingForPolicy = isTodayHoliday || isTodayWeeklyOff;
       
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
         branch_id: req.body.branch_id || req.user.branch_id,
         shift_id: shift_id,
+        preserveStatus: shouldPreserveStatus,
         bypassShiftRestrictions: true,
         employee: emp, // Pass pre-fetched employee
         existingDay: day, // Pass pre-fetched day
         punches: req.body.punches, // Pass punches array if provided
         // forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
-        isHoliday: (holidayPolicy === 'COMP_OFF') ? false : isTodayHoliday // Don't pass holiday flag for COMP_OFF
+        isHoliday: (holidayPolicy !== 'COMP_OFF') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL + BLOCK: all time → overtime
+        isHolidayAllowNormal: (holidayPolicy === 'ALLOW_NORMAL') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL: status = Present (not Holiday)
+        isHolidayCompOff: (holidayPolicy === 'COMP_OFF') ? isNonWorkingForPolicy : false // COMP_OFF: all time → worked_minutes, no overtime
       }, t);
+      console.log("[updateAttendanceDay] manualPunch done");
+    }
+
+    // If status wasn't explicitly provided, use the recalculated status from rebuildAttendanceDay
+    if (!shouldPreserveStatus) {
+      const refreshedDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+      console.log(
+        "[updateAttendanceDay] refreshed status",
+        JSON.stringify({
+          day_id: day.id,
+          refreshed_status: refreshedDay ? refreshedDay.status : null,
+          refreshed_worked_minutes: refreshedDay ? refreshedDay.worked_minutes : null,
+        })
+      );
+      if (refreshedDay && refreshedDay.status !== undefined && refreshedDay.status !== null) {
+        effectiveStatus = refreshedDay.status;
+      }
     }
  
     const payload = {

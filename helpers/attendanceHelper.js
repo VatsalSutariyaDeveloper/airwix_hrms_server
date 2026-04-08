@@ -1001,12 +1001,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       const pE = dayjs(punches[i + 1].punch_time);
 
       if (shift) {
-        if (meta.isHoliday || meta.isWeeklyOff) {
-          // When it's a holiday or weekly off, all work time should be treated as overtime
+        if ((meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff) {
+          // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), all work time should be treated as overtime
           const sessionMinutes = pE.diff(pS, "minute");
           lateOTMins += sessionMinutes;
         } else {
-          // Normal shift logic
+          // Normal shift logic (used for COMP_OFF holidays and regular days)
           // Shift Part
           const sOverlapStart = dayjs(Math.max(pS.valueOf(), shiftStart.valueOf()));
           const sOverlapEnd = dayjs(Math.min(pE.valueOf(), shiftEnd.valueOf()));
@@ -1032,13 +1032,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           }
         }
       } else {
-        // No Shift or Holiday/Weekly Off - All work time should be stored as overtime
+        // No Shift - All work time should be stored as overtime
         const sessionMinutes = pE.diff(pS, "minute");
-        if (meta.isHoliday || meta.isWeeklyOff) {
-          // When it's a holiday or weekly off, all work time goes to overtime
+        if ((meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff) {
+          // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), all work time goes to overtime
           lateOTMins += sessionMinutes;
         } else {
-          // No shift assigned on regular day - treat as overtime
+          // No shift assigned on regular day OR ALLOW_NORMAL holiday without shift - treat as overtime
           lateOTMins += sessionMinutes;
         }
       }
@@ -1137,17 +1137,17 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       totalSpanMinutes += dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute");
     }
   }
-  // [MOD] Deduct unpaid shift breaks (Scheduled Breaks) that occurred while the employee was punched in.
-  // totalSpanMinutes already excludes gaps between pairs, so we only subtract the "stayed punched-in" break portion.
+  // [MOD] Deduct unpaid shift breaks (Scheduled Breaks) that occurred while employee was punched in.
+  // totalSpanMinutes already excludes gaps between pairs, so we only subtract "stayed punched-in" break portion.
   let breakDeduction = Math.max(0, scheduledBreaksMins);
   if (template && template.paid_break_duration_mins > 0) {
     breakDeduction = Math.max(0, breakDeduction - template.paid_break_duration_mins);
   }
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakDeduction);
 
-  // When no shift is assigned OR it's a holiday/weekly off, set worked minutes to 0 so all time goes to overtime
-  // if (!shift || meta.isHoliday || meta.isWeeklyOff) {
-  if (meta.isHoliday || meta.isWeeklyOff) {
+  // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), set worked minutes to 0 so all time goes to overtime
+  // For COMP_OFF: keep finalWorkedMinutes (all time → worked_minutes)
+  if ((meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff) {
     finalWorkedMinutes = 0;
   }
 
@@ -1157,7 +1157,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let rawEarlyOT = earlyOTMins;
   let rawLateOT = lateOTMins;
 
-  const isNonWorkingDay = meta.isHoliday || meta.isWeeklyOff;
+  const isNonWorkingDay = (meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff;
 
   if (template && shift && !isNonWorkingDay) {
     // 1. Honor individual OT toggles (only when shift exists and not holiday)
@@ -1206,6 +1206,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     expectedShiftWorkMinutes = netMins;
   }
 
+  // [MOD] Limit worked minutes to shift duration
+  if (shift && expectedShiftWorkMinutes > 0) {
+    finalWorkedMinutes = Math.min(finalWorkedMinutes, expectedShiftWorkMinutes);
+  }
+  
   // [MOD] Do not trim worked minutes by policy here. 
   // We want worked_minutes to store total site duration (Total - Breaks), as requested.
   // if (template && !template.include_overtime_in_total && shift) {
@@ -1687,6 +1692,58 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     };
   }
 
+  // --- ALLOW_NORMAL / COMP_OFF on Holiday/WeeklyOff: use first_in→last_out span with break deduction ---
+  if ((meta.isHolidayAllowNormal || meta.isHolidayCompOff) && firstIn && lastOut) {
+    const rawSpanMinutes = Math.max(0, dayjs(lastOut.punch_time).diff(dayjs(firstIn.punch_time), "minute"));
+    
+    // Calculate break minutes to deduct (same logic as regular days)
+    let breakMinutesToDeduct = 0;
+    if (shift && shift.ShiftBreaks && shift.ShiftBreaks.length > 0) {
+      for (const breakRule of shift.ShiftBreaks) {
+        if ((breakRule.is_automatic === true || breakRule.is_automatic === undefined) && breakRule.start_time && breakRule.end_time) {
+          const breakStart = dayjs(`${date} ${breakRule.start_time}`);
+          let breakEnd = dayjs(`${date} ${breakRule.end_time}`);
+          
+          // Handle breaks that cross midnight for night shifts
+          if (breakEnd.isBefore(breakStart)) {
+            breakEnd = breakEnd.add(1, 'day');
+          }
+          
+          // Check if break period falls within work time
+          const workStart = dayjs(firstIn.punch_time);
+          const workEnd = dayjs(lastOut.punch_time);
+          
+          if (workStart.isBefore(breakEnd) && workEnd.isAfter(breakStart)) {
+            const actualBreakStart = workStart.isAfter(breakStart) ? workStart : breakStart;
+            const actualBreakEnd = workEnd.isBefore(breakEnd) ? workEnd : breakEnd;
+            const breakOverlapMinutes = Math.max(0, actualBreakEnd.diff(actualBreakStart, 'minute'));
+            breakMinutesToDeduct += breakOverlapMinutes;
+          }
+        }
+      }
+    }
+
+    const effectiveWorkMinutes = Math.max(0, rawSpanMinutes - breakMinutesToDeduct);
+
+    if (meta.isHolidayAllowNormal) {
+      // ALLOW_NORMAL: effective time → overtime, worked = 0
+      finalWorkedMinutes = 0;
+      overtimeMinutes = effectiveWorkMinutes;
+      earlyOvertimeMinutes = 0;
+      // Recalculate OT data with effective time
+      const otRes = getRateIdAndAmount(5, 1, effectiveWorkMinutes, dailyWage, hourlyWage);
+      lateOtData = { minutes: effectiveWorkMinutes, amount: otRes.amount, rate: otRes.rate, calculation_type: otRes.rateId };
+      earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+    } else if (meta.isHolidayCompOff) {
+      // COMP_OFF: effective time → worked_minutes, overtime = 0
+      finalWorkedMinutes = effectiveWorkMinutes;
+      overtimeMinutes = 0;
+      earlyOvertimeMinutes = 0;
+      lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+      earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+    }
+  }
+
   let status = 5; // Default ABSENT
   let autoAbsentReason = null;
 
@@ -1730,7 +1787,14 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const minFullDay = shift ? shift.min_full_day_minutes : 480;
 
     // Special handling for holidays - if holiday and worked, set HOLIDAY status
-    if (meta.isHoliday && overtimeMinutes > 0) {
+    // For ALLOW_NORMAL: set Present (0) instead of Holiday (4)
+    if (meta.isHolidayCompOff && finalWorkedMinutes > 0) {
+      status = 0;
+      // autoAbsentReason = `Present on Holiday (COMP_OFF): Worked ${finalWorkedMinutes}m`;
+    } else if (meta.isHolidayAllowNormal && overtimeMinutes > 0) {
+      status = 0;
+      // autoAbsentReason = `Present on Holiday (ALLOW_NORMAL): OT ${overtimeMinutes}m`;
+    } else if (meta.isHoliday && overtimeMinutes > 0) {
       status = 4; // HOLIDAY
       autoAbsentReason = `Worked on Holiday: ${overtimeMinutes}m overtime`;
     } else if (!shift && overtimeMinutes > 0) {
@@ -2077,7 +2141,13 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   // 4. Rebuild day
   if (!meta.skipRebuild) {
-    await rebuildAttendanceDay(employeeId, date, { ...meta, shift_id: shift ? shift.id : meta.shift_id, preserveStatus: true, isHoliday: meta.isHoliday }, transaction);
+    const preserveStatus = (meta.preserveStatus !== undefined) ? meta.preserveStatus : true;
+    await rebuildAttendanceDay(
+      employeeId,
+      date,
+      { ...meta, shift_id: shift ? shift.id : meta.shift_id, preserveStatus, isHoliday: meta.isHoliday },
+      transaction
+    );
   }
 }
 /**
