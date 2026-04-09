@@ -127,7 +127,7 @@ console.log("start",start,"end",end)
     /**
      * Primary entry point: Assigns/Syncs leaves to an employee.
      */
-    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}) {
+    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}, oldBalancesMap = null) {
         const { allowRollover = false } = options;
         const t = transaction || (await sequelize.transaction());
         try {
@@ -362,6 +362,14 @@ console.log("start",start,"end",end)
                     // Syncing with existing active balance without rollover
                     carryForward = parseFloat(targetBalance.carry_forward_leaves || 0);
                     used = parseFloat(targetBalance.used_leaves || 0);
+                } else if (oldBalancesMap) {
+                    // When old balances were soft-deleted before this call (template update flow),
+                    // use the preserved usage data so employees don't get extra leaves
+                    const oldBal = oldBalancesMap.get(category.id);
+                    if (oldBal) {
+                        used = parseFloat(oldBal.used_leaves || 0);
+                        carryForward = parseFloat(oldBal.carry_forward_leaves || 0);
+                    }
                 }
 console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 let totalAllowance = Math.round((allocated + carryForward) * 2) / 2;
@@ -414,7 +422,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
     /**
      * Synchronizes balances when an employee's template is changed.
-     * Strategy: DELETE all existing balances first → create fresh from new template.
+     * Strategy: Capture used leaves → DELETE all existing balances → create fresh from new template with old usage preserved.
      */
     static async syncEmployeeBalances(employeeId, newTemplateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null) {
         const t = transaction || (await sequelize.transaction());
@@ -422,7 +430,20 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             const employee = preFetchedEmployee || await commonQuery.findOneRecord(Employee, employeeId, {}, t, true);
             if (!employee) throw new Error("Employee not found");
 
-            // Step 1: Soft-delete ALL existing leave balances for this employee
+            // Step 1: Capture old balance usage data BEFORE soft-deleting
+            const oldBalances = await EmployeeLeaveBalance.findAll({
+                where: { employee_id: employeeId, status: { [Op.in]: [0, 1] } },
+                transaction: t
+            });
+            const oldBalancesMap = new Map();
+            for (const bal of oldBalances) {
+                oldBalancesMap.set(bal.leave_category_id, {
+                    used_leaves: bal.used_leaves,
+                    carry_forward_leaves: bal.carry_forward_leaves
+                });
+            }
+
+            // Step 2: Soft-delete ALL existing leave balances for this employee
             await EmployeeLeaveBalance.update(
                 { status: 2 },
                 { where: { employee_id: employeeId, status: { [Op.in]: [0, 1] } }, transaction: t }
@@ -440,8 +461,8 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
             if (!newTemplate) throw new Error("New leave template not found");
 
-            // Step 2: Create fresh balances from the new template
-            const results = await this.initializeBalance(employeeId, newTemplateId, t, employee, newTemplate);
+            // Step 3: Create fresh balances from the new template, passing old usage data
+            const results = await this.initializeBalance(employeeId, newTemplateId, t, employee, newTemplate, null, {}, oldBalancesMap);
 
             if (!transaction) await t.commit();
             return results;
@@ -453,14 +474,31 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
     /**
      * Optimized bulk synchronization of leave balances.
-     * Strategy: DELETE all existing balances first → create fresh from new template.
+     * Strategy: Capture used leaves → DELETE all existing balances → create fresh from new template with old usage preserved.
      */
     static async bulkSyncEmployeeBalances(employeeIds, newTemplateId, transaction = null, meta = {}) {
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
 
         const t = transaction || (await sequelize.transaction());
         try {
-            // Step 1: Soft-delete ALL existing leave balances for these employees
+            // Step 1: Capture old balance usage data BEFORE soft-deleting
+            // Build a map: employeeId -> Map(categoryId -> { used_leaves, carry_forward_leaves })
+            const allOldBalances = await EmployeeLeaveBalance.findAll({
+                where: { employee_id: { [Op.in]: employeeIds }, status: { [Op.in]: [0, 1] } },
+                transaction: t
+            });
+            const employeeOldBalancesMap = new Map();
+            for (const bal of allOldBalances) {
+                if (!employeeOldBalancesMap.has(bal.employee_id)) {
+                    employeeOldBalancesMap.set(bal.employee_id, new Map());
+                }
+                employeeOldBalancesMap.get(bal.employee_id).set(bal.leave_category_id, {
+                    used_leaves: bal.used_leaves,
+                    carry_forward_leaves: bal.carry_forward_leaves
+                });
+            }
+
+            // Step 2: Soft-delete ALL existing leave balances for these employees
             await EmployeeLeaveBalance.update(
                 { status: 2 },
                 { where: { employee_id: { [Op.in]: employeeIds }, status: { [Op.in]: [0, 1] } }, transaction: t }
@@ -477,14 +515,15 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             }, t);
             if (!template) throw new Error("Leave template not found");
 
-            // Step 2: Create fresh balances in chunks to avoid memory issues
+            // Step 3: Create fresh balances in chunks, passing old usage data per employee
             const chunkSize = 50;
             for (let i = 0; i < employeeIds.length; i += chunkSize) {
                 const chunk = employeeIds.slice(i, i + chunkSize);
                 const employees = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: chunk } }, {}, t);
 
                 for (const emp of employees) {
-                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template);
+                    const oldBalancesMap = employeeOldBalancesMap.get(emp.id) || null;
+                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template, null, {}, oldBalancesMap);
                 }
             }
 

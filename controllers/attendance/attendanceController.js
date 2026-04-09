@@ -584,12 +584,53 @@ exports.updateAttendanceDay = async (req, res) => {
             // 1. Extra Overtime Logic
             if (holidayPolicy === 'ALLOW_NORMAL') {
                 if (salaryTemplate) {
-                    let daySalaryAddress = parseFloat(salaryTemplate.daily_rate || 0);
-                    if (daySalaryAddress <= 0) {
-                        const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
-                        const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
-                        daySalaryAddress = monthlyGross / (daysInCalc || 30);
+                    const salaryType = (salaryTemplate.salary_type || 'Monthly').toString();
+                    const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
+                    const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
+
+                    let daySalaryAddress = 0;
+                    if (salaryType === 'Hourly') {
+                        const hourlyRate = parseFloat(salaryTemplate.hourly_rate || 0);
+                        let effectiveWorkedMinutes = parseFloat((worked_minutes !== undefined && worked_minutes !== null) ? worked_minutes : (day.worked_minutes || 0)) || 0;
+
+                        if (!(effectiveWorkedMinutes > 0)) {
+                            const calcFirstIn = first_in !== undefined ? first_in : day.first_in;
+                            const calcLastOut = last_out !== undefined ? last_out : day.last_out;
+                            const breakMins = parseFloat((total_break_minutes !== undefined && total_break_minutes !== null) ? total_break_minutes : (day.total_break_minutes || 0)) || 0;
+                            if (calcFirstIn && calcLastOut) {
+                                let inTime = dayjs(calcFirstIn);
+                                let outTime = dayjs(calcLastOut);
+                                if (outTime.isBefore(inTime)) {
+                                    outTime = outTime.add(1, 'day');
+                                }
+                                const diffMins = outTime.diff(inTime, 'minute');
+                                effectiveWorkedMinutes = Math.max(0, diffMins - breakMins);
+                            }
+                        }
+
+                        let hoursForPay = effectiveWorkedMinutes / 60;
+                        if (!(hoursForPay > 0)) {
+                            const shift = emp?.shiftTemplate;
+                            if (shift) {
+                                const payableMins = parseFloat(shift.total_payable_hours || 0) || parseFloat(shift.min_full_day_minutes || 0) || 0;
+                                if (payableMins > 0) hoursForPay = payableMins / 60;
+                            }
+                        }
+                        if (!(hoursForPay > 0)) hoursForPay = 8;
+
+                        if (hourlyRate > 0) {
+                            daySalaryAddress = hourlyRate * hoursForPay;
+                        } else {
+                            daySalaryAddress = monthlyGross / (daysInCalc || 30);
+                        }
+                    } else if (salaryType === 'Daily') {
+                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
+                    } else {
+                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
                     }
+
                     const currentOvertime = parseFloat(overtime_amount || 0);
                     overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
                 }
@@ -845,7 +886,8 @@ exports.updateAttendanceDay = async (req, res) => {
         if (first_in !== undefined) payload.first_in = first_in;
         if (last_out !== undefined) payload.last_out = last_out;
         
-        if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+        const finesAllowed = template ? (template.fines_allowed !== false) : true;
+        if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
         
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
 
@@ -870,7 +912,11 @@ exports.updateAttendanceDay = async (req, res) => {
         }
 
         // Re-calculate Fine from Data if provided
-        if (fine_data !== undefined) {
+        if (!finesAllowed) {
+            payload.fine_data = null;
+            payload.fine_amount = 0;
+            payload.fine_minutes = 0;
+        } else if (fine_data !== undefined) {
             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
             payload.fine_data = finalFineData;
             if (finalFineData && typeof finalFineData === 'object') {
@@ -887,6 +933,7 @@ exports.updateAttendanceDay = async (req, res) => {
                 payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
                 payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
             } else {
+                payload.fine_data = null;
                 payload.fine_amount = 0;
                 payload.fine_minutes = 0;
             }

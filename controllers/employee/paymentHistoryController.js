@@ -1,5 +1,5 @@
 const { PaymentHistory, Employee, EmployeeAdvance, Payslip, User, sequelize } = require("../../models");
-const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError, formatDateTime } = require("../../helpers");
+const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError, formatDateTime, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { createNotification } = require("../../services/notificationService");
 const dayjs = require("dayjs");
@@ -198,7 +198,7 @@ exports.getAllPaymentHistory = async (req, res) => {
 
         const data = await commonQuery.fetchPaginatedData(
             PaymentHistory,
-            req.body,
+            {...req.body},
             fieldConfig,
             {
                 include: [

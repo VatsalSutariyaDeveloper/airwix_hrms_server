@@ -1,5 +1,5 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User } = require("../../models");
-const { commonQuery, handleError, fail } = require("../../helpers");
+const { commonQuery, handleError, fail, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
@@ -252,9 +252,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     });
 
     // This ensures if a holiday exists in both attendance (status 4) and template, it's counted only once
-    offDays.goneHolidayList.forEach(h => {
-        const hDate = formatDateTime(h.date, 'DD-MM-YYYY');
-        if (!attendanceHolidayDates.has(hDate)) {
+    (offDays.goneHolidayList || []).forEach(h => {
+        const hDate = dayjs(h.date).format('YYYY-MM-DD');
+        const existsInAttendanceHoliday = attendanceHolidayDates.has(hDate);
+        if (!existsInAttendanceHoliday) {
             holidays++;
         }
     });
@@ -1080,6 +1081,10 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         throw new Error("Main payroll for this month is already finalized. Use 'generate_additional' to create a supplementary payslip.");
     }
 
+    const netSalaryAmount = parseFloat(summary.salary?.netPayable || 0) || 0;
+    const paidAmount = parseFloat(summary.payment_history?.salary?.sum || 0) || 0;
+    const pendingAmount = Math.max(netSalaryAmount - paidAmount, 0);
+
     // Create or Update Draft
     const payslipPayload = {
         employee_id,
@@ -1112,6 +1117,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         statutory_details: summary.breakdown.statutory || {},
         employer_details: summary.breakdown.employer || {},
         payment_history: {
+            ...(summary.payment_history || {}),
             advances_adjusted: []
         },
 
@@ -1120,6 +1126,8 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
         total_deduction: summary.salary.totalDeductions,
         net_salary: summary.salary.netPayable,
+        paid_amount: paidAmount,
+        pending_amount: pendingAmount,
 
         break_down: summary.breakdown,
         tds_calculation_data: summary.tds_calculation_data,
@@ -1178,6 +1186,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         // Update payslip payment history with adjusted advances
         await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
             payment_history: {
+                ...(finalizedPayslip.payment_history || {}),
                 advances_adjusted: advances_adjusted
             }
         }, transaction);

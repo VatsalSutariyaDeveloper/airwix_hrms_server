@@ -42,19 +42,19 @@ exports.create = async (req, res) => {
         
         // Ensure Unpaid exists and matches the last index
         let paidCategories = finalCategories.filter(c => c.is_paid !== false);
-        let unpaidCategory = finalCategories.find(c => c.is_paid === false);
+        // let unpaidCategory = finalCategories.find(c => c.is_paid === false);
 
-        if (!unpaidCategory) {
-            unpaidCategory = {
-                leave_category_name: "Unpaid",
-                leave_count: 0,
-                unused_leave_rule: 'LAPSE',
-                is_paid: false,
-                is_compoff: false
-            };
-        }
+        // if (!unpaidCategory) {
+        //     unpaidCategory = {
+        //         leave_category_name: "Unpaid",
+        //         leave_count: 0,
+        //         unused_leave_rule: 'LAPSE',
+        //         is_paid: false,
+        //         is_compoff: false
+        //     };
+        // }
 
-        const reorderedCategories = [...paidCategories, unpaidCategory];
+        const reorderedCategories = [...paidCategories];
         
         if (reorderedCategories.length > 0) {
             const categoryData = reorderedCategories.map(cat => ({
@@ -120,19 +120,19 @@ exports.update = async (req, res) => {
             const existingCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { leave_template_id: id }, {}, transaction);
             
             let paidCategories = finalCategories.filter(c => c.is_paid !== false);
-            let unpaidCategory = finalCategories.find(c => c.is_paid === false) || existingCategories.find(c => c.is_paid === false);
+            // let unpaidCategory = finalCategories.find(c => c.is_paid === false) || existingCategories.find(c => c.is_paid === false);
 
-            if (!unpaidCategory) {
-                unpaidCategory = {
-                    leave_category_name: "Unpaid",
-                    leave_count: 0,
-                    unused_leave_rule: 'LAPSE',
-                    is_paid: false,
-                    is_compoff: false
-                };
-            }
+            // if (!unpaidCategory) {
+            //     unpaidCategory = {
+            //         leave_category_name: "Unpaid",
+            //         leave_count: 0,
+            //         unused_leave_rule: 'LAPSE',
+            //         is_paid: false,
+            //         is_compoff: false
+            //     };
+            // }
 
-            const reorderedCategories = [...paidCategories, unpaidCategory];
+            const reorderedCategories = [...paidCategories];
 
             const existingIds = existingCategories.map(c => c.id);
             const inputIds = reorderedCategories.filter(c => c.id).map(c => c.id);

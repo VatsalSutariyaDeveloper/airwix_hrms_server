@@ -1735,11 +1735,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       lateOtData = { minutes: effectiveWorkMinutes, amount: otRes.amount, rate: otRes.rate, calculation_type: otRes.rateId };
       earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
     } else if (meta.isHolidayCompOff) {
-      // COMP_OFF: effective time → worked_minutes, overtime = 0
-      finalWorkedMinutes = effectiveWorkMinutes;
-      overtimeMinutes = 0;
+      // --- COMP_OFF REFINEMENT ---
+      // Distribute effectiveWorkMinutes between regular worked_minutes (for credit) and overtime_minutes
+      const minCompOff = template ? (template.comp_off_min_working_mins || 0) : 0;
+      const maxCompOff = template ? (template.comp_off_max_working_mins || 0) : 0;
+      const fullShiftMins = expectedShiftWorkMinutes || 480;
+      const halfShiftMins = fullShiftMins / 2;
+
+      let worked = effectiveWorkMinutes;
+      let ot = 0;
+      let workedToSave = 0;
+
+      if (worked < minCompOff) {
+        ot = worked;
+        workedToSave = 0;
+      } else if (worked < maxCompOff) {
+        workedToSave = halfShiftMins;
+        ot = Math.max(0, worked - halfShiftMins);
+      } else {
+        workedToSave = fullShiftMins;
+        ot = Math.max(0, worked - fullShiftMins);
+      }
+
+      finalWorkedMinutes = workedToSave;
+      overtimeMinutes = ot;
       earlyOvertimeMinutes = 0;
-      lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+      
+      if (ot > 0) {
+        const otRes = getRateIdAndAmount(5, 1, ot, dailyWage, hourlyWage);
+        lateOtData = { minutes: ot, amount: otRes.amount, rate: otRes.rate, calculation_type: otRes.rateId };
+      } else {
+        lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+      }
       earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
     }
   }
@@ -1787,10 +1814,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const minFullDay = shift ? shift.min_full_day_minutes : 480;
 
     // Special handling for holidays - if holiday and worked, set HOLIDAY status
-    // For ALLOW_NORMAL: set Present (0) instead of Holiday (4)
-    if (meta.isHolidayCompOff && finalWorkedMinutes > 0) {
+    // For ALLOW_NORMAL and COMP_OFF: set Present (0) instead of Holiday (4) if any work performed
+    if (meta.isHolidayCompOff && (finalWorkedMinutes > 0 || overtimeMinutes > 0)) {
       status = 0;
-      // autoAbsentReason = `Present on Holiday (COMP_OFF): Worked ${finalWorkedMinutes}m`;
+      // autoAbsentReason = `Present on Holiday (COMP_OFF): Worked ${finalWorkedMinutes}m, OT ${overtimeMinutes}m`;
     } else if (meta.isHolidayAllowNormal && overtimeMinutes > 0) {
       status = 0;
       // autoAbsentReason = `Present on Holiday (ALLOW_NORMAL): OT ${overtimeMinutes}m`;
@@ -2237,36 +2264,52 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   }, {}, transaction);
 
   if (isWorkingStatus) {
-    const creditAmount = [0, 12].includes(Number(status)) ? 1.0 : 0.5;
+    const minCompOff = template ? (template.comp_off_min_working_mins || 0) : 0;
+    const maxCompOff = template ? (template.comp_off_max_working_mins || 0) : 0;
+    const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
 
-    if (existingCompOff) {
-      // Handle Correction (e.g. Full Day vs Half Day change)
-      if (parseFloat(existingCompOff.total_days) !== creditAmount) {
-        const diff = creditAmount - parseFloat(existingCompOff.total_days);
-        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
+    let creditAmount = 0;
+    if (workedMins >= maxCompOff) {
+      creditAmount = 1.0;
+    } else if (workedMins >= minCompOff) {
+      creditAmount = 0.5;
+    }
+
+    if (creditAmount > 0) {
+      if (existingCompOff) {
+        // Handle Correction (e.g. Full Day vs Half Day change)
+        if (parseFloat(existingCompOff.total_days) !== creditAmount) {
+          const diff = creditAmount - parseFloat(existingCompOff.total_days);
+          const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
+          if (error) return error;
+          await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount, request_type: 'CREDIT' }, transaction);
+        }
+      } else {
+        // New Credit
+        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction, date, employee, true);
         if (error) return error;
-        await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount, request_type: 'CREDIT' }, transaction);
-      }
-    } else {
-      // New Credit
-      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction, date, employee, true);
-      if (error) return error;
 
-      await commonQuery.createRecord(LeaveRequest, {
-        employee_id: employeeId,
-        leave_category_id: compOffCategory.id,
-        start_date: date,
-        end_date: date,
-        total_days: creditAmount,
-        request_type: 'CREDIT',
-        reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
-        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
-        approved_by: 0,
-        company_id: employee.company_id,
-        branch_id: employee.branch_id,
-        user_id: 0,
-        status: 0
-      }, transaction);
+        await commonQuery.createRecord(LeaveRequest, {
+          employee_id: employeeId,
+          leave_category_id: compOffCategory.id,
+          start_date: date,
+          end_date: date,
+          total_days: creditAmount,
+          request_type: 'CREDIT',
+          reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
+          approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+          approved_by: 0,
+          company_id: employee.company_id,
+          branch_id: employee.branch_id,
+          user_id: 0,
+          status: 0
+        }, transaction);
+      }
+    } else if (existingCompOff) {
+      // Remove Credit if status changed to non-working or worked time below minimum
+      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
+      if (error) return error;
+      await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction);
     }
   } else if (existingCompOff) {
     // Remove Credit if status changed to non-working (e.g. Absent)
