@@ -53,6 +53,7 @@ function initModels(prefix) {
   const ApiLog = require("./apiLog")(seq, DataTypes);
   const Logs = require("./logs")(seq, DataTypes);
   const Notification = require("./notification")(seq, DataTypes);
+  const Announcement = require("./announcement")(seq, DataTypes);
 
   // Subscription models
   const CompanySubscription = require("./subscription/companySubscriptions")(seq, DataTypes);
@@ -166,6 +167,7 @@ function initModels(prefix) {
     ApiLog,
     Logs,
     Notification,
+    Announcement,
     CompanySubscription,
     SubscriptionPlan,
     AttendanceTemplate,
