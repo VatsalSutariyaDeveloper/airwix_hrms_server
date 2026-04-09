@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User } = require("../../models");
 const { commonQuery, handleError, fail, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -252,9 +252,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     });
 
     // This ensures if a holiday exists in both attendance (status 4) and template, it's counted only once
-    offDays.goneHolidayList.forEach(h => {
-        const hDate = formatDateTime(h.date, 'DD-MM-YYYY');
-        if (!attendanceHolidayDates.has(hDate)) {
+    (offDays.goneHolidayList || []).forEach(h => {
+        const hDate = dayjs(h.date).format('YYYY-MM-DD');
+        const existsInAttendanceHoliday = attendanceHolidayDates.has(hDate);
+        if (!existsInAttendanceHoliday) {
             holidays++;
         }
     });
@@ -455,7 +456,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             let actualAmount = amount;
             if (calcType === 'ATTENDANCE_BASED') {
                 actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-            } else if (comp.is_lwp_impacted || plain.is_lwp_impacted) {
+            } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
                 actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
             }
 
@@ -492,7 +493,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         
         if (calcType === 'ATTENDANCE_BASED') {
             actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-        } else if ((comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
+        } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
             actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
         }
 
@@ -986,6 +987,36 @@ const formatPayslipToSummary = async (payslip) => {
     };
 };
 
+/**
+ * Helper to fetch salary summary (checks for existing payslip first, then fresh calculation)
+ */
+const fetchSalarySummary = async (employee_id, month, year) => {
+    // 1. Check if a finalized/paid payslip already exists.
+    const existingPayslips = await commonQuery.findAllRecords(Payslip, {
+        employee_id,
+        month,
+        year,
+        status: { [Op.in]: [1, 3] } // Finalized or Paid
+    }, {
+        order: [['id', 'ASC']],
+        include: [{
+            model: Employee,
+            as: "employee",
+            attributes: ['id', 'first_name', 'employee_code'],
+            include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
+        }]
+    });
+    
+    if (existingPayslips && existingPayslips.length > 0) {
+        // Return all payslips if there are multiple
+        const summaries = await Promise.all(existingPayslips.map(ps => formatPayslipToSummary(ps)));
+        return summaries.length === 1 ? summaries[0] : { multiple: true, payslips: summaries };
+    }
+
+    // 2. Otherwise perform fresh calculation based on attendance and template
+    return await performSalaryCalculation(employee_id, month, year);
+};
+
 exports.calculateMonthlySalary = async (req, res) => {
     try {
         const { employee_id, month, year } = req.body;
@@ -993,36 +1024,211 @@ exports.calculateMonthlySalary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        // 1. Check if a finalized/paid payslip already exists.
-        // For multiple payslips, we might return an array or the first one.
-        const existingPayslips = await commonQuery.findAllRecords(Payslip, {
-            employee_id,
-            month,
-            year,
-            status: { [Op.in]: [1, 3] } // Finalized or Paid
-        }, {
-            order: [['id', 'ASC']],
-            include: [{
-                model: Employee,
-                as: "employee",
-                attributes: ['id', 'first_name', 'employee_code'],
-                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
-            }]
-        });
-        
-        if (existingPayslips && existingPayslips.length > 0) {
-            // Return all payslips if there are multiple
-            const summaries = await Promise.all(existingPayslips.map(ps => formatPayslipToSummary(ps)));
-            return res.ok(summaries.length === 1 ? summaries[0] : { multiple: true, payslips: summaries });
-        }
-
-        // 2. Otherwise perform fresh calculation based on attendance and template
-        const summary = await performSalaryCalculation(employee_id, month, year);
-        
+        const summary = await fetchSalarySummary(employee_id, month, year);
         return res.ok(summary);
     } catch (err) {
         return handleError(err, res, req);
     }
+};
+
+exports.calculateMonthlySalaryBulk = async (req, res) => {
+    try {
+        const { employee_ids, month, year } = req.body;
+        if (!employee_ids || !Array.isArray(employee_ids) || !month || !year) {
+            return res.error("VALIDATION_ERROR", { message: "Employee IDs (array), Month, and Year are required" });
+        }
+
+        const results = await Promise.all(employee_ids.map(async (id) => {
+            try {
+                const data = await fetchSalarySummary(id, month, year);
+                return { 
+                    employee_id: id, 
+                    success: true, 
+                    data 
+                };
+            } catch (err) {
+                console.error(`Error calculating salary for employee ${id}:`, err);
+                return { 
+                    employee_id: id, 
+                    success: false, 
+                    message: err.message 
+                };
+            }
+        }));
+
+        return res.ok({
+            success_count: results.filter(r => r.success).length,
+            failed_count: results.filter(r => !r.success).length,
+            results
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Internal helper to finalize a single employee's payroll
+ */
+const internalFinalizePayroll = async (employee_id, month, year, generate_additional = false, transaction, req) => {
+    const summary = await performSalaryCalculation(employee_id, month, year, transaction);  
+          
+    // 1. Check if already finalized (Main sequence)
+    const existingMain = await commonQuery.findOneRecord(Payslip, {
+        employee_id, month, year, status: { [Op.in]: [1, 3] }
+    }, {}, transaction);
+
+    if (existingMain && !generate_additional) {
+        throw new Error("Main payroll for this month is already finalized. Use 'generate_additional' to create a supplementary payslip.");
+    }
+
+    const netSalaryAmount = parseFloat(summary.salary?.netPayable || 0) || 0;
+    const paidAmount = parseFloat(summary.payment_history?.salary?.sum || 0) || 0;
+    const pendingAmount = Math.max(netSalaryAmount - paidAmount, 0);
+
+    // Create or Update Draft
+    const payslipPayload = {
+        employee_id,
+        month,
+        year,
+        // Attendance
+        days_in_calculation: summary.period.daysInCalculation,
+        present_days: summary.attendance.presentDays,
+        absent_days: summary.attendance.absentDays,
+        half_days: summary.attendance.halfDays,
+        pd_days: summary.attendance.payableDays,
+        wo_days: summary.attendance.weeklyOffs,
+        ph_days: summary.attendance.holidays,
+        lp_days: summary.attendance.leaveDays,
+        ul_days: summary.attendance.unpaidLeaveDays,
+        total_days: summary.period.daysInMonth,
+        leave_details: summary.attendance.leave_category_details,
+        lunch_count: summary.attendance.lunchCount || 0,
+
+        // Dynamic JSON Components
+        salary_template_id: summary.employee.template_id,
+        earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => {
+            acc[e.name] = e.actual_amount;
+            return acc;
+        }, {}),
+        deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => {
+            acc[d.name] = d.amount;
+            return acc;
+        }, {}),
+        statutory_details: summary.breakdown.statutory || {},
+        employer_details: summary.breakdown.employer || {},
+        payment_history: {
+            ...(summary.payment_history || {}),
+            advances_adjusted: []
+        },
+
+        // Summary Totals
+        fixed_gross: summary.salary.ctc_monthly,
+        paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
+        total_deduction: summary.salary.totalDeductions,
+        net_salary: summary.salary.netPayable,
+        paid_amount: paidAmount,
+        pending_amount: pendingAmount,
+
+        break_down: summary.breakdown,
+        tds_calculation_data: summary.tds_calculation_data,
+        leave_balances: summary.leave_balances,
+        status: 1, // Finalized
+        user_id: req.user?.id || 0,
+        company_id: req.user?.company_id || summary.meta?.company_id,
+        branch_id: summary.meta?.branch_id
+    };
+
+    let finalizedPayslip;
+    const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0 }, {}, transaction);
+    if (draft) {
+        finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
+    } else {
+        finalizedPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
+    }
+
+    // Find and update employee advances for this month/year
+    const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
+        employee_id,
+        month,
+        year,
+        status: 0, // Only pending advances
+        adjusted_in_payroll: false
+    }, {}, transaction);
+
+    const advances_adjusted = [];
+    if (employeeAdvances.length > 0) {
+        // Update all advances to mark them as adjusted in payroll
+        await EmployeeAdvance.update(
+            { adjusted_in_payroll: true, status: 1 }, // status 1 = Adjusted
+            {
+                where: {
+                    employee_id,
+                    month,
+                    year,
+                    status: 0,
+                    adjusted_in_payroll: false
+                },
+                transaction
+            }
+        );
+
+        // Collect advance details for payment history
+        employeeAdvances.forEach(advance => {
+            advances_adjusted.push({
+                advance_id: advance.id,
+                amount: advance.amount,
+                payment_date: advance.payment_date,
+                payment_mode: advance.payment_mode,
+                notes: advance.notes
+            });
+        });
+
+        // Update payslip payment history with adjusted advances
+        await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
+            payment_history: {
+                ...(finalizedPayslip.payment_history || {}),
+                advances_adjusted: advances_adjusted
+            }
+        }, transaction);
+    }
+
+    // Lock Attendance Records
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    await AttendanceDay.update({ is_locked: true }, {
+        where: {
+            employee_id,
+            attendance_date: { [Op.between]: [startDate, endDate] }
+        },
+        transaction
+    });
+
+    // 💸 Send Notification to Employee
+    try {
+        const targetUser = await commonQuery.findOneRecord(User, { employee_id: employee_id }, {}, transaction);
+        if (targetUser) {
+            const monthName = dayjs().month(month - 1).format('MMMM');
+            const { createNotification } = require("../../services/notificationService");
+            await createNotification({
+                user_id: targetUser.id,
+                title: "Payslip Generated",
+                message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
+                type: "PAYROLL",
+                reference_id: finalizedPayslip.id,
+                status_code: 0,
+                company_id: req.user?.company_id || summary.meta?.company_id,
+                branch_id: summary.meta?.branch_id
+            }, transaction);
+        }
+    } catch (notifyErr) {
+        console.error("Payslip Notification Error:", notifyErr.message);
+    }
+
+    return {
+        id: finalizedPayslip.id,
+        netPayable: summary.salary.netPayable
+    };
 };
 
 exports.finalizeMonthlySalary = async (req, res) => {
@@ -1034,149 +1240,13 @@ exports.finalizeMonthlySalary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summary = await performSalaryCalculation(employee_id, month, year, transaction);  
-              
-        // Check if already finalized (Main sequence)
-        const existingMain = await commonQuery.findOneRecord(Payslip, {
-            employee_id, month, year, status: { [Op.in]: [1, 3] }
-        }, {}, transaction);
-
-        if (existingMain && !generate_additional) {
-            await transaction.rollback();
-            return res.error("ALREADY_FINALIZED", { message: "Main payroll for this month is already finalized. Use 'generate_additional' to create a supplementary payslip." });
-        }
-
-        // Logic for setting sequence
-        let targetSequence = 1;
-        if (generate_additional) {
-            const lastPayslip = await commonQuery.findOneRecord(Payslip, {
-                employee_id, month, year
-            }, { order: [['id', 'DESC']] }, transaction);
-            targetSequence = (lastPayslip?.id || 0) + 1;
-        }
-
-        // Create or Update Draft
-        const payslipPayload = {
-            employee_id,
-            month,
-            year,
-            // Attendance
-            days_in_calculation:summary.period.daysInCalculation,
-            present_days: summary.attendance.presentDays,
-            absent_days: summary.attendance.absentDays,
-            half_days: summary.attendance.halfDays,
-            pd_days: summary.attendance.payableDays,
-            wo_days: summary.attendance.weeklyOffs,
-            ph_days: summary.attendance.holidays,
-            lp_days: summary.attendance.leaveDays,
-            ul_days: summary.attendance.unpaidLeaveDays,
-            total_days: summary.period.daysInMonth,
-            leave_details: summary.attendance.leave_category_details,
-            lunch_count: summary.attendance.lunchCount || 0,
-
-            // Dynamic JSON Components
-            salary_template_id: summary.employee.template_id,
-            earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => {
-                acc[e.name] = e.actual_amount;
-                return acc;
-            }, {}),
-            deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => {
-                acc[d.name] = d.amount;
-                return acc;
-            }, {}),
-            statutory_details: summary.breakdown.statutory || {},
-            employer_details: summary.breakdown.employer || {},
-            payment_history: {
-                advances_adjusted: []
-            },
-
-            // Summary Totals
-            fixed_gross: summary.salary.ctc_monthly,
-            paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
-            total_deduction: summary.salary.totalDeductions,
-            net_salary: summary.salary.netPayable,
-            paid_amount: parseFloat(summary.payment_history?.grand_total || 0),
-            pending_amount: Math.max(0, parseFloat(summary.salary.netPayable || 0) - parseFloat(summary.payment_history?.grand_total || 0)),
-
-            break_down: summary.breakdown,
-            tds_calculation_data: summary.tds_calculation_data,
-            leave_balances: summary.leave_balances,
-            // sequence: targetSequence,
-            status: (parseFloat(summary.payment_history?.grand_total || 0) >= (parseFloat(summary.salary.netPayable || 0) - 0.01)) ? 3 : 1,
-        };
-
-        let finalizedPayslip;
-        const draft = await commonQuery.findOneRecord(Payslip, { employee_id, month, year, status: 0 }, {}, transaction);
-        if (draft) {
-            finalizedPayslip = await commonQuery.updateRecordById(Payslip, draft.id, payslipPayload, transaction);
-        } else {
-            finalizedPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
-        }
-
-        // Find and update employee advances for this month/year
-        const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
-            employee_id,
-            month,
-            year,
-            status: 0, // Only pending advances
-            adjusted_in_payroll: false
-        }, {}, transaction);
-
-        const advances_adjusted = [];
-        if (employeeAdvances.length > 0) {
-            // Update all advances to mark them as adjusted in payroll
-            await EmployeeAdvance.update(
-                { adjusted_in_payroll: true, status: 1 }, // status 1 = Adjusted
-                {
-                    where: {
-                        employee_id,
-                        month,
-                        year,
-                        status: 0,
-                        adjusted_in_payroll: false
-                    },
-                    transaction
-                }
-            );
-
-            // Collect advance details for payment history
-            employeeAdvances.forEach(advance => {
-                advances_adjusted.push({
-                    advance_id: advance.id,
-                    amount: advance.amount,
-                    payment_date: advance.payment_date,
-                    payment_mode: advance.payment_mode,
-                    notes: advance.notes
-                });
-            });
-        }
-
-        // Update payslip payment history with adjusted advances
-        if (advances_adjusted.length > 0) {
-            await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
-                payment_history: {
-                    advances_adjusted: advances_adjusted
-                }
-            }, transaction);
-        }
-
-        // Lock Attendance Records
-        const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
-        const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
-
-        await AttendanceDay.update({ is_locked: true }, {
-            where: {
-                employee_id,
-                attendance_date: { [Op.between]: [startDate, endDate] }
-            },
-            transaction
-        });
+        const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req);
 
         await transaction.commit();
         return res.success("PAYROLL_FINALIZED", {
             message: "Payroll finalized and attendance locked successfully",
-            id: finalizedPayslip.id,
-            netPayable: summary.salary.netPayable
+            id: summaryData.id,
+            netPayable: summaryData.netPayable
         });
 
     } catch (err) {
@@ -1278,7 +1348,7 @@ exports.getEmployeePayslip = async (req, res) => {
 
         const payslips = await commonQuery.findAllRecords(Payslip, {
             employee_id,
-            status: { [Op.in]: [1, 2] } // Finalized or Paid
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
         }, {
             order: [['year', 'DESC'], ['month', 'DESC']]
         });
@@ -2206,6 +2276,114 @@ exports.getSalaryOverview = async (req, res) => {
     }
 };
 
+/**
+ * Helper to prepare data for payslip PDF
+ */
+const preparePayslipPdfData = async (payslipId, companyId) => {
+    // Fetch Payslip with Employee and Designation details
+    const payslip = await commonQuery.findOneRecord(Payslip, payslipId, {
+        include: [{
+            model: Employee,
+            as: "employee",
+            attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
+            include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
+        }]
+    });
+
+    if (!payslip) return null;
+
+    // Fetch company details
+    const company = await commonQuery.findOneRecord(CompanyMaster, companyId, {
+        attributes: ['company_name', 'address', 'logo_image']
+    });
+
+    const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
+
+    // Granular attendance calculation
+    const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
+    const absentDays = parseFloat(payslip.absent_days || 0);
+    const presentDays = parseFloat(payslip.present_days || 0);
+    const leave_details = payslip.leave_details || {};
+
+    // Construct breakdown if it's missing or compressed
+    let breakdown = payslip.break_down;
+    if (!breakdown || (!breakdown.earnings?.length && !breakdown.deductions?.length)) {
+        const earning_details = payslip.earning_details || {};
+        const deduction_details = payslip.deduction_details || {};
+
+        breakdown = {
+            earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
+            deductions: [
+                ...Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([name, amount]) => ({ name, amount, is_statutory: true }))
+            ],
+            statutory: payslip.statutory_details || {},
+            employer: payslip.employer_details || {},
+            total_earnings: Object.values(earning_details || {}).reduce((sum, val) => sum + parseFloat(val || 0), 0).toFixed(2),
+            total_deductions: [
+                ...Object.entries(deduction_details).map(([, val]) => parseFloat(val || 0)),
+                ...Object.entries(payslip.statutory_details || {})
+                    .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
+                    .map(([, amount]) => amount)
+            ].reduce((sum, val) => sum + val, 0).toFixed(2)
+        };
+    }
+
+    // Add Statutory deductions into the deductions list for the PDF display
+    const statutoryDeductions = Object.entries(breakdown.statutory || {}).map(([name, amount]) => ({
+        name,
+        amount: parseFloat(amount || 0),
+        is_statutory: true
+    })).filter(d => d.amount > 0);
+
+    const fullDeductionList = [
+        ...(breakdown.deductions || []).map(d => ({ name: d.name, amount: parseFloat(d.amount || 0) })),
+        ...statutoryDeductions
+    ];
+
+    // Recalculate totals for display
+    const totalEarnings = (breakdown.earnings || []).reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+    const totalDeductions = fullDeductionList.reduce((sum, d) => sum + d.amount, 0);
+
+    return {
+        payslipData: {
+            employee: {
+                name: payslip.employee?.first_name,
+                code: payslip.employee?.employee_code,
+                designation: payslip.employee?.designation?.designation_name,
+                joining_date: payslip.employee?.joining_date ? dayjs(payslip.employee.joining_date).format('DD/MM/YYYY') : 'N/A'
+            },
+            period: {
+                label: `${monthName} ${payslip.year}`,
+                payDate: dayjs(payslip.createdAt || payslip.created_at).format('DD/MM/YYYY')
+            },
+            attendance: {
+                present: presentDays,
+                lwp: lwpDays,
+                lunch_count: payslip.lunch_count || 0,
+                leave_details: leave_details
+            },
+            salary: {
+                netPayable: payslip.net_salary || payslip.net_payable
+            },
+            breakdown: {
+                earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount })),
+                deductions: fullDeductionList,
+                total_earnings: totalEarnings.toFixed(2),
+                total_deductions: totalDeductions.toFixed(2)
+            }
+        },
+        companyData: {
+            company_name: company?.company_name || 'Airwix HRMS',
+            address: company?.address || 'Gujarat, India'
+        },
+        totalEarnings,
+        totalDeductions
+    };
+};
+
 exports.generatePayslipPdf = async (req, res) => {
     try {
         const { id } = req.body;
@@ -2213,113 +2391,10 @@ exports.generatePayslipPdf = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Payslip ID is required" });
         }
 
-        // Fetch Payslip with Employee and Designation details
-        const payslip = await commonQuery.findOneRecord(Payslip, id, {
-            include: [{
-                model: Employee,
-                as: "employee",
-                attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
-                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
-            }]
-        });
-
-        if (!payslip) {
+        const data = await preparePayslipPdfData(id, req.user.company_id);
+        if (!data) {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
-
-        // Fetch company details
-        const company = await commonQuery.findOneRecord(CompanyMaster, req.user.company_id, {
-            attributes: ['company_name', 'address', 'logo_image']
-        });
-
-        const monthName = formatDateTime(new Date(payslip.year, parseInt(payslip.month) - 1, 1), "MMMM");
-
-        // Granular attendance calculation
-        const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
-        const absentDays = parseFloat(payslip.absent_days || 0);
-        const halfDays = (lwpDays - absentDays) / 0.5;
-        const presentDays = parseFloat(payslip.present_days || 0);
-        const leave_details = payslip.leave_details || {};
-        const weeklyOffs = parseFloat(payslip.wo_days || payslip.weekly_offs || 0);
-        const holidays = parseFloat(payslip.ph_days || payslip.holidays || 0);
-
-        // Construct breakdown if it's missing or compressed
-        let breakdown = payslip.break_down;
-        if (!breakdown || (!breakdown.earnings?.length && !breakdown.deductions?.length)) {
-            const earning_details = payslip.earning_details || {};
-            const deduction_details = payslip.deduction_details || {};
-
-            breakdown = {
-                earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
-                deductions: [
-                    ...Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
-                    ...Object.entries(payslip.statutory_details || {})
-                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
-                        .map(([name, amount]) => ({ name, amount, is_statutory: true }))
-                ],
-                statutory: payslip.statutory_details || {},
-                employer: payslip.employer_details || {},
-                total_earnings: Object.values(earning_details || {}).reduce((sum, val) => sum + parseFloat(val || 0), 0).toFixed(2),
-                total_deductions: [
-                    ...Object.entries(deduction_details).map(([, val]) => parseFloat(val || 0)),
-                    ...Object.entries(payslip.statutory_details || {})
-                        .filter(([key, value]) => typeof value === 'number' && !key.includes('%'))
-                        .map(([, amount]) => amount)
-                ].reduce((sum, val) => sum + val, 0).toFixed(2)
-            };
-        }
-
-        // Add Statutory deductions into the deductions list for the PDF display
-        const statutoryDeductions = Object.entries(breakdown.statutory || {}).map(([name, amount]) => ({
-            name,
-            amount: parseFloat(amount || 0),
-            is_statutory: true
-        })).filter(d => d.amount > 0);
-
-        const fullDeductionList = [
-            ...(breakdown.deductions || []).map(d => ({ name: d.name, amount: parseFloat(d.amount || 0) })),
-            ...statutoryDeductions
-        ];
-
-        // Recalculate totals for display
-        const totalEarnings = (breakdown.earnings || []).reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
-        const totalDeductions = fullDeductionList.reduce((sum, d) => sum + d.amount, 0);
-
-        const data = {
-            payslipData: {
-                employee: {
-                    name: payslip.employee?.first_name,
-                    code: payslip.employee?.employee_code,
-                    designation: payslip.employee?.designation?.designation_name,
-                    joining_date: payslip.employee?.joining_date ? formatDateTime(payslip.employee.joining_date) : 'N/A'
-                },
-                period: {
-                    label: `${monthName} ${payslip.year}`,
-                    payDate: formatDateTime(payslip.created_at)
-                },
-                attendance: {
-                    present: presentDays,
-                    lwp: lwpDays,
-                    lunch_count: payslip.lunch_count || 0,
-                    leave_details: leave_details
-                },
-                salary: {
-                    netPayable: payslip.net_salary || payslip.net_payable
-                },
-                breakdown: {
-                    earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount })),
-                    deductions: fullDeductionList,
-                    total_earnings: totalEarnings.toFixed(2),
-                    total_deductions: totalDeductions.toFixed(2)
-                }
-            },
-            companyData: {
-                company_name: company?.company_name || 'Airwix HRMS',
-                address: company?.address || 'Gujarat, India'
-            },
-            totalEarnings,
-            totalDeductions
-        };
 
         const templatePath = path.join(process.cwd(), 'views', 'payslip', 'slip.ejs');
         const filename = `payslip_${id}_${Date.now()}.pdf`;
@@ -2330,7 +2405,6 @@ exports.generatePayslipPdf = async (req, res) => {
         }
 
         const outputPath = path.join(outputDir, filename);
-
         await pdfService.generatePdfFromTemplate(templatePath, data, outputPath);
 
         // Construct download link
@@ -2339,6 +2413,52 @@ exports.generatePayslipPdf = async (req, res) => {
         return res.ok({
             download_link: downloadLink,
             filename: filename
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.generateBulkPayslipPdf = async (req, res) => {
+    try {
+        const { ids } = req.body; // Array of Payslip IDs
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.error("VALIDATION_ERROR", { message: "List of Payslip IDs is required" });
+        }
+
+        const slips = [];
+        for (const id of ids) {
+            try {
+                const data = await preparePayslipPdfData(id, req.user.company_id);
+                if (data) {
+                    slips.push(data);
+                }
+            } catch (pErr) {
+                console.error(`Error preparing data for payslip ${id}:`, pErr.message);
+            }
+        }
+
+        if (slips.length === 0) {
+            return res.error("NOT_FOUND", { message: "No valid payslips found to generate" });
+        }
+
+        const templatePath = path.join(process.cwd(), 'views', 'payslip', 'bulk_slip.ejs');
+        const filename = `bulk_payslip_${Date.now()}.pdf`;
+        const outputDir = path.join(process.cwd(), 'uploads', 'payslips');
+
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const outputPath = path.join(outputDir, filename);
+        await pdfService.generatePdfFromTemplate(templatePath, { slips }, outputPath);
+
+        const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
+
+        return res.ok({
+            download_link: downloadLink,
+            filename: filename,
+            count: slips.length
         });
     } catch (err) {
         return handleError(err, res, req);
@@ -2517,7 +2637,7 @@ exports.getMonthlyPayrollListing = async (req, res) => {
         // 2. Fetch Existing Payslips (Finalized/Paid)
         const payslips = await commonQuery.findAllRecords(Payslip, {
             month, year, company_id,
-            status: { [Op.in]: [1, 2] }
+            status: { [Op.in]: [1, 3] }
         });
         const payslipMap = new Map(payslips.map(p => [p.employee_id, p]));
 
@@ -2550,7 +2670,7 @@ exports.getMonthlyPayrollListing = async (req, res) => {
                 job_title: emp.designation?.designation_name || "N/A",
                 joining_date: emp.joining_date,
                 finalized: !!existing,
-                status: existing ? (existing.status === 2 ? 'Paid' : 'Finalized') : 'No',
+                status: existing ? (existing.status === 3 ? 'Paid' : 'Finalized') : 'No',
                 ctc: emp.employeeSalaryTemplate?.ctc_monthly || 0,
                 salary_type: emp.employeeSalaryTemplate?.salary_type || "Monthly",
                 payslip_id: existing?.id || null,
@@ -2608,84 +2728,16 @@ exports.bulkFinalizePayroll = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "List of employee IDs is required" });
         }
 
-        const results = [];
         for (const emp_id of employee_ids) {
-            try {
-                // Individual finalizing logic (re-using existing logic)
-                const summary = await performSalaryCalculation(emp_id, month, year, transaction);
-
-                const payslipPayload = {
-                    employee_id: emp_id,
-                    month, year,
-                    present_days: summary.attendance.presentDays,
-                    absent_days: summary.attendance.absentDays,
-                    pd_days: summary.attendance.payableDays,
-                    wp_days: summary.attendance.totalLWP,
-                    wo_days: summary.attendance.weeklyOffs,
-                    ph_days: summary.attendance.holidays,
-                    total_days: summary.period.daysInMonth,
-                    leave_details: { 
-                        "Paid Leave": summary.attendance.leaveDays || 0,
-                        "Unpaid Leave": summary.attendance.unpaidLeaveDays || 0,
-                        "Compoff": summary.attendance.compoffLeaveDays || 0
-                    },
-                    lunch_count: summary.attendance.lunchCount || 0,
-                    salary_template_id: summary.employee.template_id,
-                    earning_details: (summary.breakdown.earnings || []).reduce((acc, e) => { acc[e.name] = e.actual_amount; return acc; }, {}),
-                    deduction_details: (summary.breakdown.deductions || []).reduce((acc, d) => { acc[d.name] = d.amount; return acc; }, {}),
-                    statutory_details: summary.breakdown.statutory || {},
-                    employer_details: summary.breakdown.employer || {},
-                    fixed_gross: summary.salary.ctc_monthly,
-                    paid_gross: summary.salary.takeHomeEarnings,
-                    total_deduction: summary.salary.totalDeductions,
-                    net_salary: summary.salary.netPayable,
-                    break_down: summary.breakdown,
-                    tds_calculation_data: summary.tds_calculation_data,
-                    status: 1, // Finalized
-                    user_id: req.user.id || 0,
-                    company_id: req.user.company_id
-                };
-
-                // Check for existing to override
-                const existing = await commonQuery.findOneRecord(Payslip, { employee_id: emp_id, month, year, status: { [Op.in]: [1, 2] } }, {}, transaction);
-                if (!existing) {
-                    const newPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
-                    
-                    // 💸 Send Notification to Employee
-                    try {
-                        const { User: UserModel } = require("../../models");
-                        const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: emp_id }, {}, transaction);
-                        if (targetUser) {
-                            const monthName = formatDateTime(new Date(year, month - 1, 1), "MMMM");
-                            const { createNotification } = require("../../services/notificationService");
-                            await createNotification({
-                                user_id: targetUser.id,
-                                title: "Payslip Generated",
-                                message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
-                                type: "PAYROLL",
-                                reference_id: newPayslip.id,
-                                status_code: 0,
-                                company_id: req.user.company_id,
-                                branch_id: payslipPayload.branch_id
-                            }, transaction);
-                        }
-                    } catch (notifyErr) {
-                        console.error("Payslip Notification Error:", notifyErr.message);
-                    }
-
-                    results.push({ id: emp_id, success: true });
-                } else {
-                    results.push({ id: emp_id, success: false, message: "Already finalized" });
-                }
-            } catch (e) {
-                results.push({ id: emp_id, success: false, message: e.message });
-            }
+            // Direct call without internal try-catch. 
+            // Any failure will trigger the outer catch and ROLLBACK the entire transaction.
+            await internalFinalizePayroll(emp_id, month, year, false, transaction, req);
         }
 
         await transaction.commit();
-        return res.success(`${results.filter(r => r.success).length} payroll records finalized successfully`, results);
+        return res.success(`${employee_ids.length} payroll records finalized successfully`);
     } catch (err) {
-        if (transaction) await transaction.rollback();
+        if (transaction && !transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
@@ -2701,70 +2753,110 @@ exports.bulkPayPayroll = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Payment list is required" });
         }
 
-        const stats = { success: 0, failed: 0 };
         for (const p of payments) {
             const payslip = await commonQuery.findOneRecord(Payslip, {
                 employee_id: p.employee_id, month, year, status: 1
             }, {}, transaction);
 
-            if (payslip) {
-                // Record history
-                await commonQuery.createRecord(PaymentHistory, {
-                    employee_id: p.employee_id,
-                    ref_id: payslip.id,
-                    payment_date: dayjs().format('YYYY-MM-DD'),
-                    amount: p.amount,
-                    payment_type: 'Salary',
-                    payment_mode: p.payment_mode || 'Bank',
-                    status: 1,
-                    user_id: req.user.id,
-                    company_id: req.user.company_id,
-                    branch_id: payslip.branch_id
-                }, transaction);
+            if (!payslip) {
+                await transaction.rollback();
+                return res.error("NOT_FOUND", { message: `No finalized payslip found for employee ID: ${p.employee_id}` });
+            }
 
-                // Check if fully paid
-                const totalPaidRes = await PaymentHistory.findOne({
-                    where: { employee_id: p.employee_id, ref_id: payslip.id, payment_type: 'Salary' },
-                    attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'paid']],
-                    transaction
+            const netPayable = parseFloat(payslip.net_salary || 0);
+            const paymentAmount = parseFloat(p.amount || 0);
+
+            // Validate payment amount (not exceeding net payable)
+            const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
+                ref_id: payslip.id,
+                payment_type: 'Salary'
+            }, {
+                attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total_paid']],
+                raw: true
+            }, transaction);
+
+            const existingPaid = parseFloat(totalPaidResult[0]?.total_paid || 0);
+            const totalPaid = paymentAmount + existingPaid;
+            
+            if (totalPaid > netPayable) {
+                await transaction.rollback();
+                return res.error("VALIDATION_ERROR", { 
+                    message: `Payment amount (${paymentAmount}) for employee ${p.employee_id} exceeds remaining payable (${(netPayable - existingPaid).toFixed(2)})` 
                 });
-                const totalPaid = parseFloat(totalPaidRes.getDataValue('paid') || 0);
+            }
 
-                if (totalPaid >= parseFloat(payslip.net_salary)) {
-                    await commonQuery.updateRecordById(Payslip, payslip.id, { status: 2 }, transaction);
+            // Record history
+            const createdPayment = await commonQuery.createRecord(PaymentHistory, {
+                employee_id: p.employee_id,
+                ref_id: payslip.id,
+                payment_date: dayjs().format('YYYY-MM-DD'),
+                month,
+                year,
+                amount: p.amount,
+                payment_type: 'Salary',
+                payment_mode: p.payment_mode || 'Bank',
+                status: 1,
+                user_id: req.user.id,
+                company_id: req.user.company_id,
+                branch_id: payslip.branch_id
+            }, transaction);
 
-                    // 💸 Send Paid Notification
-                    try {
-                        const { User: UserModel } = require("../../models");
-                        const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: p.employee_id }, {}, transaction);
-                        if (targetUser) {
-                            const { createNotification } = require("../../services/notificationService");
-                            const monthName = formatDateTime(new Date(payslip.year, payslip.month - 1, 1), "MMMM");
-                            await createNotification({
-                                user_id: targetUser.id,
-                                title: "Salary Paid",
-                                message: `Your salary for ${monthName} ${payslip.year} has been marked as paid.`,
-                                type: "PAYROLL",
-                                reference_id: payslip.id,
-                                status_code: 0,
-                                company_id: req.user.company_id,
-                                branch_id: payslip.branch_id
-                            }, transaction);
-                        }
-                    } catch (notifyErr) {
-                        console.error("Paid Notification Error:", notifyErr.message);
+            // Update payslip payment_history JSON (Mirroring paymentHistoryController logic)
+            const currentPaymentHistory = payslip.payment_history || { advances_adjusted: [] };
+            const salaryPayment = {
+                id: createdPayment.id,
+                amount: p.amount,
+                payment_mode: p.payment_mode || 'Bank',
+                payment_date: dayjs().format('YYYY-MM-DD'),
+                payment_type: 'Salary'
+            };
+            
+            if (!currentPaymentHistory.salary_payments) {
+                currentPaymentHistory.salary_payments = [];
+            }
+            currentPaymentHistory.salary_payments.push(salaryPayment);
+            
+            const payslipUpdatePayload = {
+                payment_history: currentPaymentHistory,
+                paid_amount: totalPaid,
+                pending_amount: netPayable - totalPaid
+            };
+
+            // Check if fully paid
+            if (totalPaid >= netPayable) {
+                payslipUpdatePayload.status = 3;
+            }
+
+            await commonQuery.updateRecordById(Payslip, payslip.id, payslipUpdatePayload, transaction);
+
+            // 💸 Send Paid Notification
+            if (payslipUpdatePayload.status === 3) {
+                try {
+                    const targetUser = await commonQuery.findOneRecord(User, { employee_id: p.employee_id }, {}, transaction);
+                    if (targetUser) {
+                        const { createNotification } = require("../../services/notificationService");
+                        const monthName = dayjs().month(payslip.month - 1).format('MMMM');
+                        await createNotification({
+                            user_id: targetUser.id,
+                            title: "Salary Paid",
+                            message: `Your salary for ${monthName} ${payslip.year} has been marked as paid.`,
+                            type: "PAYROLL",
+                            reference_id: payslip.id,
+                            status_code: 0,
+                            company_id: req.user.company_id,
+                            branch_id: payslip.branch_id
+                        }, transaction);
                     }
+                } catch (notifyErr) {
+                    console.error("Paid Notification Error:", notifyErr.message);
                 }
-                stats.success++;
-            } else {
-                stats.failed++;
             }
         }
 
         await transaction.commit();
-        return res.success(`Generated ${stats.success} payment entries.`, stats);
+        return res.success("All bulk payments recorded successfully");
     } catch (err) {
-        if (transaction) await transaction.rollback();
+        if (transaction && !transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };

@@ -1,5 +1,5 @@
 const { PaymentHistory, Employee, EmployeeAdvance, Payslip, User, sequelize } = require("../../models");
-const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError, formatDateTime } = require("../../helpers");
+const { sequelize: sequelizeInstance, validateRequest, commonQuery, handleError, formatDateTime, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { createNotification } = require("../../services/notificationService");
 const dayjs = require("dayjs");
@@ -99,10 +99,23 @@ exports.create = async (req, res) => {
             }
             currentPaymentHistory.salary_payments.push(salaryPayment);
             
-            await commonQuery.updateRecordById(Payslip, req.body.ref_id, {
-                payment_history: currentPaymentHistory
+            // Calculate total paid and update payslip
+            const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
+                ref_id: req.body.ref_id,
+                payment_type: PAYMENT_TYPE.SALARY
+            }, {
+                attributes: [[sequelizeInstance.fn('SUM', sequelize.col('amount')), 'total_paid']],
+                raw: true
             }, transaction);
 
+            const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0) + paymentAmount;
+            
+            await commonQuery.updateRecordById(Payslip, req.body.ref_id, {
+                payment_history: currentPaymentHistory,
+                paid_amount: totalPaid,
+                pending_amount: netPayable - totalPaid,
+                status: (totalPaid >= netPayable && payslip.status !== 3) ? 3 : payslip.status
+            }, transaction);
         } else {
             // General or Advance payment history creation
             createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
@@ -185,7 +198,7 @@ exports.getAllPaymentHistory = async (req, res) => {
 
         const data = await commonQuery.fetchPaginatedData(
             PaymentHistory,
-            req.body,
+            {...req.body},
             fieldConfig,
             {
                 include: [

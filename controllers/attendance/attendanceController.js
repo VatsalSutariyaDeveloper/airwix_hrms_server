@@ -584,12 +584,53 @@ exports.updateAttendanceDay = async (req, res) => {
             // 1. Extra Overtime Logic
             if (holidayPolicy === 'ALLOW_NORMAL') {
                 if (salaryTemplate) {
-                    let daySalaryAddress = parseFloat(salaryTemplate.daily_rate || 0);
-                    if (daySalaryAddress <= 0) {
-                        const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
-                        const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
-                        daySalaryAddress = monthlyGross / (daysInCalc || 30);
+                    const salaryType = (salaryTemplate.salary_type || 'Monthly').toString();
+                    const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
+                    const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
+
+                    let daySalaryAddress = 0;
+                    if (salaryType === 'Hourly') {
+                        const hourlyRate = parseFloat(salaryTemplate.hourly_rate || 0);
+                        let effectiveWorkedMinutes = parseFloat((worked_minutes !== undefined && worked_minutes !== null) ? worked_minutes : (day.worked_minutes || 0)) || 0;
+
+                        if (!(effectiveWorkedMinutes > 0)) {
+                            const calcFirstIn = first_in !== undefined ? first_in : day.first_in;
+                            const calcLastOut = last_out !== undefined ? last_out : day.last_out;
+                            const breakMins = parseFloat((total_break_minutes !== undefined && total_break_minutes !== null) ? total_break_minutes : (day.total_break_minutes || 0)) || 0;
+                            if (calcFirstIn && calcLastOut) {
+                                let inTime = dayjs(calcFirstIn);
+                                let outTime = dayjs(calcLastOut);
+                                if (outTime.isBefore(inTime)) {
+                                    outTime = outTime.add(1, 'day');
+                                }
+                                const diffMins = outTime.diff(inTime, 'minute');
+                                effectiveWorkedMinutes = Math.max(0, diffMins - breakMins);
+                            }
+                        }
+
+                        let hoursForPay = effectiveWorkedMinutes / 60;
+                        if (!(hoursForPay > 0)) {
+                            const shift = emp?.shiftTemplate;
+                            if (shift) {
+                                const payableMins = parseFloat(shift.total_payable_hours || 0) || parseFloat(shift.min_full_day_minutes || 0) || 0;
+                                if (payableMins > 0) hoursForPay = payableMins / 60;
+                            }
+                        }
+                        if (!(hoursForPay > 0)) hoursForPay = 8;
+
+                        if (hourlyRate > 0) {
+                            daySalaryAddress = hourlyRate * hoursForPay;
+                        } else {
+                            daySalaryAddress = monthlyGross / (daysInCalc || 30);
+                        }
+                    } else if (salaryType === 'Daily') {
+                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
+                    } else {
+                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
                     }
+
                     const currentOvertime = parseFloat(overtime_amount || 0);
                     overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
                 }
@@ -607,9 +648,13 @@ exports.updateAttendanceDay = async (req, res) => {
     // Determine if times are explicitly provided (User modifying Time)
     const isTimeUpdate = (first_in !== undefined || last_out !== undefined);
 
-    // [FIX] If the user explicitly provides a status, we should respect it.
-    // This is a manual update endpoint, so we trust the status sent in req.body.
-    let effectiveStatus = (status !== undefined && status !== null) ? Number(status) : day.status;
+    const statusProvided = (status !== undefined && status !== null);
+    const hasPunchesArray = Array.isArray(req.body.punches);
+    // Only preserve/force status when explicitly requested (to allow recalculation on punch updates)
+    const shouldPreserveStatus = statusProvided && req.body.force_status === true;
+
+    // Default: respect provided status; will be recalculated later if not preserved
+    let effectiveStatus = statusProvided ? Number(status) : day.status;
 
     // Check if status is non-working (3: WEEKLY_OFF, 4: HOLIDAY, 5: ABSENT, 6: LEAVE)
     const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
@@ -673,6 +718,19 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // Only trigger punch update if strictly needed
     if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
+      console.log(
+        "[updateAttendanceDay] manualPunch start",
+        JSON.stringify({
+          employee_id,
+          attendance_date,
+          effectiveFirstIn,
+          effectiveLastOut,
+          statusProvided,
+          preserveStatus: shouldPreserveStatus,
+          hasPunchesArray,
+          force_status: req.body.force_status === true
+        })
+      );
       
       // Check if today is a holiday - if so, store working hours as overtime
       let isTodayHoliday = false;
@@ -689,19 +747,53 @@ exports.updateAttendanceDay = async (req, res) => {
         );
         isTodayHoliday = !!holidayRecord;
       }
+
+      // Check if today is a weekly off
+      let isTodayWeeklyOff = false;
+      const woDateJS = dayjs(attendance_date);
+      const woDayOfWeek = woDateJS.day();
+      const woWeekNo = Math.ceil(woDateJS.date() / 7);
+      if (emp.employeeWeeklyOffs && emp.employeeWeeklyOffs.length > 0) {
+        isTodayWeeklyOff = !!(emp.employeeWeeklyOffs || []).find(wo =>
+          wo.day_of_week === woDayOfWeek &&
+          (wo.week_no === 0 || wo.week_no === woWeekNo)
+        );
+      }
+
+      const isNonWorkingForPolicy = isTodayHoliday || isTodayWeeklyOff;
       
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
         branch_id: req.body.branch_id || req.user.branch_id,
         shift_id: shift_id,
+        preserveStatus: shouldPreserveStatus,
         bypassShiftRestrictions: true,
         employee: emp, // Pass pre-fetched employee
         existingDay: day, // Pass pre-fetched day
         punches: req.body.punches, // Pass punches array if provided
         // forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
-        isHoliday: (holidayPolicy === 'COMP_OFF') ? false : isTodayHoliday // Don't pass holiday flag for COMP_OFF
+        isHoliday: (holidayPolicy !== 'COMP_OFF') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL + BLOCK: all time → overtime
+        isHolidayAllowNormal: (holidayPolicy === 'ALLOW_NORMAL') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL: status = Present (not Holiday)
+        isHolidayCompOff: (holidayPolicy === 'COMP_OFF') ? isNonWorkingForPolicy : false // COMP_OFF: all time → worked_minutes, no overtime
       }, t);
+      console.log("[updateAttendanceDay] manualPunch done");
+    }
+
+    // If status wasn't explicitly provided, use the recalculated status from rebuildAttendanceDay
+    if (!shouldPreserveStatus) {
+      const refreshedDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+      console.log(
+        "[updateAttendanceDay] refreshed status",
+        JSON.stringify({
+          day_id: day.id,
+          refreshed_status: refreshedDay ? refreshedDay.status : null,
+          refreshed_worked_minutes: refreshedDay ? refreshedDay.worked_minutes : null,
+        })
+      );
+      if (refreshedDay && refreshedDay.status !== undefined && refreshedDay.status !== null) {
+        effectiveStatus = refreshedDay.status;
+      }
     }
  
     const payload = {
@@ -794,7 +886,8 @@ exports.updateAttendanceDay = async (req, res) => {
         if (first_in !== undefined) payload.first_in = first_in;
         if (last_out !== undefined) payload.last_out = last_out;
         
-        if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+        const finesAllowed = template ? (template.fines_allowed !== false) : true;
+        if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
         
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
 
@@ -819,7 +912,11 @@ exports.updateAttendanceDay = async (req, res) => {
         }
 
         // Re-calculate Fine from Data if provided
-        if (fine_data !== undefined) {
+        if (!finesAllowed) {
+            payload.fine_data = null;
+            payload.fine_amount = 0;
+            payload.fine_minutes = 0;
+        } else if (fine_data !== undefined) {
             const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
             payload.fine_data = finalFineData;
             if (finalFineData && typeof finalFineData === 'object') {
@@ -836,6 +933,7 @@ exports.updateAttendanceDay = async (req, res) => {
                 payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
                 payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
             } else {
+                payload.fine_data = null;
                 payload.fine_amount = 0;
                 payload.fine_minutes = 0;
             }

@@ -32,6 +32,8 @@ router.post("/cash-voucher/get-voucher-details", cashVoucherController.getCashVo
 router.post("/listing", payrollController.getMonthlyPayrollListing);
 router.post("/bulk-finalize", payrollController.bulkFinalizePayroll);
 router.post("/bulk-pay", payrollController.bulkPayPayroll);
+router.post("/calculate-bulk", payrollController.calculateMonthlySalaryBulk);
+router.post("/generate-bulk-pdf", payrollController.generateBulkPayslipPdf);
 
 
 // ==========================

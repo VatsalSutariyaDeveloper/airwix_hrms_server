@@ -55,6 +55,9 @@ module.exports = (sequelize, DataTypes) => {
     },
     enble_on_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
 
+    comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+    comp_off_max_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
