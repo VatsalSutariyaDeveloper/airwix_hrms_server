@@ -15,8 +15,13 @@ module.exports = (sequelize, DataTypes) => {
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
+            device_type: {
+                type: DataTypes.SMALLINT,
+                defaultValue: 0,
+                comment: "0: Attendance, 1: Canteen"
+            },
         },
-        {
+        {                           
             tableName: "device_master",
             timestamps: true,
             underscored: true,

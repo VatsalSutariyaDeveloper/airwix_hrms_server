@@ -6,7 +6,7 @@ const jwt = require("jsonwebtoken");
 const generateToken = (user, companyId, access_by = "web login") => {
   // Logic to determine branch_id: use user.branch_id, or first branch from branch_access, or 0
   const branchId = user.branch_id || (user.branch_access && user.branch_access.split(',')[0] ? parseInt(user.branch_access.split(',')[0]) : 0);
-
+console.log("user",user)
   return jwt.sign(
     {
       id: user.id || user.user_id,
@@ -22,7 +22,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       is_reporting_manager: user.is_reporting_manager,
       is_super_admin: user.is_super_admin || user.role_id == 1,
       is_admin: user.role_id == 2,
-      access: user.access || (user.role_id ? "employee" : "attendance device")
+      access: user.access
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "30d" }

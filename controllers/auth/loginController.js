@@ -733,11 +733,11 @@ exports.generatePin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
-
+console.log("entity",entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)
@@ -783,7 +783,7 @@ exports.generatePin = async (req, res) => {
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);
@@ -989,11 +989,12 @@ exports.pinLogin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
+console.log("entity",entity.device_type)
 
     const token = generateToken({
       ...entity.get({ plain: true }),
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)
@@ -1031,7 +1032,7 @@ exports.pinLogin = async (req, res) => {
         : (!isDevice && entity.employee_profile_image) 
           ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
           : null,
-      role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
+      role_name: userPermission?.role_name || (isDevice ? (entity.device_type === 1 ? "Canteen" : "Attendance Device") : "Employee"),
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: isDevice ? null : entity.user_id,
@@ -1039,7 +1040,7 @@ exports.pinLogin = async (req, res) => {
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);

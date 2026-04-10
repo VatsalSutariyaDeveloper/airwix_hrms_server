@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OnDutyRequest } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OnDutyRequest, DeviceMaster, CanteenAttendance } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -391,6 +391,24 @@ async function punch(employeeId, meta, transaction = null) {
     punch_time: now,
     ...meta,
   }, transaction, { company_id: true });
+
+  // --- CANTEEN ATTENDANCE LOGIC ---
+  if (meta.device_id) {
+    const device = await commonQuery.findOneRecord(DeviceMaster, { id: meta.device_id }, {}, transaction);
+    if (device && device.device_type === 1) { // 1: Canteen
+        // Check if already marked for today to avoid duplicates if needed, 
+        // but typically canteen can have multiple punches (different meals). 
+        // For now, following "mark present".
+        await commonQuery.createRecord(CanteenAttendance, {
+            employee_id: employeeId,
+            date: targetDayDate,
+            status: 0, // PRESENT
+            company_id: meta.company_id || employee.company_id,
+            branch_id: meta.branch_id || employee.branch_id,
+            user_id: meta.user_id || 0
+        }, transaction);
+    }
+  }
 
   // 4.1 Send Notification
   try {
