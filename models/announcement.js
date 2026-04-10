@@ -16,37 +16,27 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.DATE,
             allowNull: true
         },
-        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
         priority: {
             type: DataTypes.ENUM('low', 'medium', 'high'),
             defaultValue: 'medium'
         },
-        target_audience: {
-            type: DataTypes.STRING(255),
-            defaultValue: 'all'
-        },
-        created_by: {
+        target_type: {
             type: DataTypes.INTEGER,
-            allowNull: false,
-            comment: "User ID who created the announcement"
+            defaultValue: 0
         },
-        company_id: {
-            type: DataTypes.INTEGER,
-            allowNull: false
-        },
-        branch_id: {
-            type: DataTypes.INTEGER,
+        target:{
+            type: DataTypes.STRING,
             allowNull: true
-        }
+        },
+        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
+        user_id: { type: DataTypes.INTEGER, allowNull: true },
+        branch_id: { type: DataTypes.INTEGER, allowNull: true },
+        company_id: { type: DataTypes.INTEGER, allowNull: true }
     }, {
         tableName: "announcements",
         underscored: true,
         timestamps: true
     });
-
-    Announcement.associate = (models) => {
-        Announcement.belongsTo(models.User, { foreignKey: "created_by", as: "creator" });
-    };
 
     return Announcement;
 };

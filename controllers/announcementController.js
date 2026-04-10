@@ -1,40 +1,52 @@
 const { Announcement, User, RolePermission } = require("../models");
 const notificationService = require("../services/notificationService");
 const commonQuery = require("../helpers/commonQuery");
-const { handleError } = require("../helpers");
+const { handleError, sequelize, constants, Op, formatDateTime } = require("../helpers");
+const validateRequest = require("../helpers/validateRequest");
 
-exports.createAnnouncement = async (req, res) => {
+exports.create = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
-    const { title, content, announcement_date, expiry_date, priority, target_audience, branch_id } = req.body;
+    const requiredFields = {
+      title: "Title",
+      content: "Content",
+      announcement_date: "Announcement Date",
+      priority: "Priority",
+      target_type: "Target Type",
+    };
 
-    const announcement = await commonQuery.createRecord(Announcement, {
-      title,
-      content,
-      announcement_date,
-      expiry_date,
-      priority,
-      target_audience,
-      created_by: req.user.id,
-      company_id: req.user.company_id,
-      branch_id: branch_id || req.user.branch_id
-    });
+    const errors = await validateRequest(req.body, requiredFields, {
+      uniqueCheck: {
+        model: Announcement,
+        fields: ["title"],
+      }
+    }, transaction);
+
+    if (errors) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, errors);
+    }
+
+    const announcement = await commonQuery.createRecord(
+      Announcement,
+      req.body,
+      transaction
+    );
 
     // Send notifications if active
     if (announcement.status === 0) {
       await sendAnnouncementNotifications(announcement);
     }
 
-    return res.status(201).json({
-      success: true,
-      message: "Announcement created successfully",
-      data: announcement
-    });
+    await transaction.commit();
+    return res.success(constants.ANNOUNCEMENT_CREATED);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };
 
-exports.getAnnouncements = async (req, res) => {
+exports.getAll = async (req, res) => {
   try {
     const fieldConfig = [
       ["title", true, true],
@@ -42,119 +54,130 @@ exports.getAnnouncements = async (req, res) => {
       ["announcement_date", true, true],
       ["expiry_date", true, true],
       ["priority", true, true],
-      ["status", true, true],
-      ["created_at", false, true]
+      ["target_type", true, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
       Announcement,
-      req.body,
+      { ...req.body },
       fieldConfig,
-      {
-        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "priority", "target_audience", "status", "created_at"],
-        include: [
-          { model: User, as: "creator", attributes: ["id", "user_name"] }
-        ],
-        where: {
-          company_id: req.user.company_id
-        },
-        order: [["announcement_date", "DESC"]]
-      },
-      { company_id: false }
+      {}
     );
 
-    return res.status(200).json({
-      success: true,
-      data: result
-    });
+    return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);
   }
 };
 
-exports.updateAnnouncement = async (req, res) => {
+exports.update = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { id } = req.params;
-    const { title, content, announcement_date, expiry_date, priority, target_audience, status } = req.body;
 
-    const announcement = await commonQuery.findOneRecord(Announcement, id, {}, null);
-    if (!announcement) {
-      return res.status(404).json({
-        success: false,
-        message: "Announcement not found"
-      });
+    const requiredFields = {
+      title: "Title",
+      content: "Content",
+      announcement_date: "Announcement Date",
+      priority: "Priority",
+      target_type: "Target Type",
+    };
+
+    const errors = await validateRequest(req.body, requiredFields, {
+      uniqueCheck: {
+        model: Announcement,
+        fields: ["title"],
+        excludeId: req.params.id
+      }
+    }, transaction);
+
+    if (errors) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    if (announcement.created_by !== req.user.id && !req.user.is_admin && !req.user.is_super_admin) {
-      return res.status(403).json({
-        success: false,
-        message: "You can only update your own announcements"
-      });
-    }
-
-    const updated = await commonQuery.updateRecord(Announcement, id, {
-      title,
-      content,
-      announcement_date,
-      expiry_date,
-      priority,
-      target_audience,
-      status
-    });
+    const announcement = await commonQuery.updateRecordById(Announcement, id, req.body, transaction);
 
     // If it was just activated, send notifications
-    if (status === 0 && announcement.status !== 0) {
-       const freshAnnouncement = await Announcement.findByPk(id);
-       await sendAnnouncementNotifications(freshAnnouncement);
+    if (announcement.status == 0) {
+      await sendAnnouncementNotifications(announcement);
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "Announcement updated successfully"
-    });
+    await transaction.commit();
+    return res.success(constants.ANNOUNCEMENT_UPDATED);
+  } catch (err) {
+    await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+exports.delete = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
+    }
+
+    const deleted = await commonQuery.softDeleteById(Announcement, ids, transaction);
+    if (!deleted) {
+      await transaction.rollback();
+      return res.error(constants.ALREADY_DELETED);
+    }
+
+    await transaction.commit();
+    return res.success(constants.DELETED);
+  } catch (err) {
+    await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+exports.getById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const announcement = await commonQuery.findOneRecord(Announcement, id);
+    if (!announcement || announcement.status === 2) return res.error(constants.NOT_FOUND);
+    return res.ok(announcement);
   } catch (err) {
     return handleError(err, res, req);
   }
 };
 
-exports.deleteAnnouncement = async (req, res) => {
+exports.updateStatus = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
-    const { id } = req.params;
-
-    const announcement = await commonQuery.findOneRecord(Announcement, id, {}, null);
-    if (!announcement) {
-      return res.status(404).json({
-        success: false,
-        message: "Announcement not found"
-      });
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      await transaction.rollback();
+      return res.error(constants.SELECT_AT_LEAST_ONE_RECORD);
+    }
+    if (status === undefined || status === null) {
+      await transaction.rollback();
+      return res.error(constants.STATUS_REQUIRED);
     }
 
-    if (announcement.created_by !== req.user.id && !req.user.is_admin && !req.user.is_super_admin) {
-      return res.status(403).json({
-        success: false,
-        message: "You can only delete your own announcements"
-      });
+    const updated = await commonQuery.updateStatus(Announcement, ids, status, transaction);
+    if (!updated) {
+      await transaction.rollback();
+      return res.error(constants.UPDATE_FAILED);
     }
 
-    await commonQuery.updateRecord(Announcement, id, { status: 2 });
-
-    return res.status(200).json({
-      success: true,
-      message: "Announcement deleted successfully"
-    });
+    await transaction.commit();
+    return res.success(constants.STATUS_UPDATED);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };
 
 exports.getActiveAnnouncements = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
   try {
     const today = new Date();
-    const Op = require('sequelize').Op;
-    
     const whereClause = {
-      company_id: req.user.company_id,
-      status: 0,
       announcement_date: { [Op.lte]: today },
       [Op.and]: [
         {
@@ -166,29 +189,49 @@ exports.getActiveAnnouncements = async (req, res) => {
       ]
     };
 
-    // Filter by target audience for non-admin users
+    const announcements = await commonQuery.findAllRecords(
+      Announcement,
+      whereClause,
+      {
+        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "priority", "target_type", "target"],
+        order: [["priority", "DESC"], ["announcement_date", "DESC"]]
+      }, transaction);
+
+    // Filter by target audience for non-admin users in response
+    let filteredAnnouncements = announcements;
     if (!req.user.is_super_admin && !req.user.is_admin) {
-      whereClause[Op.and].push({
-        [Op.or]: [
-          { target_audience: 'all' },
-          { target_audience: req.user.role_id?.toString() }
-        ]
+      filteredAnnouncements = announcements.filter(announcement => {
+        const { target_type, target } = announcement;
+        const userId = req.user.id?.toString();
+        const roleId = req.user.role_id?.toString();
+        const employeeRoleId = constants.EMPLOYEE_ROLE_ID.toString();
+
+        // Helper to check if target contains exact match
+        const containsExactMatch = (targetStr, value) => {
+          if (!targetStr || !value) return false;
+          const parts = targetStr.split(',');
+          return parts.some(part => part.trim() === value);
+        };
+
+        if (target_type === 0) return true; // Show to all
+        if (target_type === 1 && containsExactMatch(target, employeeRoleId)) return true; // Employee role
+        if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
+        if (target_type === 2 && containsExactMatch(target, roleId)) return true; // Specific role
+        return false;
       });
     }
 
-    const announcements = await commonQuery.findAllRecords(Announcement, whereClause, {
-      attributes: ["id", "title", "content", "announcement_date", "priority", "target_audience"],
-      include: [
-        { model: User, as: "creator", attributes: ["id", "user_name"] }
-      ],
-      order: [["priority", "DESC"], ["announcement_date", "DESC"]]
-    }, null);
+    // Format dates in response
+    const formattedAnnouncements = filteredAnnouncements.map(announcement => ({
+      ...announcement.toJSON(),
+      announcement_date: formatDateTime(announcement.announcement_date),
+      expiry_date: announcement.expiry_date ? formatDateTime(announcement.expiry_date) : null
+    }));
 
-    return res.status(200).json({
-      success: true,
-      data: announcements
-    });
+    await transaction.commit();
+    return res.success(constants.ANNOUNCEMENT_FETCHED, formattedAnnouncements);
   } catch (err) {
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };
@@ -198,27 +241,25 @@ exports.getActiveAnnouncements = async (req, res) => {
  */
 async function sendAnnouncementNotifications(announcement) {
   try {
-    const { target_audience, company_id, branch_id, title, content, id } = announcement;
-    const Op = require('sequelize').Op;
+    const { target_type, company_id, branch_id, title, content, id } = announcement;
     let userFilter = { company_id, status: 0 };
 
-    if (!target_audience || target_audience === 'all') {
-      // All users in company
-    } else if (target_audience === 'employees') {
-      userFilter.role_id = { [Op.notIn]: [1, 2] };
-    } else if (target_audience === 'managers') {
-      userFilter.role_id = { [Op.in]: [3, 4] };
-    } else if (typeof target_audience === 'string' && target_audience.startsWith('users:')) {
-      const userIds = target_audience.replace('users:', '').split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    if (!target_type || target_type === 0) {
+    } else if (target_type === 1) {
+      userFilter.role_id = constants.EMPLOYEE_ROLE_ID;
+    } else if (target_type === 2) {
+      const roleIds = target.toString().split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      if (roleIds.length > 0) {
+        userFilter.role_id = { [Op.in]: roleIds };
+      }
+    } else if (target_type === 3) {
+      const userIds = target.toString().split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
       if (userIds.length > 0) {
         userFilter.id = { [Op.in]: userIds };
       }
-    } else if (!isNaN(target_audience)) {
-      // It's a Role ID
-      userFilter.role_id = parseInt(target_audience);
     }
 
-    const users = await User.findAll({ where: userFilter, attributes: ['id'] });
+    const users = await commonQuery.findAllRecords(User, userFilter, { attributes: ['id'] });
 
     for (const user of users) {
       await notificationService.createNotification({
