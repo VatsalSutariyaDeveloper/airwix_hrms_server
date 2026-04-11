@@ -488,18 +488,23 @@ exports.verifyMobileNo = async (req, res) => {
       where: { 
         mobile_no, 
         status: { [Op.in]: [0, 1] } 
-      }
+      },
+      attributes: ['id', 'user_name', 'password', 'status']
     });
 
     let entity = user;
+    let type = "user";
+
     if (!user) {
       const device = await DeviceMaster.findOne({
         where: { 
           mobile_no, 
           status: { [Op.in]: [0, 1] } 
-        }
+        },
+        attributes: ['id', 'device_name', 'password', 'status']
       });
       entity = device;
+      type = "device";
     }
     
     if (!entity) {
@@ -510,11 +515,15 @@ exports.verifyMobileNo = async (req, res) => {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (!entity.password) {
-      return res.success("SET PIN");
-    } else {
-      return res.success("ENTER PIN");
-    }
+    const pin_set = !!entity.password;
+
+    return res.success("Mobile verification successful", {
+      is_registered: true,
+      pin_set: pin_set,
+      next_step: pin_set ? "ENTER_PIN" : "SET_PIN",
+      user_name: type === "user" ? entity.user_name : entity.device_name,
+      type: type
+    });
 
   } catch (err) {
     return handleError(err, res, req);
@@ -585,6 +594,23 @@ exports.generatePin = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "PIN is already set. Use PIN login or forgot password." });
     }
 
+    // --- OTP VERIFICATION FOR SECURITY (Commented out) ---
+    /*
+    const { otp } = req.body;
+    if (!otp) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "OTP is required to set your PIN." });
+    }
+
+    try {
+      await otpService.verifyOtp(mobile_no, otp);
+      await otpService.cleanupOtp(mobile_no, transaction);
+    } catch (e) {
+      await transaction.rollback();
+      return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
+    }
+    */
+
     const salt = await bcrypt.genSalt(10);
     const hashedPin = await bcrypt.hash(pin, salt);
 
@@ -624,10 +650,10 @@ exports.generatePin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
-        await transaction.rollback();
-        return res.error(403, { message: "Use the mobile application to access this account." });
-    }
+    // if (!isDevice && entity.role_id === 5 && access_by !== "application") {
+    //     await transaction.rollback();
+    //     return res.error(403, { message: "Use the mobile application to access this account." });
+    // }
 
     // 2. Validate Company
     if (!entity.company_id) {
@@ -881,10 +907,10 @@ exports.pinLogin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
-        await transaction.rollback();
-        return res.error(403, { message: "Use the mobile application to access this account." });
-    }
+    // if (!isDevice && entity.role_id === 5 && access_by !== "application") {
+    //     await transaction.rollback();
+    //     return res.error(403, { message: "Use the mobile application to access this account." });
+    // }
 
     // 2. Validate Company
     if (!entity.company_id) {
