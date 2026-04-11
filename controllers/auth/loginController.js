@@ -478,16 +478,16 @@ exports.logout = async (req, res) => {
  */
 exports.verifyMobileNo = async (req, res) => {
   try {
-    const { mobile_no } = req.body;
-    
+    const { mobile_no, access_by } = req.body;
+
     if (!mobile_no) {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
     }
 
     let user = await User.findOne({
-      where: { 
-        mobile_no, 
-        status: { [Op.in]: [0, 1] } 
+      where: {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
       },
       attributes: ['id', 'user_name', 'password', 'status']
     });
@@ -495,18 +495,18 @@ exports.verifyMobileNo = async (req, res) => {
     let entity = user;
     let type = "user";
 
-    if (!user) {
+    if (!user && access_by === "application") {
       const device = await DeviceMaster.findOne({
-        where: { 
-          mobile_no, 
-          status: { [Op.in]: [0, 1] } 
+        where: {
+          mobile_no,
+          status: { [Op.in]: [0, 1] }
         },
         attributes: ['id', 'device_name', 'password', 'status']
       });
       entity = device;
       type = "device";
     }
-    
+
     if (!entity) {
       return res.error(constants.NOT_FOUND, "Mobile number not registered.");
     }
@@ -516,11 +516,45 @@ exports.verifyMobileNo = async (req, res) => {
     }
 
     const pin_set = !!entity.password;
+    const next_step = pin_set ? "ENTER_PIN" : "SET_PIN";
+    let otp = null;
+
+    // Send OTP only if PIN is not set (next_step is SET_PIN)
+    if (!pin_set) {
+      const transaction = await sequelize.transaction();
+      try {
+        // Check OTP Rate Limit
+        const limitCheck = await otpRateLimit.checkRateLimit(mobile_no);
+
+        if (!limitCheck.allowed) {
+          const mins = Math.ceil(limitCheck.remaining_seconds / 60);
+          await transaction.rollback();
+
+          return res.status(400).json({
+            code: 400,
+            status: "TOO_MANY_REQUESTS",
+            message: `Too many OTP attempts. Try again in ${mins} minutes.`,
+            remaining_seconds: limitCheck.remaining_seconds
+          });
+        }
+
+        // Increase attempt count
+        await otpRateLimit.increaseAttempt(mobile_no);
+
+        // Use OTP Service
+        otp = await otpService.sendOtp(mobile_no, transaction);
+        await transaction.commit();
+      } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+      }
+    }
 
     return res.success("Mobile verification successful", {
       is_registered: true,
       pin_set: pin_set,
-      next_step: pin_set ? "ENTER_PIN" : "SET_PIN",
+      next_step: next_step,
+      dev_otp: otp,
       user_name: type === "user" ? entity.user_name : entity.device_name,
       type: type
     });
@@ -531,7 +565,39 @@ exports.verifyMobileNo = async (req, res) => {
 };
 
 /**
- * 4. Generate/Set PIN
+ * 4. Verify OTP
+ * - Verifies OTP only, does not set PIN
+ */
+exports.verifyOtpPin = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { mobile_no, otp } = req.body;
+
+    if (!mobile_no || !otp) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and OTP are required." });
+    }
+
+    // Verify OTP
+    try {
+      await otpService.verifyOtp(mobile_no, otp);
+      await otpService.cleanupOtp(mobile_no, transaction);
+    } catch (e) {
+      await transaction.rollback();
+      return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
+    }
+
+    await transaction.commit();
+    return res.success("OTP verified successfully", { message: "OTP has been verified successfully." });
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * 5. Generate/Set PIN
  * - Sets the PIN in the password field for the user and logs them in
  */
 exports.generatePin = async (req, res) => {

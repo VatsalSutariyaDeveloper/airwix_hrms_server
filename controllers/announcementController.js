@@ -158,7 +158,12 @@ exports.updateStatus = async (req, res) => {
       return res.error(constants.STATUS_REQUIRED);
     }
 
-    const updated = await commonQuery.updateStatus(Announcement, ids, status, transaction);
+    const updated = await commonQuery.updateRecordById(
+      Announcement, 
+      ids, 
+      { status },
+      transaction
+    );
     if (!updated) {
       await transaction.rollback();
       return res.error(constants.UPDATE_FAILED);

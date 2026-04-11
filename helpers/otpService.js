@@ -1,9 +1,10 @@
 const { OtpVerification } = require("../models");
 const otpRateLimit = require("./otpRateLimit");
+const emailService = require("../services/emailService");
 
 // Configuration
 const OTP_EXPIRY_MINUTES = 10;
-const IS_DEV_MODE = true; 
+const IS_DEV_MODE = true;
 
 const generateNumericOTP = (length = 6) => {
   return Math.floor(100000 + Math.random() * 900000).toString().substring(0, length);
@@ -16,15 +17,21 @@ const delivery_challanSms = async (mobile_no, otp) => {
   // Add real SMS provider logic here later
 };
 
+const isEmail = (identifier) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(identifier);
+};
+
 module.exports = {
-  sendOtp: async (mobile_no, transaction) => {
+  sendOtp: async (identifier, transaction) => {
     // TODO: Remove this hardcoded OTP when going live
     // const otp = generateNumericOTP(6);
     const otp = "123456";
     const expires_at = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+    const isEmailAddress = isEmail(identifier);
 
     const existing = await OtpVerification.findOne({
-      where: { mobile_no },
+      where: { identifier },
       transaction
     });
 
@@ -35,18 +42,24 @@ module.exports = {
       );
     } else {
       await OtpVerification.create(
-        { mobile_no, otp, expires_at, is_verified: 0, status: 0 },
+        { identifier, otp, expires_at, is_verified: 0, status: 0 },
         { transaction }
       );
     }
 
-    await delivery_challanSms(mobile_no, otp);
+    // Send OTP via SMS or Email based on identifier type
+    if (isEmailAddress) {
+      await emailService.sendOtpToEmail(identifier, otp);
+    } else {
+      await delivery_challanSms(identifier, otp);
+    }
+
     return otp;
   },
 
-  verifyOtp: async (mobile_no, otp) => {
+  verifyOtp: async (identifier, otp) => {
     const record = await OtpVerification.findOne({
-      where: { mobile_no }
+      where: { identifier }
     });
 
     // ✅ THROW OBJECTS WITH STATUS AND MESSAGE
@@ -57,7 +70,7 @@ module.exports = {
     if (record.otp !== otp) {
       throw { status: "VALIDATION_ERROR", message: "Invalid OTP" };
     }
-    
+
     if (new Date() > new Date(record.expires_at)) {
       throw { status: "VALIDATION_ERROR", message: "OTP has expired" };
     }
@@ -69,14 +82,14 @@ module.exports = {
     );
 
     // 🎉 Successful OTP → Reset Limit
-    await otpRateLimit.resetAttempts(mobile_no);
+    await otpRateLimit.resetAttempts(identifier);
 
     return true;
   },
 
-  cleanupOtp: async (mobile_no, transaction) => {
+  cleanupOtp: async (identifier, transaction) => {
      await OtpVerification.destroy({
-       where: { mobile_no },
+       where: { identifier },
        transaction
      });
   }
