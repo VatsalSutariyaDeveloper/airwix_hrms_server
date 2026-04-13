@@ -212,10 +212,48 @@ exports.getPendingCount = async (req, res) => {
 
 exports.getPendingAnnouncementCount = async (req, res) => {
     try {
-        const announcementCount = await commonQuery.countRecords(Announcement, {
-            status: 0
-        });
-        return res.ok({announcementCount});
+        const today = dayjs().format("YYYY-MM-DD");
+        const whereClause = {
+            status: 0,
+            announcement_date: { [Op.lte]: today },
+            [Op.and]: [
+                {
+                    [Op.or]: [
+                        { expiry_date: null },
+                        { expiry_date: { [Op.gte]: today } }
+                    ]
+                }
+            ]
+        };
+
+        const announcements = await commonQuery.findAllRecords(Announcement, whereClause, {
+            attributes: ["id", "target_type", "target"]
+        }, null, false);
+
+        let filteredAnnouncements = announcements;
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            filteredAnnouncements = announcements.filter(announcement => {
+                const { target_type, target } = announcement;
+                const userId = req.user.id?.toString();
+                const roleId = req.user.role_id?.toString();
+                const employeeRoleId = constants.EMPLOYEE_ROLE_ID.toString();
+
+                const containsExactMatch = (targetStr, value) => {
+                    if (!targetStr || !value) return false;
+                    const parts = targetStr.split(',');
+                    return parts.some(part => part.trim() === value);
+                };
+
+                if (target_type === 0) return true; // Show to all
+                if (target_type === 1 && containsExactMatch(target, employeeRoleId)) return true; // Employee role
+                if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
+                if (target_type === 2 && containsExactMatch(target, roleId)) return true; // Specific role
+                return false;
+            });
+        }
+
+        const announcementCount = filteredAnnouncements.length;
+        return res.ok({ announcementCount });
     } catch (err) {
         return handleError(err, res, req);
     }
