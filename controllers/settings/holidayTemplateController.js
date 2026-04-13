@@ -280,7 +280,8 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
               await commonQuery.updateRecordById(AttendanceDay, existingAttendanceDay.id, {
                 status: 3, // WEEKLY_OFF
                 shift_id: null,
-                note: `System: Changed from Holiday to Weekly Off (${new Date(holidayDate).toLocaleDateString('en-US', { weekday: 'long' })})`
+                note: ``
+                // note: `System: Changed from Holiday to Weekly Off (${new Date(holidayDate).toLocaleDateString('en-US', { weekday: 'long' })})`
               }, transaction);
             }
           } else {
@@ -356,7 +357,8 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
             if (existingAttendanceDay) {
               await commonQuery.updateRecordById(AttendanceDay, existingAttendanceDay.id, {
                 status: 4, // HOLIDAY
-                note: `System: Changed from Weekly Off to Holiday (${transactionData.name || 'Holiday'})`
+                note: ``
+                // note: `System: Changed from Weekly Off to Holiday (${transactionData.name || 'Holiday'})`
               }, transaction);
             } else {
               // Create new HOLIDAY record
@@ -364,7 +366,8 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
                 employee_id: employee.id,
                 attendance_date: transactionData.date,
                 status: 4, // HOLIDAY
-                note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
+                note: ``,
+                // note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
                 created_at: new Date(),
                 updated_at: new Date()
               }, transaction);
@@ -375,7 +378,8 @@ async function syncHolidayTransactions(templateId, incomingTransactions, existin
               employee_id: employee.id,
               attendance_date: transactionData.date,
               status: 4, // HOLIDAY
-              note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
+              note: ``,
+              // note: `System: Holiday auto-detected (${transactionData.name || 'Holiday'})`,
               created_at: new Date(),
               updated_at: new Date()
             }, transaction);

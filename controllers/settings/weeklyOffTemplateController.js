@@ -59,9 +59,10 @@ async function handleAttendanceDayUpdates(employeeIds, date, isAddingWeeklyOff, 
                 {
                     status: 3, // WEEKLY_OFF
                     shift_id: null, // Clear shift when converting to weekly off
-                    note: record.status === 4 
-                        ? `System: Changed from Holiday to Weekly Off (${dayjs(date).format('dddd')})`
-                        : "System: Weekly Off auto-detected (template updated)",
+                    note: "", 
+                    // note: record.status === 4 
+                    //     ? `System: Changed from Holiday to Weekly Off (${dayjs(date).format('dddd')})`
+                    //     : "System: Weekly Off auto-detected (template updated)",
                     updated_at: new Date()
                 },
                 transaction
@@ -76,7 +77,8 @@ async function handleAttendanceDayUpdates(employeeIds, date, isAddingWeeklyOff, 
             user_id: meta.user_id || 0,
             company_id: meta.company_id || 0,
             branch_id: meta.branch_id || 0,
-            note: "System: Weekly Off auto-detected (template updated)",
+            note: "",
+            // note: "System: Weekly Off auto-detected (template updated)",
             created_at: new Date(),
             updated_at: new Date()
         }));
@@ -109,7 +111,8 @@ async function handleAttendanceDayUpdates(employeeIds, date, isAddingWeeklyOff, 
                     record.id,
                     {
                         status: 4, // HOLIDAY
-                        note: `System: Holiday auto-detected (${holiday.name || 'Holiday'}) - Weekly Off removed`,
+                        note: ``,
+                        // note: `System: Holiday auto-detected (${holiday.name || 'Holiday'}) - Weekly Off removed`,
                         updated_at: new Date()
                     },
                     transaction

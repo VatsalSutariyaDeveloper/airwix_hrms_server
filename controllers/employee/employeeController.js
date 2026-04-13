@@ -2218,18 +2218,20 @@ exports.inviteUser = async (req, res) => {
             // }, transaction);
         }
 
-        // Generate Activation Code
-        const activation_code = crypto.randomBytes(20).toString("hex");
+        // Generate PIN Setup Token
+        const pin_setup_token = crypto.randomBytes(32).toString("hex");
+        const pin_setup_expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
         await commonQuery.updateRecordById(User, user.id, {
-            activation_code: activation_code,
-            is_activated: true, // Ensure it's reset to false
-            status: 0 // Keep inactive
+            pin_setup_token: pin_setup_token,
+            pin_setup_expires: pin_setup_expires,
+            is_activated: true,
+            status: 0
         }, transaction);
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/airwix-payroll/'}activate?code=${activation_code}`;
+        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/airwix-payroll/'}generate-pin?token=${pin_setup_token}`;
 
         // Send WhatsApp Notification (Async)
         const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);

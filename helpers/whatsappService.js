@@ -57,11 +57,19 @@ const sendInvitationLink = async (employee, setupLink) => {
 
 Welcome to Airwix Payroll! Your system account has been created.
 
+Please use the link below to set up your secure 4-digit PIN for login:
+${setupLink}
+
+Instructions:
+1. Click the link above.
+2. Enter your new 4-digit numeric PIN.
+3. Confirm the PIN.
+4. Once set, you can login to the application using your mobile number and this PIN.
+
+This link is valid for 1 hour only.
+
 Download our application:
 https://loadly.io/airwix-payroll
-
-Step 1: Login Using Mobile No.
-Step 2: Set PIN For Login
 
 Best regards,
 HR Team`;

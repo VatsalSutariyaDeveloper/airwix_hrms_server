@@ -30,6 +30,10 @@ router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 router.post("/state/dropdown-list", stateMasterController.dropdownList);
 router.post("/country/dropdown-list", countryMasterController.dropdownList);
 
+// PIN Management (Public)
+router.get("/user/verify-pin-token/:token", userController.verifyPinToken);
+router.post("/user/setup-pin", userController.setupPin);
+
 // Password Management (Public)
 router.post("/user/setup-password", userController.setPassword);
 router.post("/user/forgot-password", userController.forgotPassword);

@@ -391,41 +391,136 @@ exports.assignRole = async (req, res) => {
 };
 
 /**
+ * Verify PIN setup token (GET)
+ * Checks if the token is valid and not expired.
+ */
+exports.verifyPinToken = async (req, res) => {
+    try {
+        const { token } = req.params;
+
+        const user = await commonQuery.findOneRecord(User, {
+            pin_setup_token: token,
+            pin_setup_expires: { [Op.gt]: new Date() },
+        }, {
+            attributes: ["id", "user_name", "mobile_no", "email"]
+        }, null, false, false);
+
+        if (!user) {
+            return res.status(400).json({
+                code: 400,
+                status: "INVALID_OR_EXPIRED",
+                message: "PIN setup link is invalid or has expired",
+            });
+        }
+
+        return res.json({
+            code: 200,
+            status: "SUCCESS",
+            data: {
+                user_name: user.user_name,
+                mobile_no: user.mobile_no,
+                email: user.email
+            },
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Setup PIN (POST)
+ * Finalizes the PIN setup using the token.
+ */
+exports.setupPin = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { token, pin } = req.body;
+
+        if (!token || !pin) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Token and PIN are required." });
+        }
+
+        if (!/^[0-9]{4}$/.test(pin)) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
+        }
+
+        const user = await commonQuery.findOneRecord(User, {
+            pin_setup_token: token,
+            pin_setup_expires: { [Op.gt]: new Date() },
+        }, {}, transaction, false, false);
+
+        if (!user) {
+            await transaction.rollback();
+            return res.status(400).json({
+                code: 400,
+                status: "INVALID_OR_EXPIRED",
+                message: "Token is invalid or has expired",
+            });
+        }
+
+        // Hash PIN
+        const salt = await bcrypt.genSalt(10);
+        const hashedPin = await bcrypt.hash(pin, salt);
+
+        await commonQuery.updateRecordById(User, user.id, {
+            password: hashedPin,
+            pin_setup_token: null,
+            pin_setup_expires: null,
+            is_activated: true,
+            status: 0
+        }, transaction);
+
+        await transaction.commit();
+
+        return res.json({
+            code: 200,
+            status: "SUCCESS",
+            message: "PIN has been set successfully. You can now login.",
+        });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
  * Set password (POST)
  */
 exports.setPassword = async (req, res) => {
-  try {
-    const { token, password } = req.body;
-    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    try {
+        const { token, password } = req.body;
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    const user = await commonQuery.findOneRecord(User, {
-      reset_password_token: hashedToken,
-      reset_password_expires: { [Op.gt]: new Date() },
-    }, {}, null, false, false);
+        const user = await commonQuery.findOneRecord(User, {
+            reset_password_token: hashedToken,
+            reset_password_expires: { [Op.gt]: new Date() },
+        }, {}, null, false, false);
 
-    if (!user) {
-      return res.status(400).json({
-        code: 400,
-        status: "INVALID_OR_EXPIRED",
-        message: "Token is invalid or has expired",
-      });
+        if (!user) {
+            return res.status(400).json({
+                code: 400,
+                status: "INVALID_OR_EXPIRED",
+                message: "Token is invalid or has expired",
+            });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(password, salt);
+        user.reset_password_token = null;
+        user.reset_password_expires = null;
+        await user.save();
+
+        return res.json({
+            code: 200,
+            status: "SUCCESS",
+            message: "Password has been set successfully",
+        });
+    } catch (err) {
+        return handleError(err, res, req);
     }
-
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
-    user.reset_password_token = null;
-    user.reset_password_expires = null;
-    await user.save();
-
-    return res.json({
-      code: 200,
-      status: "SUCCESS",
-      message: "Password has been set successfully",
-    });
-  } catch (err) {
-    return handleError(err, res, req);
-  }
 };
 
 /**

@@ -1,5 +1,6 @@
+const crypto = require('crypto');
 const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
-const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
+const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService, uploadFile } = require("../../helpers");
 const { generateCustomFieldImageUrls, handleCustomFieldImages } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const emailService = require("../../services/emailService");
