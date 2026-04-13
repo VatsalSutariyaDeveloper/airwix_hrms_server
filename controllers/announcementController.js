@@ -11,7 +11,7 @@ exports.create = async (req, res) => {
       title: "Title",
       content: "Content",
       announcement_date: "Announcement Date",
-      priority: "Priority",
+      announcement_type: "Announcement Type",
       target_type: "Target Type",
     };
 
@@ -53,7 +53,7 @@ exports.getAll = async (req, res) => {
       ["content", true, false],
       ["announcement_date", true, true],
       ["expiry_date", true, true],
-      ["priority", true, true],
+      ["announcement_type", true, true],
       ["target_type", true, true],
     ];
 
@@ -79,7 +79,7 @@ exports.update = async (req, res) => {
       title: "Title",
       content: "Content",
       announcement_date: "Announcement Date",
-      priority: "Priority",
+      announcement_type: "Announcement Type",
       target_type: "Target Type",
     };
 
@@ -198,8 +198,15 @@ exports.getActiveAnnouncements = async (req, res) => {
       Announcement,
       whereClause,
       {
-        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "priority", "target_type", "target"],
-        order: [["priority", "DESC"], ["announcement_date", "DESC"]]
+        include: [
+          {
+            model: User,
+            as: "created_by",
+            attributes: ["id", "user_name"],
+          },
+        ],
+        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type"],
+        order: [["announcement_date", "DESC"]]
       }, transaction);
 
     // Filter by target audience for non-admin users in response
@@ -230,7 +237,8 @@ exports.getActiveAnnouncements = async (req, res) => {
     const formattedAnnouncements = filteredAnnouncements.map(announcement => ({
       ...announcement.toJSON(),
       announcement_date: formatDateTime(announcement.announcement_date),
-      expiry_date: announcement.expiry_date ? formatDateTime(announcement.expiry_date) : null
+      expiry_date: announcement.expiry_date ? formatDateTime(announcement.expiry_date) : null,
+      created_by: announcement.created_by.user_name,
     }));
 
     await transaction.commit();

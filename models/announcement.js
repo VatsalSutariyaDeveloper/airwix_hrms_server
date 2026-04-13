@@ -16,9 +16,9 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.DATE,
             allowNull: true
         },
-        priority: {
-            type: DataTypes.ENUM('low', 'medium', 'high'),
-            defaultValue: 'medium'
+        announcement_type: {
+            type: DataTypes.ENUM('info', 'urgent', 'update'),
+            defaultValue: 'info'
         },
         target_type: {
             type: DataTypes.INTEGER,
@@ -37,6 +37,13 @@ module.exports = (sequelize, DataTypes) => {
         underscored: true,
         timestamps: true
     });
+
+    Announcement.associate = (models) => {
+        Announcement.belongsTo(models.User, {
+            foreignKey: "user_id",
+            as: "created_by"
+        });
+    };
 
     return Announcement;
 };
