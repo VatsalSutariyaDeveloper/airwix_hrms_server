@@ -1,4 +1,5 @@
 const { uploadFile, deleteFile } = require('./fileUpload');
+const { writeLogToFile } = require("./functions/logFunctions");
 
 /**
  * Handles image uploads for custom fields
@@ -22,11 +23,13 @@ const handleCustomFieldImages = async (
   const updatedFields = await Promise.all(
     customFields.map(async (field) => {
       const { field_name, type, key } = field;
+      const fieldType = (type || field.field_type || "").toLowerCase();
+      writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Processing field: ${field_name}, type: ${fieldType}, key: ${key}`);
 
       delete field.image_url;
       delete field.image_urls;
 
-      if (type !== "image") return field;
+      if (fieldType !== "image") return field;
 
       let oldValueArray = [];
       let wasDefault = false;
@@ -48,11 +51,15 @@ const handleCustomFieldImages = async (
       for (const k of keysToProcess) {
           const uploadedFile = allFiles.find(f => f.fieldname === k);
           if (uploadedFile) {
+              writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Found file for key ${k}: ${uploadedFile.originalname}`);
               const tempReq = { file: uploadedFile };
               const saved = await uploadFile(tempReq, res, folder, transaction);
               if (saved[k]) {
+                  writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Saved file for key ${k}: ${saved[k]}`);
                   newFiles.push(saved[k]);
               }
+          } else {
+              writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] NO file found for key ${k}`);
           }
       }
       
@@ -88,7 +95,8 @@ const generateCustomFieldImageUrls = (customFields, folder) => {
   return customFields.map(field => {
     const updatedField = { ...field };
 
-    if (field.type !== "image") {
+    const fieldType = field.type || field.field_type;
+    if (fieldType !== "image") {
       return updatedField;
     }
 

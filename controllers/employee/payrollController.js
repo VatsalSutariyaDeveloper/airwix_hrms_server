@@ -454,10 +454,21 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             // Apply Attendance/LWP Impact to Basic immediately in Pass 1
             let actualAmount = amount;
-            if (calcType === 'ATTENDANCE_BASED') {
-                actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-            } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
-                actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+            if (salaryType === "Hourly") {
+                const totalPossibleHours = daysInCalculation * unitWorkingHours;
+                const workedHours = totalWorkedMins / 60;
+                const hourRatio = totalPossibleHours > 0 ? workedHours / totalPossibleHours : 0;
+                if (calcType !== 'FIXED') {
+                    actualAmount = amount * hourRatio;
+                } else {
+                    actualAmount = amount;
+                }
+            } else {
+                if (calcType === 'ATTENDANCE_BASED') {
+                    actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
+                } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
+                    actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                }
             }
 
             valuesMap.BASIC = actualAmount;
@@ -491,10 +502,21 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         let actualAmount = amount;
         const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
         
-        if (calcType === 'ATTENDANCE_BASED') {
-            actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
-        } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
-            actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+        if (salaryType === "Hourly") {
+            const totalPossibleHours = daysInCalculation * unitWorkingHours;
+            const workedHours = totalWorkedMins / 60;
+            const hourRatio = totalPossibleHours > 0 ? workedHours / totalPossibleHours : 0;
+            if (calcType !== 'FIXED' && !isFoodComp) {
+                actualAmount = amount * hourRatio;
+            } else {
+                actualAmount = amount;
+            }
+        } else {
+            if (calcType === 'ATTENDANCE_BASED') {
+                actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
+            } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
+                actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+            }
         }
 
         const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');

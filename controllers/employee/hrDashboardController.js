@@ -8,9 +8,10 @@ const {
     Payslip,
     CanteenAttendance,
     LeaveTemplate,
-    OnDutyRequest,
+    OutDutyRequest,
     AttendanceRegularization,
-    EmployeeResignation
+    EmployeeResignation,
+    Announcement
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
@@ -99,14 +100,14 @@ exports.getCounts = async (req, res) => {
 exports.getPendingCount = async (req, res) => {
     try {
         let pendingLeaves = 0;
-        let authorizedOnDutyRequests = 0;
+        let authorizedOutDutyRequests = 0;
         let authorizedAttendanceRegularizationRequests = 0;
         let authorizedEmployeeResignationRequests = 0;
 
         if (req.user.is_super_admin) {
             // Optimization for super admins
             pendingLeaves = await commonQuery.countRecords(LeaveRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
-            authorizedOnDutyRequests = await commonQuery.countRecords(OnDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
+            authorizedOutDutyRequests = await commonQuery.countRecords(OutDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedAttendanceRegularizationRequests = await commonQuery.countRecords(AttendanceRegularization, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedEmployeeResignationRequests = await commonQuery.countRecords(EmployeeResignation, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
         } else {
@@ -161,16 +162,16 @@ exports.getPendingCount = async (req, res) => {
                 }
             }
 
-            const pendingOnDutyRequests = await commonQuery.findAllRecords(OnDutyRequest,
+            const pendingOutDutyRequests = await commonQuery.findAllRecords(OutDutyRequest,
                 { approval_status: { [Op.in]: [0, 1] }, status: 0 },
                 queryIncludeOptions,
                 null,
                 true
             );
 
-            for (const request of pendingOnDutyRequests) {
-                if (isUserAuthorizedForRequest(request, 'current_on_duty_level')) {
-                    authorizedOnDutyRequests++;
+            for (const request of pendingOutDutyRequests) {
+                if (isUserAuthorizedForRequest(request, 'current_out_duty_level')) {
+                    authorizedOutDutyRequests++;
                 }
             }
 
@@ -201,9 +202,58 @@ exports.getPendingCount = async (req, res) => {
             }
         }
         
-        const pendingGlobalCount = pendingLeaves + authorizedOnDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
+        const pendingGlobalCount = pendingLeaves + authorizedOutDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
 
         return res.ok({pendingCount: pendingGlobalCount});
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getPendingAnnouncementCount = async (req, res) => {
+    try {
+        const today = dayjs().format("YYYY-MM-DD");
+        const whereClause = {
+            status: 0,
+            announcement_date: { [Op.lte]: today },
+            [Op.and]: [
+                {
+                    [Op.or]: [
+                        { expiry_date: null },
+                        { expiry_date: { [Op.gte]: today } }
+                    ]
+                }
+            ]
+        };
+
+        const announcements = await commonQuery.findAllRecords(Announcement, whereClause, {
+            attributes: ["id", "target_type", "target"]
+        }, null, false);
+
+        let filteredAnnouncements = announcements;
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            filteredAnnouncements = announcements.filter(announcement => {
+                const { target_type, target } = announcement;
+                const userId = req.user.id?.toString();
+                const roleId = req.user.role_id?.toString();
+                const employeeRoleId = constants.EMPLOYEE_ROLE_ID.toString();
+
+                const containsExactMatch = (targetStr, value) => {
+                    if (!targetStr || !value) return false;
+                    const parts = targetStr.split(',');
+                    return parts.some(part => part.trim() === value);
+                };
+
+                if (target_type === 0) return true; // Show to all
+                if (target_type === 1 && containsExactMatch(target, employeeRoleId)) return true; // Employee role
+                if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
+                if (target_type === 2 && containsExactMatch(target, roleId)) return true; // Specific role
+                return false;
+            });
+        }
+
+        const announcementCount = filteredAnnouncements.length;
+        return res.ok({ announcementCount });
     } catch (err) {
         return handleError(err, res, req);
     }

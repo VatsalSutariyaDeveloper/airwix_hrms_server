@@ -1,6 +1,6 @@
 module.exports = (sequelize, DataTypes) => {
-    const OnDutyRequest = sequelize.define(
-        "OnDutyRequest",
+    const OutDutyRequest = sequelize.define(
+        "OutDutyRequest",
         {
             employee_id: {
                 type: DataTypes.INTEGER,
@@ -16,7 +16,7 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0=PENDING, 1=PARTIALLY_APPROVED, 2=DELETED, 3=APPROVED, 4=REJECTED, 5=CANCELLED" 
             },
-            current_on_duty_level: { 
+            current_out_duty_level: { 
                 type: DataTypes.INTEGER, 
                 defaultValue: 1,
                 comment: "Tracks the current approval stage"
@@ -44,16 +44,16 @@ module.exports = (sequelize, DataTypes) => {
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         },
         {
-            tableName: "on_duty_requests",
+            tableName: "out_duty_requests",
             timestamps: true,
             underscored: true,
         }
     );
 
-    OnDutyRequest.associate = (models) => {
-        OnDutyRequest.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
-        OnDutyRequest.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
+    OutDutyRequest.associate = (models) => {
+        OutDutyRequest.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+        OutDutyRequest.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
     };
 
-    return OnDutyRequest;
+    return OutDutyRequest;
 };

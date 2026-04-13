@@ -6,6 +6,32 @@ const { CompanyMaster } = require("../models");
  */
 const emailService = {
     /**
+     * Send OTP to email
+     * @param {string} email
+     * @param {string} otp
+     */
+    sendOtpToEmail: async (email, otp) => {
+        try {
+            await sendEmailHelper({
+                from: process.env.EMAIL_FROM || "noreply@airwix.in",
+                email: [email],
+                subject: "Your Registration OTP",
+                message: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
+                        <h2 style="color: #2563eb;">Registration OTP</h2>
+                        <p>Your One-Time Password (OTP) for registration is:</p>
+                        <h1 style="font-size: 32px; color: #2563eb; letter-spacing: 5px; text-align: center; margin: 20px 0;">${otp}</h1>
+                        <p style="color: #666;">This OTP is valid for 10 minutes. Please do not share it with anyone.</p>
+                    </div>
+                `,
+            });
+            return true;
+        } catch (error) {
+            console.error("Failed to send OTP email:", error);
+            throw error;
+        }
+    },
+    /**
      * Send onboarding invitation to a candidate
      * @param {string} email 
      * @param {string} name 

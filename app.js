@@ -66,6 +66,8 @@ if (cluster.isMaster) {
   const onboardingRoutes = require("./routes/onboardingRoutes");
   const systemLogRoutes = require("./routes/systemLogRoutes");
   const reportsRoutes = require("./routes/reportsRoutes");
+  const announcementRoutes = require("./routes/announcementRoutes");
+  const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
 
   const app = express();
   const { authMiddleware } = require("./middlewares/authMiddleware");
@@ -106,7 +108,7 @@ if (cluster.isMaster) {
   app.use(checkPermission);
 
   app.use("/api/dashboard", dashboardRoutes);
-  app.use("/api/hr-dashboard", require("./routes/hrDashboardRoutes"));
+  app.use("/api/hr-dashboard", hrDashboardRoutes);
   app.use("/api/settings", settingsRoutes);
   app.use("/api/administration", administrationRoutes);
   app.use("/api/subscription", subscriptionRoutes);
@@ -118,6 +120,7 @@ if (cluster.isMaster) {
   app.use("/api/onboarding", onboardingRoutes);
   app.use("/api/reports", reportsRoutes);
   app.use("/api/system-logs", systemLogRoutes);
+  app.use("/api/announcements", announcementRoutes);
   app.use(errorHandler);
 
   app.get("/force-currency-update", async (req, res) => {

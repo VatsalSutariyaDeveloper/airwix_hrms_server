@@ -1,5 +1,6 @@
+const crypto = require('crypto');
 const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
-const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService } = require("../../helpers");
+const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService, uploadFile, writeLogToFile } = require("../../helpers");
 const { generateCustomFieldImageUrls, handleCustomFieldImages } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const emailService = require("../../services/emailService");
@@ -279,6 +280,8 @@ exports.submitDetails = async (req, res) => {
                     });
                 }
             }
+            writeLogToFile("onboarding_debug.log", `[OnboardingSubmit] Custom fields before handling: ${JSON.stringify(updateData.custom_fields)}`);
+            writeLogToFile("onboarding_debug.log", `[OnboardingSubmit] All files available for custom fields: ${allFilesArray.map(f => f.fieldname).join(", ")}`);
             updateData.custom_fields = await handleCustomFieldImages(
                 req,
                 res,

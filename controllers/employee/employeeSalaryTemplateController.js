@@ -211,22 +211,38 @@ const employeeSalaryTemplateController = {
                 await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, {
                     employee_id: employeeId
                 }, transaction);
-                const componentPayloads = components.map(comp => ({
-                    employee_id: employeeId,
-                    employee_salary_template_id: employeeTemplate.id,
-                    component_id: comp.component_id,
-                    calculation_type: comp.calculation_type || (comp.component_category === 'VARIABLE' ? 'SYSTEM' : 'FIXED'),
-                    formula: comp.formula || null,
-                    percentage_of: comp.percentage_of || null,
-                    percentage_value: parseFloat(comp.percentage_value) || 0,
-                    component_category: (comp.component_category || 'FIXED').toUpperCase(),
-                    monthly_amount: parseFloat(comp.monthly_amount) || 0,
-                    yearly_amount: parseFloat(comp.yearly_amount) || (parseFloat(comp.monthly_amount) * 12),
-                    included_in_ctc: comp.included_in_ctc ?? true,
-                    is_employer_contribution: comp.is_employer_contribution || false,
-                    company_id: req.user?.company_id || 0,
-                    user_id: req.user?.id || 0
-                }));
+
+                const getCalculationType = (comp) => {
+                    const explicit = String(comp.calculation_type || '').toUpperCase().trim();
+                    if (explicit) return explicit;
+                    const calcLabel = String(comp.calculation || '').toUpperCase().trim();
+                    if (calcLabel.startsWith('% OF')) return 'PERCENTAGE';
+                    if (calcLabel === 'FORMULA') return 'FORMULA';
+                    if (calcLabel === 'ATTENDANCE' || calcLabel === 'VARIABLE') return 'ATTENDANCE_BASED';
+                    return 'FIXED';
+                };
+
+                const componentPayloads = components.map(comp => {
+                    const calculation_type = getCalculationType(comp);
+                    const component_category = (comp.component_category || (['FORMULA', 'ATTENDANCE_BASED', 'PERCENTAGE'].includes(calculation_type) ? 'VARIABLE' : 'FIXED')).toUpperCase();
+
+                    return {
+                        employee_id: employeeId,
+                        employee_salary_template_id: employeeTemplate.id,
+                        component_id: comp.component_id,
+                        calculation_type,
+                        formula: comp.formula || null,
+                        percentage_of: comp.percentage_of || null,
+                        percentage_value: parseFloat(comp.percentage_value) || 0,
+                        component_category,
+                        monthly_amount: parseFloat(comp.monthly_amount) || 0,
+                        yearly_amount: parseFloat(comp.yearly_amount) || (parseFloat(comp.monthly_amount) * 12),
+                        included_in_ctc: comp.included_in_ctc ?? true,
+                        is_employer_contribution: comp.is_employer_contribution || false,
+                        company_id: req.user?.company_id || 0,
+                        user_id: req.user?.id || 0
+                    };
+                });
 
                 await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction);
             }

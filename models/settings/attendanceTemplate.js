@@ -41,17 +41,17 @@ module.exports = (sequelize, DataTypes) => {
     include_overtime_in_total: { type: DataTypes.BOOLEAN, defaultValue: true, comment: 'Rule 3: Overtime deducted (False) vs Included (True)' },
     paid_break_duration_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Minutes of break time that are NOT deducted' },
     break_rules: { type: DataTypes.JSON, defaultValue: [], comment: 'List of rules for breaks' },
-    on_duty_approval_level: {
+    out_duty_approval_level: {
       type: DataTypes.INTEGER,
       defaultValue: 1,
       comment: "1, 2, or 3 levels of approval"
     },
-    on_duty_approval_config: {
+    out_duty_approval_config: {
       type: DataTypes.JSON,
       allowNull: true,
       comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
     },
-    enble_on_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
+    enble_out_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
 
     comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     comp_off_max_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },

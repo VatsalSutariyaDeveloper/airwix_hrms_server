@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OnDutyRequest } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -154,8 +154,15 @@ async function punch(employeeId, meta, transaction = null) {
         company_id: meta.company_id || (employee ? employee.company_id : undefined)
       }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, { company_id: true });
 
-      // DEFAULT Cutoff: 24 hours from original punch
-      let cutoffTime = dayjs(lastPunchGlobal.punch_time).add(24, "hour");
+      // 🚀 Rule: Calculate cutoff based on the FIRST "IN" of this logical day
+      const firstIn = await commonQuery.findOneRecord(AttendancePunch, {
+        day_id: lastPunchGlobal.day_id,
+        punch_type: "IN",
+        status: 0
+      }, { order: [["punch_time", "ASC"]] }, transaction, true, { company_id: true });
+
+      const startTime = firstIn ? firstIn.punch_time : lastPunchGlobal.punch_time;
+      let cutoffTime = dayjs(startTime).add(24, "hour");
 
       if (lastInDay && lastInDay.shift_id) {
         console.log(`[Context] Last IN Day: ${lastInDay.attendance_date} | ShiftID: ${lastInDay.shift_id}`);
@@ -175,8 +182,8 @@ async function punch(employeeId, meta, transaction = null) {
             cutoffTime = shiftEnd.add(template.max_overtime_mins, 'minute');
             console.log(`[Logic] Using OT Rule: ShiftEnd (${shiftEnd.format('HH:mm')}) + ${template.max_overtime_mins}m`);
           } else {
-            cutoffTime = shiftStart.add(24, 'hour');
-            console.log(`[Logic] Using 24h Rule: ShiftStart (${shiftStart.format('HH:mm')}) + 24h`);
+            // Keep the 24h from Start rule for flexible/no-shift
+            console.log(`[Logic] Using 24h Rule from Day Start (${dayjs(startTime).format('HH:mm')})`);
           }
         }
       }
@@ -391,6 +398,24 @@ async function punch(employeeId, meta, transaction = null) {
     punch_time: now,
     ...meta,
   }, transaction, { company_id: true });
+
+  // --- CANTEEN ATTENDANCE LOGIC ---
+  if (meta.device_id) {
+    const device = await commonQuery.findOneRecord(DeviceMaster, { id: meta.device_id }, {}, transaction);
+    if (device && device.device_type === 1) { // 1: Canteen
+        // Check if already marked for today to avoid duplicates if needed, 
+        // but typically canteen can have multiple punches (different meals). 
+        // For now, following "mark present".
+        await commonQuery.createRecord(CanteenAttendance, {
+            employee_id: employeeId,
+            date: targetDayDate,
+            status: 0, // PRESENT
+            company_id: meta.company_id || employee.company_id,
+            branch_id: meta.branch_id || employee.branch_id,
+            user_id: meta.user_id || 0
+        }, transaction);
+    }
+  }
 
   // 4.1 Send Notification
   try {
@@ -669,25 +694,26 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     status: 0
   }, {}, transaction);
 
-  const approvedOnDuty = (meta.preFetchedOnDuty !== undefined) ? meta.preFetchedOnDuty : await commonQuery.findOneRecord(OnDutyRequest, {
+  const approvedOutDuty = (meta.preFetchedOutDuty !== undefined) ? meta.preFetchedOutDuty : await commonQuery.findOneRecord(OutDutyRequest, {
     employee_id: employeeId,
-    approval_status: constants.ON_DUTY_STATUS.APPROVED,
+    approval_status: constants.OUT_DUTY_STATUS.APPROVED,
     start_date: { [Op.lte]: date },
     end_date: { [Op.gte]: date },
     status: 0
   }, {}, transaction);
 
-  // --- ON DUTY PROCESSING ---
-  if (approvedOnDuty && !hasPunches) {
+  // --- OUT DUTY PROCESSING ---
+  if (approvedOutDuty && !hasPunches) {
       const odPayload = {
           employee_id: employeeId,
           attendance_date: date,
-          status: 12, // ON_DUTY
+          status: 12, // OUT_DUTY
           shift_id: null,
           user_id: meta.user_id || 0,
           branch_id: meta.branch_id || employee.branch_id,
           company_id: meta.company_id || employee.company_id,
-          note: "System: On Duty auto-detected"
+          note: ""
+          // note: "System: Out Duty auto-detected"
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
@@ -702,9 +728,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
       }
       return;
-  } else if (approvedOnDuty && hasPunches) {
-      // If they have punches while on duty, we treat it as PRESENT (0) but keep the flag?
-      // Actually, usually status 12 is for On Duty.
+  } else if (approvedOutDuty && hasPunches) {
+      // If they have punches while out duty, we treat it as PRESENT (0) but keep the flag?
+      // Actually, usually status 12 is for Out Duty.
       // We set meta.forcedStatus to ensure it uses 12.
       meta.forcedStatus = 12;
   }
@@ -742,7 +768,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         meta.forcedStatus = 1; 
         meta.leave_category_id = approvedLeave.leave_category_id;
         meta.leave_session = (approvedLeave.start_date === date) ? approvedLeave.start_session : approvedLeave.end_session;
-        meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
+        // meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
       } else {
         // Standard (Full Day): Refund/Cancel leave if employee punches in OR is manually marked as Present
         // syncLeaveRecord now handles both auto-generated and manual (single/multi-day) requests centrally.
@@ -753,7 +779,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       meta.forcedStatus = finalStatus;
       meta.leave_category_id = approvedLeave.leave_category_id;
       meta.leave_session = approvedLeave.leave_session;
-      meta.overrideAutomationNote = `System: Marked via ${category.leave_category_name}`;
+      // meta.overrideAutomationNote = `System: Marked via ${category.leave_category_name}`;
     } else if (!hasPunches && !isWorkingForced) {
       // Apply Leave or Custom Attendance Status (No Punches and No manual override)
       const leavePayload = {
@@ -766,7 +792,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         user_id: meta.user_id || 0,
         branch_id: meta.branch_id || employee.branch_id,
         company_id: meta.company_id || employee.company_id,
-        note: isSpecialStatus ? `System: Marked via ${category.leave_category_name}` : null
+        note: ""
+        // note: isSpecialStatus ? `System: Marked via ${category.leave_category_name}` : null
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
@@ -941,7 +968,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       fine_data: (existingDay && existingDay.status === emptyStatus) ? (existingDay.fine_data || null) : null,
       leave_category_id: null,
       leave_session: null,
-      note: emptyStatus === 4 ? `System: Holiday restored (${holidayDetails?.name || dayjs(date).format('dddd')})` : (emptyStatus === 3 ? `System: Weekly Off restored (${dayjs(date).format('dddd')})` : (existingDay?.note || null))
+      note: "",
+      // note: emptyStatus === 4 ? `System: Holiday restored (${holidayDetails?.name || dayjs(date).format('dddd')})` : (emptyStatus === 3 ? `System: Weekly Off restored (${dayjs(date).format('dddd')})` : (existingDay?.note || null))
       // note: (function (note, emptyStatus) {
       //   // If we are now PRESENT/HALF_DAY, ignore negative auto reasons (e.g. from downgrade prevention)
       //   if ([0, 1, 12, 13].includes(emptyStatus) && note) {
@@ -1856,9 +1884,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
     // Otherwise apply downgrade prevention logic
     else if ([12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
-      status = existingDayForStatus.status; // Keep Present or On Duty
+      status = existingDayForStatus.status; // Keep Present or Out Duty
     } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
-      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
+      status = existingDayForStatus.status; // Keep Half Day or Half Out Duty
     }
   }
   if (meta.forcedStatus !== undefined) {
@@ -2437,7 +2465,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const empShiftMap = new Map(employeeShifts.map(s => [s.employee_id, s]));
 
   // 3. Fetch all potential non-working day triggers in bulk
-  const [holidays, weeklyOffs, leaveRequests, onDutyRequests] = await Promise.all([
+  const [holidays, weeklyOffs, leaveRequests, outDutyRequests] = await Promise.all([
     commonQuery.findAllRecords(
       EmployeeHoliday,
       {
@@ -2473,12 +2501,12 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       transaction
     ),
     commonQuery.findAllRecords(
-      OnDutyRequest,
+      OutDutyRequest,
       {
         employee_id: { [Op.in]: missingEmpIds },
         start_date: { [Op.lte]: date },
         end_date: { [Op.gte]: date },
-        approval_status: constants.ON_DUTY_STATUS.APPROVED,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
         status: 0
       },
       {},
@@ -2490,7 +2518,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const holidayMap = new Map(holidays.map(h => [h.employee_id, h]));
   const weeklyOffMap = new Map(weeklyOffs.map(w => [w.employee_id, w]));
   const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
-  const onDutyMap = new Map(onDutyRequests.map(o => [o.employee_id, o]));
+  const outDutyMap = new Map(outDutyRequests.map(o => [o.employee_id, o]));
 
   const payloads = [];
   for (const emp of employees) {
@@ -2498,19 +2526,19 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     let leave_cat = null;
     let note = null;
 
-    if (onDutyMap.has(emp.id)) {
-      status = 12; // ON_DUTY
-      note = "System: On Duty auto-detected";
+    if (outDutyMap.has(emp.id)) {
+      status = 12; // OUT_DUTY
+      // note = "System: Out Duty auto-detected";
     } else if (leaveMap.has(emp.id)) {
       status = 6; // LEAVE
       leave_cat = leaveMap.get(emp.id).leave_category_id;
-      note = "System: Leave auto-detected";
+      // note = "System: Leave auto-detected";
     } else if (holidayMap.has(emp.id)) {
       status = 4; // HOLIDAY
-      note = `System: Holiday auto-detected (${holidayMap.get(emp.id).name || 'Holiday'})`;
+      // note = `System: Holiday auto-detected (${holidayMap.get(emp.id).name || 'Holiday'})`;
     } else if (weeklyOffMap.has(emp.id)) {
       status = 3; // WEEKLY_OFF
-      note = "System: Weekly Off auto-detected";
+      // note = "System: Weekly Off auto-detected";
     } else {
       const template = emp.employeeAttendanceTemplate || emp.attendanceTemplate;
       if (template?.auto_mark_absent) {
@@ -2526,7 +2554,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         // Case 1: Past date (beyond buffer days)
         if (markDate.isBefore(today.subtract(buffer, 'day'))) {
           status = 5; // ABSENT
-          note = "System: Auto Absent (Policy)";
+          // note = "System: Auto Absent (Policy)";
         }
         // Case 2: Shift ended (even for today or recent past)
         else if (shift && shift.end_time) {
@@ -2537,7 +2565,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
 
           if (now.isAfter(shiftEnd)) {
             status = 5; // ABSENT
-            note = "System: Auto Absent (Shift Ended)";
+            // note = "System: Auto Absent (Shift Ended)";
           }
         }
       }

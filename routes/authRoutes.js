@@ -18,14 +18,21 @@ const countryMasterController = require("../controllers/administration/address/c
 router.post("/login", loginController.login);
 router.post("/pin-login", loginController.pinLogin);
 router.post("/register", authController.register);
+router.post("/register/send-otp", authController.sendOtp);
+router.post("/register/verify-otp", authController.verifyOtp);
 router.post("/login/send-otp", loginController.sendLoginOtp);
 router.post("/verify-mobile", loginController.verifyMobileNo);
 router.post("/verify-pin", loginController.verifyPin);
+router.post("/verify-otp-pin", loginController.verifyOtpPin);
 router.post("/generate-pin", loginController.generatePin);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 
 router.post("/state/dropdown-list", stateMasterController.dropdownList);
 router.post("/country/dropdown-list", countryMasterController.dropdownList);
+
+// PIN Management (Public)
+router.get("/user/verify-pin-token/:token", userController.verifyPinToken);
+router.post("/user/setup-pin", userController.setupPin);
 
 // Password Management (Public)
 router.post("/user/setup-password", userController.setPassword);

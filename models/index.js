@@ -40,7 +40,7 @@ function initModels(prefix) {
   const BranchMaster = require("./settings/branchMaster")(seq, DataTypes);
   const ResignationTemplate = require("./settings/resignationTemplate")(seq, DataTypes);
   const ResignationReason = require("./settings/resignationReason")(seq, DataTypes);
-  const OnDutyRequest = require("./settings/onDutyRequest")(seq, DataTypes);
+  const OutDutyRequest = require("./settings/outDutyRequest")(seq, DataTypes);
 
   // Auth models
   const User = require("./settings/user/user")(seq, DataTypes);
@@ -53,6 +53,7 @@ function initModels(prefix) {
   const ApiLog = require("./apiLog")(seq, DataTypes);
   const Logs = require("./logs")(seq, DataTypes);
   const Notification = require("./notification")(seq, DataTypes);
+  const Announcement = require("./announcement")(seq, DataTypes);
 
   // Subscription models
   const CompanySubscription = require("./subscription/companySubscriptions")(seq, DataTypes);
@@ -149,7 +150,7 @@ function initModels(prefix) {
     BranchMaster,
     ResignationTemplate,
     ResignationReason,
-    OnDutyRequest,
+    OutDutyRequest,
     SeriesTypeMaster,
     ApprovalWorkflow,
     ApprovalRule,
@@ -166,6 +167,7 @@ function initModels(prefix) {
     ApiLog,
     Logs,
     Notification,
+    Announcement,
     CompanySubscription,
     SubscriptionPlan,
     AttendanceTemplate,

@@ -1,37 +1,76 @@
-const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization } = require("../../models");
+const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
 const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings } = require("../../helpers");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
 const moment = require("moment");
-const sendEmailHelper = require("../../services/mailer");
+const emailService = require("../../services/emailService");
 const { generateToken } = require("../../helpers/tokenHelper");
 const { requestContext } = require("../../utils/requestContext");
 
-// Send OTP for Registration
+// Send OTP to Mobile or Email for Registration
 exports.sendOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { mobile_no } = req.body;
-    const indianMobileRegex = /^[6-9]\d{9}$/;
+    const { mobile_no, email } = req.body;
 
-    if (!mobile_no || !indianMobileRegex.test(mobile_no)) {
+    if (!mobile_no && !email) {
       await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+      return res.error(constants.VALIDATION_ERROR, { errors: ["Mobile number or Email is required."] });
     }
 
-    const errors = await validateRequest(req.body, { mobile_no: "Mobile Number" }, {
-      skipDefaultRequired: ["company_id", "branch_id", "user_id"],
-      uniqueCheck: { model: User, fields: ["mobile_no"], message: "Mobile number already registered." },
-    }, transaction);
-
-    if (errors) {
+    if (mobile_no && email) {
       await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, errors);
+      return res.error(constants.VALIDATION_ERROR, { errors: ["Please provide either mobile number or email, not both."] });
+    }
+
+    let identifier;
+    const { Op } = require("sequelize");
+
+    // Handle Mobile OTP
+    if (mobile_no) {
+      const indianMobileRegex = /^[6-9]\d{9}$/;
+      if (!indianMobileRegex.test(mobile_no)) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+      }
+
+      // Check if mobile number already exists across User, Employee, and DeviceMaster
+      const mobileExists =
+        await User.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] }) ||
+        await Employee.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] })
+        // await DeviceMaster.findOne({ where: { mobile_no, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] });
+
+      if (mobileExists) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { errors: ["Mobile number is already registered."] });
+      }
+
+      identifier = mobile_no;
+    }
+    // Handle Email OTP
+    else if (email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid email address."] });
+      }
+
+      // Check if email already exists across User and Employee
+      const emailExists =
+        await User.findOne({ where: { email, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] }) ||
+        await Employee.findOne({ where: { email, status: { [Op.ne]: 2 } }, transaction, attributes: ["id"] });
+
+      if (emailExists) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { errors: ["Email is already registered."] });
+      }
+
+      identifier = email;
     }
 
     // Check OTP Rate Limit
-    const limitCheck = await otpRateLimit.checkRateLimit(mobile_no);
+    const limitCheck = await otpRateLimit.checkRateLimit(identifier);
     if (!limitCheck.allowed) {
       const mins = Math.ceil(limitCheck.remaining_seconds / 60);
       await transaction.rollback();
@@ -44,13 +83,14 @@ exports.sendOtp = async (req, res) => {
     }
 
     // Increase attempt count
-    await otpRateLimit.increaseAttempt(mobile_no);
+    await otpRateLimit.increaseAttempt(identifier);
 
-    const otp = await otpService.sendOtp(mobile_no, transaction);
+    // Use common OTP Service to send OTP (handles both mobile and email)
+    await otpService.sendOtp(identifier, transaction);
 
     await transaction.commit();
+    return res.ok();
 
-    return res.ok({ dev_otp: otp });
   } catch (err) {
     console.error("Error in sendOtp:", err);
     if (!transaction.finished) await transaction.rollback();
@@ -58,35 +98,50 @@ exports.sendOtp = async (req, res) => {
   }
 };
 
-// Verify OTP for Registration
+// Verify OTP for Registration (Mobile or Email)
 exports.verifyOtp = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
-    const { mobile_no, otp } = req.body;
-    if (!mobile_no || !otp) return res.error(constants.REQUIRED_FIELD_MISSING, { message: "Required fields missing" });
+    const { mobile_no, email, otp } = req.body;
 
-    // ✅ CLEANER ERROR HANDLING
+    if (!otp) {
+      await transaction.rollback();
+      return res.error(constants.REQUIRED_FIELD_MISSING, { message: "OTP is required." });
+    }
+
+    if (!mobile_no && !email) {
+      await transaction.rollback();
+      return res.error(constants.REQUIRED_FIELD_MISSING, { message: "Mobile number or Email is required." });
+    }
+
+    const identifier = mobile_no || email;
+
+    // Verify OTP
     try {
-        await otpService.verifyOtp(mobile_no, otp);
+      await otpService.verifyOtp(identifier, otp);
+      await otpService.cleanupOtp(identifier, transaction);
     } catch (e) {
-        // If the service throws our custom error object, pass it directly
-        if (e.status && e.message) {
-            return res.error(e.status, { message: e.message });
-        }
-        throw e; // Check other errors in the main catch block
+      await transaction.rollback();
+      if (e.status && e.message) {
+        return res.error(e.status, { message: e.message });
+      }
+      throw e;
     }
 
     // Reset OTP rate limit after successful verification
-    await otpRateLimit.resetAttempts(mobile_no);
+    await otpRateLimit.resetAttempts(identifier);
 
     const registration_token = jwt.sign(
-      { mobile_no: mobile_no, scope: "registration_verification" },
+      { identifier, scope: "registration_verification" },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );
 
+    await transaction.commit();
     return res.ok({ message: "Verified", registration_token });
 
   } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
   }
 };
@@ -137,7 +192,6 @@ exports.register = async (req, res) => {
     };
 
     // ─── Cross-table uniqueness checks ───────────────────────────────────────
-    const { Employee, DeviceMaster } = require("../../models");
     const { Op } = require("sequelize");
     const uniqueErrors = [];
 

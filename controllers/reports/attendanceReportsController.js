@@ -1,6 +1,6 @@
 const { commonQuery, handleError} = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OnDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster } = require("../../models");
+const { Employee, AttendanceDay, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster } = require("../../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -96,11 +96,11 @@ exports.getAttendanceReport = async (req, res) => {
       order: [['attendance_date', 'ASC']]
     }, null, { company_id: true });
 
-    // 3. Pre-fetch Holidays & Week Offs & On Duty
-    const [holidays, weeklyOffs, onDuties] = await Promise.all([
+    // 3. Pre-fetch Holidays & Week Offs & Out Duty
+    const [holidays, weeklyOffs, outDuties] = await Promise.all([
       commonQuery.findAllRecords(EmployeeHoliday, { employee_id: { [Op.in]: employeeIds }, date: { [Op.between]: [startDate, endDate] }, status: 0 }),
       commonQuery.findAllRecords(EmployeeWeeklyOff, { employee_id: { [Op.in]: employeeIds }, status: 0, is_off: true }),
-      commonQuery.findAllRecords(OnDutyRequest, { employee_id: { [Op.in]: employeeIds }, approval_status: constants.ON_DUTY_STATUS.APPROVED, start_date: { [Op.lte]: endDate }, end_date: { [Op.gte]: startDate }, status: 0 })
+      commonQuery.findAllRecords(OutDutyRequest, { employee_id: { [Op.in]: employeeIds }, approval_status: constants.OUT_DUTY_STATUS.APPROVED, start_date: { [Op.lte]: endDate }, end_date: { [Op.gte]: startDate }, status: 0 })
     ]);
 
     // Fast lookups
@@ -116,12 +116,12 @@ exports.getAttendanceReport = async (req, res) => {
       holidayMap.set(key, true);
     });
 
-    const onDutyMap = new Map();
-    onDuties.forEach(od => {
+    const outDutyMap = new Map();
+    outDuties.forEach(od => {
       const currDate = dayjs(od.start_date);
       const limitDate = dayjs(od.end_date);
       while(currDate.isBefore(limitDate) || currDate.isSame(limitDate, 'day')) {
-         onDutyMap.set(`${od.employee_id}_${currDate.format('YYYY-MM-DD')}`, true);
+         outDutyMap.set(`${od.employee_id}_${currDate.format('YYYY-MM-DD')}`, true);
          currDate.add(1, 'day');
       }
     });
@@ -157,7 +157,7 @@ exports.getAttendanceReport = async (req, res) => {
            leave: 0,
            holiday: 0,
            weeklyOff: 0,
-           onDuty: 0,
+           outDuty: 0,
            totalWorkedMinutes: 0,
            totalLateMinutes: 0,
            totalOvertimeMinutes: 0
@@ -182,7 +182,7 @@ exports.getAttendanceReport = async (req, res) => {
 
         if (dayRecord) {
            statusId = dayRecord.status;
-           const sMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "On Duty", 13: "Half On Duty" };
+           const sMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "Out Duty", 13: "Half Out Duty" };
            status = sMap[statusId] || "Pending";
            
            if (statusId === 6 && dayRecord.leaveCategory) status = dayRecord.leaveCategory.leave_category_name;
@@ -200,7 +200,7 @@ exports.getAttendanceReport = async (req, res) => {
            else if (statusId === 4) empData.summary.holiday += 1;
            else if (statusId === 5) empData.summary.absent += 1;
            else if (statusId === 6) empData.summary.leave += 1;
-           else if (statusId === 12) empData.summary.onDuty += 1;
+           else if (statusId === 12) empData.summary.outDuty += 1;
            else if (statusId === 13) empData.summary.halfDay += 1;
         } else {
            // Inherit auto statuses
@@ -210,9 +210,9 @@ exports.getAttendanceReport = async (req, res) => {
            } else if (isScheduledWo) {
                status = "Weekly Off";
                empData.summary.weeklyOff += 1;
-           } else if (onDutyMap.has(key)) {
-               status = "On Duty";
-               empData.summary.onDuty += 1;
+           } else if (outDutyMap.has(key)) {
+               status = "Out Duty";
+               empData.summary.outDuty += 1;
            } else if (dayjs(d).isBefore(dayjs(emp.joining_date || dayjs()), 'day') || (emp.exit_date && dayjs(d).isAfter(dayjs(emp.exit_date), 'day'))) {
                status = "N/A";
            } else if (dayjs(d).isSame(dayjs(), 'day') || dayjs(d).isAfter(dayjs(), 'day')) {

@@ -478,30 +478,35 @@ exports.logout = async (req, res) => {
  */
 exports.verifyMobileNo = async (req, res) => {
   try {
-    const { mobile_no } = req.body;
-    
+    const { mobile_no, access_by } = req.body;
+
     if (!mobile_no) {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
     }
 
     let user = await User.findOne({
-      where: { 
-        mobile_no, 
-        status: { [Op.in]: [0, 1] } 
-      }
+      where: {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
+      },
+      attributes: ['id', 'user_name', 'password', 'status']
     });
 
     let entity = user;
-    if (!user) {
+    let type = "user";
+
+    if (!user && access_by === "application") {
       const device = await DeviceMaster.findOne({
-        where: { 
-          mobile_no, 
-          status: { [Op.in]: [0, 1] } 
-        }
+        where: {
+          mobile_no,
+          status: { [Op.in]: [0, 1] }
+        },
+        attributes: ['id', 'device_name', 'password', 'status']
       });
       entity = device;
+      type = "device";
     }
-    
+
     if (!entity) {
       return res.error(constants.NOT_FOUND, "Mobile number not registered.");
     }
@@ -510,11 +515,56 @@ exports.verifyMobileNo = async (req, res) => {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (!entity.password) {
+    const pin_set = !!entity.password;
+    const next_step = pin_set ? "ENTER_PIN" : "SET_PIN";
+    let otp = null;
+
+    // Send OTP only if PIN is not set (next_step is SET_PIN)
+    if (!pin_set) {
+      const transaction = await sequelize.transaction();
+      try {
+        // Check OTP Rate Limit
+        const limitCheck = await otpRateLimit.checkRateLimit(mobile_no);
+
+        if (!limitCheck.allowed) {
+          const mins = Math.ceil(limitCheck.remaining_seconds / 60);
+          await transaction.rollback();
+
+          return res.status(400).json({
+            code: 400,
+            status: "TOO_MANY_REQUESTS",
+            message: `Too many OTP attempts. Try again in ${mins} minutes.`,
+            remaining_seconds: limitCheck.remaining_seconds
+          });
+        }
+
+        // Increase attempt count
+        await otpRateLimit.increaseAttempt(mobile_no);
+
+        // Use OTP Service
+        otp = await otpService.sendOtp(mobile_no, transaction);
+        await transaction.commit();
+      } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+      }
+    }
+
+    // return res.success("Mobile verification successful", {
+    //   is_registered: true,
+    //   pin_set: pin_set,
+    //   next_step: next_step,
+    //   dev_otp: otp,
+    //   user_name: type === "user" ? entity.user_name : entity.device_name,
+    //   type: type
+    // });
+
+    if (!pin_set) {
       return res.success("SET PIN");
     } else {
       return res.success("ENTER PIN");
     }
+
 
   } catch (err) {
     return handleError(err, res, req);
@@ -522,7 +572,39 @@ exports.verifyMobileNo = async (req, res) => {
 };
 
 /**
- * 4. Generate/Set PIN
+ * 4. Verify OTP
+ * - Verifies OTP only, does not set PIN
+ */
+exports.verifyOtpPin = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { mobile_no, otp } = req.body;
+
+    if (!mobile_no || !otp) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and OTP are required." });
+    }
+
+    // Verify OTP
+    try {
+      await otpService.verifyOtp(mobile_no, otp);
+      await otpService.cleanupOtp(mobile_no, transaction);
+    } catch (e) {
+      await transaction.rollback();
+      return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
+    }
+
+    await transaction.commit();
+    return res.success("OTP verified successfully", { message: "OTP has been verified successfully." });
+
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * 5. Generate/Set PIN
  * - Sets the PIN in the password field for the user and logs them in
  */
 exports.generatePin = async (req, res) => {
@@ -585,6 +667,23 @@ exports.generatePin = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "PIN is already set. Use PIN login or forgot password." });
     }
 
+    // --- OTP VERIFICATION FOR SECURITY (Commented out) ---
+    /*
+    const { otp } = req.body;
+    if (!otp) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "OTP is required to set your PIN." });
+    }
+
+    try {
+      await otpService.verifyOtp(mobile_no, otp);
+      await otpService.cleanupOtp(mobile_no, transaction);
+    } catch (e) {
+      await transaction.rollback();
+      return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
+    }
+    */
+
     const salt = await bcrypt.genSalt(10);
     const hashedPin = await bcrypt.hash(pin, salt);
 
@@ -624,10 +723,10 @@ exports.generatePin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
-        await transaction.rollback();
-        return res.error(403, { message: "Use the mobile application to access this account." });
-    }
+    // if (!isDevice && entity.role_id === 5 && access_by !== "application") {
+    //     await transaction.rollback();
+    //     return res.error(403, { message: "Use the mobile application to access this account." });
+    // }
 
     // 2. Validate Company
     if (!entity.company_id) {
@@ -733,11 +832,11 @@ exports.generatePin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
-
+console.log("entity",entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)
@@ -783,7 +882,7 @@ exports.generatePin = async (req, res) => {
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);
@@ -881,10 +980,10 @@ exports.pinLogin = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    if (!isDevice && entity.role_id === 5 && access_by !== "application") {
-        await transaction.rollback();
-        return res.error(403, { message: "Use the mobile application to access this account." });
-    }
+    // if (!isDevice && entity.role_id === 5 && access_by !== "application") {
+    //     await transaction.rollback();
+    //     return res.error(403, { message: "Use the mobile application to access this account." });
+    // }
 
     // 2. Validate Company
     if (!entity.company_id) {
@@ -989,11 +1088,12 @@ exports.pinLogin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
+console.log("entity",entity.device_type)
 
     const token = generateToken({
       ...entity.get({ plain: true }),
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)
@@ -1031,7 +1131,7 @@ exports.pinLogin = async (req, res) => {
         : (!isDevice && entity.employee_profile_image) 
           ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
           : null,
-      role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
+      role_name: userPermission?.role_name || (isDevice ? (entity.device_type === 1 ? "Canteen" : "Attendance Device") : "Employee"),
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: isDevice ? null : entity.user_id,
@@ -1039,7 +1139,7 @@ exports.pinLogin = async (req, res) => {
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? "attendance device" : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);
