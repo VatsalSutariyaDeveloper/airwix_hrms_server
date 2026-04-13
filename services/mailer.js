@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 const CryptoJS = require("crypto-js");
-const { getCompanySetting } = require('../helpers'); 
+const { getCompanySetting } = require('../helpers/cache'); 
 
 // Helper to map Nodemailer Error Codes to Human Readable Text
 const mapNodemailerError = (err) => {

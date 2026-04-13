@@ -3,6 +3,7 @@ const notificationService = require("../services/notificationService");
 const commonQuery = require("../helpers/commonQuery");
 const { handleError, sequelize, constants, Op, formatDateTime } = require("../helpers");
 const validateRequest = require("../helpers/validateRequest");
+const dayjs = require("dayjs");
 
 exports.create = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -181,8 +182,9 @@ exports.getActiveAnnouncements = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const today = new Date();
+    const today = dayjs().format("YYYY-MM-DD");
     const whereClause = {
+      status: 0,
       announcement_date: { [Op.lte]: today },
       [Op.and]: [
         {
@@ -205,7 +207,7 @@ exports.getActiveAnnouncements = async (req, res) => {
             attributes: ["id", "user_name"],
           },
         ],
-        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type"],
+        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type", "target_type", "target"],
         order: [["announcement_date", "DESC"]]
       }, transaction);
 
