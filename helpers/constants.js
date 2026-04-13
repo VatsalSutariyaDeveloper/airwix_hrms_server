@@ -361,7 +361,7 @@ const constants = {
     CANCELLED: 5
   },
 
-  ON_DUTY_STATUS: {
+  OUT_DUTY_STATUS: {
     PENDING: 0,
     PARTIALLY_APPROVED: 1,
     DELETED: 2,

@@ -99,7 +99,7 @@ exports.getPerformanceReport = async (req, res) => {
     // 3. Transform data into performance metrics
     for (const emp of employees.items) {
       let stats = {
-        present: 0, halfDay: 0, absent: 0, leave: 0, holiday: 0, weeklyOff: 0, onDuty: 0,
+        present: 0, halfDay: 0, absent: 0, leave: 0, holiday: 0, weeklyOff: 0, outDuty: 0,
         totalWorkedMinutes: 0, totalLateMinutes: 0, totalOvertimeMinutes: 0,
         scheduledWorkingDays: 0
       };
@@ -137,7 +137,7 @@ exports.getPerformanceReport = async (req, res) => {
             else if (sid === 1 || sid === 13) stats.halfDay++;
             else if (sid === 5) stats.absent++;
             else if (sid === 6) stats.leave++;
-            else if (sid === 12) stats.onDuty++;
+            else if (sid === 12) stats.outDuty++;
         }
 
         if (dayRecord) {
@@ -155,7 +155,7 @@ exports.getPerformanceReport = async (req, res) => {
       }
 
       // KPI Calculations
-      const attendance_ratio = stats.scheduledWorkingDays > 0 ? (stats.present + stats.onDuty + (stats.halfDay * 0.5)) / stats.scheduledWorkingDays : 0;
+      const attendance_ratio = stats.scheduledWorkingDays > 0 ? (stats.present + stats.outDuty + (stats.halfDay * 0.5)) / stats.scheduledWorkingDays : 0;
       const attendance_score = Math.min(100, attendance_ratio * 100);
 
       const punctuality_score = stats.present > 0 ? Math.max(0, 100 - (stats.totalLateMinutes / (stats.present * 10)) * 10) : 0;

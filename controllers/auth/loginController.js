@@ -550,14 +550,21 @@ exports.verifyMobileNo = async (req, res) => {
       }
     }
 
-    return res.success("Mobile verification successful", {
-      is_registered: true,
-      pin_set: pin_set,
-      next_step: next_step,
-      dev_otp: otp,
-      user_name: type === "user" ? entity.user_name : entity.device_name,
-      type: type
-    });
+    // return res.success("Mobile verification successful", {
+    //   is_registered: true,
+    //   pin_set: pin_set,
+    //   next_step: next_step,
+    //   dev_otp: otp,
+    //   user_name: type === "user" ? entity.user_name : entity.device_name,
+    //   type: type
+    // });
+
+    if (!pin_set) {
+      return res.success("SET PIN");
+    } else {
+      return res.success("ENTER PIN");
+    }
+
 
   } catch (err) {
     return handleError(err, res, req);

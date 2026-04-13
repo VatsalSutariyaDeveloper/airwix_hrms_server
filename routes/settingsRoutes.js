@@ -27,7 +27,7 @@ const designationMasterController = require("../controllers/settings/designation
 const incentiveTypeController = require("../controllers/settings/incentiveTypeController");
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
-const onDutyRequestController = require("../controllers/settings/onDutyRequestController");
+const outDutyRequestController = require("../controllers/settings/outDutyRequestController");
 const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 const systemLogController = require("../controllers/systemLogController");
 
@@ -312,17 +312,17 @@ router.post("/employee-settings/get-transactions", employeeSettingsController.ge
 router.put("/employee-settings/update", employeeSettingsController.update);
 
 // ==========================
-// 39. ON DUTY REQUEST ROUTES
+// 39. OUT DUTY REQUEST ROUTES
 // ==========================
-router.post("/onduty-request/", onDutyRequestController.create);
-router.post("/onduty-request/get-transactions", onDutyRequestController.getAll);
-router.post("/onduty-request/pending-approvals", onDutyRequestController.getPendingApprovals);
-router.get("/onduty-request/:id", onDutyRequestController.getById);
-router.put("/onduty-request/:id", onDutyRequestController.update);
-router.put("/onduty-request/status/:id", onDutyRequestController.updateStatus);
-router.put("/onduty-request/cancel/:id", onDutyRequestController.cancelLeave);
-router.post("/onduty-request/summary", onDutyRequestController.getOnDutySummary);
-router.delete("/onduty-request", onDutyRequestController.delete);
+router.post("/outduty-request/", outDutyRequestController.create);
+router.post("/outduty-request/get-transactions", outDutyRequestController.getAll);
+router.post("/outduty-request/pending-approvals", outDutyRequestController.getPendingApprovals);
+router.get("/outduty-request/:id", outDutyRequestController.getById);
+router.put("/outduty-request/:id", outDutyRequestController.update);
+router.put("/outduty-request/status/:id", outDutyRequestController.updateStatus);
+router.put("/outduty-request/cancel/:id", outDutyRequestController.cancelLeave);
+router.post("/outduty-request/summary", outDutyRequestController.getOutDutySummary);
+router.delete("/outduty-request", outDutyRequestController.delete);
 
 // ===============================
 // 40. ATTENDANCE REGULARIZATION  ROUTES

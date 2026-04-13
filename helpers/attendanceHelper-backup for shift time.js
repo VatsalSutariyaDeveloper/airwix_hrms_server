@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OnDutyRequest } = require("../models");
+const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -631,25 +631,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     status: 0
   }, {}, transaction);
 
-  const approvedOnDuty = (meta.preFetchedOnDuty !== undefined) ? meta.preFetchedOnDuty : await commonQuery.findOneRecord(OnDutyRequest, {
+  const approvedOutDuty = (meta.preFetchedOutDuty !== undefined) ? meta.preFetchedOutDuty : await commonQuery.findOneRecord(OutDutyRequest, {
     employee_id: employeeId,
-    approval_status: constants.ON_DUTY_STATUS.APPROVED,
+    approval_status: constants.OUT_DUTY_STATUS.APPROVED,
     start_date: { [Op.lte]: date },
     end_date: { [Op.gte]: date },
     status: 0
   }, {}, transaction);
 
-  // --- ON DUTY PROCESSING ---
-  if (approvedOnDuty && !hasPunches) {
+  // --- OUT DUTY PROCESSING ---
+  if (approvedOutDuty && !hasPunches) {
       const odPayload = {
           employee_id: employeeId,
           attendance_date: date,
-          status: 12, // ON_DUTY
+          status: 12, // OUT_DUTY
           shift_id: null,
           user_id: meta.user_id || 0,
           branch_id: meta.branch_id || employee.branch_id,
           company_id: meta.company_id || employee.company_id,
-          note: "System: On Duty auto-detected"
+          note: "System: Out Duty auto-detected"
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
@@ -664,9 +664,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
       }
       return;
-  } else if (approvedOnDuty && hasPunches) {
-      // If they have punches while on duty, we treat it as PRESENT (0) but keep the flag?
-      // Actually, usually status 12 is for On Duty.
+  } else if (approvedOutDuty && hasPunches) {
+      // If they have punches while out duty, we treat it as PRESENT (0) but keep the flag?
+      // Actually, usually status 12 is for Out Duty.
       // We set meta.forcedStatus to ensure it uses 12.
       meta.forcedStatus = 12;
   }
@@ -1729,9 +1729,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
     // Otherwise apply downgrade prevention logic
     else if ([0, 12].includes(existingDayForStatus.status) && [1, 5, 13].includes(status)) {
-      status = existingDayForStatus.status; // Keep Present or On Duty
+      status = existingDayForStatus.status; // Keep Present or Out Duty
     } else if ([1, 13].includes(existingDayForStatus.status) && status === 5) {
-      status = existingDayForStatus.status; // Keep Half Day or Half On Duty
+      status = existingDayForStatus.status; // Keep Half Day or Half Out Duty
     }
   }
   if (meta.forcedStatus !== undefined) {
@@ -2265,7 +2265,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const empShiftMap = new Map(employeeShifts.map(s => [s.employee_id, s]));
 
   // 3. Fetch all potential non-working day triggers in bulk
-  const [holidays, weeklyOffs, leaveRequests, onDutyRequests] = await Promise.all([
+  const [holidays, weeklyOffs, leaveRequests, outDutyRequests] = await Promise.all([
     commonQuery.findAllRecords(
       EmployeeHoliday,
       {
@@ -2301,12 +2301,12 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       transaction
     ),
     commonQuery.findAllRecords(
-      OnDutyRequest,
+      OutDutyRequest,
       {
         employee_id: { [Op.in]: missingEmpIds },
         start_date: { [Op.lte]: date },
         end_date: { [Op.gte]: date },
-        approval_status: constants.ON_DUTY_STATUS.APPROVED,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
         status: 0
       },
       {},
@@ -2318,7 +2318,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const holidayMap = new Map(holidays.map(h => [h.employee_id, h]));
   const weeklyOffMap = new Map(weeklyOffs.map(w => [w.employee_id, w]));
   const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
-  const onDutyMap = new Map(onDutyRequests.map(o => [o.employee_id, o]));
+  const outDutyMap = new Map(outDutyRequests.map(o => [o.employee_id, o]));
 
   const payloads = [];
   for (const emp of employees) {
@@ -2326,9 +2326,9 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     let leave_cat = null;
     let note = null;
 
-    if (onDutyMap.has(emp.id)) {
-      status = 12; // ON_DUTY
-      note = "System: On Duty auto-detected";
+    if (outDutyMap.has(emp.id)) {
+      status = 12; // OUT_DUTY
+      note = "System: Out Duty auto-detected";
     } else if (leaveMap.has(emp.id)) {
       status = 6; // LEAVE
       leave_cat = leaveMap.get(emp.id).leave_category_id;

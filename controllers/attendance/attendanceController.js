@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OnDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -296,7 +296,7 @@ exports.getAttendanceSummary = async (req, res) => {
       const dayOfWeek = dayjs(targetDate).day();
       const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
 
-      const [itemHolidays, itemWeeklyOffs, itemOnDuties] = await Promise.all([
+      const [itemHolidays, itemWeeklyOffs, itemOutDuties] = await Promise.all([
         commonQuery.findAllRecords(EmployeeHoliday, { 
           employee_id: { [Op.in]: itemIds }, 
           date: targetDate, 
@@ -309,9 +309,9 @@ exports.getAttendanceSummary = async (req, res) => {
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
         }),
-        commonQuery.findAllRecords(OnDutyRequest, {
+        commonQuery.findAllRecords(OutDutyRequest, {
           employee_id: { [Op.in]: itemIds },
-          approval_status: constants.ON_DUTY_STATUS.APPROVED,
+          approval_status: constants.OUT_DUTY_STATUS.APPROVED,
           start_date: { [Op.lte]: targetDate },
           end_date: { [Op.gte]: targetDate },
           status: 0
@@ -320,18 +320,18 @@ exports.getAttendanceSummary = async (req, res) => {
 
       const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
       const itemWeeklyOffMap = new Set(itemWeeklyOffs.map(w => w.employee_id));
-      const itemOnDutyMap = new Set(itemOnDuties.map(o => o.employee_id));
+      const itemOutDutyMap = new Set(itemOutDuties.map(o => o.employee_id));
 
       employeesResult.items.forEach(emp => {
         const day = emp.attendanceDays?.[0];
         if (day) {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
-          day.setDataValue('is_on_duty_approved', itemOnDutyMap.has(emp.id));
+          day.setDataValue('is_out_duty_approved', itemOutDutyMap.has(emp.id));
           day.setDataValue('branch_name', day.branch?.branch_name);
           
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 12: "On Duty", 13: "Half On Duty" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 12: "Out Duty", 13: "Half Out Duty" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
              const h = itemHolidays.find(h => h.employee_id === emp.id);
@@ -437,9 +437,9 @@ exports.getAttendanceSummary = async (req, res) => {
       const status = parseInt(stat.status);
       
       if (status === 0) summary.present += count;
-      else if (status === 12) summary.present += count; // On Duty
+      else if (status === 12) summary.present += count; // Out Duty
       else if (status === 1) summary.halfDay += count;
-      else if (status === 13) summary.halfDay += count; // Half On Duty
+      else if (status === 13) summary.halfDay += count; // Half Out Duty
       else if (status === 3) summary.weeklyOff += count;
       else if (status === 4) summary.holiday += count;
       else if (status === 6) summary.leave += count;
@@ -1495,9 +1495,9 @@ exports.getMonthlyAttendance = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Employee not found");
     }
 
-    // 1.1 Check for Approved On Duty Request for TODAY
+    // 1.1 Check for Approved Out Duty Request for TODAY
     const todayStr = dayjs().format('YYYY-MM-DD');
-    const onDutyRequest = await commonQuery.findOneRecord(OnDutyRequest, {
+    const outDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, {
       employee_id: employee_id,
       start_date: { [Op.lte]: todayStr },
       end_date: { [Op.gte]: todayStr },
@@ -1583,9 +1583,9 @@ exports.getMonthlyAttendance = async (req, res) => {
             status: 0
         });
     }
-    const monthlyOnDuties = await commonQuery.findAllRecords(OnDutyRequest, {
+    const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
       employee_id,
-      approval_status: constants.ON_DUTY_STATUS.APPROVED,
+      approval_status: constants.OUT_DUTY_STATUS.APPROVED,
       start_date: { [Op.lte]: endDate },
       end_date: { [Op.gte]: startDate },
       status: 0
@@ -1634,7 +1634,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         day_status: 10, // Default Not Marked
         status: "Not Marked",
         note: null,
-        is_on_duty_approved: !!monthlyOnDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
+        is_out_duty_approved: !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
         punches: []
       };
 
@@ -1676,7 +1676,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           shiftTimeStr = `${Math.floor(diffMins / 60)}:${(diffMins % 60).toString().padStart(2, '0')} Hrs`;
         }
 
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 12: "On Duty", 13: "Half On Duty" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 12: "Out Duty", 13: "Half Out Duty" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
@@ -1797,7 +1797,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       employeeDetails: employee,
       month_year: date.format('MMMM YYYY'),
       summary,
-      can_punch_from_personal_device: !!onDutyRequest,
+      can_punch_from_personal_device: !!outDutyRequest,
       attendance: allDays.reverse() // DESC order
     });
   } catch (err) {

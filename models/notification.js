@@ -16,7 +16,7 @@ module.exports = (sequelize, DataTypes) => {
         type: {
             type: DataTypes.STRING(50),
             allowNull: false,
-            comment: "LEAVE, RESIGNATION, ON_DUTY, REGULARIZATION, ATTENDANCE"
+            comment: "LEAVE, RESIGNATION, OUT_DUTY, REGULARIZATION, ATTENDANCE"
         },
         reference_id: {
             type: DataTypes.INTEGER,

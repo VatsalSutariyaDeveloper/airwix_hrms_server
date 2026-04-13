@@ -64,7 +64,7 @@ const runWorker = async () => {
         pd_days: ["pd", "paid days", "paiddays", "pay day", "payday", "payable days"],
         al_days: ["al", "annual leave", "annualleave", "pl", "paid leave", "paidleave"],
         cl_days: ["cl", "casual leave", "casualleave"],
-        od_days: ["od", "on duty", "onduty"],
+        od_days: ["od", "out duty", "outduty"],
         sl_days: ["sl", "short leave", "shortleave", "cof", "compoff", "compoff leave", "compoffleave"],
         ph_days: ["ph", "public holiday", "publicholiday", "holidays"],
         wo_days: ["wo", "weekly off", "weeklyoff"],

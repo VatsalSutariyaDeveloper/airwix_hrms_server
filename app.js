@@ -67,6 +67,7 @@ if (cluster.isMaster) {
   const systemLogRoutes = require("./routes/systemLogRoutes");
   const reportsRoutes = require("./routes/reportsRoutes");
   const announcementRoutes = require("./routes/announcementRoutes");
+  const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
 
   const app = express();
   const { authMiddleware } = require("./middlewares/authMiddleware");
@@ -107,7 +108,7 @@ if (cluster.isMaster) {
   app.use(checkPermission);
 
   app.use("/api/dashboard", dashboardRoutes);
-  app.use("/api/hr-dashboard", require("./routes/hrDashboardRoutes"));
+  app.use("/api/hr-dashboard", hrDashboardRoutes);
   app.use("/api/settings", settingsRoutes);
   app.use("/api/administration", administrationRoutes);
   app.use("/api/subscription", subscriptionRoutes);

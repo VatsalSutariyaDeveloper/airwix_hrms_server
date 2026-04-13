@@ -116,6 +116,28 @@ const jobPayslipCleanup = async (asOf = null) => {
     }
 };
 
+const jobAnnouncementExpiry = async (asOf = null) => {
+    console.log('⏰ Running daily announcement expiry check task...');
+    const dayjs = require('dayjs');
+    const { Announcement } = require("../models");
+    const { Op } = require("../helpers");
+
+    const currentDate = asOf ? dayjs(asOf) : dayjs();
+
+    const expiredAnnouncements = await Announcement.update(
+        { status: 1 },
+        {
+            where: {
+                expiry_date: { [Op.lt]: currentDate.format('YYYY-MM-DD') },
+                status: 0
+            }
+        }
+    );
+
+    const count = expiredAnnouncements[0];
+    console.log(`✅ ${count} expired announcements updated to inactive status.`);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // All jobs registry (used by runAllNow)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +150,7 @@ const ALL_JOBS = [
     { name: 'Resignation Processing',   fn: jobResignationProcessing },
     { name: 'Attendance Rebuild',       fn: jobAttendanceRebuild },
     { name: 'Payslip PDF Cleanup',      fn: jobPayslipCleanup },
+    { name: 'Announcement Expiry',      fn: jobAnnouncementExpiry },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,5 +241,6 @@ module.exports = {
     jobResignationProcessing,
     jobAttendanceRebuild,
     jobPayslipCleanup,
+    jobAnnouncementExpiry,
 };
 
