@@ -247,20 +247,21 @@ exports.getStatesWithRules = async (req, res) => {
     try {
         const rules = await commonQuery.findAllRecords(
             StatutoryLWFRule,
-            {},
+            { status: 0 },
             {
-                attributes: ['state_id'],
                 include: [{ 
                     model: StateMaster, 
                     as: 'state',
-                    attributes: ['id', 'state_name'] 
+                    attributes: [] 
                 }],
-                group: ['StatutoryLWFRule.state_id', 'state.id', 'state.state_name'],
-            },null, false
+                attributes: [
+                    'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
+                ],
+                raw: true
+            }, null, false
         );
         
-        const states = rules.map(r => r.state).filter(Boolean);
-        return res.ok(states);
+        return res.ok(rules);
     } catch (err) {
         return handleError(err, res, req);
     }
