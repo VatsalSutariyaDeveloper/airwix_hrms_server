@@ -478,7 +478,7 @@ exports.logout = async (req, res) => {
  */
 exports.verifyMobileNo = async (req, res) => {
   try {
-    const { mobile_no, access_by } = req.body;
+    const { mobile_no } = req.body;
 
     if (!mobile_no) {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
@@ -495,7 +495,7 @@ exports.verifyMobileNo = async (req, res) => {
     let entity = user;
     let type = "user";
 
-    if (!user && access_by === "application") {
+    if (!user) {
       const device = await DeviceMaster.findOne({
         where: {
           mobile_no,
@@ -516,7 +516,6 @@ exports.verifyMobileNo = async (req, res) => {
     }
 
     const pin_set = !!entity.password;
-    const next_step = pin_set ? "ENTER_PIN" : "SET_PIN";
     let otp = null;
 
     // Send OTP only if PIN is not set (next_step is SET_PIN)
