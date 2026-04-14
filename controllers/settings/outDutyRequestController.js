@@ -518,7 +518,7 @@ exports.getOutDutySummary = async (req, res) => {
         group = {
           month_label: monthYear,
           total_days: 0,
-          on_duties: []
+          out_duties: []
         };
         groupedHistory.push(group);
       }
@@ -547,7 +547,7 @@ exports.getOutDutySummary = async (req, res) => {
         [constants.OUT_DUTY_STATUS.DELETED]: "#9CA3AF",
       };
 
-      group.on_duties.push({
+      group.out_duties.push({
         id: outDuty.id,
         date_range: dateRange,
         duration_display: `${parseFloat(outDuty.total_days).toFixed(1)} Days | Out Duty`,

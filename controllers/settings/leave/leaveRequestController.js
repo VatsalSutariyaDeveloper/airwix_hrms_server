@@ -1018,10 +1018,11 @@ exports.calculateLeaveDays = async (req, res) => {
         end_session = parseInt(end_session) || 0;
 
         const { leave_category_id } = req.body;
+        let rules = {};
         if (leave_category_id) {
             const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
             if (category) {
-                const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+                rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
                 if (rules.allow_half_day === false && (start_session !== 0 || end_session !== 0)) {
                     return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
                 }
@@ -1087,7 +1088,9 @@ exports.calculateLeaveDays = async (req, res) => {
 
         return res.success("Working days calculated", { 
             total_days: workingDays,
-            breakdown: dateWiseBreakdown
+            breakdown: dateWiseBreakdown,
+            is_allow_full_day: rules.allow_full_day === true,
+            is_allow_half_day: rules.allow_half_day === true
         });
     } catch (err) {
         return handleError(err, res, req);
