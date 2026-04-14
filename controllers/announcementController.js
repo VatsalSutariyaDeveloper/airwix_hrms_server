@@ -217,8 +217,7 @@ exports.getActiveAnnouncements = async (req, res) => {
       filteredAnnouncements = announcements.filter(announcement => {
         const { target_type, target } = announcement;
         const userId = req.user.id?.toString();
-        const roleId = req.user.role_id?.toString();
-        const employeeRoleId = constants.EMPLOYEE_ROLE_ID.toString();
+        const roleKey = req.user.role_key;
 
         // Helper to check if target contains exact match
         const containsExactMatch = (targetStr, value) => {
@@ -228,9 +227,9 @@ exports.getActiveAnnouncements = async (req, res) => {
         };
 
         if (target_type === 0) return true; // Show to all
-        if (target_type === 1 && containsExactMatch(target, employeeRoleId)) return true; // Employee role
+        if (target_type === 1 && roleKey === constants.ROLE_KEYS.EMPLOYEE) return true; // Employee role
         if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
-        if (target_type === 2 && containsExactMatch(target, roleId)) return true; // Specific role
+        if (target_type === 2 && containsExactMatch(target, req.user.role_id?.toString())) return true; // Specific role (still uses ID for now as target column stores IDs)
         return false;
       });
     }
@@ -261,7 +260,7 @@ async function sendAnnouncementNotifications(announcement) {
 
     if (!target_type || target_type === 0) {
     } else if (target_type === 1) {
-      userFilter.role_id = constants.EMPLOYEE_ROLE_ID;
+      userFilter['$RolePermission.role_key$'] = constants.ROLE_KEYS.EMPLOYEE;
     } else if (target_type === 2) {
       const roleIds = target.toString().split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
       if (roleIds.length > 0) {
@@ -274,7 +273,10 @@ async function sendAnnouncementNotifications(announcement) {
       }
     }
 
-    const users = await commonQuery.findAllRecords(User, userFilter, { attributes: ['id'] });
+    const users = await commonQuery.findAllRecords(User, userFilter, { 
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+      attributes: ['id'] 
+    });
 
     for (const user of users) {
       await notificationService.createNotification({

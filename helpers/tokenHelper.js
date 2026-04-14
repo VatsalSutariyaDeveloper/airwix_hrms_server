@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { constants } = require("./constants");
 
 /**
  * Common token generator for User sessions
@@ -12,16 +13,17 @@ console.log("user",user)
       id: user.id || user.user_id,
       employee_id: user.employee_id,
       role_id: user.role_id,
-      is_employee: user.role_id === 5,
+      role_key: user.RolePermission?.role_key || null,
+      is_employee: user.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE,
       branch_id: branchId,
       company_id: companyId,
       organization_id: user.organization_id || null,
       access_by: access_by,
       branch_access: user.branch_access || "",
-      is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager,
-      is_super_admin: user.is_super_admin || user.role_id == 1,
-      is_admin: user.role_id == 2,
+      is_attendance_supervisor: user.is_attendance_supervisor || user.RolePermission?.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR,
+      is_reporting_manager: user.is_reporting_manager || user.RolePermission?.role_key === constants.ROLE_KEYS.REPORTING_MANAGER,
+      is_super_admin: user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
+      is_admin: user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN,
       access: user.access
     },
     process.env.JWT_SECRET || "your_jwt_secret",

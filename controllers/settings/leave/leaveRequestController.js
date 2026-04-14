@@ -799,10 +799,10 @@ exports.getPendingApprovals = async (req, res) => {
             
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
                         if (req.user.is_admin) isAuthorized = true;
@@ -1018,10 +1018,11 @@ exports.calculateLeaveDays = async (req, res) => {
         end_session = parseInt(end_session) || 0;
 
         const { leave_category_id } = req.body;
+        let rules = {};
         if (leave_category_id) {
             const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
             if (category) {
-                const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+                rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
                 if (rules.allow_half_day === false && (start_session !== 0 || end_session !== 0)) {
                     return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
                 }
@@ -1087,7 +1088,9 @@ exports.calculateLeaveDays = async (req, res) => {
 
         return res.success("Working days calculated", { 
             total_days: workingDays,
-            breakdown: dateWiseBreakdown
+            breakdown: dateWiseBreakdown,
+            is_allow_full_day: rules?.allow_full_day ?? true,
+            is_allow_half_day: rules?.allow_half_day ?? true
         });
     } catch (err) {
         return handleError(err, res, req);

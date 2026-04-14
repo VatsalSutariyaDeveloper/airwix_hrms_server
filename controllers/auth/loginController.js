@@ -122,6 +122,7 @@ exports.login = async (req, res) => {
         user = await User.findOne({ 
           attributes: userAttributes.concat(['status']), 
           where: whereClause, 
+          include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
           transaction 
         });
         
@@ -151,6 +152,7 @@ exports.login = async (req, res) => {
             mobile_no, 
             status: { [Op.in]: [0, 1] } 
           }, 
+          include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
           transaction 
         });
         
@@ -216,7 +218,8 @@ exports.login = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    // if (user.role_id === 5 && access_by !== "application") {
+    const isEmployee = user.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE;
+    // if (isEmployee && access_by !== "application") {
     //     await transaction.rollback();
     //     return res.error(403, { message: "Use the mobile application to access this account." });
     // }
@@ -251,14 +254,16 @@ exports.login = async (req, res) => {
 
     let companyId = company.company_id || company.id;
 
+    const isAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
+
     const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
-    if (!user.is_super_admin && user.role_id != 1 && companyAccessList.length === 0) {
+    if (!isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (user.is_super_admin || user.role_id == 1){
+    if (isAdmin){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -302,7 +307,7 @@ exports.login = async (req, res) => {
           where: { 
             company_id: finalCompanyId, 
             status: 0,
-            ...(!user.is_super_admin && user.role_id != 1 && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
           },
           attributes: ['id'],
           order: [['id', 'ASC']],
@@ -315,7 +320,7 @@ exports.login = async (req, res) => {
         }
     }
 
-    if(!user.is_super_admin && user.role_id != 1){
+    if(!isAdmin){
       // Use Sequelize findOne for Employee
       const employee = await Employee.findOne({
           where: { id: user.employee_id },
@@ -355,15 +360,15 @@ exports.login = async (req, res) => {
           id: user.role_id, 
           company_id: {[Op.in]: [-1, user.company_id]}
       },
-      attributes: ["role_name", "permissions"],
+      attributes: ["role_name", "permissions", "role_key"],
       transaction 
     });
-
+console.log("userPermission",userPermission)
     // Prepare User Data Response
     const userData = {
       id: user.id,
       role_id: user.role_id,
-      is_super_admin: user.is_super_admin || user.role_id == 1,
+      is_super_admin: isAdmin,
       user_name: user.user_name,
       email: user.email,
       mobile_no: user.mobile_no,
@@ -376,7 +381,7 @@ exports.login = async (req, res) => {
       profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
       authorized_signature: user.authorized_signature,
       role_name: userPermission?.role_name,
-      is_employee: user.role_id === 5,
+      is_employee: userPermission?.role_key !== constants.ROLE_KEYS.BUSINESS_ADMIN && userPermission?.role_key !== constants.ROLE_KEYS.ADMIN,
       permission: userPermission?.permissions,
       is_login: 1,
       user_id: user.user_id,
@@ -478,7 +483,7 @@ exports.logout = async (req, res) => {
  */
 exports.verifyMobileNo = async (req, res) => {
   try {
-    const { mobile_no, access_by } = req.body;
+    const { mobile_no } = req.body;
 
     if (!mobile_no) {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
@@ -495,7 +500,7 @@ exports.verifyMobileNo = async (req, res) => {
     let entity = user;
     let type = "user";
 
-    if (!user && access_by === "application") {
+    if (!user) {
       const device = await DeviceMaster.findOne({
         where: {
           mobile_no,
@@ -516,7 +521,6 @@ exports.verifyMobileNo = async (req, res) => {
     }
 
     const pin_set = !!entity.password;
-    const next_step = pin_set ? "ENTER_PIN" : "SET_PIN";
     let otp = null;
 
     // Send OTP only if PIN is not set (next_step is SET_PIN)
@@ -703,7 +707,9 @@ exports.generatePin = async (req, res) => {
     if (!isDevice) {
       user = await User.findOne({ 
         attributes: userAttributes.concat(['status']),
-        where: { id: entity.id }, transaction 
+        where: { id: entity.id },
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+        transaction 
       });
       entity = user;
     } else {
@@ -757,13 +763,15 @@ exports.generatePin = async (req, res) => {
     let companyId = company.company_id || company.id;
     const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
     
-    if (!isDevice && !entity.is_super_admin && entity.role_id != 1 && companyAccessList.length === 0) {
+    const isAdmin = !isDevice && (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN);
+    
+    if (!isDevice && !isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (isDevice || entity.is_super_admin || entity.role_id == 1){
+    if (isDevice || isAdmin){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -865,7 +873,7 @@ console.log("entity",entity.device_type)
       role_id: isDevice ? null : entity.role_id,
       employee_id: isDevice ? null : entity.employee_id,
       joining_date: isDevice ? null : entity.joining_date,
-      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
+      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
@@ -1014,13 +1022,15 @@ exports.pinLogin = async (req, res) => {
     let companyId = company.company_id || company.id;
     const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
     
-    if (!isDevice && !entity.is_super_admin && entity.role_id != 1 && companyAccessList.length === 0) {
+    const isAdmin = !isDevice && (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN);
+    
+    if (!isDevice && !isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
     }
 
     let whereCompany = {};
-    if (isDevice || entity.is_super_admin || entity.role_id == 1){
+    if (isDevice || isAdmin){
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -1112,7 +1122,7 @@ console.log("entity",entity.device_type)
             id: entity.role_id, 
             company_id: {[Op.in]: [-1, entity.company_id]}
         },
-        attributes: ["role_name", "permissions"],
+        attributes: ["role_name", "permissions", "role_key"],
         transaction 
       });
     }
@@ -1122,7 +1132,7 @@ console.log("entity",entity.device_type)
       role_id: isDevice ? null : entity.role_id,
       employee_id: isDevice ? null : entity.employee_id,
       joining_date: isDevice ? null : entity.joining_date,
-      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.role_id == 1),
+      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,

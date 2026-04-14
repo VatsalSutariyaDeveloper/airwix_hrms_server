@@ -236,6 +236,11 @@ exports.update = async (req, res) => {
       return res.error(constants.NOT_FOUND);
     }
 
+    // If module_id is being updated, update it in the permissions table as well
+    if (POST.module_id) {
+      await commonQuery.updateRecordById(Permission, { entity_id: req.params.id }, { module_id: POST.module_id }, transaction, false, false);
+    }
+
     // Handle permissions if actions are provided
     if (POST.actions) {
       const actionList = Array.isArray(POST.actions) ? POST.actions : [POST.actions];

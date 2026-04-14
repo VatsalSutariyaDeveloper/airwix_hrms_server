@@ -1,5 +1,5 @@
 const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
-const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings } = require("../../helpers");
+const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings, initializeCompanyRoles } = require("../../helpers");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
@@ -297,9 +297,16 @@ exports.register = async (req, res) => {
         default_company: 1
     }, { transaction });
 
-    // 2. Create User (Step 1)
-    const defaultPermission = await RolePermission.findOne({
-      where: { id: 1, status: 0 },
+    // 2. Initialize Roles for the new company
+    await initializeCompanyRoles(newCompany.id, 0, 0, transaction);
+
+    // 3. Find Admin Role for this company
+    const adminRole = await RolePermission.findOne({
+      where: { 
+        company_id: newCompany.id, 
+        role_key: constants.ROLE_KEYS.BUSINESS_ADMIN,
+        status: 0 
+      },
       transaction
     });
     
@@ -319,9 +326,9 @@ exports.register = async (req, res) => {
         state_id,
         country_id,
         pincode,
-        role_id: 1,
+        role_id: adminRole ? adminRole.id : constants.BUSINESS_ADMIN_ROLE_ID,
         is_super_admin: true,
-        permission: defaultPermission ? defaultPermission.permissions : null,
+        permission: adminRole ? adminRole.permissions : null,
         company_id: newCompany.id,
         company_access: JSON.stringify([newCompany.id]),
         status: 0
@@ -405,13 +412,13 @@ exports.register = async (req, res) => {
       ...newUser.get({ plain: true }),
       organization_id: newOrg.id,
       branch_id: newBranch.id,
-      is_super_admin: newUser.is_super_admin || newUser.role_id == 1,
+      is_super_admin: newUser.is_super_admin || (adminRole && newUser.role_id == adminRole.id),
     }, newCompany.id, "web login");
 
     const userData = {
       id: newUser.id,
       role_id: newUser.role_id,
-      is_super_admin: newUser.is_super_admin || newUser.role_id == 1,
+      is_super_admin: newUser.is_super_admin || (adminRole && newUser.role_id == adminRole.id),
       user_name: newUser.user_name,
       email: newUser.email,
       mobile_no: newUser.mobile_no,
@@ -426,7 +433,7 @@ exports.register = async (req, res) => {
         : null,
       authorized_signature: newUser.authorized_signature || null,
       role_name: userPermission?.role_name || null,
-      is_employee: newUser.role_id === 5,
+      is_employee: userPermission?.role_key === constants.ROLE_KEYS.EMPLOYEE,
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: newUser.user_id || null,

@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 const { User, CompanyMaster, BranchMaster } = require("../models");
+const { constants } = require("../helpers");
 
 // In-memory token blacklist
 const tokenBlacklist = new Set();
@@ -70,9 +71,9 @@ async function authMiddleware(req, res, next) {
       access_by: decoded.access_by || "web login",
       is_attendance_supervisor: decoded.is_attendance_supervisor,
       is_reporting_manager: decoded.is_reporting_manager,
-      is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
-      is_admin: decoded.role_id == 2,
-      access: decoded.access || (decoded.role_id ? "employee" : "attendance device")
+      is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
+      is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
+      access: decoded.access || (decoded.role_key ? "employee" : "attendance device")
     };
 // console.log("req.user",req.user)
     requestContext.run(
@@ -86,9 +87,9 @@ async function authMiddleware(req, res, next) {
         roleId: decoded.role_id,
         is_attendance_supervisor: decoded.is_attendance_supervisor,
         is_reporting_manager: decoded.is_reporting_manager,
-        is_super_admin: decoded.is_super_admin || decoded.role_id == 1,
-        is_admin: decoded.role_id == 2,
-        access: decoded.access || (decoded.role_id ? "employee" : "attendance device"),
+        is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
+        is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
+        access: decoded.access || (decoded.role_key ? "employee" : "attendance device"),
         ip: req.ip
       },
       () => next()

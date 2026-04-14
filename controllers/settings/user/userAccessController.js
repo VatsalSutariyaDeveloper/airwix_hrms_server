@@ -44,7 +44,7 @@ exports.sessionData = async (req, res) => {
       include: [{ 
           model: RolePermission, 
           as: "RolePermission", 
-          attributes: ["permissions"],
+          attributes: ["permissions", "role_key"],
           required: false 
       }],
       transaction
@@ -55,20 +55,22 @@ exports.sessionData = async (req, res) => {
         return res.error(constants.USER_NOT_FOUND);
     }
 
+    const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || userData.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
+
     const companyAccessList = normalizeCompanyAccess(userData.company_access || "");
-    if (!userData.is_super_admin && userData.role_id != 1 && companyAccessList.length === 0) {
+    if (!isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
     }
     
     // Check if user has a role assigned for this specific company/branch
-    if (!userData.RolePermission?.permissions && !userData.is_super_admin && userData.role_id != 1) {
+    if (!userData.RolePermission?.permissions && !isAdmin) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "User does not have a role assigned in this company." });
     }
 
     let where = {};
-    if (userData.is_super_admin || userData.role_id == 1 || userData.role_id == 2) {
+    if (isAdmin) {
       where = {
         organization_id: orgId,
         status: { [Op.ne]: 2 }
@@ -131,7 +133,7 @@ exports.sessionData = async (req, res) => {
           where: { 
               company_id: record.id, 
               status: 0,
-              ...(!userData.is_super_admin && userData.role_id != 1 && userData.role_id != 2 && normalizeBranchAccess(userData.branch_access).length > 0 ? {
+              ...(!isAdmin && normalizeBranchAccess(userData.branch_access).length > 0 ? {
                   id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
               } : {})
           },
@@ -337,6 +339,7 @@ exports.switchCompany = async (req, res) => {
     // 1. Fetch User (Standard Sequelize)
     const user = await User.findOne({
       where: { id: user_id, status: 0 },
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key'] }],
       transaction
     });
 
@@ -346,8 +349,9 @@ exports.switchCompany = async (req, res) => {
     }
 
     // 2. Validate Access
+    const isAdminUser = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
     const companyAccessList = normalizeCompanyAccess(user.company_access || "");
-    if (!user.is_super_admin && user.role_id !== 1 && user.role_id !== 2 && !companyAccessList.includes(String(company_id))) {
+    if (!isAdminUser && !companyAccessList.includes(String(company_id))) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
     }
@@ -374,7 +378,7 @@ exports.switchCompany = async (req, res) => {
       where: { 
         company_id: company_id,
         status: { [Op.ne]: 2 },
-        ...(!user.is_super_admin && user.role_id !== 1 && user.role_id !== 2 && branchAccessList.length > 0 ? {
+        ...(!isAdminUser && branchAccessList.length > 0 ? {
           id: { [Op.in]: branchAccessList }
         } : {})
       },
@@ -420,9 +424,10 @@ exports.switchBranch = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Branch ID is required." });
     }
 
-    // 1. Fetch User (Standard Sequelize)
+    // 1. Fetch User with Role (Standard Sequelize)
     const user = await User.findOne({
         where: { id: user_id, status: 0 },
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key'] }],
         transaction
     });
 
@@ -451,8 +456,9 @@ exports.switchBranch = async (req, res) => {
         }
 
         // 2.1 Validate Branch Access for non-super admins
+        const isBranchAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
         const branchAccessList = normalizeBranchAccess(user.branch_access || "");
-        if (!user.is_super_admin && user.role_id != 1 && user.role_id != 2 && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
+        if (!isBranchAdmin && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
             await transaction.rollback();
             return res.error(constants.FORBIDDEN, { message: "You do not have access to this branch." });
         }

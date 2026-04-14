@@ -787,7 +787,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
 
       // Sorting
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
-      let order = [['createdAt', 'DESC']];
+      let order = options.order || [[dateField, 'DESC']];
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
         order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
       }

@@ -538,6 +538,44 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
     }
 };
 
+exports.initializeCompanyRoles = async (company_id, branch_id, user_id, transaction) => {
+    try {
+        const { RolePermission } = require("../../models");
+        const commonQuery = require("../commonQuery");
+
+        const systemRoles = await commonQuery.findAllRecords(
+            RolePermission,
+            { is_system: true, status: 0, company_id: -1, branch_id: -1 },
+            {},
+            transaction,
+            false
+        );
+
+        if (systemRoles && systemRoles.length > 0) {
+            const rolesToCreate = systemRoles.map(role => {
+                const roleData = role.toJSON ? role.toJSON() : { ...role };
+                return {
+                    role_name: roleData.role_name,
+                    role_key: roleData.role_key,
+                    description: roleData.description,
+                    permissions: roleData.permissions,
+                    is_system: false,
+                    p_role_id: roleData.id,
+                    company_id: company_id,
+                    branch_id: branch_id || 0,
+                    user_id: user_id,
+                    status: 0
+                };
+            });
+            return await commonQuery.bulkCreate(RolePermission, rolesToCreate, {}, transaction, false);
+        }
+        return [];
+    } catch (error) {
+        console.error("Error initializing company roles:", error);
+        throw error;
+    }
+};
+
 exports.updateDocumentUsedLimit = async (companyId, field, by=1, transaction) => {
     try {
       console.log("-----------------------------------------companyId",companyId)

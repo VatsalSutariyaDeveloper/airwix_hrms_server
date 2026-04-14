@@ -318,10 +318,10 @@ exports.getPendingApprovals = async (req, res) => {
             } else {
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
                         if (req.user.is_admin) isAuthorized = true;
@@ -518,7 +518,7 @@ exports.getOutDutySummary = async (req, res) => {
         group = {
           month_label: monthYear,
           total_days: 0,
-          on_duties: []
+          out_duties: []
         };
         groupedHistory.push(group);
       }
@@ -547,7 +547,7 @@ exports.getOutDutySummary = async (req, res) => {
         [constants.OUT_DUTY_STATUS.DELETED]: "#9CA3AF",
       };
 
-      group.on_duties.push({
+      group.out_duties.push({
         id: outDuty.id,
         date_range: dateRange,
         duration_display: `${parseFloat(outDuty.total_days).toFixed(1)} Days | Out Duty`,

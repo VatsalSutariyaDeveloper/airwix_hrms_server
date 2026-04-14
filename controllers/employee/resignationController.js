@@ -216,10 +216,11 @@ exports.submitResignation = async (req, res) => {
                     status: 0,
                     [Op.or]: [
                         { is_super_admin: true },
-                        { role_id: constants.ADMIN_ROLE_ID },
-                        { role_id: constants.BUSINESS_ADMIN_ROLE_ID }
+                        { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN },
+                        { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN }
                     ]
                 },
+                include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
                 attributes: ['email'],
                 transaction
             });
@@ -310,7 +311,7 @@ exports.handleAction = async (req, res) => {
 
         if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED) {
             const updateData = { approval_history: history };
-            const isSuperAdmin = req.user.role_id === 1 && req.user.is_super_admin;
+            const isSuperAdmin = req.user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && req.user.is_super_admin;
 
             if (isSuperAdmin || currentLevel >= totalLevels) {
                 // Final Approval (Super Admin override or last level reached)
@@ -636,12 +637,12 @@ exports.getResignationHistory = async (req, res) => {
  * Check if a user is authorized to approve/reject at a given stage
  */
 const isUserAuthorizedForResignation = (user, employee, stage) => {
-    const isSuperAdmin = user.role_id === constants.BUSINESS_ADMIN_ROLE_ID && user.is_super_admin;
+    const isSuperAdmin = user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && user.is_super_admin;
     if (isSuperAdmin) return true;
     
     const { type } = stage || { type: "ANYONE" };
     const employeeId = user.employee_id;
-    const isAdmin = user.role_id === constants.ADMIN_ROLE_ID;
+    const isAdmin = user.role_key === constants.ROLE_KEYS.ADMIN;
 
     switch (type) {
         case 'REPORTING_MANAGER':
@@ -681,11 +682,12 @@ const getResignationStakeholderEmails = async (employee, stage, transaction) => 
     if (type === 'ADMIN' || type === 'ANYONE') {
         const adminFilters = {
             [Op.or]: [
-                { role_id: constants.BUSINESS_ADMIN_ROLE_ID, is_super_admin: true },
-                { role_id: constants.ADMIN_ROLE_ID }
+                { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN, is_super_admin: true },
+                { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN }
             ]
         };
         const admins = await commonQuery.findAllRecords(User, adminFilters, {
+            include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
             attributes: ['email'],
             raw: true
         }, transaction);

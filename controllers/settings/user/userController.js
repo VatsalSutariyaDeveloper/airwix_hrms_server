@@ -213,7 +213,7 @@ exports.create = async (req, res) => {
       {},
       transaction,
       false,
-      false
+      { company_id: true }
     );
     req.body.permission = permission.permissions;
 
@@ -348,11 +348,11 @@ exports.assignRole = async (req, res) => {
 
     const permission = await commonQuery.findOneRecord(
       RolePermission,
-      { id: role_id },
+      { p_role_id: role_id },
       {},
       transaction,
       false,
-      {}
+      { company_id: true }
     );
 
     const userData = await commonQuery.updateRecordById(User, user_id, {
@@ -727,17 +727,20 @@ exports.update = async (req, res) => {
       true
     );
 
-    if(updated.employee_id){
-      await commonQuery.updateRecordById(
-        Employee,
-        updated.employee_id,
-        { 
-          ...(req.body.role_id == 3 && { is_attendance_supervisor: true }),
-          ...(req.body.role_id == 4 && { is_reporting_manager: true }),
-        },
-        transaction,
-        true
-      );
+    if(updated.employee_id && req.body.role_id){
+      const selectedRole = await commonQuery.findOneRecord(RolePermission, req.body.role_id, {}, transaction, false, { company_id: true });
+      if (selectedRole) {
+        await commonQuery.updateRecordById(
+          Employee,
+          updated.employee_id,
+          { 
+            is_attendance_supervisor: selectedRole.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR,
+            is_reporting_manager: selectedRole.role_key === constants.ROLE_KEYS.REPORTING_MANAGER,
+          },
+          transaction,
+          true
+        );
+      }
     }
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
@@ -828,20 +831,20 @@ exports.getAll = async (req, res) => {
 
         extraFilters[Op.and].push({
           [Op.or]: [
-            { is_super_admin: true, role_id: 1, company_id: { [Op.in]: organizationCompanyIds } },
-            { role_id: 2, company_id: company_id, branch_id: req.user.branch_id }
+            { is_super_admin: true, '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN, company_id: { [Op.in]: organizationCompanyIds } },
+            { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN, company_id: company_id, branch_id: req.user.branch_id }
           ]
         });
       } else {
         extraFilters[Op.and].push({
-          role_id: 2,
+          '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN,
           company_id: company_id,
           branch_id: req.user.branch_id
         });
       }
     } else if (req.body.filter?.role === "employee") {
       extraFilters[Op.and].push({
-        role_id: { [Op.notIn]: [1, 2, 3, 4] },
+        '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR, constants.ROLE_KEYS.REPORTING_MANAGER] },
         company_id: company_id,
         branch_id: req.user.branch_id
       });
@@ -939,7 +942,7 @@ exports.dropdownList = async (req, res) => {
         )
       ],
       [Op.and]: [
-        { role_id: { [Op.notIn]: [1, 2, 3, 4] } },
+        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR, constants.ROLE_KEYS.REPORTING_MANAGER] } },
         { company_id: company_id },
         { branch_id: req.user.branch_id }
       ]
@@ -948,6 +951,7 @@ exports.dropdownList = async (req, res) => {
       User,
       extraFilters,
       {
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
         attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
         order: [["user_name", "ASC"]],
       }

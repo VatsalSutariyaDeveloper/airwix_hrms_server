@@ -124,9 +124,9 @@ exports.getPendingCount = async (req, res) => {
 
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        return req.user.role_id === constants.REPORTING_MANAGER_ROLE_ID && employee.reporting_manager === req.user.id;
+                        return req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id;
                     case 'ATTENDANCE_SUPERVISOR':
-                        return req.user.role_id === constants.ATTENDANCE_SUPERVISOR_ROLE_ID && employee.attendance_supervisor === req.user.id;
+                        return req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id;
                     case 'ADMIN':
                         return req.user.is_admin;
                     case 'EMPLOYER':
@@ -235,8 +235,7 @@ exports.getPendingAnnouncementCount = async (req, res) => {
             filteredAnnouncements = announcements.filter(announcement => {
                 const { target_type, target } = announcement;
                 const userId = req.user.id?.toString();
-                const roleId = req.user.role_id?.toString();
-                const employeeRoleId = constants.EMPLOYEE_ROLE_ID.toString();
+                const roleKey = req.user.role_key;
 
                 const containsExactMatch = (targetStr, value) => {
                     if (!targetStr || !value) return false;
@@ -245,9 +244,9 @@ exports.getPendingAnnouncementCount = async (req, res) => {
                 };
 
                 if (target_type === 0) return true; // Show to all
-                if (target_type === 1 && containsExactMatch(target, employeeRoleId)) return true; // Employee role
+                if (target_type === 1 && roleKey === constants.ROLE_KEYS.EMPLOYEE) return true; // Employee role
                 if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
-                if (target_type === 2 && containsExactMatch(target, roleId)) return true; // Specific role
+                if (target_type === 2 && containsExactMatch(target, req.user.role_id?.toString())) return true; // Specific role
                 return false;
             });
         }
