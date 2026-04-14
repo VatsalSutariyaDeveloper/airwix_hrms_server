@@ -117,7 +117,10 @@ exports.getEmployerContributionReport = async (req, res) => {
                 },
                 
             ]
-        });
+        },
+        { company_id: true, branch_id: true },
+        'created_at'
+        );
 
         let allContributionColumns = new Set();
         let report = [];
@@ -204,8 +207,8 @@ exports.getCTCBreakdownReport = async (req, res) => {
                     }
                 ]
             },
-            {},
-            { company_id: true, branch_id: true }
+            { company_id: true, branch_id: true },
+            'created_at'
         );
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
@@ -313,8 +316,8 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                     }
                 ]
             },
-            {},
-            { company_id: true, branch_id: true }
+            { company_id: true, branch_id: true },
+            'created_at'
         );
 
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
@@ -490,8 +493,8 @@ exports.getPFReport = async (req, res) => {
                     }
                 ]
             },
-            {},
-            { company_id: true, branch_id: true }
+            { company_id: true, branch_id: true },
+            'created_at'
         );
         // payslips = payslips.get({ plain: true });
         // Filter out employees without PF
@@ -661,8 +664,8 @@ exports.getEmployeeSummaryReport = async (req, res) => {
                     }
                 ]
             },
-            {},
-            { company_id: true }
+            { company_id: true },
+            'created_at'
         );
 
         const report = employees.items.map(emp => {
@@ -727,8 +730,8 @@ exports.getESIReport = async (req, res) => {
                     }
                 ]
             },
-            {},
-            { company_id: true, branch_id: true }
+            { company_id: true, branch_id: true },
+            'created_at'
         );
 
         let reportData = [];
