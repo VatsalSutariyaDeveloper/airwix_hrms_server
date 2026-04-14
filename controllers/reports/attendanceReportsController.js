@@ -76,8 +76,8 @@ exports.getAttendanceReport = async (req, res) => {
         ],
         order: [['first_name', 'ASC']]
       },
-      {},
-      { company_id: true, branch_id: true }
+      { company_id: true, branch_id: true },
+      'created_at'
     );
 
     if (employees.items.length === 0) return res.ok({ items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -317,8 +317,8 @@ exports.getLateEntryReport = async (req, res) => {
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
         ]
       },
-      {},
-      { company_id: true, branch_id: true }
+      { company_id: true, branch_id: true },
+      'created_at'
     );
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -511,8 +511,8 @@ exports.getOvertimeReport = async (req, res) => {
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
         ]
       },
-      {},
-      { company_id: true, branch_id: true }
+      { company_id: true, branch_id: true },
+      'created_at'
     );
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -647,8 +647,8 @@ exports.getLeaveReport = async (req, res) => {
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                 ]
             },
-            {},
-            { company_id: true }
+            { company_id: true },
+            'created_at'
         );
 
         if (employees.items.length === 0) return res.ok({ categories: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });

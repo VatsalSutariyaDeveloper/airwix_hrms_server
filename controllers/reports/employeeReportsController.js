@@ -61,8 +61,8 @@ exports.getPerformanceReport = async (req, res) => {
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
         ]
       },
-      {},
-      { company_id: true, branch_id: true }
+      { company_id: true, branch_id: true },
+      'created_at'
     );
 
     if (!employees || employees.items.length === 0) return res.ok({ month, year, items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -250,8 +250,8 @@ exports.getEmployeeExitReport = async (req, res) => {
                 ],
                 order: [['exit_date', 'DESC']]
             },
-            {},
-            { company_id: true, branch_id: true }
+            { company_id: true, branch_id: true },
+            'created_at'
         );
 
         const reportData = employees.items.map(emp => {
