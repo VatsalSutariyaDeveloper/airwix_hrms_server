@@ -811,10 +811,10 @@ exports.getAll = async (req, res) => {
                     "created_at",
                     "status",
                     "onboarding_status"
-                ]
+                ],
             },
             true,
-            "joining_date"
+            "created_at"
         );
 
         data.items = data.items.map(item => {
@@ -1021,13 +1021,25 @@ exports.assignRole = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "No users found for the provided employees" });
         }
 
-        // 3. Determine role_id based on field_name
-        let newRoleId;
-        if (field_name === 'is_reporting_manager') {
-            newRoleId = 4;
-        } else if (field_name === 'is_attendance_supervisor') {
-            newRoleId = 3;
+        // 3. Determine role_id based on field_name dynamically using role_key
+        const roleKey = field_name === 'is_reporting_manager' 
+            ? constants.ROLE_KEYS.REPORTING_MANAGER 
+            : constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR;
+
+        const targetRole = await RolePermission.findOne({
+            where: { 
+                company_id: req.user.company_id,
+                role_key: roleKey
+            },
+            transaction
+        });
+
+        if (!targetRole) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: `Role not found for ${roleKey}` });
         }
+
+        const newRoleId = targetRole.id;
 
         // 4. Get permissions from RolePermission table
         // const rolePermission = await commonQuery.findOneRecord(RolePermission, newRoleId, {}, transaction);

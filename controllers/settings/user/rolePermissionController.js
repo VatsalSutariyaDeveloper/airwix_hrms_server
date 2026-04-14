@@ -40,22 +40,13 @@ exports.getAll = async (req, res) => {
     ["role_name", true, true],
   ];
 
-  // const company_id = req.user.company_id;
-  
-  
-  // if (process.env.NODE_ENV !== 'local') {
-  //   req.body.filter.is_super_admin = false; 
-  // }
-  
-  // const extraFilters = {
-  //   [Op.or]: [
-  //     { company_id: company_id },
-  //     sequelize.where(
-  //       sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
-  //       true
-  //     )
-  //   ]
-  // };
+  const company_id = req.user.company_id;
+  const extraFilters = {
+    [Op.or]: [
+      { company_id: company_id },
+      { company_id: -1 } // Include system roles
+    ]
+  };
   
   // Call reusable function
   const data = await commonQuery.fetchPaginatedData(
@@ -66,16 +57,19 @@ exports.getAll = async (req, res) => {
       attributes: [
         "id",
         "role_name",
+        "p_role_id",
+        "role_key",
         "permissions",
         "is_system",
         "status",
         "created_at",
         "updated_at",
       ],
+      order: [["p_role_id", "ASC"], ["id", "ASC"]]
     },
-    false,
+    { company_id: true },
     'created_at',
-    // extraFilters
+    extraFilters
   );
   return res.ok(data);
 };
@@ -89,14 +83,15 @@ exports.dropdownList = async (req, res) => {
       RolePermission,
       { 
         status: 0,
-        id: { [Op.notIn]: [1, 2] }
+        role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] },
+        ...(!req.user.is_super_admin ? { company_id: req.user.company_id } : {})
       },
       { 
         attributes: ["id", "role_name"], 
-        order: [["role_name", "ASC"]] 
+        order: [["p_role_id", "ASC"], ["id", "ASC"]] 
       },
       null,
-      false
+      { company_id: true }
     );
     return res.ok(record);
   } catch (err) {
@@ -110,7 +105,7 @@ exports.getById = async (req, res) => {
     const record = await commonQuery.findOneRecord(
       RolePermission,
       req.params.id,
-      {}, null, false, false
+      {}, null, false, { company_id: true }
     );
     
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND, { code: constants.ROLE_PERMISSION_NOT_FOUND });
@@ -161,7 +156,7 @@ exports.update = async (req, res) => {
       req.body,
       transaction,
       false,
-      false
+      { company_id: true }
     );
 
     if (!updated || updated.status === 2) {
@@ -206,7 +201,7 @@ exports.delete = async (req, res) => {
       return res.error(constants.INVALID_INPUT);
     }
     
-    const deleted = await commonQuery.softDeleteById(RolePermission, ids, transaction, false);
+    const deleted = await commonQuery.softDeleteById(RolePermission, ids, transaction, { company_id: true });
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);
@@ -250,7 +245,9 @@ exports.updateStatus = async (req, res) => {
       RolePermission,
       ids,
       { status },
-      transaction
+      transaction,
+      false,
+      { company_id: true }
     );
 
     if (!updated || updated.status === 2) {
@@ -285,7 +282,7 @@ exports.getPermissions = async (req, res) => {
 
     // 2. Get Permission Role
     if (req.body.ROLE_PERMISSION_id) {
-      RolePermission = await commonQuery.findOneRecord(RolePermission, req.body.ROLE_PERMISSION_id);
+      RolePermission = await commonQuery.findOneRecord(RolePermission, req.body.ROLE_PERMISSION_id, {}, null, false, { company_id: true });
     }
 
     // 3. Get Module + Entities

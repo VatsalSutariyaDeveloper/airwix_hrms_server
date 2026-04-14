@@ -221,6 +221,7 @@ exports.create = async (req, res) => {
     );
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
+    await initializeCompanyRoles(newCompany.id, newBranch.id, user_id, transaction);
 
     // Update company_access for the creator
     await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
