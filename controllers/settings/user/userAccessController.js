@@ -241,7 +241,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // --- SUBSCRIPTION & ACCESS FILTERING ---
-    const finalSubscriptionData = await getCompanySubscription(company_id);
+    let finalSubscriptionData = await getCompanySubscription(company_id);
     let companyAllowedEntityIds = [];
     if (finalSubscriptionData && finalSubscriptionData.allowed_module_ids) {
         companyAllowedEntityIds = normalizeCompanyAccess(finalSubscriptionData.allowed_module_ids);
@@ -276,15 +276,21 @@ exports.sessionData = async (req, res) => {
     });
 
     let planStatus = "active";
-    if (finalSubscriptionData) {
-        if (currentCompany.status === 3) {
-            planStatus = "account_suspended";
-        } else if (finalSubscriptionData.status === 0) {
-            planStatus = "active";
-        } else if (finalSubscriptionData.status === 1) {
-             planStatus = "expired";
-        }
+    // if (finalSubscriptionData) {
+    //     if (currentCompany.status === 3) {
+    //         planStatus = "account_suspended";
+    //     } else if (finalSubscriptionData.status === 0) {
+    //         planStatus = "active";
+    //     } else if (finalSubscriptionData.status === 1) {
+    //          planStatus = "expired";
+    //     }
+    // }
+    if (!finalSubscriptionData) {
+        finalSubscriptionData = {};
     }
+    finalSubscriptionData.status = 0;
+    finalSubscriptionData.users_limit = 100000;
+    finalSubscriptionData.companies_limit = 100000;
 
     let currentBranch = null;
     if (branchList && branchList.length > 0) {
