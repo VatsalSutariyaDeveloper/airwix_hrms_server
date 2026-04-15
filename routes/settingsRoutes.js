@@ -30,6 +30,7 @@ const customFieldController = require("../controllers/settings/customFieldContro
 const outDutyRequestController = require("../controllers/settings/outDutyRequestController");
 const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 const systemLogController = require("../controllers/systemLogController");
+const expenseTypeController = require("../controllers/settings/expenseTypeController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -288,6 +289,19 @@ router.get("/incentive-type/:id", incentiveTypeController.getById);
 router.put("/incentive-type/:id", incentiveTypeController.update);
 router.delete("/incentive-type", incentiveTypeController.delete);
 router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
+
+// ==========================
+// 36.1. EXPENSE TYPE MASTER
+// ==========================
+// Base Path: /expense-type
+router.post("/expense-type", expenseTypeController.create);
+router.post("/expense-type/get-transactions", expenseTypeController.getAll);
+router.post("/expense-type/dropdown-list", expenseTypeController.dropdownList);
+router.get("/expense-type/:id", expenseTypeController.getById);
+router.put("/expense-type/:id", expenseTypeController.update);
+router.delete("/expense-type", expenseTypeController.delete);
+router.patch("/expense-type/status", expenseTypeController.updateStatus);
+
 
 // ==========================
 // 37. CUSTOM FIELD ROUTES

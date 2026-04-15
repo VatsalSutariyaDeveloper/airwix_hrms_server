@@ -124,6 +124,8 @@ function initModels(prefix) {
   const EmployeeAdvance = require("./payroll/employeeAdvance")(seq, DataTypes);
   const PaymentHistory = require("./payroll/paymentHistory")(seq, DataTypes);
   const CashVoucher = require("./payroll/cashVoucher")(seq, DataTypes);
+  const ExpenseType = require("./settings/expenseType")(seq, DataTypes);
+  const Reimbursement = require("./payroll/reimbursement")(seq, DataTypes);
 
   const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(seq, DataTypes);
 
@@ -210,7 +212,9 @@ function initModels(prefix) {
     CashVoucher,
     CanteenAttendance,
     SalaryRevisionHistory,
-    AttendanceRegularization
+    AttendanceRegularization,
+    ExpenseType,
+    Reimbursement
   };
 
   Object.keys(db).forEach(modelName => {

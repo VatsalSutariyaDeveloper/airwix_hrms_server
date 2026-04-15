@@ -34,6 +34,7 @@ const constants = {
   EMPLOYEE_IMG_FOLDER: "employee/images/",
   PUNCH_IMAGE_FOLDER: "punch_images/",
   LEAVE_DOC_FOLDER: "employee/leave_docs/",
+  REIMBURSEMENT_DOC_FOLDER: "employee/reimbursement_docs/",
   CUSTOM_FIELD_IMG_FOLDER: "custom_fields/",
 
   /* =======================
@@ -45,6 +46,7 @@ const constants = {
   DELETED: "DELETED",
   FETCHED: "FETCHED",
   REQUIRED: "REQUIRED",
+  CANCELLED: "CANCELLED",
   NO_RECORDS_FOUND: "NO_RECORDS_FOUND",
   ACTION_SUCCESSFUL: "ACTION_SUCCESSFUL",
   LOGOUT_SUCCESS: "LOGOUT_SUCCESS",
@@ -388,6 +390,15 @@ const constants = {
   },
   
   RESIGNATION_APPROVAL_STATUS: {
+    PENDING: 0,
+    PARTIALLY_APPROVED: 1,
+    DELETED: 2,
+    APPROVED: 3,
+    REJECTED: 4,
+    CANCELLED: 5
+  },
+
+  REIMBURSEMENT_APPROVAL_STATUS: {
     PENDING: 0,
     PARTIALLY_APPROVED: 1,
     DELETED: 2,
