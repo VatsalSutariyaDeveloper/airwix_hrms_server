@@ -97,7 +97,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
 
             group.regularizations.push({
                 id: request.id,
-                date: dateStr,
+                date: request.attendance_date,
                 date_display: dateStr,
                 reason: request.reason || "",
                 status_id: request.approval_status,
