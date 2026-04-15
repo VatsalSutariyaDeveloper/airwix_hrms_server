@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const resignationController = require("../controllers/employee/resignationController");
+const reasonController = require("../controllers/settings/resignationReasonController");
 
 // Resignation Template Routes
 router.post("/template", resignationController.create);
@@ -12,7 +13,6 @@ router.put("/template/:id", resignationController.update);
 router.delete("/template/:id", resignationController.delete);
  
 // Resignation Reason Routes
-const reasonController = require("../controllers/settings/resignationReasonController");
 router.post("/reason", reasonController.create);
 router.get("/reason", reasonController.getAll);
 router.post("/reason/get-transactions", reasonController.getAll);

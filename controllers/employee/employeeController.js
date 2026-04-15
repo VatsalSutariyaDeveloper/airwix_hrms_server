@@ -26,7 +26,8 @@ const {
     Department,
     HolidayTemplate,
     ResignationTemplate,
-    DeviceMaster
+    DeviceMaster,
+    OutDutyRequest
 } = require("../../models");
 
 const {
@@ -2681,6 +2682,22 @@ exports.getEmployeeHolidays = async (req, res) => {
 
         return res.success("Employee holidays retrieved successfully", { holidays });
 
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.availableOutDuty = async (req, res) => {
+    try {
+        const today = dayjs().format("YYYY-MM-DD");
+        const todayOutDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, {
+            employee_id: req.user.employee_id,
+            start_date: { [Op.lte]: today },
+            end_date: { [Op.gte]: today },
+            approval_status: 3, // APPROVED
+            status: 0
+        });
+        return res.ok({can_punch_from_personal_device: todayOutDutyRequest ? true : false});
     } catch (err) {
         return handleError(err, res, req);
     }
