@@ -128,6 +128,7 @@ function initModels(prefix) {
   const Reimbursement = require("./payroll/reimbursement")(seq, DataTypes);
 
   const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(seq, DataTypes);
+  const CompanySettings = require("./settings/companySettings")(seq, DataTypes);
 
   // Collect all models in one db object
   const db = {
@@ -214,7 +215,8 @@ function initModels(prefix) {
     SalaryRevisionHistory,
     AttendanceRegularization,
     ExpenseType,
-    Reimbursement
+    Reimbursement,
+    CompanySettings
   };
 
   Object.keys(db).forEach(modelName => {

@@ -51,16 +51,6 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
     },
-    reimbursement_approval_level: {
-      type: DataTypes.INTEGER,
-      defaultValue: 1,
-      comment: "1, 2, or 3 levels of approval"
-    },
-    reimbursement_approval_config: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
-    },
     enble_out_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
 
     comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },

@@ -79,6 +79,7 @@ router.delete("/reimbursement", reimbursementController.delete);
 router.patch("/reimbursement/status/:id", reimbursementController.updateStatus);
 router.put("/reimbursement/cancel/:id", reimbursementController.cancelReimbursement);
 router.post("/reimbursement/pending-approvals", reimbursementController.getPendingApprovals);
+router.post("/reimbursement/summary", reimbursementController.getReimbursementSummary);
 
 
 

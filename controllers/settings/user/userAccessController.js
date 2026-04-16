@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission } = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -53,6 +53,16 @@ exports.sessionData = async (req, res) => {
     if (!userData) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);
+    }
+
+    // Fetch employee data if employee_id exists
+    let employeeData = null;
+    if (userData.employee_id) {
+        employeeData = await Employee.findOne({
+            where: { id: userData.employee_id },
+            attributes: ['id', 'profile_image', 'first_name', 'employee_code'],
+            transaction
+        });
     }
 
     const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || userData.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
@@ -187,11 +197,11 @@ exports.sessionData = async (req, res) => {
 
     // Enrich User
     const userJson = userData.toJSON();
-    const enrichedUserData = { 
-        ...userJson, 
-        permission: userData.RolePermission?.permissions ?? null, 
+    const enrichedUserData = {
+        ...userJson,
+        permission: userData.RolePermission?.permissions ?? null,
         branch_access: userData.branch_access || "",
-        profile_image_url: userData.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${userData.profile_image}` : null 
+        profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null
     };
 
     delete enrichedUserData.RolePermission;
@@ -309,12 +319,13 @@ exports.sessionData = async (req, res) => {
       company_list: enrichedCompanyList,
       company: currentCompany,
       user: enrichedUserData,
+      employee: employeeData,
       sidebarModule: filteredSidebarModuleList,
       currency: currencyDetails,
       settings: settingsObject,
       companySubscription: finalSubscriptionData,
       planStatus: planStatus,
-      branch_list: branchList, 
+      branch_list: branchList,
       branch: currentBranch,
       total_company_branches: totalCompanyBranches,
       employeeSettings: employeeSettings || []

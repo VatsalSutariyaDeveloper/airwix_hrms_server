@@ -1,4 +1,4 @@
-const { Reimbursement, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../models");
+const { Reimbursement, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings } = require("../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
@@ -186,26 +186,22 @@ exports.updateStatus = async (req, res) => {
             return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
         }
 
-        // 2. Fetch Employee with Template for Level Config
-        const employee = await commonQuery.findOneRecord(Employee, { id: reimbursement.employee_id }, {
-            include: [
-                { model: AttendanceTemplate, as: "attendanceTemplate" },
-                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate" }
-            ]
-        }, transaction);
+        // 2. Fetch Employee for company_id
+        const employee = await commonQuery.findOneRecord(Employee, { id: reimbursement.employee_id }, {}, transaction);
 
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
-        // 3. Determine Total Levels
-        // Check Employee-specific template first, then global template
+        // 3. Determine Total Levels from CompanySettings
         let totalLevels = 1;
-        if (employee.employeeAttendanceTemplate) {
-            totalLevels = employee.employeeAttendanceTemplate.reimbursement_approval_level || 1;
-        } else if (employee.attendanceTemplate) {
-            totalLevels = employee.attendanceTemplate.reimbursement_approval_level || 1;
+        const approvalLevelSetting = await commonQuery.findOneRecord(CompanySettings, {
+            settings_name: "reimbursement_approval_level",
+        }, {}, transaction);
+
+        if (approvalLevelSetting && approvalLevelSetting.settings_value) {
+            totalLevels = approvalLevelSetting.settings_value;
         }
 
         const currentLevel = reimbursement.current_level;
@@ -421,7 +417,6 @@ exports.getPendingApprovals = async (req, res) => {
 };
 
 // Soft Delete
-
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -440,6 +435,104 @@ exports.delete = async (req, res) => {
         return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.getReimbursementSummary = async (req, res) => {
+    try {
+        let { employee_id } = req.body;
+        if (!employee_id) {
+            employee_id = req.user.employee_id;
+        }
+
+        if (!employee_id) {
+            return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
+        }
+
+        // 1. Fetch Reimbursement Requests for History (Ordered by date)
+        const history = await commonQuery.findAllRecords(Reimbursement, {
+            employee_id,
+            status: 0
+        }, {
+            include: [
+                {
+                    model: Employee,
+                    as: "employee",
+                    attributes: ["id", "first_name", "employee_code"],
+                    required: false
+                },
+                {
+                    model: ExpenseType,
+                    as: "expenseType",
+                    attributes: ["name"],
+                    required: false
+                }
+            ],
+            order: [["date", "DESC"]]
+        });
+
+        // 2. Group History by Month
+        const groupedHistory = [];
+        history.forEach(reimbursement => {
+            const monthYear = formatDateTime(reimbursement.date, "MMM, YYYY");
+            let group = groupedHistory.find(g => g.month_label === monthYear);
+
+            if (!group) {
+                group = {
+                    month_label: monthYear,
+                    total_amount: 0,
+                    reimbursements: []
+                };
+                groupedHistory.push(group);
+            }
+
+            group.total_amount += parseFloat(reimbursement.amount || 0);
+
+            const statusMap = {
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "PENDING",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED]: "APPROVED",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED]: "REJECTED",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+            };
+
+            const colorMap = {
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED]: "#10B981",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED]: "#EF4444",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "#F59E0B",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+                [constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED]: "#6B7280",
+            };
+
+            group.reimbursements.push({
+                id: reimbursement.id,
+                date: formatDateTime(reimbursement.date, "D MMM, ddd"),
+                amount_display: `${parseFloat(reimbursement.amount).toFixed(2)}`,
+                expense_type: reimbursement.expenseType?.name || "",
+                description: reimbursement.description || "",
+                status_id: reimbursement.approval_status,
+                status: statusMap[reimbursement.approval_status],
+                status_color: colorMap[reimbursement.approval_status] || "#F59E0B",
+                approval_remark: reimbursement.approval_remark || ""
+            });
+        });
+
+        // Calculate totals
+        let totalAmount = 0;
+        history.forEach(reimbursement => {
+            totalAmount += parseFloat(reimbursement.amount || 0);
+        });
+
+        return res.ok({
+            reimbursement_summary: {
+                total_amount_text: `${totalAmount.toFixed(2)}`,
+                total_requests: history.length
+            },
+            reimbursement_history: groupedHistory
+        });
+
+    } catch (err) {
         return handleError(err, res, req);
     }
 };
