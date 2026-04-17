@@ -367,7 +367,8 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 base_salary: 0,
                 overtime: 0,
                 overtime_amount: 0,
-                
+                reimbursement_amount: (ps.reimbursement_details || []).reduce((sum, r) => sum + parseFloat(r.amount || 0), 0),
+
                 earnings: {},
                 deductions: {},
                 statutory: {},

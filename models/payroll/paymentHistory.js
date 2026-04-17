@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
       year: { type: DataTypes.INTEGER, allowNull: false },      
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
-      payment_type: { type: DataTypes.ENUM("Advance", "Salary"),defaultValue: "Advance", allowNull: false },
+      payment_type: { type: DataTypes.ENUM("Advance", "Salary", "Reimbursement"),defaultValue: "Advance", allowNull: false },
       payment_mode: {
         type: DataTypes.ENUM("Cash", "Bank"),
         allowNull: false,

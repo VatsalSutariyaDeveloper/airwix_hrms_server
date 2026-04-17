@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType } = require("../../models");
 const { commonQuery, handleError, fail, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -99,6 +99,19 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     month: month,
                     year: year
                 }
+            },
+            {
+                model: Reimbursement,
+                as: "reimbursements",
+                attributes: ['id', 'amount', 'date', 'description', 'expense_type', 'approval_status', 'payment_type'],
+                where: {
+                    date: { [Op.between]: [startDate, endDate] },
+                    approval_status: 3, // APPROVED
+                    status: 0, // Active
+                    payment_type: 1 // Only include in payroll if payment_type is 1 (salary)
+                },
+                required: false,
+                include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
             },
             {
                 model: EmployeeAttendanceTemplate,
@@ -347,11 +360,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     console.log("includeOTInTotal", includeOTInTotal);
     const otAmount = includeOTInTotal ? Math.round(totalOTAmount) : 0;
 
-    // Step E: Use advances and incentives from employee include (already fetched)
+    // Step E: Use advances, incentives and reimbursements from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
     const advances = employee.employeeAdvances || [];
+    const reimbursements = employee.reimbursements || [];
+    
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
+    const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.amount || 0), 0);
 
     // Create overtime history from attendance records
     const overtimeHistory = attendanceRecords
@@ -364,6 +380,18 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             amount: Math.round(parseFloat(day.overtime_amount || 0)),
             note: day.note || '',
             overtime_data: day.overtime_data || null
+        }));
+
+    // Create fine history from attendance records
+    const fineHistory = attendanceRecords
+        .filter(day => parseFloat(day.fine_amount || 0) > 0)
+        .map(day => ({
+            type: "fine",
+            id: day.id,
+            date: day.attendance_date,
+            amount: Math.round(parseFloat(day.fine_amount || 0)),
+            note: day.note || '',
+            fine_data: day.fine_data || null
         }));
 
     // Fetch Payment History for the month
@@ -604,6 +632,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         takeHomeEarnings += totalIncentive;
     }
 
+    // Add reimbursement to takeHomeEarnings (but not to earnings array to avoid storing in earning_details)
+    if (totalReimbursement > 0) {
+        takeHomeEarnings += totalReimbursement;
+    }
+
     // Remove individual incentive additions from the loop below
     // incentives.forEach(inc => {
     //     const amt = parseFloat(inc.amount || 0);
@@ -654,7 +687,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
     }
 
-    /*
+
     // Step H: Calculate Statutory TDS (Tax Deducted at Source)
     let tdsAmount = 0;
     let tdsPercentage = 0;
@@ -696,25 +729,36 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             }
         });
 
-        if (tdsConfig.calculation_type === 'Fixed') {
+        if (tdsConfig.calculation_type === 'Manual Amount') {
             tdsAmount = parseFloat(tdsConfig.amount || 0);
             tdsCalculationData = { calculation_type: 'Manual', amount: tdsAmount, monthlyTDS: tdsAmount };
         } else if (tdsConfig.calculation_type !== 'None') {
-            // Advanced Projection Approach: 
+            // Advanced Projection Approach:
             // Estimated Annual Gross = Actual YTD (from prev months) + Current Month Actual + Projected Remaining Months
             const currentMonthActual = takeHomeEarnings;
             const projectedRemaining = parseFloat(template.ctc_monthly || 0) * (monthsRemaining - 1);
-            
+
             const annualGross = actualYTD + currentMonthActual + projectedRemaining;
-            
-            // Map NEW/OLD to new_regime/old_regime
-            const regime = tdsConfig.regime === 'OLD' ? 'old_regime' : 'new_regime';
-            
+
+            // Map regime from config - support both 'regime' field and 'calculation_type' containing regime name
+            let regime = 'new_regime';
+            if (tdsConfig.regime) {
+                regime = tdsConfig.regime === 'OLD' ? 'old_regime' : 'new_regime';
+            } else if (tdsConfig.calculation_type) {
+                const calcType = tdsConfig.calculation_type.toLowerCase();
+                if (calcType.includes('old')) {
+                    regime = 'old_regime';
+                } else if (calcType.includes('new')) {
+                    regime = 'new_regime';
+                }
+                // 'System Calculated' or 'Smart System Calculated' will default to new_regime
+            }
+
             // Deductions/Exemptions from config (80C, 80D, etc.)
             const exemptions = parseFloat(tdsConfig.exemptions || 0);
 
             const tdsResult = calculateTDS(annualGross, regime, exemptions, taxPaidAlready, monthsRemaining);
-            
+
             tdsAmount = tdsResult.monthlyTDS;
             tdsPercentage = tdsResult.percentage;
             tdsCalculationData = tdsResult;
@@ -723,19 +767,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     if (tdsAmount > 0) {
         statutory["Income Tax (TDS)"] = tdsAmount;
-        // statutory["Income Tax (TDS) %"] = tdsPercentage;
+        statutory["Income Tax (TDS) %"] = tdsPercentage;
         deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
         totalDeductions += tdsAmount;
-    }
-    */
-    // let tdsCalculationData = null;
-
-    // if (tdsAmount > 0) {
-    //     statutory["Income Tax (TDS)"] = tdsAmount;
-    //     statutory["Income Tax (TDS) %"] = tdsPercentage;
-    //     deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
-    //     totalDeductions += tdsAmount;
-    // }    
+    }    
     const netPayable = takeHomeEarnings - totalDeductions;
 
     // Calculate totals for breakdown arrays
@@ -761,9 +796,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             totalFine: Math.round(totalFine),
             overtimeAmount: Math.round(otAmount),
             incentiveAmount: Math.round(totalIncentive),
+            reimbursementAmount: Math.round(totalReimbursement),
             // advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: Math.round(encashmentAmount),
-            // tdsPercentage: tdsPercentage.toFixed(2),
+            tdsPercentage: tdsPercentage.toFixed(2),
             netPayable: netPayable < 0 ? "0" : Math.round(netPayable).toString(),
             takeHomeEarnings: Math.round(takeHomeEarnings).toString(),
             totalDeductions: Math.round(totalDeductions).toString()
@@ -777,6 +813,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             total_deductions: Math.round(totalDeductionsBreakdown).toString()
         },
         overtime_history: overtimeHistory,
+        fine_history: fineHistory,
+        reimbursement_history: reimbursements.map(r => ({
+            id: r.id,
+            amount: r.amount,
+            date: r.date,
+            description: r.description,
+            expense_type: r.expenseType?.name,
+        })),
         payment_history: {
             salary: {
                 history: paymentHistories.filter(ph => ph.payment_type === 'Salary').map(ph => ({
@@ -863,14 +907,12 @@ const formatPayslipToSummary = async (payslip) => {
     const totalFine = getSum(deductionDetails, ['fine', 'misc', 'adjustment', 'food']);
     const otAmount = getSum(earningDetails, ['overtime', 'ot']);
     const totalIncentive = getSum(earningDetails, ['incentive', 'bonus']);
+    const totalReimbursement = getSum(earningDetails, ['reimbursement']);
     const encashmentAmount = getSum(earningDetails, ['encashment']);
     const advanceAmount = getSum(deductionDetails, ['advance', 'loan']);
 
     // 6. Payment History
-    const paymentHistories = payslip.payment_history?.advances_adjusted || [];
-
-    console.log("payslip.payment_history-------------------------------",payslip.payment_history);
-    
+    const paymentHistories = payslip.payment_history?.advances_adjusted || [];    
 
     // 7. Lunch History
     const lunchRecords = await commonQuery.findAllRecords(CanteenAttendance, {
@@ -927,6 +969,18 @@ const formatPayslipToSummary = async (payslip) => {
             overtime_data: day.overtime_data || null
         }));
 
+    const fineHistory = attendanceRecords
+        .filter(day => parseFloat(day.fine_minutes || 0) > 0 || parseFloat(day.fine_amount || 0) > 0)
+        .map(day => ({
+            type: "fine",
+            id: day.id,
+            date: day.attendance_date,
+            minutes: parseInt(day.fine_minutes || 0),
+            amount: parseFloat(day.fine_amount || 0),
+            note: day.note || '',
+            fine_data: day.fine_data || null
+        }));
+
     // 8. Final Summary Object
     return {
         id: payslip.id,
@@ -971,6 +1025,7 @@ const formatPayslipToSummary = async (payslip) => {
             totalFine: totalFine.toFixed(2),
             overtimeAmount: otAmount.toFixed(2),
             incentiveAmount: totalIncentive.toFixed(2),
+            reimbursementAmount: totalReimbursement.toFixed(2),
             encashmentAmount: encashmentAmount.toFixed(2),
             advanceAmount: advanceAmount,
             netPayable: parseFloat(payslip.net_salary || 0).toFixed(2),
@@ -1004,6 +1059,8 @@ const formatPayslipToSummary = async (payslip) => {
             grand_total: ((payslip.payment_history?.salary_payments || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0) + (paymentHistories || []).reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0)).toFixed(2)
         },
         overtime_history: overtimeHistory,
+        fine_history: fineHistory,
+        reimbursement_history: payslip.reimbursement_details || [],
         employee_incentive_history: employeeIncentiveHistory,
         leave_balances: payslip.leave_balances || [],
     };
@@ -1138,6 +1195,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         }, {}),
         statutory_details: summary.breakdown.statutory || {},
         employer_details: summary.breakdown.employer || {},
+        reimbursement_details: summary.reimbursement_history || [],
         payment_history: {
             ...(summary.payment_history || {}),
             advances_adjusted: []
@@ -1853,6 +1911,19 @@ exports.getPayslipById = async (req, res) => {
             status: { [Op.ne]: 2 }
         });
 
+        // Fetch reimbursements for the month
+        const startDate = monthDate.startOf('month').format('YYYY-MM-DD');
+        const endDate = monthDate.endOf('month').format('YYYY-MM-DD');
+        const reimbursements = await commonQuery.findAllRecords(Reimbursement, {
+            employee_id: payslip.employee_id,
+            date: { [Op.between]: [startDate, endDate] },
+            approval_status: 3, // APPROVED
+            status: 0, // Active
+            payment_type: 1 // Only include in payroll if payment_type is 1 (salary)
+        }, {
+            include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
+        });
+
         // Fetch Employee Leave Balance data
         const rawLeaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
             employee_id: payslip.employee_id,
@@ -1982,12 +2053,14 @@ exports.getPayslipById = async (req, res) => {
                 overtime: payslip.paid_ot_pay || payslip.ot_amount,
                 lwpDeduction: payslip.lwp_deduction || 0,
                 incentives: (parseFloat(payslip.paid_incentive || 0) + incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0)).toFixed(2),
-                advances: (parseFloat(payslip.deduct_advance || 0) + advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)).toFixed(2)
+                advances: (parseFloat(payslip.deduct_advance || 0) + advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)).toFixed(2),
+                reimbursements: (payslip.reimbursement_details || []).reduce((sum, r) => sum + parseFloat(r.amount || 0), 0).toFixed(2)
             },
             adjustments: {
                 incentives: incentives.map(i => ({ name: i.incentiveType?.name, amount: i.amount })),
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
+            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.amount, description: r.description, date: r.date, expense_type: r.expense_type?.name,})),
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
             leave_balances: payslip.leave_balances || leaveBalances,
@@ -2090,12 +2163,11 @@ exports.getSalaryOverview = async (req, res) => {
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
             });            
-            if (payslip) {                
+            if (payslip) {
                 // Use stored values from payslip database
-                const breakdown = payslip.break_down || { earnings: [], deductions: [] };
                 const ot = parseFloat(payslip.ot_amount || 0);
                 const fine = parseFloat(payslip.total_fine || 0);
-                
+
                 // Use stored earnings from earning_details
                 const earningDetails = payslip.earning_details || {};
                 const earnList = Object.entries(earningDetails).map(([name, amount]) => ({
@@ -2105,42 +2177,15 @@ exports.getSalaryOverview = async (req, res) => {
                     is_incentive: false,
                     is_employer: false
                 }));
-                
-                const dedList = (breakdown.deductions || []).map(d => ({
-                    name: d.name,
-                    amount: parseFloat(d.amount || 0).toFixed(2),
-                    is_food: d.is_food,
-                    meal_count: d.meal_count,
-                    rate: d.rate,
-                    is_statutory: d.is_statutory
-                }));
 
-                // Also include deductions from deduction_details if not already covered
+                // Use stored deductions from deduction_details
                 const deductionDetails = payslip.deduction_details || {};
-                Object.entries(deductionDetails).forEach(([name, amount]) => {
-                    const amt = parseFloat(amount || 0);
-                    if (amt > 0 && !dedList.find(d => d.name === name)) {
-                        dedList.push({
-                            name,
-                            amount: amt.toFixed(2),
-                            is_food: name.toLowerCase().includes('food'),
-                            is_statutory: false
-                        });
-                    }
-                });
-
-                // Include Statutory Employee Deductions from stored statutory_details
-                const statDetails = payslip.statutory_details || {};
-                Object.entries(statDetails).forEach(([name, amount]) => {
-                    const amt = parseFloat(amount || 0);
-                    if (amt > 0 && name !== "Income Tax (TDS) %") {
-                        dedList.push({
-                            name,
-                            amount: amt.toFixed(2),
-                            is_statutory: true
-                        });
-                    }
-                });
+                const dedList = Object.entries(deductionDetails).map(([name, amount]) => ({
+                    name,
+                    amount: parseFloat(amount || 0).toFixed(2),
+                    is_food: name.toLowerCase().includes('food'),
+                    is_statutory: false
+                }));
 
                 // Use stored attendance values
                 const lwpDays = parseFloat(payslip.wp_days || 0);
@@ -2209,6 +2254,7 @@ exports.getSalaryOverview = async (req, res) => {
                     lunch_count: payslip.lunch_count || 0,
                     lunch_history: lunchHistory,
                     employee_incentive_history: employeeIncentiveHistory,
+                    reimbursement_history: payslip.reimbursement_details || [],
                     statutory: payslip.statutory_details || {},
                     employer: payslip.employer_details || {},
                     breakdown: {
@@ -2228,6 +2274,7 @@ exports.getSalaryOverview = async (req, res) => {
                     is_loaded: true,
                     is_finalized: true
                 });
+                
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
@@ -2255,6 +2302,7 @@ exports.getSalaryOverview = async (req, res) => {
                             amount: inc.amount,
                             incentive_date: inc.incentive_date
                         })),
+                        reimbursement_history: summary.reimbursement_history || [],
                         statutory: summary.breakdown.statutory || {},
                         employer: summary.breakdown.employer || {},
                         breakdown: summary.breakdown,
@@ -2291,6 +2339,9 @@ exports.getSalaryOverview = async (req, res) => {
                 overview[i].payments = advances.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0).toFixed(2);
             }
         }
+
+        console.log("overview----------------------------\n",overview);
+        console.log("overview.breakdown----------------------------\n",overview[0]?.breakdown);
 
         return res.ok(overview);
     } catch (err) {

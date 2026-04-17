@@ -44,7 +44,7 @@ exports.sessionData = async (req, res) => {
       include: [{ 
           model: RolePermission, 
           as: "RolePermission", 
-          attributes: ["permissions", "role_key"],
+          attributes: ["permissions", "role_key", "role_name"],
           required: false 
       }],
       transaction
@@ -201,7 +201,8 @@ exports.sessionData = async (req, res) => {
         ...userJson,
         permission: userData.RolePermission?.permissions ?? null,
         branch_access: userData.branch_access || "",
-        profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null
+        profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
+        role_name : userData.RolePermission.role_name
     };
 
     delete enrichedUserData.RolePermission;

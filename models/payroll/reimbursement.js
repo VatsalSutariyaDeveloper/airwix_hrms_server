@@ -13,8 +13,9 @@ module.exports = (sequelize, DataTypes) => {
             current_level: { type: DataTypes.INTEGER, defaultValue: 1, comment: "Tracks the current approval stage" },
             approval_history: { type: DataTypes.JSON, allowNull: true, comment: "Record of who approved at each level" },
             approval_remark: { type: DataTypes.TEXT, allowNull: true },
-            status: { 
-                type: DataTypes.SMALLINT, 
+            payment_type: { type: DataTypes.INTEGER, defaultValue: 1, comment: "1: Include in payroll (salary), 2: Direct payment (instant)" },
+            status: {
+                type: DataTypes.SMALLINT,
                 defaultValue: 0,
                 comment: "0: Active, 1: Inactive, 2: Deleted"
             },

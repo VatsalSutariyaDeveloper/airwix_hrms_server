@@ -107,6 +107,8 @@ exports.getById = async (req, res) => {
       req.params.id,
       {}, null, false, { company_id: true }
     );
+    console.log("record---------------------\n",record);
+    
     
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND, { code: constants.ROLE_PERMISSION_NOT_FOUND });
     
