@@ -10,7 +10,7 @@ router.post("/template/get-transactions", resignationController.getAll);
 router.get("/template/dropdown-list", resignationController.dropdownList);
 router.get("/template/:id", resignationController.getById);
 router.put("/template/:id", resignationController.update);
-router.delete("/template/:id", resignationController.delete);
+router.delete("/template/delete", resignationController.delete);
  
 // Resignation Reason Routes
 router.post("/reason", reasonController.create);

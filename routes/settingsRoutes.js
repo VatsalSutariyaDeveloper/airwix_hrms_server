@@ -26,10 +26,12 @@ const employeeLeaveBalanceController = require("../controllers/employee/employee
 const designationMasterController = require("../controllers/settings/designationMasterController");
 const incentiveTypeController = require("../controllers/settings/incentiveTypeController");
 const employeeSettingsController = require("../controllers/settings/employeeSettingsController");
+const companySettingsController = require("../controllers/settings/companySettingsController");
 const customFieldController = require("../controllers/settings/customFieldController");
 const outDutyRequestController = require("../controllers/settings/outDutyRequestController");
 const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 const systemLogController = require("../controllers/systemLogController");
+const expenseTypeController = require("../controllers/settings/expenseTypeController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -290,6 +292,19 @@ router.delete("/incentive-type", incentiveTypeController.delete);
 router.patch("/incentive-type/status", incentiveTypeController.updateStatus);
 
 // ==========================
+// 36.1. EXPENSE TYPE MASTER
+// ==========================
+// Base Path: /expense-type
+router.post("/expense-type", expenseTypeController.create);
+router.post("/expense-type/get-transactions", expenseTypeController.getAll);
+router.post("/expense-type/dropdown-list", expenseTypeController.dropdownList);
+router.get("/expense-type/:id", expenseTypeController.getById);
+router.put("/expense-type/:id", expenseTypeController.update);
+router.delete("/expense-type", expenseTypeController.delete);
+router.patch("/expense-type/status", expenseTypeController.updateStatus);
+
+
+// ==========================
 // 37. CUSTOM FIELD ROUTES
 // ==========================
 // Base Path: /custom-field
@@ -310,6 +325,15 @@ router.patch("/custom-fields/status", customFieldController.updateStatus);
 router.post("/employee-settings/", employeeSettingsController.create);
 router.post("/employee-settings/get-transactions", employeeSettingsController.getAll);
 router.put("/employee-settings/update", employeeSettingsController.update);
+
+// ==========================
+// 38.1. COMPANY SETTINGS ROUTES
+// ==========================
+// Base Path: /company-settings
+router.post("/company-settings/", companySettingsController.create);
+router.post("/company-settings/get-transactions", companySettingsController.getAll);
+router.post("/company-settings/get-data", companySettingsController.getById);
+router.put("/company-settings/update", companySettingsController.update);
 
 // ==========================
 // 39. OUT DUTY REQUEST ROUTES

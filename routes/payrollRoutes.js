@@ -5,6 +5,8 @@ const employeeIncentiveController = require("../controllers/employee/employeeInc
 const employeeAdvanceController = require("../controllers/employee/EmployeeAdvanceController");
 const cashVoucherController = require("../controllers/employee/cashVoucherController");
 const paymentHistoryController = require("../controllers/employee/paymentHistoryController");
+const reimbursementController = require("../controllers/employee/reimbursementController");
+const { bufferFile } = require("../helpers/fileUpload");
 
 router.post("/calculate", payrollController.calculateMonthlySalary);
 router.post("/calculate-batch", payrollController.calculateBatchMonthlySalary);
@@ -64,5 +66,22 @@ router.post("/employee-advance/view", employeeAdvanceController.advanceView);
 router.post("/payment-history/create", paymentHistoryController.create);
 router.post("/payment-history/get-transactions", paymentHistoryController.getAllPaymentHistory);
 router.post("/payment-history/view", paymentHistoryController.paymentHistoryView);
+
+// ==========================
+// REIMBURSEMENT
+// ==========================
+// Base Path: /reimbursement
+router.post("/reimbursement", bufferFile(["bills_docs"]), reimbursementController.create);
+router.post("/reimbursement/get-transactions", reimbursementController.getAll);
+router.get("/reimbursement/:id", reimbursementController.getById);
+router.put("/reimbursement/:id", bufferFile(["bills_docs"]), reimbursementController.update);
+router.delete("/reimbursement", reimbursementController.delete);
+router.patch("/reimbursement/status/:id", reimbursementController.updateStatus);
+router.put("/reimbursement/cancel/:id", reimbursementController.cancelReimbursement);
+router.post("/reimbursement/pending-approvals", reimbursementController.getPendingApprovals);
+router.post("/reimbursement/summary", reimbursementController.getReimbursementSummary);
+
+
+
 
 module.exports = router;

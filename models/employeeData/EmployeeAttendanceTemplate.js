@@ -53,6 +53,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
     },
+      
     enble_out_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
 
     comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },

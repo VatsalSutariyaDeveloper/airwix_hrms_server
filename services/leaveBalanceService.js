@@ -213,10 +213,6 @@ console.log("start",start,"end",end)
 
                     const lastEarnedMonth = today.subtract(1, 'month').startOf('month');
                     // const lastEarnedMonth = today.startOf('month');
-                    if (joinDate.isAfter(lastEarnedMonth.endOf('month'))) {
-                        allocated = 0;
-                        continue;
-                    }
 
                     let monthlyRate = category.leave_count / 12;
 
@@ -740,54 +736,37 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 console.log(`[Year-End Log] >>> Reset Triggered for Emp ${employee.id}! <<<`);
 
                 const lastYear = lastCycleEnd.year();
-                
-                for (const category of template.categories) {
-                    const lastBalance = await EmployeeLeaveBalance.findOne({
-                        where: {
-                            employee_id: employee.id,
-                            leave_category_id: category.id,
-                            year: lastYear,
-                            month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null,
-                            status: 0
-                        },
-                        transaction
-                    });
+                const lastMonth = (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? lastCycleEnd.month() + 1 : null;
 
-                    if (!lastBalance) {
-                        console.log(`[Year-End Log] No active balance found for Cat: ${category.leave_category_name} in Year ${lastYear}. Skipping category.`);
-                        continue;
-                    }
+                console.log(`[Year-End Log] >>> Reset Triggered for Emp ${employee.id}! <<<`);
 
-                    console.log(`[Year-End Log] Processing Cat: ${category.leave_category_name}. Remaining: ${lastBalance.pending_leaves}, Rule: ${category.unused_leave_rule}, Limit: ${category.carry_forward_limit}`);
+                // 1. Mark ALL active balances for the cycle that just ended as processed (status 1)
+                // This correctly includes dynamic categories like Comp-Off that aren't in the template
+                const [updatedCount] = await EmployeeLeaveBalance.update({ status: 1 }, {
+                    where: {
+                        employee_id: employee.id,
+                        year: lastYear,
+                        month: lastMonth,
+                        status: 0
+                    },
+                    transaction
+                });
 
-                    let carryForwardAmount = 0;
-                    const remaining = parseFloat(lastBalance.pending_leaves || 0);
-
-                    if (category.unused_leave_rule === 'CARRY_FORWARD') {
-                        const limit = parseFloat(category.carry_forward_limit || 0);
-                        carryForwardAmount = Math.min(remaining, limit);
-                    } 
-
-                    console.log(`[Year-End Log] Carry Forward calculated: ${carryForwardAmount}`);
-
-                    // 1. Mark OLD balance as processed
-                    await EmployeeLeaveBalance.update({ status: 1 }, {
-                        where: { id: lastBalance.id },
-                        transaction
-                    });
-
-                    // 2. Initialize NEW balance for the next cycle (use day after yesterday = today)
-                    // Passing allowRollover: true will cause initializeBalance to correctly carry over 
-                    // the remaining leaves from lastBalance while respecting category limits.
-                    console.log(`[Year-End Log] Initializing fresh balance for next cycle (Target Date: ${today.format('YYYY-MM-DD')})`);
-                    await this.initializeBalance(employee.id, template.id, transaction, null, null, today.toDate(), { allowRollover: true });
-                    resetCount++;
-                    console.log(`[Year-End Log] ✅ Reset Complete for Cat: ${category.leave_category_name}`);
+                if (updatedCount > 0) {
+                    console.log(`[Year-End Log] Marked ${updatedCount} balances as processed for Emp ${employee.id} (Year: ${lastYear}${lastMonth ? ` Month: ${lastMonth}` : ''}).`);
                 }
+
+                // 2. Initialize NEW balance for the next cycle
+                // Passing allowRollover: true will cause initializeBalance to correctly carry over 
+                // the remaining leaves from the now-processed (status 1) balances.
+                console.log(`[Year-End Log] Initializing fresh balance for next cycle...`);
+                await this.initializeBalance(employee.id, template.id, transaction, employee, template, today.toDate(), { allowRollover: true });
+                resetCount++;
+                console.log(`[Year-End Log] ✅ Reset Complete for Employee ${employee.id}`);
             }
 
             if (resetCount > 0) {
-                console.log(`⏰ [Year-End Reset] Processed resets for ${resetCount} leave categories.`);
+                console.log(`⏰ [Year-End Reset] Processed resets for ${resetCount} employees.`);
             }
 
             await transaction.commit();

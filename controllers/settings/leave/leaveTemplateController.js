@@ -46,7 +46,7 @@ exports.create = async (req, res) => {
 
         if (!unpaidCategory) {
             unpaidCategory = {
-                leave_category_name: "Unpaid",
+                leave_category_name: "Unpaid Leave",
                 leave_count: 0,
                 unused_leave_rule: 'LAPSE',
                 is_paid: false,
@@ -124,7 +124,7 @@ exports.update = async (req, res) => {
 
             if (!unpaidCategory) {
                 unpaidCategory = {
-                    leave_category_name: "Unpaid",
+                    leave_category_name: "Unpaid Leave",
                     leave_count: 0,
                     unused_leave_rule: 'LAPSE',
                     is_paid: false,
