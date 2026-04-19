@@ -234,6 +234,24 @@ async function normalizeInclude(includeArray) {
   );
 }
 
+// Normalizes order clause to handle dotted notation like [['state.state_name', 'ASC']]
+function normalizeOrder(order) {
+    if (!order || !Array.isArray(order)) return order;
+
+    return order.map(item => {
+        if (!Array.isArray(item)) return item;
+        
+        let [col, dir] = item;
+        // If col is a string and contains a dot, split it
+        // Example: ['state.state_name', 'ASC'] -> ['state', 'state_name', 'ASC']
+        if (typeof col === 'string' && col.includes('.')) {
+            const parts = col.split('.');
+            return [...parts, dir];
+        }
+        return item;
+    });
+}
+
 /**
  * ------------------------------------------------------------------
  * CORE EXPORTS
@@ -497,7 +515,7 @@ module.exports = {
       ...attributesOption,
       ...(safeOptions.skip ? { offset: safeOptions.skip } : {}),
       ...(safeOptions.limit ? { limit: safeOptions.limit } : {}),
-      ...(safeOptions.order ? { order: safeOptions.order } : {}),
+      ...(safeOptions.order ? { order: normalizeOrder(safeOptions.order) } : {}),
       ...(includeOption.length ? { include: includeOption } : {}),
       ...(safeOptions.group ? { group: safeOptions.group } : {}),
       ...(safeOptions.subQuery !== undefined
@@ -545,7 +563,7 @@ module.exports = {
       __caller: caller,
       where: condition,
       ...attributesOption,
-      ...(safeOptions.order ? { order: safeOptions.order } : {}),
+      ...(safeOptions.order ? { order: normalizeOrder(safeOptions.order) } : {}),
       ...(includeOption.length ? { include: includeOption } : {}),
       ...(safeOptions.group ? { group: safeOptions.group } : {}),
       ...(safeOptions.raw && { raw: safeOptions.raw }),
@@ -789,7 +807,13 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       const sortableFields = standardizedConfig.filter(f => f.sortable).map(f => f.key);
       let order = options.order || [[dateField, 'DESC']];
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
-        order = [[reqBody.sortBy, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
+        const sortKey = reqBody.sortBy;
+        if (sortKey.includes('.')) {
+            const parts = sortKey.split('.');
+            order = [[...parts, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
+        } else {
+            order = [[sortKey, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
+        }
       }
 
       // Execution

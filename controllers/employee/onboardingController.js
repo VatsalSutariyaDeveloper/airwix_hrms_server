@@ -38,7 +38,7 @@ exports.initiate = async (req, res) => {
         const companyId = req.user.company_id;
 
         // Validation
-        if (!first_name || !email || !mobile_no || !joining_date) {
+        if (!first_name || !email || !mobile_no) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
         }
@@ -47,7 +47,6 @@ exports.initiate = async (req, res) => {
         const existing = await Employee.findOne({
             where: {
                 [Op.or]: [{ email }, { mobile_no }],
-                company_id: companyId,
                 status: {
                     [Op.ne]: 2
                 }
