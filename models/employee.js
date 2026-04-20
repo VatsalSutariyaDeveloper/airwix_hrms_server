@@ -18,6 +18,11 @@ module.exports = (sequelize, DataTypes) => {
         is_reporting_manager: { type: DataTypes.BOOLEAN, defaultValue: false },
 
         // GENERAL INFORMATION
+        employment_type: {
+            type: DataTypes.ENUM("Full Time", "Permanent", "Part Time", "Probation", "Intern", "Temporary"),
+            allowNull: true,
+            comment: "Employment type: Full Time, Permanent, Part Time, Probation, Intern, Temporary"
+        },
         salary_cycle: { type: DataTypes.INTEGER, defaultValue: 0 },
         weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
         holiday_template: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -127,8 +132,21 @@ module.exports = (sequelize, DataTypes) => {
         name_as_per_passport: { type: DataTypes.STRING },
         passport_expiry_date: { type: DataTypes.DATEONLY },
         passport_doc: { type: DataTypes.STRING },
+        signature_doc: { type: DataTypes.STRING },
 
         education_details: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
+        family_details: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
+        experience_details: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
+        professional_reference: {
             type: DataTypes.JSONB,
             defaultValue: []
         },
@@ -137,16 +155,6 @@ module.exports = (sequelize, DataTypes) => {
             defaultValue: null,
             comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
         },
-
-        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted, 3: Onboarding, 4:Exited" },
-        onboarding_token: { type: DataTypes.STRING, unique: true },
-        onboarding_step: { type: DataTypes.INTEGER, defaultValue: 1 },
-        onboarding_status:{ type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Initial, 1: Onboarding, 2: Rejected, 3: Completed" },
-        reject_note: { type: DataTypes.STRING},
-        user_id: { type: DataTypes.INTEGER, allowNull: true },
-        branch_id: { type: DataTypes.INTEGER, allowNull: true },
-        access_branches: { type: DataTypes.JSONB, defaultValue: [] },
-        company_id: { type: DataTypes.INTEGER, allowNull: true },
 
         // Resignation Related
         is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -161,6 +169,16 @@ module.exports = (sequelize, DataTypes) => {
             allowNull: true,
             comment: "Assigned resignation policy"
         },
+        onboarding_token: { type: DataTypes.STRING, unique: true },
+        onboarding_step: { type: DataTypes.INTEGER, defaultValue: 1 },
+        onboarding_status:{ type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Initial, 1: Onboarding, 2: Rejected, 3: Completed" },
+        reject_note: { type: DataTypes.STRING},
+        remarks: { type: DataTypes.TEXT },
+        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted, 3: Onboarding, 4:Exited" },
+        user_id: { type: DataTypes.INTEGER, allowNull: true },
+        branch_id: { type: DataTypes.INTEGER, allowNull: true },
+        access_branches: { type: DataTypes.JSONB, defaultValue: [] },
+        company_id: { type: DataTypes.INTEGER, allowNull: true },        
     }, {
         tableName: 'employees',
         timestamps: true,

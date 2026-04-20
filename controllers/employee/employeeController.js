@@ -707,8 +707,13 @@ exports.getProfile = async (req, res) => {
                 driving_license_doc: getFileUrl(plainRecord.driving_license_doc, constants.EMPLOYEE_DOC_FOLDER),
                 voter_id_doc: getFileUrl(plainRecord.voter_id_doc, constants.EMPLOYEE_DOC_FOLDER),
                 uan_doc: getFileUrl(plainRecord.uan_doc, constants.EMPLOYEE_DOC_FOLDER),
+                signature_doc: getFileUrl(plainRecord.signature_doc, constants.EMPLOYEE_DOC_FOLDER),
             },
             education: plainRecord.education_details || [],
+            family_details: plainRecord.family_details || [],
+            experience_details: plainRecord.experience_details || [],
+            professional_reference: plainRecord.professional_reference || [],
+            remarks: plainRecord.remarks || null,
             custom_fields: plainRecord.custom_fields || {}
         };
 

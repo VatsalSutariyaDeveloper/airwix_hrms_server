@@ -85,10 +85,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             {
                 model: EmployeeAdvance,
                 as: "employeeAdvances",
-                attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'month', 'year'],
+                attributes: ['id', 'amount', 'payment_mode', 'payment_date'],
                 where: {
-                    month: month,
-                    year: year
+                    adjusted_in_payroll: false,
+                    status: 0
                 }
             },
             {
@@ -174,15 +174,15 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         leaveParamMap.set(cat.id, {
             name: cat.name,
             is_paid: cat.is_paid === true || cat.is_paid === 'true',
-            is_compoff: false 
+            is_compoff: false
         });
     });
     // Supplement with actual balance data
     leaveBalances.forEach(lb => {
-        leaveParamMap.set(lb.leave_category_id, { 
+        leaveParamMap.set(lb.leave_category_id, {
             name: lb.leave_category_name,
-            is_paid: lb.is_paid === true || lb.is_paid === 'true', 
-            is_compoff: lb.is_compoff === true || lb.is_compoff === 'true' 
+            is_paid: lb.is_paid === true || lb.is_paid === 'true',
+            is_compoff: lb.is_compoff === true || lb.is_compoff === 'true'
         });
     });
 
@@ -193,13 +193,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
     }, {}, transaction, { company_id: true });
-    
+
     const monthLeaveUsage = {}; // Track usage per category ID for the current month
     const leaveCategoryDetails = {}; // Track usage per category name for leave_details
     const attendanceHolidayDates = new Set();
     attendanceRecords.forEach(day => {
         const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
-        
+
         // Track current month leave usage
         let dayUsage = 0;
         const status = parseInt(day.status);
@@ -208,47 +208,47 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         if (dayUsage > 0 && day.leave_category_id) {
             monthLeaveUsage[day.leave_category_id] = (monthLeaveUsage[day.leave_category_id] || 0) + dayUsage;
-            
+
             const catName = catInfo ? catInfo.name : "Other Leave";
             leaveCategoryDetails[catName] = (leaveCategoryDetails[catName] || 0) + dayUsage;
         }
 
         switch (parseInt(day.status)) {
-            case 0: case 12: 
+            case 0: case 12:
                 const attendanceDateStr = dayjs(day.attendance_date).format('YYYY-MM-DD');
                 const isWeeklyOff = offDays.weeklyOffList.find(wo => wo.date === attendanceDateStr);
                 const isHoliday = offDays.holidayList.find(h => dayjs(h.date).format('YYYY-MM-DD') === attendanceDateStr);
-                
+
                 const lwpBasis = employeeSalaryTemplate?.lwp_calculation_basis || 'WORKING_DAYS';
-                
+
                 if (lwpBasis === 'WORKING_DAYS') {
                     // Don't count weekly offs and holidays as present
                     if (!isWeeklyOff && !isHoliday) {
-                        presentDays++; 
+                        presentDays++;
                     }
                 } else {
                     // For FIXED_30_DAYS and DAYS_IN_MONTH, count all present days including weekly offs and holidays
-                    presentDays++; 
+                    presentDays++;
                 }
                 break;
-            case 1: case 13: 
+            case 1: case 13:
                 halfDays++;
                 if (catInfo) {
                     if (!catInfo.is_paid) unpaidLeaveDays += 0.5;
                     else if (catInfo.is_compoff) compoffLeaveDays += 0.5;
                     else leaveDays += 0.5;
                 } else {
-                    uncategorizedHalfDays++; 
+                    uncategorizedHalfDays++;
                 }
                 break;
-            case 4: 
+            case 4:
                 holidays++;
                 attendanceHolidayDates.add(dayjs(day.attendance_date).format('YYYY-MM-DD'));
                 break;
-            case 5: 
-                absentDays++; 
+            case 5:
+                absentDays++;
                 break;
-            case 6: 
+            case 6:
                 if (catInfo) {
                     if (!catInfo.is_paid) unpaidLeaveDays++;
                     else if (catInfo.is_compoff) compoffLeaveDays++;
@@ -291,7 +291,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Logic for LWP
     const totalLWP = absentDays + (uncategorizedHalfDays * 0.5) + unpaidLeaveDays;
-    
+
     // Total mathematically worked days
     const totalPresentDays = presentDays + (halfDays * 0.5);
 
@@ -353,18 +353,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     }
 
     const lwpDeductionTotal = salaryType === "Monthly" ? (totalLWP * perDaySalary) : 0;
-    
+
     // Check if Overtime should be included in total earnings based on attendance configuration
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
     const includeOTInTotal = activeAttendanceTemplate ? (activeAttendanceTemplate.include_overtime_in_total === true || activeAttendanceTemplate.include_overtime_in_total === 'true') : false;
-    console.log("includeOTInTotal", includeOTInTotal);
     const otAmount = includeOTInTotal ? Math.round(totalOTAmount) : 0;
 
     // Step E: Use advances, incentives and reimbursements from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
     const advances = employee.employeeAdvances || [];
     const reimbursements = employee.reimbursements || [];
-    
+
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
     const totalAdvance = advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
     const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.amount || 0), 0);
@@ -404,6 +403,15 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
     }, transaction);
     const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
+
+    // Fetch Employee Advance records
+    const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
+        employee_id,
+        status: 0,
+        adjusted_in_payroll: false
+    }, {
+        attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'notes', 'adjusted_in_payroll']
+    }, transaction);
 
     // Step E.1: Fetch Approved Encashment Requests
     const encashments = await commonQuery.findAllRecords(LeaveRequest, {
@@ -529,7 +537,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         // Calculate actual pro-rated amount (Attendance/LWP Impact)
         let actualAmount = amount;
         const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
-        
+
         if (salaryType === "Hourly") {
             const totalPossibleHours = daysInCalculation * unitWorkingHours;
             const workedHours = totalWorkedMins / 60;
@@ -573,10 +581,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 earnings.push({ name: comp.component_name, amount: Math.round(amount), actual_amount: Math.round(amount), is_statutory: true });
             }
             return;
-        }        
+        }
         if (comp.component_type === "EARNING" || comp.component_type === "VARIABLE_EARNING") {
             let finalAmount = actualAmount;
-            
+
             earnings.push({
                 name: comp.component_name,
                 amount: Math.round(finalAmount),
@@ -591,13 +599,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             if (isFoodComp && (plain.formula || comp.formula)) {
                 const formulaStr = plain.formula || comp.formula;
                 const rateMap = { ...valuesMap, CANTEEN_ATTENDANCE: 1 };
-                
+
                 const calculatedRate = evaluateComponentFormula(formulaStr, rateMap);
                 if (calculatedRate > 0) {
                     rateValue = calculatedRate;
                 }
             }
-            
+
             deductions.push({
                 name: comp.component_name,
                 amount: Math.round(actualAmount),
@@ -624,7 +632,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         takeHomeEarnings += otAmount;
     }
 
-    
+
 
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
@@ -694,12 +702,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     let tdsCalculationData = null;
     if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
         const tdsConfig = template.statutory_config.tds;
-        
+
         // India Financial Year Logic (April to March)
         const currentMonth = parseInt(month);
         const currentYear = parseInt(year);
         let fyStartYear = currentMonth < 4 ? currentYear - 1 : currentYear;
-        
+
         // Calculate months left in FY (including current)
         // monthsSpent: April=0, May=1... March=11
         let monthsSpent = (currentMonth >= 4) ? (currentMonth - 4) : (currentMonth + 8);
@@ -770,7 +778,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         statutory["Income Tax (TDS) %"] = tdsPercentage;
         deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
         totalDeductions += tdsAmount;
-    }    
+    }
     const netPayable = takeHomeEarnings - totalDeductions;
 
     // Calculate totals for breakdown arrays
@@ -833,14 +841,15 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
             },
             advance: {
-                history: paymentHistories.filter(ph => ph.payment_type === 'Advance').map(ph => ({
-                    id: ph.id,
-                    amount: ph.amount,
-                    payment_mode: ph.payment_mode,
-                    payment_date: ph.payment_date,
-                    payment_type: ph.payment_type
+                history: employeeAdvances.map(ea => ({
+                    id: ea.id,
+                    amount: ea.amount,
+                    payment_mode: ea.payment_mode,
+                    payment_date: ea.payment_date,
+                    payment_type: 'Advance',
+                    adjusted_in_payroll: ea.adjusted_in_payroll
                 })),
-                sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                sum: employeeAdvances.reduce((sum, ea) => sum + parseFloat(ea.amount || 0), 0).toFixed(2)
             },
             grand_total: totalPaid.toFixed(2)
         },
@@ -912,7 +921,7 @@ const formatPayslipToSummary = async (payslip) => {
     const advanceAmount = getSum(deductionDetails, ['advance', 'loan']);
 
     // 6. Payment History
-    const paymentHistories = payslip.payment_history?.advances_adjusted || [];    
+    const paymentHistories = payslip.payment_history?.advances_adjusted || [];
 
     // 7. Lunch History
     const lunchRecords = await commonQuery.findAllRecords(CanteenAttendance, {
@@ -1008,7 +1017,7 @@ const formatPayslipToSummary = async (payslip) => {
             absentDays,
             leaveDays,
             unpaidLeaveDays,
-            compoffLeaveDays: 0, 
+            compoffLeaveDays: 0,
             weeklyOffs,
             holidays,
             totalLWP,
@@ -1085,7 +1094,7 @@ const fetchSalarySummary = async (employee_id, month, year) => {
             include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
         }]
     });
-    
+
     if (existingPayslips && existingPayslips.length > 0) {
         // Return all payslips if there are multiple
         const summaries = await Promise.all(existingPayslips.map(ps => formatPayslipToSummary(ps)));
@@ -1120,17 +1129,17 @@ exports.calculateMonthlySalaryBulk = async (req, res) => {
         const results = await Promise.all(employee_ids.map(async (id) => {
             try {
                 const data = await fetchSalarySummary(id, month, year);
-                return { 
-                    employee_id: id, 
-                    success: true, 
-                    data 
+                return {
+                    employee_id: id,
+                    success: true,
+                    data
                 };
             } catch (err) {
                 console.error(`Error calculating salary for employee ${id}:`, err);
-                return { 
-                    employee_id: id, 
-                    success: false, 
-                    message: err.message 
+                return {
+                    employee_id: id,
+                    success: false,
+                    message: err.message
                 };
             }
         }));
@@ -1148,9 +1157,9 @@ exports.calculateMonthlySalaryBulk = async (req, res) => {
 /**
  * Internal helper to finalize a single employee's payroll
  */
-const internalFinalizePayroll = async (employee_id, month, year, generate_additional = false, transaction, req) => {
-    const summary = await performSalaryCalculation(employee_id, month, year, transaction);  
-          
+const internalFinalizePayroll = async (employee_id, month, year, generate_additional = false, transaction, req, advance_ids_to_adjust = [], net_take_home_pay = null) => {
+    const summary = await performSalaryCalculation(employee_id, month, year, transaction);
+
     // 1. Check if already finalized (Main sequence)
     const existingMain = await commonQuery.findOneRecord(Payslip, {
         employee_id, month, year, status: { [Op.in]: [1, 3] }
@@ -1160,7 +1169,8 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         throw new Error("Main payroll for this month is already finalized. Use 'generate_additional' to create a supplementary payslip.");
     }
 
-    const netSalaryAmount = parseFloat(summary.salary?.netPayable || 0) || 0;
+    const calculatedNetSalaryAmount = parseFloat(summary.salary?.netPayable || 0) || 0;
+    const netSalaryAmount = net_take_home_pay ? parseFloat(net_take_home_pay) : calculatedNetSalaryAmount;
     const paidAmount = parseFloat(summary.payment_history?.salary?.sum || 0) || 0;
     const pendingAmount = Math.max(netSalaryAmount - paidAmount, 0);
 
@@ -1205,7 +1215,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         fixed_gross: summary.salary.ctc_monthly,
         paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
         total_deduction: summary.salary.totalDeductions,
-        net_salary: summary.salary.netPayable,
+        net_salary: net_take_home_pay ? parseFloat(net_take_home_pay) : summary.salary.netPayable,
         paid_amount: paidAmount,
         pending_amount: pendingAmount,
 
@@ -1226,50 +1236,60 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         finalizedPayslip = await commonQuery.createRecord(Payslip, payslipPayload, transaction);
     }
 
-    // Find and update employee advances for this month/year
-    const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
-        employee_id,
-        month,
-        year,
-        status: 0, // Only pending advances
-        adjusted_in_payroll: false
-    }, {}, transaction);
+    // Find and update employee advances by specific IDs
 
     const advances_adjusted = [];
-    if (employeeAdvances.length > 0) {
-        // Update all advances to mark them as adjusted in payroll
-        await EmployeeAdvance.update(
-            { adjusted_in_payroll: true, status: 1 }, // status 1 = Adjusted
-            {
-                where: {
-                    employee_id,
-                    month,
-                    year,
-                    status: 0,
-                    adjusted_in_payroll: false
-                },
-                transaction
-            }
-        );
 
-        // Collect advance details for payment history
-        employeeAdvances.forEach(advance => {
-            advances_adjusted.push({
-                advance_id: advance.id,
-                amount: advance.amount,
-                payment_date: advance.payment_date,
-                payment_mode: advance.payment_mode,
-                notes: advance.notes
+    // Only adjust advances if specific IDs are provided
+    if (advance_ids_to_adjust && advance_ids_to_adjust.length > 0) {
+        // First, get all pending advances for this employee
+        const allPendingAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
+            employee_id,
+            status: 0,
+            adjusted_in_payroll: false
+        }, {}, transaction);
+
+        // Filter to only the IDs that actually exist and are pending
+        const validIds = allPendingAdvances
+            .filter(a => advance_ids_to_adjust.includes(a.id))
+            .map(a => a.id);
+
+        if (validIds.length === 0) {
+            throw new Error(`Invalid advance IDs provided. Available pending advance IDs: ${allPendingAdvances.map(a => a.id).join(', ')}`);
+        }
+
+        const advanceWhereCondition = {
+            employee_id,
+            status: 0, // Only pending advances
+            adjusted_in_payroll: false,
+            id: { [Op.in]: validIds }
+        };
+
+        const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, advanceWhereCondition, {}, transaction);
+
+        if (employeeAdvances.length > 0) {
+            // Update selected advances to mark them as adjusted in payroll
+            await commonQuery.updateRecordById(EmployeeAdvance, advanceWhereCondition, { adjusted_in_payroll: true, status: 1 }, transaction);
+
+            // Collect advance details for payment history
+            employeeAdvances.forEach(advance => {
+                advances_adjusted.push({
+                    advance_id: advance.id,
+                    amount: advance.amount,
+                    payment_date: advance.payment_date,
+                    payment_mode: advance.payment_mode,
+                    notes: advance.notes
+                });
             });
-        });
 
-        // Update payslip payment history with adjusted advances
-        await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
-            payment_history: {
-                ...(finalizedPayslip.payment_history || {}),
-                advances_adjusted: advances_adjusted
-            }
-        }, transaction);
+            // Update payslip payment history with adjusted advances
+            await commonQuery.updateRecordById(Payslip, finalizedPayslip.id, {
+                payment_history: {
+                    ...(finalizedPayslip.payment_history || {}),
+                    advances_adjusted: advances_adjusted
+                }
+            }, transaction);
+        }
     }
 
     // Lock Attendance Records
@@ -1314,13 +1334,13 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
 exports.finalizeMonthlySalary = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { employee_id, month, year, generate_additional = false } = req.body;
+        const { employee_id, month, year, generate_additional = false, advance_ids_to_adjust = [], net_take_home_pay = null } = req.body;
         if (!employee_id || !month || !year) {
             await transaction.rollback();
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req);
+        const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req, advance_ids_to_adjust, net_take_home_pay);
 
         await transaction.commit();
         return res.success("PAYROLL_FINALIZED", {
@@ -1360,6 +1380,19 @@ exports.deletePayslip = async (req, res) => {
 
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
+
+        // Reset employee advances that were adjusted in this payslip
+        const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
+        if (advancesAdjusted.length > 0) {
+            const advanceIds = advancesAdjusted.map(a => a.advance_id);
+            await commonQuery.updateRecordById(EmployeeAdvance, {
+                id: { [Op.in]: advanceIds },
+                employee_id: payslip.employee_id
+            }, {
+                adjusted_in_payroll: false,
+                status: 0
+            }, transaction);
+        }
 
         // Unlock Attendance
         await AttendanceDay.update({ is_locked: false }, {
@@ -1500,7 +1533,7 @@ const processPayslipData = (payslips) => {
             deductions_sum: parseFloat(totalDeductionsSum.toFixed(2)),
             paid_amount: parseFloat(payslip.paid_amount || 0),
             pending_amount: parseFloat(payslip.pending_amount || 0),
-            
+
             // TDS Data
             annual_gross: tdsData.annualGross || 0,
             standard_deduction: tdsData.standardDeduction || 0,
@@ -1522,24 +1555,24 @@ exports.getPayslipEmployeeList = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Year is required" });
         }
 
-       const data = await commonQuery.fetchPaginatedData(
-        Payslip,
-        {filter: {year}},
-        [],
-        {
-            include:[
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['id', 'employee_code', 'first_name'],
-                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
-                }
-            ]
-        }
-       )
+        const data = await commonQuery.fetchPaginatedData(
+            Payslip,
+            { filter: { year } },
+            [],
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['id', 'employee_code', 'first_name'],
+                        include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
+                    }
+                ]
+            }
+        )
 
-       // Process each payslip to add calculated sums
-       data.items = processPayslipData(data.items);
+        // Process each payslip to add calculated sums
+        data.items = processPayslipData(data.items);
 
         return res.ok(data);
     } catch (err) {
@@ -1554,25 +1587,25 @@ exports.getPayslipView = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee ID and Year are required" });
         }
 
-       const data = await commonQuery.findAllRecords(
-        Payslip,
-        {employee_id, year},
-        {
-            include:[
-                {
-                    model: Employee,
-                    as: 'employee',
-                    attributes: ['id', 'employee_code', 'first_name'],
-                    include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
-                }
-            ]
-        }
-       )
+        const data = await commonQuery.findAllRecords(
+            Payslip,
+            { employee_id, year },
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['id', 'employee_code', 'first_name'],
+                        include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
+                    }
+                ]
+            }
+        )
 
-       // Process each payslip to add calculated sums
-       const processedData = processPayslipData(data);
+        // Process each payslip to add calculated sums
+        const processedData = processPayslipData(data);
 
-        return res.ok({items: processedData});
+        return res.ok({ items: processedData });
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -1588,9 +1621,9 @@ exports.exportPayrollView = async (req, res) => {
         // Get payslip data (same logic as getPayslipView)
         const data = await commonQuery.findAllRecords(
             Payslip,
-            {employee_id, year},
+            { employee_id, year },
             {
-                include:[
+                include: [
                     {
                         model: Employee,
                         as: 'employee',
@@ -1719,7 +1752,7 @@ exports.getCalculationHistory = async (req, res) => {
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
         let { employee_id } = req.body;
-        if (!employee_id){
+        if (!employee_id) {
             employee_id = req.user.employee_id;
         }
         const company_id = req.user.company_id;
@@ -1939,13 +1972,21 @@ exports.getPayslipById = async (req, res) => {
         // Fetch Payment History for the month
         const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
             employee_id: payslip.employee_id,
-            month: month,
-            year: year,
+            payment_date: { [Op.between]: [startDate, endDate] },
             status: { [Op.ne]: 2 }
         }, {
             attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
         });
         const totalPaid = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
+
+        // Fetch Employee Advance records
+        const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
+            employee_id: payslip.employee_id,
+            status: 0,
+            adjusted_in_payroll: false
+        }, {
+            attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'notes', 'adjusted_in_payroll']
+        });
 
         // Granular attendance recalculation for UI (since Payslip summary is slightly compressed)
         const lwpDays = parseFloat(payslip.wp_days || payslip.lwp_days || 0);
@@ -2060,7 +2101,7 @@ exports.getPayslipById = async (req, res) => {
                 incentives: incentives.map(i => ({ name: i.incentiveType?.name, amount: i.amount })),
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
-            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.amount, description: r.description, date: r.date, expense_type: r.expense_type?.name,})),
+            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.amount, description: r.description, date: r.date, expense_type: r.expense_type?.name, })),
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
             leave_balances: payslip.leave_balances || leaveBalances,
@@ -2076,14 +2117,15 @@ exports.getPayslipById = async (req, res) => {
                     sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
                 },
                 advance: {
-                    history: paymentHistories.filter(ph => ph.payment_type === 'Advance').map(ph => ({
-                        id: ph.id,
-                        amount: ph.amount,
-                        payment_mode: ph.payment_mode,
-                        payment_date: ph.payment_date,
-                        payment_type: ph.payment_type
+                    history: employeeAdvances.map(ea => ({
+                        id: ea.id,
+                        amount: ea.amount,
+                        payment_mode: ea.payment_mode,
+                        payment_date: ea.payment_date,
+                        payment_type: 'Advance',
+                        adjusted_in_payroll: ea.adjusted_in_payroll
                     })),
-                    sum: paymentHistories.filter(ph => ph.payment_type === 'Advance').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
+                    sum: employeeAdvances.reduce((sum, ea) => sum + parseFloat(ea.amount || 0), 0).toFixed(2)
                 },
             },
             status: payslip.status,
@@ -2162,7 +2204,7 @@ exports.getSalaryOverview = async (req, res) => {
                 month: m.month,
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
-            });            
+            });
             if (payslip) {
                 // Use stored values from payslip database
                 const ot = parseFloat(payslip.ot_amount || 0);
@@ -2197,7 +2239,7 @@ exports.getSalaryOverview = async (req, res) => {
                 const weeklyOffs = parseFloat(payslip.wo_days || 0);
                 const holidays = parseFloat(payslip.ph_days || 0);
                 const daysInMonth = dayjs(`${m.year}-${m.month}-01`).daysInMonth();
-                
+
                 // Use stored payable days or calculate if not available
                 const payableDays = parseFloat(payslip.pd_days || 0);
 
@@ -2228,11 +2270,46 @@ exports.getSalaryOverview = async (req, res) => {
                     incentive_date: inc.incentive_date
                 }));
 
+                // Fetch Payment History for the month
+                const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, {
+                    employee_id,
+                    payment_date: { [Op.between]: [startDate, endDate] },
+                    status: { [Op.ne]: 2 }
+                }, {
+                    attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
+                });
+
+                // Use advances_adjusted from payslip payment_history
+                const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
+
                 // Create payment history structure
+                const salaryPayments = paymentHistories.filter(ph => ph.payment_type === 'Salary');
+                const salarySum = salaryPayments.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
+                const advanceSum = advancesAdjusted.reduce((sum, aa) => sum + parseFloat(aa.amount || 0), 0);
+
                 const paymentHistory = {
-                    salary: { history: [], sum: "0.00" },
-                    advance: { history: [], sum: "0.00" },
-                    grand_total: "0.00"
+                    salary: {
+                        history: salaryPayments.map(ph => ({
+                            id: ph.id,
+                            amount: ph.amount,
+                            payment_mode: ph.payment_mode,
+                            payment_date: ph.payment_date,
+                            payment_type: ph.payment_type
+                        })),
+                        sum: salarySum.toFixed(2)
+                    },
+                    advance: {
+                        history: advancesAdjusted.map(aa => ({
+                            id: aa.advance_id,
+                            amount: aa.amount,
+                            payment_mode: aa.payment_mode,
+                            payment_date: aa.payment_date,
+                            payment_type: 'Advance',
+                            notes: aa.notes
+                        })),
+                        sum: advanceSum.toFixed(2)
+                    },
+                    grand_total: (salarySum + advanceSum).toFixed(2)
                 };
 
                 // Use stored totals - calculate from actual details
@@ -2274,11 +2351,11 @@ exports.getSalaryOverview = async (req, res) => {
                     is_loaded: true,
                     is_finalized: true
                 });
-                
+
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
-                    const summary = await performSalaryCalculation(employee_id, m.month, m.year);                      
+                    const summary = await performSalaryCalculation(employee_id, m.month, m.year);
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
@@ -2339,9 +2416,6 @@ exports.getSalaryOverview = async (req, res) => {
                 overview[i].payments = advances.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0).toFixed(2);
             }
         }
-
-        console.log("overview----------------------------\n",overview);
-        console.log("overview.breakdown----------------------------\n",overview[0]?.breakdown);
 
         return res.ok(overview);
     } catch (err) {
@@ -2802,9 +2876,9 @@ exports.bulkFinalizePayroll = async (req, res) => {
         }
 
         for (const emp_id of employee_ids) {
-            // Direct call without internal try-catch. 
+            // Direct call without internal try-catch.
             // Any failure will trigger the outer catch and ROLLBACK the entire transaction.
-            await internalFinalizePayroll(emp_id, month, year, false, transaction, req);
+            await internalFinalizePayroll(emp_id, month, year, false, transaction, req, []);
         }
 
         await transaction.commit();
@@ -2850,11 +2924,11 @@ exports.bulkPayPayroll = async (req, res) => {
 
             const existingPaid = parseFloat(totalPaidResult[0]?.total_paid || 0);
             const totalPaid = paymentAmount + existingPaid;
-            
+
             if (totalPaid > netPayable) {
                 await transaction.rollback();
-                return res.error("VALIDATION_ERROR", { 
-                    message: `Payment amount (${paymentAmount}) for employee ${p.employee_id} exceeds remaining payable (${(netPayable - existingPaid).toFixed(2)})` 
+                return res.error("VALIDATION_ERROR", {
+                    message: `Payment amount (${paymentAmount}) for employee ${p.employee_id} exceeds remaining payable (${(netPayable - existingPaid).toFixed(2)})`
                 });
             }
 
@@ -2883,12 +2957,12 @@ exports.bulkPayPayroll = async (req, res) => {
                 payment_date: dayjs().format('YYYY-MM-DD'),
                 payment_type: 'Salary'
             };
-            
+
             if (!currentPaymentHistory.salary_payments) {
                 currentPaymentHistory.salary_payments = [];
             }
             currentPaymentHistory.salary_payments.push(salaryPayment);
-            
+
             const payslipUpdatePayload = {
                 payment_history: currentPaymentHistory,
                 paid_amount: totalPaid,
@@ -2937,8 +3011,8 @@ exports.bulkPayPayroll = async (req, res) => {
 exports.getPaymentHistory = async (req, res) => {
     try {
         const { employee_id, month, year } = req.body;
-        
-        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory, 
+
+        const paymentHistories = await commonQuery.findAllRecords(PaymentHistory,
             {
                 employee_id,
                 month,
@@ -2956,10 +3030,10 @@ exports.getPaymentHistory = async (req, res) => {
                 ]
             }
         );
-        
+
         // Calculate sum of amounts
         const totalAmount = paymentHistories.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
-        
+
         return res.ok({
             paymentHistories,
             totalAmount: parseFloat(totalAmount.toFixed(2))
@@ -2974,16 +3048,16 @@ exports.getPayrollSummary = async (req, res) => {
     const POST = req.body;
     try {
         const { month, year, ...employeeFilter } = POST;
-        
+
         // Validate month and year
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-       const employee = await commonQuery.findAllRecords(
-        Employee,
-        employeeFilter,
-        {
+        const employee = await commonQuery.findAllRecords(
+            Employee,
+            employeeFilter,
+            {
                 include: [
                     {
                         model: Payslip,
@@ -3005,7 +3079,7 @@ exports.getPayrollSummary = async (req, res) => {
                     }
                 ]
             }
-       )
+        )
 
         // Initialize summary object
         const summary = {
@@ -3022,10 +3096,10 @@ exports.getPayrollSummary = async (req, res) => {
         employee.forEach(emp => {
             const payslips = emp.payslips || [];
             const paymentHistories = emp.paymentHistories || [];
-            
+
             // Count employees
             summary.total_employees += 1;
-            
+
             payslips.forEach(payslip => {
                 summary.total_payable_amount += parseFloat(payslip.net_salary || 0);
 
@@ -3034,7 +3108,7 @@ exports.getPayrollSummary = async (req, res) => {
                     payslip.break_down.earnings.forEach(earning => {
                         const name = earning.name.trim();
                         const amount = parseFloat(earning.actual_amount || 0);
-                        
+
                         if (!summary.total_earnings[name]) {
                             summary.total_earnings[name] = { amount: 0, count: 0 };
                         }
@@ -3048,7 +3122,7 @@ exports.getPayrollSummary = async (req, res) => {
                     payslip.break_down.deductions.forEach(deduction => {
                         const name = deduction.name.trim();
                         const amount = parseFloat(deduction.amount || 0);
-                        
+
                         if (!summary.total_deductions_breakdown[name]) {
                             summary.total_deductions_breakdown[name] = { amount: 0, count: 0 };
                         }
@@ -3062,7 +3136,7 @@ exports.getPayrollSummary = async (req, res) => {
                     Object.entries(payslip.break_down.statutory).forEach(([key, value]) => {
                         const name = key.trim();
                         const amount = parseFloat(value || 0);
-                        
+
                         if (amount > 0) {
                             if (!summary.total_statutory[name]) {
                                 summary.total_statutory[name] = { amount: 0, count: 0 };
@@ -3102,4 +3176,3 @@ exports.getPayrollSummary = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
