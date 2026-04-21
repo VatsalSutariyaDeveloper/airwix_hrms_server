@@ -2504,7 +2504,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
             },
             period: {
                 label: `${monthName} ${payslip.year}`,
-                payDate: dayjs(payslip.createdAt || payslip.created_at).format('DD/MM/YYYY')
+                payDate: payslip.payment_date ? dayjs(payslip.payment_date).format('DD/MM/YYYY') : dayjs(payslip.createdAt || payslip.created_at).format('DD/MM/YYYY')
             },
             attendance: {
                 present: presentDays,
@@ -2516,11 +2516,15 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
                 netPayable: payslip.net_salary || payslip.net_payable
             },
             breakdown: {
-                earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount })),
+                earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount, amount: e.actual_amount })),
                 deductions: fullDeductionList,
+                statutory: breakdown.statutory || payslip.statutory_details || {},
                 total_earnings: totalEarnings.toFixed(2),
                 total_deductions: totalDeductions.toFixed(2)
-            }
+            },
+            leave_balances: payslip.leave_balances || [],
+            reimbursements: payslip.reimbursement_details || [],
+            payment_history: payslip.payment_history || {}
         },
         companyData: {
             company_name: company?.company_name || 'Airwix HRMS',

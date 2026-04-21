@@ -138,10 +138,6 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.JSONB,
             defaultValue: []
         },
-        family_details: {
-            type: DataTypes.JSONB,
-            defaultValue: []
-        },
         experience_details: {
             type: DataTypes.JSONB,
             defaultValue: []
@@ -224,7 +220,9 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.Payslip, { foreignKey: "employee_id", as: "payslips" });
         Employee.hasMany(models.PaymentHistory, { foreignKey: "employee_id", as: "paymentHistories" });
         Employee.hasMany(models.EmployeeResignation, { foreignKey: "employee_id", as: "resignations" });
+        Employee.hasMany(models.LeaveRequest, { foreignKey: "employee_id", as: "leaveRequests" });
         Employee.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company" });
+        Employee.hasMany(models.EmployeeFamilyMember, { foreignKey: "employee_id", as: "family_members" });
     };
 
     return Employee;

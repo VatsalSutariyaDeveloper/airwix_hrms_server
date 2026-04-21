@@ -105,12 +105,20 @@ const FILE_COLUMNS = [
     'profile_image',
     'driving_license_doc',
     'voter_id_doc',
-    'uan_doc'
+    'uan_doc',
+    'signature_doc'
 ];
 
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
-    const fieldsToParse = ["education_details", "custom_fields", "access_branches"];
+    const fieldsToParse = [
+        "education_details", 
+        "custom_fields", 
+        "access_branches", 
+        "experience_details", 
+        "professional_reference", 
+        "family_details"
+    ];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
@@ -118,7 +126,7 @@ const parseJsonFields = (body) => {
                 body[field] = JSON.parse(body[field]);
             } catch (error) {
                 console.error(`Error parsing JSON for field ${field}:`, error);
-                body[field] = [];
+                body[field] = field.includes('details') || field.includes('reference') || field.includes('known') || field.includes('background') ? [] : {};
             }
         }
     });
@@ -130,11 +138,54 @@ const sanitizeTemplateFields = (body) => {
         if (body[field] === "") {
             body[field] = 0;
         }
-        // else if (body[field] === null || body[field] === "null" || body[field] === undefined || body[field] === "undefined") {
-
-        // }
     });
 };
+
+const handleExperienceAttachments = async (req, res, experienceDetails = [], allFiles = [], folder, transaction, existingEmployee = null) => {
+    if (!Array.isArray(experienceDetails) || experienceDetails.length === 0) return experienceDetails;
+
+    let existingExperience = [];
+    if (existingEmployee && existingEmployee.experience_details) {
+        const raw = existingEmployee.experience_details;
+        if (typeof raw === 'string') {
+            if (raw !== "[object Object]") {
+                try {
+                    existingExperience = JSON.parse(raw);
+                } catch (e) {
+                    existingExperience = [];
+                }
+            }
+        } else if (Array.isArray(raw)) {
+            existingExperience = raw;
+        }
+    }
+
+    return await Promise.all(experienceDetails.map(async (exp, index) => {
+        // Aligned with frontend request structure: attachments.key
+        const attachmentKeys = (exp.attachments && exp.attachments.key) ? exp.attachments.key : (exp.attachment_keys || []);
+        const keptAttachments = Array.isArray(exp.attachments) ? exp.attachments : (typeof exp.attachments === 'string' ? [exp.attachments] : []);
+        const newAttachments = [];
+
+        for (const key of attachmentKeys) {
+            const uploadedFile = allFiles.find(f => f.fieldname === key);
+            if (uploadedFile) {
+                const tempReq = { file: uploadedFile };
+                const saved = await uploadFile(tempReq, res, folder, transaction);
+                if (saved[key]) {
+                    newAttachments.push(saved[key]);
+                }
+            }
+        }
+        
+        exp.attachments = Array.isArray(keptAttachments) ? [...keptAttachments.filter(a => typeof a === 'string'), ...newAttachments] : [...newAttachments];
+        delete exp.attachment_keys;
+        return exp;
+    }));
+};
+
+/**
+ * Creates a new Employee and their Family Members.
+ */
 
 
 /**
@@ -209,6 +260,21 @@ exports.create = async (req, res) => {
             );
         }
 
+        // Handle Experience Attachments
+        if (Array.isArray(POST.experience_details)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) allFilesArray.push(...req.files);
+                else Object.values(req.files).forEach(v => {
+                    if (Array.isArray(v)) allFilesArray.push(...v);
+                    else allFilesArray.push(v);
+                });
+            }
+            POST.experience_details = await handleExperienceAttachments(
+                req, res, POST.experience_details, allFilesArray, constants.EMPLOYEE_DOC_FOLDER, transaction
+            );
+        }
+
         // 1. Handle File Uploads
         // We map the uploaded file keys to the database column names
         if (req.files && Object.keys(req.files).length > 0) {
@@ -253,6 +319,11 @@ exports.create = async (req, res) => {
             const familyData = POST.family_details.map(member => ({
                 ...member,
                 employee_id: employee.id,
+                company_id: employee.company_id,
+                branch_id: employee.branch_id,
+                user_id: req.user.id,
+                dob: member.dob_age || member.dob, // Handle dob_age from frontend
+                relationship: member.relation || member.relationship, // Directly store string relation
                 status: 0
             }));
 
@@ -340,6 +411,21 @@ exports.update = async (req, res) => {
                 constants.CUSTOM_FIELD_IMG_FOLDER,
                 transaction,
                 existingEmployee
+            );
+        }
+
+        // Handle Experience Attachments
+        if (Array.isArray(POST.experience_details)) {
+            const allFilesArray = [];
+            if (req.files) {
+                if (Array.isArray(req.files)) allFilesArray.push(...req.files);
+                else Object.values(req.files).forEach(v => {
+                    if (Array.isArray(v)) allFilesArray.push(...v);
+                    else allFilesArray.push(v);
+                });
+            }
+            POST.experience_details = await handleExperienceAttachments(
+                req, res, POST.experience_details, allFilesArray, constants.EMPLOYEE_DOC_FOLDER, transaction, existingEmployee
             );
         }
 
@@ -444,7 +530,12 @@ exports.update = async (req, res) => {
         for (const member of incomingFamily) {
             const memberPayload = {
                 ...member,
-                employee_id: id
+                employee_id: id,
+                company_id: existingEmployee.company_id,
+                branch_id: existingEmployee.branch_id,
+                user_id: req.user.id,
+                dob: member.dob_age || member.dob, // Handle dob_age from frontend
+                relationship: member.relation || member.relationship // Directly store string relation
             };
 
             if (member.id) {
@@ -487,9 +578,11 @@ exports.getById = async (req, res) => {
                 attributes: ['id', 'template_name', 'notice_period_days'],
                 required: false
             },
-            // If you have State/Country relations for addresses, include them here:
-            // { model: StateMaster, as: 'permanent_state', attributes: ['state_name'] },
-            // { model: CountryMaster, as: 'permanent_country', attributes: ['country_name'] },
+            {
+                model: EmployeeFamilyMember,
+                as: 'family_members',
+                required: false
+            }
         ];
 
         const record = await commonQuery.findOneRecord(Employee, id, { include: dynamicIncludes });
@@ -497,6 +590,46 @@ exports.getById = async (req, res) => {
         if (!record || record.status === STATUS.DELETED) return res.error(constants.EMPLOYEE_NOT_FOUND);
 
         const plainRecord = record.get({ plain: true });
+
+        // Map family_members to family_details for UI consistency
+        plainRecord.family_details = plainRecord.family_members || [];
+        delete plainRecord.family_members;
+
+        // Format dates in family_details
+        if (Array.isArray(plainRecord.family_details)) {
+            plainRecord.family_details = plainRecord.family_details.map(member => ({
+                ...member,
+                dob: member.dob ? formatDateTime(member.dob) : member.dob,
+                dob_age: member.dob ? formatDateTime(member.dob) : member.dob_age
+            }));
+        }
+
+        // Handle Experience Attachments URLs and format dates
+        if (Array.isArray(plainRecord.experience_details)) {
+            plainRecord.experience_details = plainRecord.experience_details.map(exp => {
+                if (Array.isArray(exp.attachments)) {
+                    exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
+                }
+                // Format experience durations
+                return {
+                    ...exp,
+                    duration_start: exp.duration_start ? formatDateTime(exp.duration_start) : exp.duration_start,
+                    duration_end: exp.duration_end ? formatDateTime(exp.duration_end) : exp.duration_end
+                };
+            });
+        }
+
+        // Format root level date fields
+        const dateFields = [
+            'dob', 'joining_date', 'pf_joining_date', 'eps_joining_date', 'eps_exit_date',
+            'passport_expiry_date', 'marriage_date', 'confirmation_date'
+        ];
+
+        dateFields.forEach(field => {
+            if (plainRecord[field]) {
+                plainRecord[field] = formatDateTime(plainRecord[field]);
+            }
+        });
 
         FILE_COLUMNS.forEach(field => {
             if (plainRecord[field]) {
@@ -521,15 +654,17 @@ exports.getById = async (req, res) => {
             }
         });
 
-        // 2. Parse Education JSON if needed (Sequelize usually returns object for JSONB)
-        // Adding safety check just in case
-        if (typeof plainRecord.education_details === 'string') {
-            try {
-                plainRecord.education_details = JSON.parse(plainRecord.education_details);
-            } catch (e) {
-                plainRecord.education_details = [];
+        // Parse JSON fields (Sequelize usually returns object for JSONB, but safety first)
+        const jsonFields = ["education_details", "custom_fields", "experience_details", "professional_reference"];
+        jsonFields.forEach(field => {
+            if (typeof plainRecord[field] === 'string') {
+                try {
+                    plainRecord[field] = JSON.parse(plainRecord[field]);
+                } catch (e) {
+                    plainRecord[field] = [];
+                }
             }
-        }
+        });
 
         // also ensure custom_fields is parsed and convert any image references to URLs
         if (typeof plainRecord.custom_fields === 'string') {
@@ -581,7 +716,8 @@ exports.getProfile = async (req, res) => {
                     ]
                 },
                 { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
-                { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] }
+                { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] },
+                { model: EmployeeFamilyMember, as: 'family_members' }
             ]
         });
 
@@ -710,8 +846,13 @@ exports.getProfile = async (req, res) => {
                 signature_doc: getFileUrl(plainRecord.signature_doc, constants.EMPLOYEE_DOC_FOLDER),
             },
             education: plainRecord.education_details || [],
-            family_details: plainRecord.family_details || [],
-            experience_details: plainRecord.experience_details || [],
+            family_details: plainRecord.family_members || [],
+            experience_details: (plainRecord.experience_details || []).map(exp => {
+                if (Array.isArray(exp.attachments)) {
+                    exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
+                }
+                return exp;
+            }),
             professional_reference: plainRecord.professional_reference || [],
             remarks: plainRecord.remarks || null,
             custom_fields: plainRecord.custom_fields || {}

@@ -257,6 +257,7 @@ exports.getStatesWithRules = async (req, res) => {
                 attributes: [
                     'id', 'state_id', 'state.state_name', 'employee_contribution', 'employer_contribution', 'deduction_months', 'status'
                 ],
+                order: [['state.state_name', 'ASC']],
                 raw: true
             }, null, false
         );

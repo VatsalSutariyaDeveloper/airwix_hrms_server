@@ -218,10 +218,8 @@ exports.submitDetails = async (req, res) => {
                 onboarding_token: token,
                 status: 3
             },
-            [],
-            transaction,
-            false,
-            {}
+            {},
+            transaction
         );
 
         if (!employee) {
