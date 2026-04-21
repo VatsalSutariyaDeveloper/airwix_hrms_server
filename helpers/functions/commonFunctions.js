@@ -178,47 +178,10 @@ exports.fixQty = (value, decimals = 3) => {
 
 
 exports.formatDateTime = (dateInput, format = "DD-MM-YYYY") => {
-  const date = new Date(dateInput);
-  if (isNaN(date)) return "";
-
-  const day = date.getDate();
-  const monthIndex = date.getMonth();
-  const year = date.getFullYear();
-
-  const map = {
-    D: day,
-    DD: String(day).padStart(2, "0"),
-    M: monthIndex + 1,
-    MM: String(monthIndex + 1).padStart(2, "0"),
-    MMM: getMonthNameShort(monthIndex),
-    MMMM: getMonthNameFull(monthIndex),
-    YYYY: year,
-    YY: String(year).slice(-2),
-    d: date.getDay(),
-    ddd: getDayNameShort(date.getDay()),
-    dddd: getDayNameFull(date.getDay()),
-    H: date.getHours(),
-    HH: String(date.getHours()).padStart(2, "0"),
-    h: date.getHours() % 12 || 12,
-    hh: String(date.getHours() % 12 || 12).padStart(2, "0"),
-    m: date.getMinutes(),
-    mm: String(date.getMinutes()).padStart(2, "0"),
-    s: date.getSeconds(),
-    ss: String(date.getSeconds()).padStart(2, "0"),
-    A: date.getHours() >= 12 ? "PM" : "AM",
-    a: date.getHours() >= 12 ? "pm" : "am",
-  };
-
-  return format.replace(
-    /YYYY|YY|MMMM|MMM|MM|M|dddd|ddd|d|DD|D|HH|H|hh|h|mm|m|ss|s|A|a/g,
-    (match) => map[match]
-  );
-
-  // console.log(formatDateTime(date, "D M YYYY"));      // 28 July 2025
-  // console.log(formatDateTime(date, "DD-MM-YYYY"));    // 28-07-2025
-  // console.log(formatDateTime(date, "MMM D, YY"));     // Jul 28, 25
-  // console.log(formatDateTime(date, "YYYY/MM/DD"));    // 2025/07/28
-  // console.log(formatDateTime(date, "HH:mm:ss"));      // 16:53:45
+  if (!dateInput) return "";
+  const d = dayjs(dateInput, ["YYYY-MM-DD", "DD-MM-YYYY", "YYYY-MM-DD HH:mm:ss", "DD-MM-YYYY HH:mm:ss", "YYYY-MM-DDTHH:mm:ss.SSSZ"]);
+  if (!d.isValid()) return "";
+  return d.format(format);
 };
 
 function getMonthNameShort(index) {
