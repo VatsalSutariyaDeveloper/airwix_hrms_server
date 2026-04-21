@@ -132,10 +132,37 @@ const parseJsonFields = (body) => {
     });
 };
 
+// Helper: Handle invalid date strings (like "Invalid date") which can crash Sequelize/Postgres
+const sanitizeDateFields = (body) => {
+    const dateFields = [
+        "dob", "joining_date", "pf_joining_date", "eps_joining_date", 
+        "eps_exit_date", "marriage_date", "confirmation_date", 
+        "passport_expiry_date", "exit_date"
+    ];
+
+    dateFields.forEach((field) => {
+        if (body[field] === "Invalid date" || body[field] === "" || body[field] === "null") {
+            body[field] = null;
+        }
+    });
+
+    // Also sanitize family_details if present
+    if (Array.isArray(body.family_details)) {
+        body.family_details.forEach(member => {
+            if (member.dob === "Invalid date" || member.dob === "" || member.dob === "null") {
+                member.dob = null;
+            }
+            if (member.dob_age === "Invalid date" || member.dob_age === "" || member.dob_age === "null") {
+                member.dob_age = null;
+            }
+        });
+    }
+};
+
 // Helper: Set template fields to 0 if they are null
 const sanitizeTemplateFields = (body) => {
     ALLOWED_TEMPLATE_FIELDS.forEach((field) => {
-        if (body[field] === "") {
+        if (body[field] === "" || body[field] === "null" || body[field] === null) {
             body[field] = 0;
         }
     });
@@ -196,6 +223,8 @@ exports.create = async (req, res) => {
     try {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
+        sanitizeDateFields(req.body);
+
         const POST = req.body;
 
         // Validate Required Fields
@@ -347,6 +376,7 @@ exports.update = async (req, res) => {
     try {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
+        sanitizeDateFields(req.body);
 
         const { id } = req.params;
         const POST = req.body;
@@ -589,20 +619,13 @@ exports.getById = async (req, res) => {
 
         if (!record || record.status === STATUS.DELETED) return res.error(constants.EMPLOYEE_NOT_FOUND);
 
-        const plainRecord = record.get({ plain: true });
-
-        // Map family_members to family_details for UI consistency
-        plainRecord.family_details = plainRecord.family_members || [];
+        const plainRecord = record.get({ plain: true });        // Map family_members to family_details for UI consistency
+        plainRecord.family_details = (plainRecord.family_members || []).map(member => ({
+            ...member,
+            // Keep original dob, but add formatted version
+            dob_formatted: member.dob ? formatDateTime(member.dob) : ""
+        }));
         delete plainRecord.family_members;
-
-        // Format dates in family_details
-        if (Array.isArray(plainRecord.family_details)) {
-            plainRecord.family_details = plainRecord.family_details.map(member => ({
-                ...member,
-                dob: member.dob ? formatDateTime(member.dob) : member.dob,
-                dob_age: member.dob ? formatDateTime(member.dob) : member.dob_age
-            }));
-        }
 
         // Handle Experience Attachments URLs and format dates
         if (Array.isArray(plainRecord.experience_details)) {
@@ -610,24 +633,26 @@ exports.getById = async (req, res) => {
                 if (Array.isArray(exp.attachments)) {
                     exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
                 }
-                // Format experience durations
+                // Keep original duration dates, but add formatted versions
                 return {
                     ...exp,
-                    duration_start: exp.duration_start ? formatDateTime(exp.duration_start) : exp.duration_start,
-                    duration_end: exp.duration_end ? formatDateTime(exp.duration_end) : exp.duration_end
+                    duration_start_formatted: exp.duration_start ? formatDateTime(exp.duration_start) : "",
+                    duration_end_formatted: exp.duration_end ? formatDateTime(exp.duration_end) : ""
                 };
             });
         }
 
-        // Format root level date fields
+        // Format root level date fields into separate "_formatted" keys
         const dateFields = [
             'dob', 'joining_date', 'pf_joining_date', 'eps_joining_date', 'eps_exit_date',
-            'passport_expiry_date', 'marriage_date', 'confirmation_date'
+            'passport_expiry_date', 'marriage_date', 'confirmation_date', 'exit_date'
         ];
 
         dateFields.forEach(field => {
             if (plainRecord[field]) {
-                plainRecord[field] = formatDateTime(plainRecord[field]);
+                plainRecord[`${field}_formatted`] = formatDateTime(plainRecord[field]);
+            } else {
+                plainRecord[`${field}_formatted`] = "";
             }
         });
 
