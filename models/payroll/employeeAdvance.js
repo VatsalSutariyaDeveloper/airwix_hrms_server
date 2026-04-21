@@ -3,8 +3,8 @@ module.exports = (sequelize, DataTypes) => {
     "EmployeeAdvance",
     {
       employee_id: { type: DataTypes.INTEGER, allowNull: false },
-      month: { type: DataTypes.INTEGER, allowNull: false },
-      year: { type: DataTypes.INTEGER, allowNull: false },  
+      // month: { type: DataTypes.INTEGER, allowNull: true },
+      // year: { type: DataTypes.INTEGER, allowNull: true },  
       amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       payment_date: { type: DataTypes.DATEONLY, allowNull: false },
       notes: { type: DataTypes.TEXT, allowNull: true },

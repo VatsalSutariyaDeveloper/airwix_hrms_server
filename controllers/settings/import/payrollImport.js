@@ -2,6 +2,7 @@ const { parentPort, workerData } = require("worker_threads");
 const { sequelize, commonQuery, constants } = require("../../../helpers");
 const { Employee, Payslip, BranchMaster } = require("../../../models");
 const { Op } = require("sequelize");
+const dayjs = require("dayjs");
 const xlsx = require("xlsx");
 const fs = require("fs");
 const { fail } = require('../../../helpers/Err');
@@ -98,7 +99,8 @@ const runWorker = async () => {
         // Net
         net_salary: ["net salary", "netsalary", "payable", "total payable", "net payable", "take home", "net pay", "netpay"],
         // Other
-        lunch_count: ["lunch", "lunch count", "lunchcount"]
+        lunch_count: ["lunch", "lunch count", "lunchcount"],
+        payment_date: ["payment date", "pay date", "date", "paid date", "paymentdate", "paydate"]
     };
 
     const headerMap = {};
@@ -337,6 +339,28 @@ const runWorker = async () => {
         return isNaN(n) ? 0 : n;
     };
 
+    const parseDate = (idx, row) => {
+        if (idx === undefined || idx === null) return null;
+        const val = row[idx];
+        if (!val) return null;
+
+        // Handle Excel Date (Serial Number)
+        if (typeof val === 'number') {
+            // Excel dates are number of days since 1900-01-01 (or 1899-12-30)
+            const date = new Date((val - 25569) * 86400 * 1000);
+            return dayjs(date).format('YYYY-MM-DD');
+        }
+
+        // Handle native Date object
+        if (val instanceof Date) {
+            return dayjs(val).format('YYYY-MM-DD');
+        }
+
+        // Handle String
+        const d = dayjs(val);
+        return d.isValid() ? d.format('YYYY-MM-DD') : null;
+    };
+
     for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
         const row = rawRows[i];
         if (!row || row.length === 0) continue;
@@ -434,6 +458,7 @@ const runWorker = async () => {
             net_salary: parseNum(headerMap.net_salary, row),
             paid_amount: parseNum(headerMap.net_salary, row),
             pending_amount: 0,
+            payment_date: parseDate(headerMap.payment_date, row),
             
             break_down: breakdown
         };
@@ -446,7 +471,8 @@ const runWorker = async () => {
             updateOnDuplicate: [
                 'pd_days', 'ph_days', 'wo_days', 'wp_days', 'absent_days', 'present_days', 'total_days', 'lunch_count', 'leave_details',
                 'earning_details', 'deduction_details', 'statutory_details', 'employer_details',
-                'fixed_gross', 'paid_gross', 'total_deduction', 'net_salary', 'paid_amount', 'pending_amount', 'status', 'break_down'
+                'fixed_gross', 'paid_gross', 'total_deduction', 'net_salary', 'paid_amount', 'pending_amount', 'status', 'break_down',
+                'payment_date'
             ],
             transaction
         });

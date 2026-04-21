@@ -155,6 +155,7 @@ router.delete("/statutory-pt-rule", statutoryPTRuleController.delete);
 router.post("/statutory-pt-rule/dropdown-list", statutoryPTRuleController.dropdownList);
 router.patch("/statutory-pt-rule/status", statutoryPTRuleController.updateStatus);
 router.post("/statutory-pt-rule/states", statutoryPTRuleController.getStatesWithRules);
+router.post("/statutory-pt-rule/calculate", statutoryPTRuleController.calculatePT);
 
 //approval action
 router.post("/approval/my-pending", approvalActionController.getMyPendingApprovals);

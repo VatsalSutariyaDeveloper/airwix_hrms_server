@@ -114,7 +114,8 @@ exports.create = async (req, res) => {
                 payment_history: currentPaymentHistory,
                 paid_amount: totalPaid,
                 pending_amount: netPayable - totalPaid,
-                status: (totalPaid >= netPayable && payslip.status !== 3) ? 3 : payslip.status
+                status: (totalPaid >= netPayable && payslip.status !== 3) ? 3 : payslip.status,
+                payment_date: (totalPaid >= netPayable && payslip.status !== 3) ? (req.body.payment_date || dayjs().format('YYYY-MM-DD')) : payslip.payment_date
             }, transaction);
         } else {
             // General or Advance payment history creation
@@ -152,7 +153,8 @@ exports.create = async (req, res) => {
                 await commonQuery.updateRecordById(Payslip, targetPayslip.id, {
                     paid_amount: totalPaid,
                     pending_amount: Math.max(0, netSalary - totalPaid),
-                    status: (totalPaid >= (netSalary - 0.01)) ? 3 : 1 // Mark as Paid if threshold met
+                    status: (totalPaid >= (netSalary - 0.01)) ? 3 : 1, // Mark as Paid if threshold met
+                    payment_date: (totalPaid >= (netSalary - 0.01)) ? (req.body.payment_date || dayjs().format('YYYY-MM-DD')) : targetPayslip.payment_date
                 }, transaction);
             }
 

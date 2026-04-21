@@ -5,150 +5,149 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bulk Salary Slips</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
         body {
-            font-family: 'Helvetica', 'Arial', sans-serif;
+            font-family: 'Inter', 'Helvetica', 'Arial', sans-serif;
             color: #111827;
             margin: 0;
             padding: 0;
-            font-size: 12px;
-            line-height: 1.5;
+            font-size: 9px;
+            line-height: 1.4;
         }
 
         .page-break {
             page-break-after: always;
-            padding: 40px;
-            min-height: 1000px; /* Force visibility */
+            padding: 20px;
+            min-height: 950px; /* Approximate A4 height minus padding */
+            display: flex;
+            flex-direction: column;
         }
 
         .page-break:last-child {
             page-break-after: avoid;
         }
 
+        /* Header */
         .company-header {
-            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
             margin-bottom: 20px;
         }
 
         .company-name {
-            font-size: 24px;
-            font-weight: bold;
+            font-size: 18px;
+            font-weight: 700;
             margin: 0;
+            color: #111827;
         }
 
         .company-location {
-            font-size: 11px;
+            font-size: 9px;
             color: #6b7280;
-            margin-top: 4px;
+            margin-top: 2px;
             text-transform: uppercase;
-            font-weight: bold;
-            letter-spacing: 1px;
+            font-weight: 700;
         }
 
+        /* Title Bar */
         .title-bar {
             border-top: 1px solid #e5e7eb;
             border-bottom: 1px solid #e5e7eb;
-            padding: 10px 0;
-            margin-bottom: 25px;
+            padding: 6px 0;
+            margin-bottom: 20px;
             text-align: center;
         }
 
         .title-text {
-            font-size: 12px;
-            font-weight: bold;
+            font-size: 10px;
+            font-weight: 700;
             letter-spacing: 2px;
             text-transform: uppercase;
             color: #374151;
             margin: 0;
         }
 
+        /* Summary Box */
         .summary-container {
             display: flex;
             border: 1px solid #e5e7eb;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
 
         .summary-left {
-            flex: 1.5;
-            padding: 15px;
+            flex: 1;
+            padding: 10px;
             border-right: 1px solid #e5e7eb;
         }
 
         .summary-right {
             flex: 1;
-            padding: 15px;
+            padding: 10px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            background-color: #f9fafb;
         }
 
         .section-heading {
-            font-size: 10px;
-            font-weight: bold;
+            font-size: 9px;
+            font-weight: 700;
             color: #9ca3af;
-            letter-spacing: 1.5px;
+            letter-spacing: 2px;
             text-transform: uppercase;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
         }
 
         .label-row {
             display: flex;
-            margin-bottom: 6px;
+            margin-bottom: 5px;
         }
 
         .label {
-            width: 40%;
+            width: 45%;
             color: #6b7280;
-            font-weight: bold;
+            font-weight: 700;
         }
 
         .value {
-            width: 60%;
-            font-weight: bold;
+            width: 55%;
+            font-weight: 700;
         }
 
         .net-pay-amount {
-            font-size: 28px;
-            font-weight: bold;
+            font-size: 22px;
+            font-weight: 700;
             color: #111827;
-            margin: 10px 0;
         }
 
-        .chip {
-            display: flex;
-            background-color: #ffffff;
-            border: 1px solid #e5e7eb;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #6b7280;
-            text-transform: uppercase;
-        }
-
+        /* Table Styles */
         .table {
             width: 100%;
             border-collapse: collapse;
             border: 1px solid #e5e7eb;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
 
         .table th {
             background-color: #f9fafb;
             border-bottom: 1px solid #e5e7eb;
-            padding: 10px;
+            padding: 8px;
             text-align: left;
-            font-size: 10px;
-            font-weight: bold;
+            font-size: 8px;
+            font-weight: 700;
             text-transform: uppercase;
+            letter-spacing: 1px;
             color: #4b5563;
         }
 
         .table td {
-            padding: 10px;
-            border-bottom: 1px solid #f3f4f6;
+            padding: 8px;
+            border-bottom: 0.5px solid #f3f4f6;
             vertical-align: top;
+            font-size: 9px;
+            color: #374151;
         }
 
         .border-right {
@@ -160,7 +159,7 @@
         }
 
         .bold {
-            font-weight: bold;
+            font-weight: 700;
         }
 
         .text-rose {
@@ -169,69 +168,83 @@
 
         .total-row {
             background-color: #f9fafb;
-            font-weight: bold;
-        }
-
-        .total-row td {
+            font-weight: 700;
             border-top: 1px solid #e5e7eb;
         }
 
+        .total-row td {
+            padding: 8px;
+            text-transform: uppercase;
+            color: #6b7280;
+            letter-spacing: 1px;
+        }
+
+        .total-row .value-cell {
+            color: #111827;
+        }
+
+        /* Reimbursements & Net Summary */
         .net-summary-container {
             display: flex;
             justify-content: flex-end;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
 
         .net-summary-box {
-            width: 45%;
+            width: 48%;
             border: 1px solid #e5e7eb;
+            background-color: #f9fafb;
         }
 
         .net-summary-row {
             display: flex;
             justify-content: space-between;
-            padding: 10px;
-            border-bottom: 1px solid #f3f4f6;
+            padding: 8px;
+            border-bottom: 0.5px solid #f3f4f6;
+            font-size: 9px;
         }
 
         .net-summary-row.header {
             background-color: #f9fafb;
-            font-weight: bold;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 700;
             text-transform: uppercase;
-            font-size: 10px;
+            font-size: 8px;
             color: #4b5563;
         }
 
+        .net-summary-row.total {
+            background-color: #ffffff;
+            font-weight: 700;
+            font-size: 11px;
+        }
+
+        /* Words Box */
         .words-box {
             border: 1px solid #e5e7eb;
             background-color: #f9fafb;
-            padding: 15px;
+            padding: 12px;
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 15px;
         }
 
         .words-text {
-            font-size: 14px;
-            font-weight: bold;
+            font-size: 12px;
+            font-weight: 700;
         }
 
-        .formula-text {
-            margin-top: 10px;
-            font-size: 9px;
-            font-weight: bold;
-            color: #9ca3af;
-            text-transform: uppercase;
-        }
-
+        /* Footer */
         .footer {
             border-top: 1px solid #f3f4f6;
-            padding-top: 20px;
+            padding-top: 8px;
             text-align: center;
-            font-size: 9px;
+            font-size: 7px;
             color: #9ca3af;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 40px;
+            letter-spacing: 1.5px;
+            line-height: 1.5;
+            font-weight: 600;
+            margin-top: auto;
         }
 
         @media print {
@@ -239,7 +252,7 @@
                 padding: 0;
             }
             .page-break {
-                padding: 0;
+                padding: 20px;
                 margin: 0;
             }
         }
@@ -247,14 +260,44 @@
 </head>
 <body>
     <% slips.forEach(function(slip) { %>
+        <% 
+            // Reuse logic from single slip.ejs
+            const payslipData = slip.payslipData;
+            const companyData = slip.companyData;
+            const totalEarnings = slip.totalEarnings;
+            
+            const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+            const baseDeductions = payslipData.breakdown.deductions || [];
+            const statutoryDetails = payslipData.breakdown.statutory || {};
+            const statutoryKeys = Object.keys(statutoryDetails).map(k => normalize(k));
+
+            const combinedDeductions = [
+                ...baseDeductions.filter(d => !statutoryKeys.includes(normalize(d.name))).map(d => ({ ...d, amount: d.amount, percentage: null })),
+                ...Object.entries(statutoryDetails)
+                    .filter(([name]) => !name.endsWith(' %'))
+                    .map(([name, amount]) => {
+                        const pKey = `${name} %`;
+                        const percentage = statutoryDetails[pKey];
+                        return { name, amount: amount, percentage: percentage };
+                    })
+            ];
+
+            const totalDeductionsCalculated = combinedDeductions.reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+            const earningsList = payslipData.breakdown.earnings || [];
+            const maxRows = Math.max(earningsList.length, combinedDeductions.length, 3);
+
+            const reimbursements = payslipData.reimbursements || [];
+            const netPayable = parseFloat(payslipData.salary.netPayable || 0);
+        %>
+        
         <div class="page-break">
             <div class="company-header">
-                <h1 class="company-name"><%= slip.companyData.company_name || 'Airwix HRMS' %></h1>
-                <div class="company-location"><%= slip.companyData.address || 'Gujarat, India' %></div>
+                <h1 class="company-name"><%= companyData.company_name || 'Airwix HRMS' %></h1>
+                <div class="company-location"><%= companyData.address || 'Gujarat, India' %></div>
             </div>
 
             <div class="title-bar">
-                <div class="title-text">Payslip for the month of <%= slip.payslipData.period.label %></div>
+                <div class="title-text">Payslip for the month of <%= payslipData.period.label %></div>
             </div>
 
             <div class="summary-container">
@@ -262,50 +305,33 @@
                     <div class="section-heading">Employee Pay Summary</div>
                     <div class="label-row">
                         <div class="label">Employee Name</div>
-                        <div class="value">: <%= slip.payslipData.employee.name %></div>
+                        <div class="value">: <%= payslipData.employee.name %></div>
                     </div>
                     <div class="label-row">
                         <div class="label">Employee Code</div>
-                        <div class="value">: <%= slip.payslipData.employee.code || 'N/A' %></div>
+                        <div class="value">: <%= payslipData.employee.code || '' %></div>
                     </div>
                     <div class="label-row">
                         <div class="label">Designation</div>
-                        <div class="value">: <%= slip.payslipData.employee.designation || 'N/A' %></div>
+                        <div class="value">: <%= payslipData.employee.designation || '' %></div>
                     </div>
                     <div class="label-row">
                         <div class="label">Date of Joining</div>
-                        <div class="value">: <%= slip.payslipData.employee.joining_date %></div>
+                        <div class="value">: <%= payslipData.employee.joining_date %></div>
                     </div>
                     <div class="label-row">
                         <div class="label">Pay Period</div>
-                        <div class="value">: <%= slip.payslipData.period.label %></div>
+                        <div class="value">: <%= payslipData.period.label %></div>
                     </div>
                     <div class="label-row">
                         <div class="label">Pay Date</div>
-                        <div class="value">: <%= slip.payslipData.period.payDate || 'N/A' %></div>
+                        <div class="value">: <%= payslipData.period.payDate || '' %></div>
                     </div>
-                    <% if (slip.payslipData.attendance && slip.payslipData.attendance.lunch_count > 0) { %>
-                    <div class="label-row">
-                        <div class="label">Lunch Count</div>
-                        <div class="value">: <%= slip.payslipData.attendance.lunch_count %></div>
-                    </div>
-                    <% } %>
-                    <% if (slip.payslipData.attendance && slip.payslipData.attendance.leave_details) { %>
-                        <% Object.entries(slip.payslipData.attendance.leave_details).forEach(([name, count]) => { %>
-                        <div class="label-row">
-                            <div class="label"><%= name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, ' ') %></div>
-                            <div class="value">: <%= count %></div>
-                        </div>
-                        <% }) %>
-                    <% } %>
                 </div>
 
                 <div class="summary-right">
                     <div class="section-heading">Employee Net Pay</div>
-                    <div class="net-pay-amount"><%= formatCurrency(slip.payslipData.salary.netPayable) %></div>
-                    <div class="chip">
-                        Paid Days: <%= slip.payslipData.attendance.present %> | LOP Days: <%= slip.payslipData.attendance.lwp %>
-                    </div>
+                    <div class="net-pay-amount"><%= formatCurrency(netPayable) %></div>
                 </div>
             </div>
 
@@ -319,63 +345,81 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <% 
-                        const earnings = slip.payslipData.breakdown.earnings || [];
-                        const deductions = slip.payslipData.breakdown.deductions || [];
-                        const maxRows = Math.max(earnings.length, deductions.length, 3);
-                    %>
                     <% for (let i = 0; i < maxRows; i++) { %>
-                        <% const earn = earnings[i]; const ded = deductions[i]; %>
+                        <% const earn = earningsList[i]; const ded = combinedDeductions[i]; %>
                         <tr>
                             <td class="border-right"><%= earn ? earn.name : '' %></td>
-                            <td class="border-right text-right bold"><%= earn ? formatCurrency(earn.actual_amount) : '' %></td>
-                            <td class="border-right"><%= ded ? ded.name : '' %></td>
+                            <td class="border-right text-right bold"><%= earn ? formatCurrency(earn.amount) : '' %></td>
+                            <td class="border-right">
+                                <%= ded ? ded.name : '' %>
+                                <% if (ded && ded.percentage) { %>(<%= ded.percentage %>%)<% } %>
+                                <% if (ded && ded.is_food && ded.meal_count > 0) { %>
+                                    <span style="font-size: 7px;"> (<%= ded.meal_count %> meals x ₹<%= ded.rate %>)</span>
+                                <% } %>
+                            </td>
                             <td class="text-right bold text-rose"><%= ded ? formatCurrency(ded.amount) : '' %></td>
                         </tr>
                     <% } %>
                     <tr class="total-row">
                         <td class="border-right">Gross Earnings</td>
-                        <td class="border-right text-right"><%= formatCurrency(slip.totalEarnings) %></td>
+                        <td class="border-right text-right value-cell"><%= formatCurrency(totalEarnings) %></td>
                         <td class="border-right">Total Deductions</td>
-                        <td class="text-right text-rose"><%= formatCurrency(slip.totalDeductions) %></td>
+                        <td class="text-right text-rose value-cell"><%= formatCurrency(totalDeductionsCalculated) %></td>
                     </tr>
                 </tbody>
             </table>
+
+            <% if (reimbursements && reimbursements.length > 0) { %>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th class="border-right" style="width: 70%;">Reimbursements</th>
+                        <th class="text-right" style="width: 30%;">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% reimbursements.forEach(item => { %>
+                        <tr>
+                            <td class="border-right">
+                                <span class="bold"><%= item.name %></span>
+                                <% if (item.description) { %><span style="font-size: 7px; color: #6b7280;"> - <%= item.description %></span><% } %>
+                            </td>
+                            <td class="text-right bold"><%= formatCurrency(item.amount) %></td>
+                        </tr>
+                    <% }) %>
+                </tbody>
+            </table>
+            <% } %>
 
             <div class="net-summary-container">
                 <div class="net-summary-box">
                     <div class="net-summary-row header">
                         <div>Net Pay</div>
-                        <div>Amount</div>
+                        <div class="text-right">Amount</div>
                     </div>
                     <div class="net-summary-row">
                         <div>Gross Earnings</div>
-                        <div class="bold"><%= formatCurrency(slip.totalEarnings) %></div>
+                        <div class="text-right"><%= formatCurrency(totalEarnings) %></div>
                     </div>
                     <div class="net-summary-row">
                         <div>Total Deductions</div>
-                        <div class="bold text-rose">(-) <%= formatCurrency(slip.totalDeductions) %></div>
+                        <div class="text-right text-rose">(-) <%= formatCurrency(totalDeductionsCalculated) %></div>
                     </div>
-                    <div class="net-summary-row" style="background-color: #ffffff; border-top: 1px solid #e5e7eb;">
+                    <div class="net-summary-row total">
                         <div class="bold">Total Net Payable</div>
-                        <div class="bold" style="font-size: 14px;"><%= formatCurrency(slip.payslipData.salary.netPayable) %></div>
+                        <div class="text-right bold"><%= formatCurrency(netPayable) %></div>
                     </div>
                 </div>
             </div>
 
             <div class="words-box">
                 <div class="words-text">
-                    Total Net Payable: <%= formatCurrency(slip.payslipData.salary.netPayable) %>
-                    <br>
-                    (<%= numberToWords(slip.payslipData.salary.netPayable) %> Rupees Only)
-                </div>
-                <div class="formula-text">
-                    ** Total Net Payable = Gross Earnings - Total Deductions
+                    Total Net Payable : <%= formatCurrency(netPayable) %> (<%= numberToWords(netPayable) %> Only)
                 </div>
             </div>
 
             <div class="footer">
-                -- This document has been automatically generated by Airwix HRMS; 
+                -- This document has been system generated;
                 therefore, a signature is not required. --
             </div>
         </div>

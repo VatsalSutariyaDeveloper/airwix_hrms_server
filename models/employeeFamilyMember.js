@@ -2,7 +2,8 @@ module.exports = (sequelize, DataTypes) => {
     const EmployeeFamilyMember = sequelize.define("EmployeeFamilyMember", {
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
         name: { type: DataTypes.STRING, allowNull: false },
-        relationship: { type: DataTypes.SMALLINT, comment: "1: Brother, 2: Sister, 3: Father, 4: Mother, 5: Spouse, 6: Son, 7: Daughter" },
+        relationship: { type: DataTypes.STRING, allowNull: false },
+        contact_no: { type: DataTypes.STRING },
         dob: { type: DataTypes.DATEONLY },
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },
         blood_group: { type: DataTypes.SMALLINT, comment: "1: A+, 2: A-, 3: B+, 4: B-, 5: O+, 6: O-, 7: AB+, 8: AB-" },
@@ -22,6 +23,10 @@ module.exports = (sequelize, DataTypes) => {
         timestamps: true,
         underscored: true // Ensures snake_case for created_at, updated_at
     });
+
+    EmployeeFamilyMember.associate = function (models) {
+        EmployeeFamilyMember.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+    };
 
     return EmployeeFamilyMember;
 };

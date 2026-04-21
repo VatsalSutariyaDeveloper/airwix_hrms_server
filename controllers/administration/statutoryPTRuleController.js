@@ -1,6 +1,6 @@
-const { validateRequest, commonQuery, handleError, sequelize } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, sequelize, Op } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { StatutoryPTRule, StateMaster } = require("../../models");
+const { StatutoryPTRule, StateMaster, Employee } = require("../../models");
 
 //CREATE
 exports.create = async (req, res) => {
@@ -25,9 +25,12 @@ exports.create = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        await commonQuery.createRecord(StatutoryPTRule, req.body, transaction);
+        req.body.company_id = -1;
+        req.body.branch_id = -1;
+        req.body.user_id = -1;
+        await commonQuery.createRecord(StatutoryPTRule, req.body, transaction, false);
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_CREATED);
+        return res.success(constants.CREATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -43,6 +46,8 @@ exports.getAll = async (req, res) => {
             ["min_salary", true, true],
             ["max_salary", true, true],
             ["monthly_amount", true, true],
+            ["march_amount", true, true],
+            ["state.state_name", true, true],
             // ["gender", true, true],
         ];
 
@@ -57,7 +62,7 @@ exports.getAll = async (req, res) => {
                     attributes: [] 
                 }],
                 attributes: [
-                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'march_amount', 'gender', 'status'
                 ]
             }, false
         );
@@ -114,12 +119,12 @@ exports.getById = async (req, res) => {
                     attributes: ['state_name', 'code'] 
                 }],
                 attributes: [
-                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'status'
+                    'id', 'state_id', 'state.state_name', 'min_salary', 'max_salary', 'monthly_amount', 'gender', 'march_amount', 'status'
                 ]
             },
             null,
             false,
-            {}
+            false
         );
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
         return res.ok(record);
@@ -147,19 +152,20 @@ exports.update = async (req, res) => {
             {},
             transaction
         );
-
-
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        const updated = await commonQuery.updateRecordById(StatutoryPTRule, req.params.id, req.body, transaction);
+        req.body.company_id = -1;
+        req.body.branch_id = -1;
+        req.body.user_id = -1;
+        const updated = await commonQuery.updateRecordById(StatutoryPTRule, req.params.id, req.body, transaction, false, false);
         if (!updated || updated.status === 2) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -187,13 +193,13 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
-        const deleted = await commonQuery.softDeleteById(StatutoryPTRule, ids, transaction);
+        const deleted = await commonQuery.softDeleteById(StatutoryPTRule, ids, transaction, false);
         if (!deleted) {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_DELETED);
+        return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
@@ -229,7 +235,9 @@ exports.updateStatus = async (req, res) => {
             StatutoryPTRule,
             ids,
             { status },
-            transaction
+            transaction,
+            false,
+            false
         );
 
         if (!updated || updated.status === 2) {
@@ -238,7 +246,7 @@ exports.updateStatus = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success(constants.STATUTORY_PTR_RULE_MASTER_UPDATED);
+        return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -258,11 +266,133 @@ exports.getStatesWithRules = async (req, res) => {
                     attributes: ['id', 'state_name'] 
                 }],
                 group: ['StatutoryPTRule.state_id', 'state.id', 'state.state_name'],
+                order: [['state.state_name', 'ASC']],
             }, null, false
         );
         
         const states = rules.map(r => r.state).filter(Boolean);
         return res.ok(states);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.calculatePT = async (req, res) => {
+    try {
+        let { state_id, employee_id, state_name, amount, gender, month } = req.body;
+
+        if (employee_id) {
+            const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, null, false, {});
+            if (employee) {
+                state_id = state_id || employee.state_id || employee.present_state_id; // Using fallback if state_id is not exactly named
+                gender = gender || employee.gender;
+            }
+        }
+
+        if (amount === undefined || amount === null) {
+            return res.error(constants.VALIDATION_ERROR, { amount: "Amount is required" });
+        }
+
+        // 1. Resolve state_id if state_name is provided
+        if (!state_id && state_name) {
+            const state = await commonQuery.findOneRecord(StateMaster, { state_name: { [Op.iLike]: state_name } }, null, false, {});
+            if (state) state_id = state.id;
+        }
+
+        if (!state_id) {
+            return res.error(constants.VALIDATION_ERROR, { state_id: "State is required or invalid" });
+        }
+
+        // 2. Default values
+        gender = gender || 3; // Default to 'All'
+        month = month || (new Date().getMonth() + 1);
+
+        // 3. Find matching rules using commonQuery
+        const filters = {
+            state_id,
+            status: 0,
+            min_salary: { [Op.lte]: amount },
+            gender: { [Op.in]: [gender, 3] },
+            [Op.or]: [
+                { max_salary: { [Op.gte]: amount } },
+                { max_salary: null }
+            ]
+        };
+
+        const matchingRules = await commonQuery.findAllRecords(StatutoryPTRule, filters, {}, null, false);
+
+        if (!matchingRules || matchingRules.length === 0) {
+            return res.ok({ monthly_amount: 0 });
+        }
+
+        // 4. Prioritize exact gender match (1 or 2) over 'All' (3)
+        let selectedRule = matchingRules.find(r => r.gender == gender);
+        if (!selectedRule) selectedRule = matchingRules.find(r => r.gender == 3);
+        if (!selectedRule) selectedRule = matchingRules[0];
+
+        // 5. Check for March amount
+        let deduction = selectedRule.monthly_amount;
+        if (parseInt(month) === 3 && selectedRule.march_amount && parseFloat(selectedRule.march_amount) > 0) {
+            deduction = selectedRule.march_amount;
+        }
+
+        return res.ok({ monthly_amount: parseFloat(deduction) });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+
+exports.getPTByMonth = async (req, res) => {
+    try {
+        const { employee_id, month } = req.body;
+
+        if (!employee_id) {
+            return res.error(constants.VALIDATION_ERROR, { employee_id: "Employee is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, null, false, {});
+        if (!employee) {
+            return res.error(constants.NOT_FOUND);
+        }
+
+        const state_id = employee.state_id;
+        const gender = employee.gender;
+        const monthly_salary = employee.monthly_salary;
+
+        if (!state_id) {
+            return res.error(constants.VALIDATION_ERROR, { state_id: "Employee state not found" });
+        }
+
+        const matchingRules = await StatutoryPTRule.findAll({
+            where: {
+                state_id,
+                status: 0,
+                min_salary: { [Op.lte]: monthly_salary },
+                [Op.or]: [
+                    { max_salary: { [Op.gte]: monthly_salary } },
+                    { max_salary: null }
+                ],
+                gender: { [Op.in]: [gender, 3] }
+            }
+        });
+
+        if (!matchingRules || matchingRules.length === 0) {
+            return res.ok({ monthly_amount: 0 });
+        }
+
+        let selectedRule = matchingRules.find(r => r.gender == gender);
+        if (!selectedRule) selectedRule = matchingRules.find(r => r.gender == 3);
+        if (!selectedRule) selectedRule = matchingRules[0];
+
+        let deduction = selectedRule.monthly_amount;
+        if (parseInt(month) === 3 && selectedRule.march_amount && parseFloat(selectedRule.march_amount) > 0) {
+            deduction = selectedRule.march_amount;
+        }
+
+        return res.ok({ monthly_amount: parseFloat(deduction) });
+
     } catch (err) {
         return handleError(err, res, req);
     }

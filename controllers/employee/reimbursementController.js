@@ -1,4 +1,4 @@
-const { Reimbursement, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings } = require("../../models");
+const { Reimbursement, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
@@ -16,6 +16,7 @@ exports.create = async (req, res) => {
             expense_type: "Expense Type",
             amount: "Amount",
             date: "Date",
+            payment_type: "Payment Type"
         };
 
         if (!req.body.employee_id && req.user.employee_id) {
@@ -234,6 +235,22 @@ exports.updateStatus = async (req, res) => {
                     if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
                     updateData.approval_history = history;
                     updateData.current_level = totalLevels;
+                }
+
+                // Create PaymentHistory entry for instant payment (payment_type = 2)
+                if (reimbursement.payment_type === 2) {
+                    const reimbursementDate = dayjs(reimbursement.date);
+                    await commonQuery.createRecord(PaymentHistory, {
+                        employee_id: reimbursement.employee_id,
+                        ref_id: reimbursement.id,
+                        month: reimbursementDate.month() + 1,
+                        year: reimbursementDate.year(),
+                        payment_date: dayjs().format('YYYY-MM-DD'),
+                        amount: reimbursement.amount,
+                        payment_type: "Reimbursement",
+                        payment_mode: "Bank",
+                        status: 1, // Adjusted/Paid
+                    }, transaction);
                 }
             }
 

@@ -29,40 +29,27 @@ const calculateTDS = (annualGross, regime = 'new_regime', exemptions = 0, taxPai
         // 10 - 12L: 15%
         // 12 - 15L: 20%
         // > 15L: 30%
-        
-        if (taxableIncome <= 700000) {
-            tax = 0; // Section 87A Rebate
-        } else {
-            if (taxableIncome > 1500000) {
-                tax += (taxableIncome - 1500000) * 0.30;
-                tax += 300000 * 0.20; // 12L to 15L
-                tax += 200000 * 0.15; // 10L to 12L
-                tax += 300000 * 0.10; // 7L to 10L
-                tax += 400000 * 0.05; // 3L to 7L
-            } else if (taxableIncome > 1200000) {
-                tax += (taxableIncome - 1200000) * 0.20;
-                tax += 200000 * 0.15;
-                tax += 300000 * 0.10;
-                tax += 400000 * 0.05;
-            } else if (taxableIncome > 1000000) {
-                tax += (taxableIncome - 1000000) * 0.15;
-                tax += 300000 * 0.10;
-                tax += 400000 * 0.05;
-            } else if (taxableIncome > 700000) {
-                tax += (taxableIncome - 700000) * 0.10;
-                tax += 400000 * 0.05;
-            } else if (taxableIncome > 300000) {
-                tax += (taxableIncome - 300000) * 0.05;
-            }
-            
-            // Marginal Relief for New Regime (Commonly applicable just above 7L)
-            if (taxableIncome > 700000) {
-                const taxOn7L = 0;
-                const excessIncome = taxableIncome - 700000;
-                if (tax > excessIncome) {
-                    tax = excessIncome;
-                }
-            }
+
+        if (taxableIncome > 1500000) {
+            tax += (taxableIncome - 1500000) * 0.30;
+            tax += 300000 * 0.20; // 12L to 15L
+            tax += 200000 * 0.15; // 10L to 12L
+            tax += 300000 * 0.10; // 7L to 10L
+            tax += 400000 * 0.05; // 3L to 7L
+        } else if (taxableIncome > 1200000) {
+            tax += (taxableIncome - 1200000) * 0.20;
+            tax += 200000 * 0.15;
+            tax += 300000 * 0.10;
+            tax += 400000 * 0.05;
+        } else if (taxableIncome > 1000000) {
+            tax += (taxableIncome - 1000000) * 0.15;
+            tax += 300000 * 0.10;
+            tax += 400000 * 0.05;
+        } else if (taxableIncome > 700000) {
+            tax += (taxableIncome - 700000) * 0.10;
+            tax += 400000 * 0.05;
+        } else if (taxableIncome > 300000) {
+            tax += (taxableIncome - 300000) * 0.05;
         }
     } else if (regime === 'old_regime') {
         // Old Tax Regime Slabs (FY 2024-25)

@@ -13,7 +13,7 @@ exports.getAuditLogs = async (req, res) => {
       ["logs.access_type", true, true],
       ["logs.caller", true, true],
       ["logs.status", true, true],
-      ["logs.created_at", false, true],
+      ["logs.created_at", true, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
@@ -49,7 +49,7 @@ exports.getActivityLogs = async (req, res) => {
       ["activity_logs.ip_address", true, true],
       ["activity_logs.access_type", true, true],
       ["activity_logs.caller", true, true],
-      ["activity_logs.created_at", false, true],
+      ["activity_logs.created_at", true, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(
@@ -84,7 +84,7 @@ exports.getApiLogs = async (req, res) => {
       ["ApiLog.ip_address", true, true],
       ["access_type", true, true],
       ["caller", true, true],
-      ["ApiLog.created_at", false, true],
+      ["ApiLog.created_at", true, true],
     ];
 
     const result = await commonQuery.fetchPaginatedData(

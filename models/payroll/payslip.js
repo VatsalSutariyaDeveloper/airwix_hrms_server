@@ -25,6 +25,7 @@ module.exports = (sequelize, DataTypes) => {
     deduction_details: { type: DataTypes.JSON, allowNull: true },
     statutory_details: { type: DataTypes.JSON, allowNull: true },
     employer_details: { type: DataTypes.JSON, allowNull: true },
+    reimbursement_details: { type: DataTypes.JSON, allowNull: true },
     payment_history: { type: DataTypes.JSON, allowNull: true },
 
     // Summary Totals
@@ -37,6 +38,7 @@ module.exports = (sequelize, DataTypes) => {
     // JSON details for legacy or extra breakdown
     break_down: { type: DataTypes.JSON, allowNull: true },
     tds_calculation_data: { type: DataTypes.JSON, allowNull: true },
+    payment_date: { type: DataTypes.DATEONLY, allowNull: true },
     
     status: { 
         type: DataTypes.SMALLINT, 
