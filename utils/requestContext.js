@@ -16,6 +16,8 @@ function getContext() {
       role_id: null,
       is_super_admin: false,
       ip: "127.0.0.1",
+      userAgent: "unknown",
+      endpoint: "unknown",
       access: "system"
     };
   }
@@ -29,6 +31,8 @@ function getContext() {
     role_id: store.roleId,
     is_super_admin: store.is_super_admin || false,
     ip: store.ip,
+    userAgent: store.userAgent || "unknown",
+    endpoint: store.endpoint || "unknown",
     access: store.access
   };
 }

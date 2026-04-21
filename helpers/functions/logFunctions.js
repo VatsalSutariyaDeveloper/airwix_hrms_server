@@ -195,18 +195,15 @@ exports.logQuery = async (logData, mainTransaction = null) => {
     const logPayload = {
         entity_name: logData.entity_name,
         action_type: logData.action_type,
-        user_id: sanitizeUserId(logData.user_id),
-        company_id: logData.company_id,
-        branch_id: logData.branch_id,
+        user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
+        company_id: logData.company_id || ctx?.company_id,
+        branch_id: logData.branch_id || ctx?.branch_id,
         record_id: logData.record_id,
         log_message: truncateText(message, TEXT_LIMIT),
         old_data: safeJson(finalOld),
         new_data: safeJson(finalNew),
-        sql_query: logData.sql_query, 
-        stack_trace: null,
-        ip_address: logData.ip_address,
-        status: 0,
-        access_type: logData.access_type || (ctx ? ctx.access : 'system'),
+        endpoint: logData.endpoint || (ctx ? ctx.endpoint : 'unknown'),
+        user_agent: logData.user_agent || (ctx ? ctx.userAgent : 'unknown'),
         caller: logData.caller,
     };
     if (mainTransaction) {
@@ -262,7 +259,8 @@ exports.logError = async (logData, transaction = null) => {
       ip_address: logData.ip_address || ctx?.ip || "127.0.0.1",
       status: 0,
       access_type: logData.access_type || (ctx ? ctx.access : 'system'),
-      sql_query: logData.sql_query,
+      endpoint: logData.endpoint || (ctx ? ctx.endpoint : 'unknown'),
+      user_agent: logData.user_agent || (ctx ? ctx.userAgent : 'unknown'),
       caller: logData.caller || ctx?.caller || "unknown"
     }, { transaction });
 

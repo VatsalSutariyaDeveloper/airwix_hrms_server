@@ -13,8 +13,10 @@ module.exports = (sequelize, DataTypes) => {
       sql_query: { type: DataTypes.TEXT, allowNull: true, comment: "The raw SQL query executed" },
       ip_address: { type: DataTypes.STRING(50), allowNull: true },
       is_resolved: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0=Pending, 1=Resolved (For Errors)" },
-      status: { type: DataTypes.INTEGER, allowNull: true, comment: "0 = Success, 1 = Error" },
+      status: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: true, comment: "0 = Success, 1 = Error" },
       access_type: { type: DataTypes.STRING(50), allowNull: true, comment: "The source type: 'web login', 'attendance device', etc." },
+      endpoint: { type: DataTypes.STRING(255), allowNull: true, comment: "The API endpoint requested" },
+      user_agent: { type: DataTypes.TEXT, allowNull: true, comment: "Device/Browser details" },
       caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
     },
     {

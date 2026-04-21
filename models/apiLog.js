@@ -13,7 +13,7 @@ module.exports = (sequelize, DataTypes) => {
       response_body: { type: DataTypes.JSONB, allowNull: true },
       duration: { type: DataTypes.INTEGER, allowNull: true, comment: "Duration in milliseconds" },
       user_agent: { type: DataTypes.TEXT, allowNull: true },
-      status: { type: DataTypes.INTEGER, allowNull: true, comment: "0 = Success, 1 = Error" },
+      status: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: true, comment: "0 = Success, 1 = Error" },
       access_type: { type: DataTypes.STRING(50), allowNull: true, comment: "The source type: 'web login', 'attendance device', etc." },
       sql_query: { type: DataTypes.TEXT, allowNull: true, comment: "The raw SQL query executed" },
       caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
