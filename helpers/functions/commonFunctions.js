@@ -4,6 +4,8 @@ const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySetti
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
+const customParseFormat = require("dayjs/plugin/customParseFormat");
+dayjs.extend(customParseFormat);
 const { fail } = require("../Err");
 
 exports.parseDate = (dateInput) => {
@@ -179,7 +181,16 @@ exports.fixQty = (value, decimals = 3) => {
 
 exports.formatDateTime = (dateInput, format = "DD-MM-YYYY") => {
   if (!dateInput) return "";
-  const d = dayjs(dateInput, ["YYYY-MM-DD", "DD-MM-YYYY", "YYYY-MM-DD HH:mm:ss", "DD-MM-YYYY HH:mm:ss", "YYYY-MM-DDTHH:mm:ss.SSSZ"]);
+  
+  let d;
+  // If it's already a Date object or Dayjs object, just wrap it
+  if (dateInput instanceof Date || dayjs.isDayjs(dateInput)) {
+    d = dayjs(dateInput);
+  } else {
+    // If it's a string, use our supported formats
+    d = dayjs(dateInput, ["YYYY-MM-DD", "DD-MM-YYYY", "YYYY-MM-DD HH:mm:ss", "DD-MM-YYYY HH:mm:ss", "YYYY-MM-DDTHH:mm:ss.SSSZ"]);
+  }
+  
   if (!d.isValid()) return "";
   return d.format(format);
 };
