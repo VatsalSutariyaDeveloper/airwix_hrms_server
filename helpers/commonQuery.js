@@ -766,8 +766,26 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
             const likeVal = `%${reqBody?.search}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
+                const colName = finalKey.replace(/\$/g, '');
+                
+                // 🚀 Advanced Date Search: Use 'FM' (Fill Mode) to support non-padded dates like 4/21 (instead of 04/21)
+                if (colName.includes('created_at') || colName.includes('updated_at') || colName.includes('_date')) {
+                    const formats = [
+                        'FMDD-FMMM-YYYY, FMHH12:MI:SS AM', 
+                        'FMDD/FMMM/YYYY, FMHH12:MI:SS AM', 
+                        'FMMM/FMDD/YYYY, FMHH12:MI:SS AM',
+                        'MM/DD/YYYY, HH12:MI:SS AM',
+                        'YYYY-MM-DD HH24:MI:SS'
+                    ];
+                    return {
+                        [Op.or]: formats.map(fmt => 
+                            sequelize.where(sequelize.fn('to_char', sequelize.col(colName), fmt), { [Op.iLike]: likeVal })
+                        )
+                    };
+                }
+
                 return sequelize.where(
-                    sequelize.cast(sequelize.col(finalKey.replace(/\$/g, '')), 'TEXT'),
+                    sequelize.cast(sequelize.col(colName), 'TEXT'),
                     { [Op.iLike]: likeVal }
                 );
             } else {

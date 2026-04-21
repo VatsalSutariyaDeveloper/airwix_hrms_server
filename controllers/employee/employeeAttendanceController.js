@@ -246,7 +246,7 @@ const employeeAttendanceController = {
                 await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
             }
 
-            await LeaveBalanceService.bulkSyncEmployeeAttendancePolicy([employeeId], transaction);
+            await LeaveBalanceService.syncCompOffOnly([employeeId], transaction);
             // Sync past attendance data for the current month
             // await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
             //     user_id: req.user.id,

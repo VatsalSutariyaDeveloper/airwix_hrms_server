@@ -531,24 +531,82 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
     }
 
     /**
-     * Specifically syncs leave balances when an attendance policy is changed.
-     * This ensures the Comp-Off category is added or removed based on the new policy.
+     * Syncs ONLY the Comp-Off leave category for employees.
+     * Use this when updating attendance templates to avoid resetting other leave balances.
      */
-    static async bulkSyncEmployeeAttendancePolicy(employeeIds, transaction = null) {
+    static async syncCompOffOnly(employeeIds, transaction = null) {
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
 
         const t = transaction || (await sequelize.transaction());
         try {
-            const chunkSize = 50;
-            for (let i = 0; i < employeeIds.length; i += chunkSize) {
-                const chunk = employeeIds.slice(i, i + chunkSize);
-                const employees = await commonQuery.findAllRecords(Employee, { 
-                    id: { [Op.in]: chunk },
-                    leave_template: { [Op.ne]: null } // Only sync if they have a leave template
-                }, {}, t);
-                for (const emp of employees) {
-                    if(emp.leave_template > 0){
-                        await this.initializeBalance(emp.id, emp.leave_template, t, emp);
+            const masterCompOff = await commonQuery.findOneRecord(LeaveTemplateCategory, { is_compoff: true, status: 0 }, {}, t);
+            if (!masterCompOff) return;
+
+            const employees = await commonQuery.findAllRecords(Employee, { 
+                id: { [Op.in]: employeeIds },
+                leave_template: { [Op.ne]: null }
+            }, {}, t);
+            
+            for (const emp of employees) {
+                if (!emp.leave_template) continue;
+
+                // Check attendance policy
+                const attendanceTemplate = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { employee_id: emp.id }, {}, t);
+                const isCompOffPolicy = attendanceTemplate && (attendanceTemplate.holiday_policy === 'COMP_OFF' || attendanceTemplate.weekly_off_policy === 'COMP_OFF');
+
+                if (isCompOffPolicy) {
+                    const leaveTemplate = await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
+                    if (!leaveTemplate) continue;
+
+                    const refDate = dayjs();
+                    const { end } = this.getCycleDates(emp.joining_date, leaveTemplate.leave_policy_cycle, refDate, {
+                        leave_period_start: leaveTemplate.leave_period_start,
+                        leave_period_end: leaveTemplate.leave_period_end
+                    });
+
+                    const currentYear = end.year();
+                    const currentMonth = (leaveTemplate.leave_policy_cycle === 'MONTHLY' || leaveTemplate.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null;
+
+                    const existing = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+                        employee_id: emp.id,
+                        leave_category_id: masterCompOff.id,
+                        year: currentYear,
+                        month: currentMonth,
+                        status: 0
+                    }, {}, t);
+
+                    if (!existing) {
+                        await commonQuery.createRecord(EmployeeLeaveBalance, {
+                            employee_id: emp.id,
+                            leave_category_id: masterCompOff.id,
+                            leave_category_name: masterCompOff.leave_category_name,
+                            unused_leave_rule: masterCompOff.unused_leave_rule,
+                            carry_forward_limit: masterCompOff.carry_forward_limit,
+                            is_paid: masterCompOff.is_paid,
+                            is_compoff: true,
+                            automation_rules: masterCompOff.automation_rules,
+                            year: currentYear,
+                            month: currentMonth,
+                            leave_template_id: emp.leave_template,
+                            total_allocated: 0,
+                            carry_forward_leaves: 0,
+                            used_leaves: 0,
+                            pending_leaves: 0,
+                            company_id: emp.company_id,
+                            status: 0
+                        }, t);
+                    }
+                } else {
+                    // Remove comp-off balance if policy changed and category is NOT in the main leave template
+                    // (Safety check so we don't accidentally delete if it's explicitly part of their leave template)
+                    const isExplicitInTemplate = await commonQuery.findOneRecord(LeaveTemplateCategory, { leave_template_id: emp.leave_template, is_compoff: true, status: 0 }, {}, t);
+
+                    if (!isExplicitInTemplate) {
+                        await commonQuery.hardDeleteRecords(EmployeeLeaveBalance, {
+                            employee_id: emp.id,
+                            is_compoff: true,
+                            status: { [Op.in]: [0, 1] }
+                        }, t);
                     }
                 }
             }
@@ -556,7 +614,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             if (!transaction) await t.commit();
         } catch (error) {
             if (!transaction && !t.finished) await t.rollback();
-            console.error("❌ Error bulk syncing attendance policy to leave balances:", error);
+            console.error("❌ Error syncCompOffOnly:", error);
             throw error;
         }
     }
