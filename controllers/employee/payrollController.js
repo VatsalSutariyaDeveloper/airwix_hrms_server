@@ -2459,7 +2459,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         const deduction_details = payslip.deduction_details || {};
 
         breakdown = {
-            earnings: Object.entries(earning_details).map(([name, val]) => ({ name, actual_amount: val })),
+            earnings: Object.entries(earning_details).map(([name, val]) => ({ name, amount: val })),
             deductions: [
                 ...Object.entries(deduction_details).map(([name, val]) => ({ name, amount: val })),
                 ...Object.entries(payslip.statutory_details || {})
@@ -2491,7 +2491,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
     ];
 
     // Recalculate totals for display
-    const totalEarnings = (breakdown.earnings || []).reduce((sum, e) => sum + parseFloat(e.actual_amount || 0), 0);
+    const totalEarnings = (breakdown.earnings || []).reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
     const totalDeductions = fullDeductionList.reduce((sum, d) => sum + d.amount, 0);
 
     return {
@@ -2516,7 +2516,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
                 netPayable: payslip.net_salary || payslip.net_payable
             },
             breakdown: {
-                earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount, amount: e.actual_amount })),
+                earnings: (breakdown.earnings || []).map(e => ({ name: e.name, actual_amount: e.actual_amount, amount: e.amount })),
                 deductions: fullDeductionList,
                 statutory: breakdown.statutory || payslip.statutory_details || {},
                 total_earnings: totalEarnings.toFixed(2),
