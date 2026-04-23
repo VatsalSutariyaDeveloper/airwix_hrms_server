@@ -33,6 +33,7 @@ module.exports = (sequelize, DataTypes) => {
     paid_gross: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     total_deduction: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     net_salary: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
+    round_off_amount: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     paid_amount: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     pending_amount: { type: DataTypes.DECIMAL(12,2), defaultValue: 0 },
     // JSON details for legacy or extra breakdown

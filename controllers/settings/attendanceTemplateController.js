@@ -109,11 +109,14 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { attendance_setting_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
-        if (employeesToSync.length > 0) {
-            const employeeIds = employeesToSync.map(emp => emp.id);
-            await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'attendance_setting_template', req.params.id, transaction);
+        // Skip employee sync if only_template is true
+        if (!req.body.only_template) {
+            // Trigger sync for all employees using this template
+            const employeesToSync = await commonQuery.findAllRecords(Employee, { attendance_setting_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
+            if (employeesToSync.length > 0) {
+                const employeeIds = employeesToSync.map(emp => emp.id);
+                await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'attendance_setting_template', req.params.id, transaction);
+            }
         }
 
         await transaction.commit();

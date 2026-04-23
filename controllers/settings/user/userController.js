@@ -733,16 +733,38 @@ exports.update = async (req, res) => {
       true
     );
 
-    if(updated.employee_id && req.body.role_id){
-      const selectedRole = await commonQuery.findOneRecord(RolePermission, req.body.role_id, {}, transaction, false, { company_id: true });
-      if (selectedRole) {
+    if(updated.employee_id){
+      const employeeUpdateData = {};
+      
+      // Sync role-based fields
+      if(req.body.role_id){
+        const selectedRole = await commonQuery.findOneRecord(RolePermission, req.body.role_id, {}, transaction, false, { company_id: true });
+        if (selectedRole) {
+          employeeUpdateData.is_attendance_supervisor = selectedRole.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR;
+          employeeUpdateData.is_reporting_manager = selectedRole.role_key === constants.ROLE_KEYS.REPORTING_MANAGER;
+        }
+      }
+      
+      // Sync profile fields
+      if(req.body.profile_image !== undefined){
+        employeeUpdateData.profile_image = req.body.profile_image;
+      }
+      if(req.body.user_name){
+        employeeUpdateData.first_name = req.body.user_name;
+      }
+      if(req.body.mobile_no){
+        employeeUpdateData.mobile_no = req.body.mobile_no;
+      }
+      if(req.body.email){
+        employeeUpdateData.email = req.body.email;
+      }
+      
+      // Update employee if there are fields to update
+      if(Object.keys(employeeUpdateData).length > 0){
         await commonQuery.updateRecordById(
           Employee,
           updated.employee_id,
-          { 
-            is_attendance_supervisor: selectedRole.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR,
-            is_reporting_manager: selectedRole.role_key === constants.ROLE_KEYS.REPORTING_MANAGER,
-          },
+          employeeUpdateData,
           transaction,
           true
         );

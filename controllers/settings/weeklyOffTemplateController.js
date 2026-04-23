@@ -258,10 +258,7 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template', 'company_id', 'branch_id'] }, transaction);
-
-        // Sync WeeklyOffTemplateDay
+        // Sync WeeklyOffTemplateDay (always update days)
         if (Array.isArray(days)) {
             const incomingIds = days.map(d => d.id).filter(Boolean);
 
@@ -316,64 +313,70 @@ exports.update = async (req, res) => {
                 }
             }
 
-            // 3. Handle AttendanceDay updates for today's date
-            const today = dayjs().format('YYYY-MM-DD');
-            const todayDayOfWeek = dayjs().day();
-            const currentWeekNo = Math.ceil(dayjs().date() / 7);
+            // Skip attendance day updates and employee sync if only_template is true
+            if (!req.body.only_template) {
+                // Trigger sync for all employees using this template
+                const employeesToSync = await commonQuery.findAllRecords(Employee, { weekly_off_template: id, status: 0 }, { attributes: ['id', 'shift_template', 'company_id', 'branch_id'] }, transaction);
 
-            if (employeesToSync.length > 0) {
-                const employeeIds = employeesToSync.map(emp => emp.id);
-                const meta = {
-                    user_id: req.user?.id || 0,
-                    company_id: employeesToSync[0]?.company_id || 0,
-                    branch_id: employeesToSync[0]?.branch_id || 0
-                };
+                // 3. Handle AttendanceDay updates for today's date
+                const today = dayjs().format('YYYY-MM-DD');
+                const todayDayOfWeek = dayjs().day();
+                const currentWeekNo = Math.ceil(dayjs().date() / 7);
 
-                // Handle added weekly offs for today
-                for (const change of dayChanges.added) {
-                    const shouldApplyToday = 
-                        (change.week_no === 0 && change.day_of_week === todayDayOfWeek) || // All weeks
-                        (change.week_no === currentWeekNo && change.day_of_week === todayDayOfWeek); // Current week
-                    
-                    if (shouldApplyToday) {
-                        await handleAttendanceDayUpdates(employeeIds, today, true, transaction, meta);
+                if (employeesToSync.length > 0) {
+                    const employeeIds = employeesToSync.map(emp => emp.id);
+                    const meta = {
+                        user_id: req.user?.id || 0,
+                        company_id: employeesToSync[0]?.company_id || 0,
+                        branch_id: employeesToSync[0]?.branch_id || 0
+                    };
+
+                    // Handle added weekly offs for today
+                    for (const change of dayChanges.added) {
+                        const shouldApplyToday = 
+                            (change.week_no === 0 && change.day_of_week === todayDayOfWeek) || // All weeks
+                            (change.week_no === currentWeekNo && change.day_of_week === todayDayOfWeek); // Current week
+                        
+                        if (shouldApplyToday) {
+                            await handleAttendanceDayUpdates(employeeIds, today, true, transaction, meta);
+                        }
+                    }
+
+                    // Handle removed weekly offs for today
+                    for (const change of dayChanges.removed) {
+                        const shouldApplyToday = 
+                            (change.week_no === 0 && change.day_of_week === todayDayOfWeek) || // All weeks
+                            (change.week_no === currentWeekNo && change.day_of_week === todayDayOfWeek); // Current week
+                        
+                        if (shouldApplyToday) {
+                            await handleAttendanceDayUpdates(employeeIds, today, false, transaction, meta);
+                        }
                     }
                 }
-
-                // Handle removed weekly offs for today
-                for (const change of dayChanges.removed) {
-                    const shouldApplyToday = 
-                        (change.week_no === 0 && change.day_of_week === todayDayOfWeek) || // All weeks
-                        (change.week_no === currentWeekNo && change.day_of_week === todayDayOfWeek); // Current week
+                if (employeesToSync.length > 0) {
+                    const employeeIds = employeesToSync.map(emp => emp.id);
                     
-                    if (shouldApplyToday) {
-                        await handleAttendanceDayUpdates(employeeIds, today, false, transaction, meta);
+                    // 1. First sync the weekly off data in bulk (skip rebuild here)
+                    await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'weekly_off_template', id, transaction, { skipRebuild: true });
+                    
+                    // 2. Then re-sync their shift template in bulk because shift settings depend on off-days
+                    const shiftTemplateGroups = {};
+                    employeesToSync.forEach(emp => {
+                        if (emp.shift_template) {
+                            if (!shiftTemplateGroups[emp.shift_template]) shiftTemplateGroups[emp.shift_template] = [];
+                            shiftTemplateGroups[emp.shift_template].push(emp.id);
+                        }
+                    });
+
+                    for (const [sId, ids] of Object.entries(shiftTemplateGroups)) {
+                        // Sync shifts in bulk (skip rebuild here too)
+                        await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, 'shift_template', sId, transaction, { skipRebuild: true });
                     }
+
+                    // 3. FINALLY: Rebuild attendance for all affected employees ONCE
+                    // await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIds, transaction);
                 }
             }
-        }
-        if (employeesToSync.length > 0) {
-            const employeeIds = employeesToSync.map(emp => emp.id);
-            
-            // 1. First sync the weekly off data in bulk (skip rebuild here)
-            await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'weekly_off_template', id, transaction, { skipRebuild: true });
-            
-            // 2. Then re-sync their shift template in bulk because shift settings depend on off-days
-            const shiftTemplateGroups = {};
-            employeesToSync.forEach(emp => {
-                if (emp.shift_template) {
-                    if (!shiftTemplateGroups[emp.shift_template]) shiftTemplateGroups[emp.shift_template] = [];
-                    shiftTemplateGroups[emp.shift_template].push(emp.id);
-                }
-            });
-
-            for (const [sId, ids] of Object.entries(shiftTemplateGroups)) {
-                // Sync shifts in bulk (skip rebuild here too)
-                await EmployeeTemplateService.bulkSyncSpecificTemplate(ids, 'shift_template', sId, transaction, { skipRebuild: true });
-            }
-
-            // 3. FINALLY: Rebuild attendance for all affected employees ONCE
-            // await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIds, transaction);
         }
 
         await transaction.commit();
