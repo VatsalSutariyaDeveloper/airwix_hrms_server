@@ -121,7 +121,7 @@ module.exports = (sequelize, DataTypes) => {
         custom_fields: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
 
         emergency_contact_name: { type: DataTypes.STRING },
-        emergency_contact_relation: { type: DataTypes.SMALLINT, comment: "1: Brother, 2: Sister, 3: Father, 4: Mother, 5: Spouse, 6: Son, 7: Daughter, 8: Other" },
+        emergency_contact_relation: { type: DataTypes.STRING },
 
         confirmation_date: { type: DataTypes.DATEONLY },
         probation_period_days: { type: DataTypes.INTEGER },

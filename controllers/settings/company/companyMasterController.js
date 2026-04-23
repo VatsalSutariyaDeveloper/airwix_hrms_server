@@ -1,5 +1,5 @@
 const { sequelize, CompanyMaster, User, BranchMaster, GodownMaster, RolePermission, CompanyAddress, CountryMaster, StateMaster, UserCompanyRoles } = require("../../../models");
-const { validateRequest, commonQuery, handleError, uploadFile, deleteFile, Op, getCompanySubscription, fileExists, initializeCompanySettings, constants } = require("../../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, deleteFile, Op, getCompanySubscription, fileExists, initializeCompanySettings, constants, initializeCompanyRoles } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 
 const ensureSingleDefault = async (POST, existing, transaction) => {  

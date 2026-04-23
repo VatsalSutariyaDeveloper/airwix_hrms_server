@@ -57,8 +57,9 @@ exports.getById = async (req, res) => {
     try {
         const requestedSettings = req.body.company_settings;
 
+        const company_id = req.user.company_id;
         const where = {
-            company_id: req.params.id,
+            company_id,
             status: 0,
         };
 
@@ -70,11 +71,10 @@ exports.getById = async (req, res) => {
             where.settings_name = keys;
         }
 
-        const records = await commonQuery.findAllRecords(CompanySettings, where, { attributes: ['settings_name', 'settings_value'] }, null, false);
+        const records = await commonQuery.findAllRecords(CompanySettings, where, { attributes: ['settings_name', 'settings_value'] }, null, { company_id: true });
 
-        if (!records || !records.length) return res.error("NOT_FOUND");
-
-        return res.ok(records);
+        // Return empty array instead of error if no records found, so frontend can handle defaults
+        return res.ok(records || []);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -90,16 +90,28 @@ exports.update = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "company_settings must be an array" });
         }
 
-        await Promise.all(settingsToUpdate.map(setting =>
-            commonQuery.updateRecordById(
+        for (const setting of settingsToUpdate) {
+            const company_id = req.user.company_id;
+            const updated = await commonQuery.updateRecordById(
                 CompanySettings,
-                { company_id: req.user.company_id, settings_name: setting.settings_name },
+                { company_id, settings_name: setting.settings_name },
                 {
                     settings_value: setting.settings_value,
                 },
-                transaction
-            )
-        ));
+                transaction,
+                false,
+                { company_id: true }
+            );
+
+            if (!updated) {
+                await commonQuery.createRecord(CompanySettings, {
+                    company_id,
+                    settings_name: setting.settings_name,
+                    settings_value: setting.settings_value,
+                    status: 0
+                }, transaction, { company_id: true });
+            }
+        }
 
         await transaction.commit();
         try {

@@ -4,7 +4,7 @@ const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
 const { constants } = require("./constants");
-const { calculateWorkingAndOffDays } = require("./functions/commonFunctions");
+const { calculateWorkingAndOffDays, getPunchAllowedWhere } = require("./functions/commonFunctions");
 // LeaveBalanceService is required lazily inside functions to avoid circular dependencies with attendanceHelper
 // const LeaveBalanceService = require("../services/leaveBalanceService");
 const notificationService = require("../services/notificationService");
@@ -100,12 +100,13 @@ async function punch(employeeId, meta, transaction = null) {
   const today = dayjs(now).format("YYYY-MM-DD");
 
   // 1️⃣.0 Fetch Employee with Attendance Template (Needed for rules)
-  const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+  const punchWhere = await getPunchAllowedWhere(meta.company_id, meta.branch_id);
+  const employee = await commonQuery.findOneRecord(Employee, { id: employeeId, ...punchWhere }, {
     include: [
       { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
       { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
     ],
-  }, transaction, false, { company_id: true });
+  }, transaction, false, false);
 
   if (!employee) throw new Error("Employee not found");
 
