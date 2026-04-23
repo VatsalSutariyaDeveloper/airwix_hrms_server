@@ -1,6 +1,6 @@
 const NodeCache = require("node-cache");
 const { literal, Op } = require("sequelize");
-const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings  } = require("../../models");
+const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings, CompanySettings } = require("../../models");
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
@@ -140,44 +140,6 @@ exports.fixQty = (value, decimals = 3) => {
 
   return isNaN(num) ? 0 : num.toFixed(decimals);
 };
-
-// const _format = (value, digits) => {
-//   if (isNaN(value) || value === null) value = 0;
-//   const factor = Math.pow(10, digits);
-//   return Number((Math.round(Number(value) * factor) / factor).toFixed(digits));
-// };
-
-// exports.fixDecimals = async function (...args) {
-//   // ─────────────────────────────────────────────
-//   // FACTORY MODE → fixDecimals(company_id, defaultType?)
-//   // ─────────────────────────────────────────────
-//   if (args.length <= 2) {
-//     const company_id = args[0];
-//     const defaultType = args[1] || "rate";
-
-//     const { decimal_points } = await getCompanySetting(company_id);
-
-//     const rateDigits = 2;
-//     const qtyDigits = decimal_points != null ? Number(decimal_points) : 0;
-
-//     return function format(value, type = defaultType) {
-//       const digits = type === "qty" ? qtyDigits : rateDigits;
-//       return _format(value, digits);
-//     };
-//   }
-
-//   // ─────────────────────────────────────────────
-//   // DIRECT MODE → fixDecimals(value, company_id, type)
-//   // ─────────────────────────────────────────────
-//   const [value, company_id, type = "rate"] = args;
-
-//   const { decimal_points } = await getCompanySetting(company_id);
-
-//   const digits = type === "qty" ? Number(decimal_points || 0) : 2;
-
-//   return _format(value, digits);
-// };
-
 
 exports.formatDateTime = (dateInput, format = "DD-MM-YYYY") => {
   if (!dateInput) return "";
@@ -444,39 +406,6 @@ exports.createOrUpdateNotification = async (data, transaction = null) => {
 
 exports.initializeCompanySettings = async (company_id, branch_id, user_id, transaction) => {
     try {
-        // // 1. Fetch all Master Settings (definitions)
-        // // We assume status: 0 means Active master settings
-        // const masterSettings = await commonQuery.findAllRecords(
-        //     CompanySettingsMaster, 
-        //     { status: 0 }, 
-        //     {}, 
-        //     transaction, 
-        //     false // No tenant check needed for Master table
-        // );
-
-        // if (!masterSettings || masterSettings.length === 0) {
-        //     console.warn("No Master Settings found to initialize.");
-        //     return;
-        // }
-
-        // // 2. Prepare Payload for CompanyConfigration
-        // const settingsPayload = masterSettings.map(setting => ({
-        //     company_id: company_id,
-        //     branch_id: branch_id,
-        //     user_id: user_id,
-        //     setting_key: setting.setting_key,
-        //     setting_value: setting.default_value !== null ? setting.default_value : "", 
-        //     status: 0
-        // }));
-
-        // // 3. Bulk Create
-        // await commonQuery.bulkCreate(
-        //     CompanyConfigration, 
-        //     settingsPayload, 
-        //     { company_id, branch_id, user_id }, 
-        //     transaction
-        // );
-
         const employeeSettingsPayload = [
             {
                 settings_name: "is_auto_generate_employee_code",
@@ -500,15 +429,34 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
             EmployeeSettings,
             employeeSettingsPayload,
             { company_id, branch_id, user_id },
-            transaction
+            transaction,
+            false
         );
-        
-        // console.log(`Initialized ${settingsPayload.length} settings for Company ${company_id}`);
-        return true;
 
+        // --- 4. Initialize CompanySettings with Defaults ---
+        const { constants } = require("../constants");
+        if (constants.DEFAULT_COMPANY_SETTINGS && Array.isArray(constants.DEFAULT_COMPANY_SETTINGS)) {
+            const companySettingsPayload = constants.DEFAULT_COMPANY_SETTINGS.map(setting => ({
+                ...setting,
+                user_id: user_id,
+                branch_id: branch_id,
+                company_id: company_id,
+                status: 0
+            }));
+
+            await commonQuery.bulkCreate(
+                CompanySettings,
+                companySettingsPayload,
+                { company_id, branch_id, user_id },
+                transaction,
+                false
+            );
+        }
+
+        return data; 
     } catch (error) {
         console.error("Error initializing company settings:", error);
-        throw error; // Let the caller handle the rollback
+        throw error;
     }
 };
 
@@ -700,4 +648,37 @@ function getOrdinal(num) {
     if (j === 2) return num + 'nd';
     if (j === 3) return num + 'rd';
     return num + 'th';
+}
+/**
+ * Generates a where condition for punching operations based on company settings.
+ * Levels: 
+ * 1. Default: Employee must match device company AND branch.
+ * 2. company_branch_punch_config: Employee can punch in any branch of their company.
+ * 3. company_punch_config: Employee can punch in any branch/company within their organization.
+ */
+exports.getPunchAllowedWhere = async (company_id, branch_id) => {
+    const settings = await getCompanySetting(company_id);
+    const company_branch_punch_config = settings.company_branch_punch_config;
+    const company_punch_config = settings.company_punch_config;
+    console.log('company_branch_punch_config', company_branch_punch_config);
+    console.log('company_punch_config', company_punch_config);
+    let where = { status: 0 }; 
+
+    if (company_punch_config === false || company_punch_config === "false") {
+        const company = await commonQuery.findOneRecord(CompanyMaster, { id: company_id }, { attributes: ["organization_id"] }, null, false, {});
+        if (company && company.organization_id) {
+            const orgCompanies = await commonQuery.findAllRecords(CompanyMaster, { organization_id: company.organization_id, status: 0 }, { attributes: ["id"] }, null, {});
+            const companyIds = orgCompanies.map(c => c.id);
+            where.company_id = { [Op.in]: companyIds };
+        } else {
+            where.company_id = company_id;
+        }
+    } else if (company_branch_punch_config === false || company_branch_punch_config === "false") {
+        where.company_id = company_id;
+    } else {
+        where.company_id = company_id;
+        where.branch_id = branch_id;
+    }
+    console.log('where', where);
+    return where;
 }

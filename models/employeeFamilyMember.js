@@ -2,7 +2,7 @@ module.exports = (sequelize, DataTypes) => {
     const EmployeeFamilyMember = sequelize.define("EmployeeFamilyMember", {
         employee_id: { type: DataTypes.INTEGER, allowNull: false },
         name: { type: DataTypes.STRING, allowNull: false },
-        relationship: { type: DataTypes.STRING, allowNull: false },
+        relationship: { type: DataTypes.STRING, allowNull: true },
         contact_no: { type: DataTypes.STRING },
         dob: { type: DataTypes.DATEONLY },
         gender: { type: DataTypes.SMALLINT, comment: "1: Male, 2: Female, 3: Others" },

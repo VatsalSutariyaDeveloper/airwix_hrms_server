@@ -120,12 +120,12 @@ exports.getDetailsByToken = async (req, res) => {
             {}
         );
 
-        const company_id = employee.company_id;
-        const branch_id = employee.branch_id;
-
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Invalid or expired onboarding link" });
         }
+
+        const company_id = employee.company_id;
+        const branch_id = employee.branch_id;
 
         // Check if onboarding is already completed
         if (employee.onboarding_status === 3) {

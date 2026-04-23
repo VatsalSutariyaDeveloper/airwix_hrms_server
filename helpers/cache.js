@@ -4,7 +4,8 @@ const {
     CompanySubscription,
     SubscriptionPlan,
     CompanyMaster,
-    RoutePermission
+    RoutePermission,
+    CompanySettings
 } = require("../models");
 
 // ================= CACHE INSTANCES =================
@@ -19,18 +20,33 @@ const reloadCompanySettingsCache = async (company_id) => {
     if (isNaN(companyId)) return null;
 
     try {
-        const settings = await CompanyConfigration.findAll({
-            where: { company_id: companyId, status: 0 },
-            raw: true
-        });
+        const [configs, settings] = await Promise.all([
+            CompanyConfigration.findAll({
+                where: { company_id: companyId, status: 0 },
+                raw: true
+            }),
+            CompanySettings.findAll({
+                where: { company_id: companyId, status: 0 },
+                raw: true
+            })
+        ]);
 
         const settingsObj = {};
-        for (const s of settings) {
-            let val = s.setting_value;
+        
+        // Load from CompanyConfigration
+        for (const c of configs) {
+            let val = c.setting_value;
             if (val === "true") val = true;
             else if (val === "false") val = false;
+            settingsObj[c.setting_key] = val;
+        }
 
-            settingsObj[s.setting_key] = val;
+        // Load from CompanySettings (overwrites if collision, which is expected for merged settings)
+        for (const s of settings) {
+            let val = s.settings_value;
+            if (val === "true") val = true;
+            else if (val === "false") val = false;
+            settingsObj[s.settings_name] = val;
         }
 
         settingsCache.set(`settings_${companyId}`, settingsObj);

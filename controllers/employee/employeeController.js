@@ -27,7 +27,9 @@ const {
     HolidayTemplate,
     ResignationTemplate,
     DeviceMaster,
-    OutDutyRequest
+    OutDutyRequest,
+    CompanyMaster,
+    Organization
 } = require("../../models");
 
 const {
@@ -43,7 +45,8 @@ const {
     fileExists,
     handleExport,
     streamExport,
-    writeLogToFile
+    writeLogToFile,
+    getCompanySetting
 } = require("../../helpers");
 
 // helper for dealing with image uploads inside custom field arrays
@@ -51,7 +54,8 @@ const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../..
 
 const {
     calculateWorkingAndOffDays,
-    formatDateTime
+    formatDateTime,
+    getPunchAllowedWhere
 } = require("../../helpers/functions/commonFunctions");
 
 const { punch, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
@@ -799,6 +803,11 @@ exports.getProfile = async (req, res) => {
                 spouse_name: plainRecord.spouse_name || 'N/A',
                 marriage_date: plainRecord.marriage_date ? formatDateTime(plainRecord.marriage_date) : 'N/A',
                 nationality: plainRecord.nationality || 'Indian',
+                emergency_contact: {
+                    name: plainRecord.emergency_contact_name || 'N/A',
+                    mobile: plainRecord.emergency_contact_mobile || 'N/A',
+                    relation: plainRecord.emergency_contact_relation || 'N/A'
+                }
             },
             general_info: {
                 salary_cycle: plainRecord.employeeSalaryTemplate?.salary_type || 'N/A',
@@ -816,13 +825,6 @@ exports.getProfile = async (req, res) => {
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
                 reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
             },
-            holiday_transactions: plainRecord.holidayTemplate?.holidayTransactions?.map(transaction => ({
-                id: transaction.id,
-                name: transaction.name,
-                date: transaction.date ? formatDateTime(transaction.date) : 'N/A',
-                holiday_type: transaction.holiday_type,
-                color: transaction.color
-            })) || [],
             employment_info: {
                 joining_date: plainRecord.joining_date ? formatDateTime(plainRecord.joining_date) : 'N/A',
                 employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
@@ -857,11 +859,6 @@ exports.getProfile = async (req, res) => {
                     pincode: plainRecord.permanent_pincode || 'N/A'
                 }
             },
-            emergency_contact: {
-                name: plainRecord.emergency_contact_name || 'N/A',
-                mobile: plainRecord.emergency_contact_mobile || 'N/A',
-                relation: ["Brother", "Sister", "Father", "Mother", "Spouse", "Son", "Daughter", "Other"][plainRecord.emergency_contact_relation - 1] || 'N/A'
-            },
             document_center: {
                 aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc, constants.EMPLOYEE_DOC_FOLDER),
                 pan_doc: getFileUrl(plainRecord.pan_doc, constants.EMPLOYEE_DOC_FOLDER),
@@ -870,17 +867,20 @@ exports.getProfile = async (req, res) => {
                 uan_doc: getFileUrl(plainRecord.uan_doc, constants.EMPLOYEE_DOC_FOLDER),
                 signature_doc: getFileUrl(plainRecord.signature_doc, constants.EMPLOYEE_DOC_FOLDER),
             },
-            education: plainRecord.education_details || [],
-            family_details: plainRecord.family_members || [],
-            experience_details: (plainRecord.experience_details || []).map(exp => {
-                if (Array.isArray(exp.attachments)) {
-                    exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
-                }
-                return exp;
-            }),
-            professional_reference: plainRecord.professional_reference || [],
-            remarks: plainRecord.remarks || null,
-            custom_fields: plainRecord.custom_fields || {}
+            background_details: {
+                education_details: plainRecord.education_details || [],
+                family_details: plainRecord.family_members || [],
+                experience_details: (plainRecord.experience_details || []).map(exp => {
+                    if (Array.isArray(exp.attachments)) {
+                        exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
+                    }
+                    return exp;
+                }),
+            },
+            additional_details: {
+                professional_reference: plainRecord.professional_reference || [],
+                custom_fields: plainRecord.custom_fields || {}
+            },
         };
 
         return res.ok(profileData);
@@ -1576,10 +1576,19 @@ exports.registerFace = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.body;
+        const { branch_id, company_id } = req.user;
+
+        if (!branch_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
+        }
+
+        const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
 
         if(req.user.access == "attendance device"){
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
             if (!device) {
+                await transaction.rollback();
                 return res.status(401).json({
                     success: false,
                     error: "UNAUTHORIZED",
@@ -1594,7 +1603,11 @@ exports.registerFace = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
         }
 
-        const employee = await commonQuery.findOneRecord(Employee, id);
+        const employee = await commonQuery.findOneRecord(Employee, {
+            id,
+            ...punchWhere,
+            status: STATUS.ACTIVE
+        }, {}, null, false, {});
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -1795,14 +1808,14 @@ exports.facePunch = async (req, res) => {
         // 🚀 PARALLEL TASK 2: Fetch Employees
         const getEmployeesTask = (async () => {
             const dbStart = Date.now();
-            const companyId = req.user?.company_id;
+            const punchWhere = await getPunchAllowedWhere(req.user.company_id, req.user.branch_id);
             const res = await commonQuery.findAllRecords(Employee, {
-                status: 0,
+                ...punchWhere,
                 face_descriptor: { [Op.ne]: null },
             }, {
                 attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'company_id', 'branch_id'],
                 raw: true
-            }, null, { company_id: true });
+            }, null, false);
             timings.db = Date.now() - dbStart;
             return res;
         })();
@@ -2418,7 +2431,7 @@ exports.inviteUser = async (req, res) => {
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL || 'https://loadly.io/airwix-payroll/'}generate-pin?token=${pin_setup_token}`;
+        const setupLink = `${process.env.FRONTEND_URL}/generate-pin?token=${pin_setup_token}`;
 
         // Send WhatsApp Notification (Async)
         const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
@@ -2788,9 +2801,9 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
         }
 
+        const punchWhere = await getPunchAllowedWhere(req.user.company_id, req.user.branch_id);
         const where = {
-            branch_id,
-            company_id,
+            ...punchWhere,
             status: STATUS.ACTIVE
         };
 

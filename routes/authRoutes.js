@@ -25,19 +25,20 @@ router.post("/verify-mobile", loginController.verifyMobileNo);
 router.post("/verify-pin", loginController.verifyPin);
 router.post("/verify-otp-pin", loginController.verifyOtpPin);
 router.post("/generate-pin", loginController.generatePin);
+router.post("/forgot-pin", loginController.forgotPin);
+router.post("/forgot-password", userController.forgotPassword);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 
 router.post("/state/dropdown-list", stateMasterController.dropdownList);
 router.post("/country/dropdown-list", countryMasterController.dropdownList);
 
 // PIN Management (Public)
-router.get("/user/verify-pin-token/:token", userController.verifyPinToken);
-router.post("/user/setup-pin", userController.setupPin);
+router.get("/reset-pin/verify/:token", userController.verifyPinToken);
+router.post("/reset-pin/setup", userController.setupPin);
 
 // Password Management (Public)
-router.post("/user/setup-password", userController.setPassword);
-router.post("/user/forgot-password", userController.forgotPassword);
-router.get("/user/verify-token/:token", userController.verifySetupToken);
+router.get("/reset-password/verify/:token", userController.verifySetupToken);
+router.post("/reset-password/setup", userController.setPassword);
 
 // ==========================
 // 2. PROTECTED ROUTES (Auth Required)

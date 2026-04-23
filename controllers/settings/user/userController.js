@@ -28,7 +28,7 @@ function generatePasswordToken() {
  */
 async function sendPasswordEmail(user, rawToken, req, type = "setup") {
   try {
-    const url = `${process.env.FRONTEND_URL}settings/user/verify-token/${rawToken}`;
+    const url = `${process.env.FRONTEND_URL}auth/reset-password/${rawToken}`;
 
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
@@ -135,9 +135,12 @@ exports.create = async (req, res) => {
     // Base required fields
     const requiredFields = {
       user_name: "User Name",
-      role_id: "Role",
       login_type: "Login Type",
     };
+
+    if (!req.body.role_id && !req.body.role_key) {
+      requiredFields.role_id = "Role";
+    }
 
     // Conditionally add required fields based on login_type
     const loginType = parseInt(req.body.login_type) || 1;
@@ -164,6 +167,17 @@ exports.create = async (req, res) => {
       await transaction.rollback();
       return res.error("VALIDATION_ERROR", { errors });
     }
+
+    // Resolve role_id from role_key if role_id is not provided
+    if (!req.body.role_id && req.body.role_key) {
+      const role = await commonQuery.findOneRecord(RolePermission, { role_key: req.body.role_key }, {}, transaction, false, { company_id: true });
+      if (!role) {
+        await transaction.rollback();
+        return res.error("NOT_FOUND", "Specified role key not found.");
+      }
+      req.body.role_id = role.id;
+    }
+
     // Handle profile image upload
     if (req.files?.profile_image) {
       // Create a new request object with only the profile image
@@ -279,7 +293,7 @@ exports.verifySetupToken = async (req, res) => {
       include: [
         {
           model: RolePermission,
-          as: "role",
+          as: "RolePermission",
           attributes: ["role_name", "permissions"]
         }
       ]
@@ -293,35 +307,15 @@ exports.verifySetupToken = async (req, res) => {
       });
     }
 
-    // --- Generate Login Session (Magic Login) ---
-    const companyId = user.company_id;
-    const loginToken = tokenHelper.generateToken(user, companyId, "magic link");
-
-    // Prepare User Data (Matching standard login response)
-    const activeRole = user.role;
-    const userData = {
-      id: user.id,
-      role_id: user.role_id,
-      user_name: user.user_name,
-      email: user.email,
-      mobile_no: user.mobile_no,
-      profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
-      role_name: activeRole?.role_name,
-      permission: activeRole?.permissions,
-      company_id: companyId,
-      branch_id: user.branch_id,
-    };
-
-    // Note: We don't clear the reset_password_token yet so they can still SET a password if the UI requires it,
-    // but the user is effectively "Logged In" now.
-
     return res.json({
       code: 200,
       status: "SUCCESS",
-      message: "Magic login successful",
-      token: loginToken,
-      user: userData,
-      data: { email: user.email },
+      message: "Token verified successfully",
+      data: {
+        user_name: user.user_name,
+        email: user.email,
+        mobile_no: user.mobile_no
+      },
     });
   } catch (err) {
     return handleError(err, res, req);
@@ -334,10 +328,10 @@ exports.assignRole = async (req, res) => {
   try {
     const { user_id, role_id, field_name } = req.body;
 
-    const requiredFields = {
-      user_id: "User ID",
-      role_id: "Role ID",
-    };
+    const requiredFields = {};
+    if (!req.body.role_id && !req.body.role_key) {
+      requiredFields.role_id = "Role ID";
+    }
 
     const errors = await validateRequest(req.body, requiredFields, {}, null);
 
@@ -346,17 +340,29 @@ exports.assignRole = async (req, res) => {
       return res.error("VALIDATION_ERROR", errors);
     }
 
-    const permission = await commonQuery.findOneRecord(
-      RolePermission,
-      { p_role_id: role_id },
-      {},
-      transaction,
-      false,
-      { company_id: true }
-    );
+    let permission;
+    if (req.body.role_key) {
+      permission = await commonQuery.findOneRecord(
+        RolePermission,
+        { role_key: req.body.role_key },
+        {},
+        transaction,
+        false,
+        { company_id: true }
+      );
+    } else {
+      permission = await commonQuery.findOneRecord(
+        RolePermission,
+        { p_role_id: role_id },
+        {},
+        transaction,
+        false,
+        { company_id: true }
+      );
+    }
 
     const userData = await commonQuery.updateRecordById(User, user_id, {
-      role_id: role_id,
+      role_id: permission.id,
       permissions: permission.permissions,
       branch_access: req.body.branch_access,
       mobile_no: req.body.mobile_no,
@@ -535,7 +541,7 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({
         code: 404,
         status: "NOT_FOUND",
-        message: "User not found",
+        message: "Email not registered",
       });
     }
 
@@ -585,7 +591,7 @@ exports.update = async (req, res) => {
       requiredFields.mobile_no = "Mobile No";
     } else if (loginType === 2) {
       requiredFields.email = "Email";
-      requiredFields.password = "Password";
+      // password optional in update
     }
 
     // Determine unique check fields based on what's being provided
@@ -837,14 +843,24 @@ exports.getAll = async (req, res) => {
         });
       } else {
         extraFilters[Op.and].push({
-          '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN,
+          '$RolePermission.role_key$': { [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] },
           company_id: company_id,
           branch_id: req.user.branch_id
         });
       }
-    } else if (req.body.filter?.role === "employee") {
+    } else if (req.body.filter?.role_key) {
+      // Direct role_key filtering (used for Attendance Supervisor, Reporting Manager, etc.)
       extraFilters[Op.and].push({
-        '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR, constants.ROLE_KEYS.REPORTING_MANAGER] },
+        '$RolePermission.role_key$': req.body.filter.role_key,
+        company_id: company_id,
+        branch_id: req.user.branch_id
+      });
+    } else if (req.body.filter?.role === "employee" || !req.body.filter?.role_key) {
+      // Show everyone EXCEPT Business Admin and Admin for the main tab
+      extraFilters[Op.and].push({
+        '$RolePermission.role_key$': { 
+          [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] 
+        },
         company_id: company_id,
         branch_id: req.user.branch_id
       });
@@ -866,7 +882,10 @@ exports.getAll = async (req, res) => {
     //   extraFilters[Op.and].push(security);
     // }
 
-    if (req.body.filter) delete req.body.filter.role;
+    if (req.body.filter) {
+      delete req.body.filter.role;
+      delete req.body.filter.role_key;
+    }
     const fieldConfig = [
       ["user_name", true, false],
       ["Employee.employee_code", true, false],
