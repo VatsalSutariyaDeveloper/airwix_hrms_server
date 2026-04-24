@@ -11,7 +11,8 @@ const {
     OutDutyRequest,
     AttendanceRegularization,
     EmployeeResignation,
-    Announcement
+    Announcement,
+    Notification
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
@@ -230,6 +231,15 @@ exports.getPendingAnnouncementCount = async (req, res) => {
             attributes: ["id", "target_type", "target"]
         }, null, false);
 
+        // Get read announcement IDs for this user
+        const readNotifications = await commonQuery.findAllRecords(Notification, {
+            user_id: req.user.id,
+            type: 'ANNOUNCEMENT'
+        }, {
+            attributes: ['reference_id']
+        }, null, false);
+        const readAnnouncementIds = readNotifications.map(n => parseInt(n.reference_id));
+
         let filteredAnnouncements = announcements;
         if (!req.user.is_super_admin && !req.user.is_admin) {
             filteredAnnouncements = announcements.filter(announcement => {
@@ -251,7 +261,10 @@ exports.getPendingAnnouncementCount = async (req, res) => {
             });
         }
 
-        const announcementCount = filteredAnnouncements.length;
+        // Filter out read announcements
+        const unreadAnnouncements = filteredAnnouncements.filter(ann => !readAnnouncementIds.includes(ann.id));
+
+        const announcementCount = unreadAnnouncements.length;
         return res.ok({ announcementCount });
     } catch (err) {
         return handleError(err, res, req);

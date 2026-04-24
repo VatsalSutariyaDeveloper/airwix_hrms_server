@@ -231,7 +231,19 @@ async function punch(employeeId, meta, transaction = null) {
   }, {}, transaction);
 
   if (approvedLeave) {
-    throw new Err(`You have an approved leave on this date. Please cancel the leave first before punching attendance.`);
+    // Determine if it's a half-day leave (allow punches for half-day leaves)
+    let isHalfDay = false;
+    if (approvedLeave.start_date === targetDayDate && approvedLeave.start_session !== 0) {
+      isHalfDay = true;
+    } else if (approvedLeave.end_date === targetDayDate && approvedLeave.end_session !== 0) {
+      isHalfDay = true;
+    } else if (parseFloat(approvedLeave.total_days) < 1 && approvedLeave.start_date === approvedLeave.end_date) {
+      isHalfDay = true;
+    }
+
+    if (!isHalfDay) {
+      throw new Err(`You have an approved leave on this date. Please cancel the leave first before punching attendance.`);
+    }
   }
 
   // 1️⃣ Check Holiday & Weekly Off Policy

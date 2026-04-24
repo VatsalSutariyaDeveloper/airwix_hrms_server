@@ -8,36 +8,29 @@ const dayjs = require("dayjs");
 exports.getNotifications = async (req, res) => {
     try {
         const userId = req.user.id;
-        const companyId = req.user.company_id;
-        const branchId = req.user.branch_id;
         const roleKey = req.user.role_key;
 
         // 1. Fetch Personal Notifications
-        const personalNotifications = await Notification.findAll({
-            where: {
-                user_id: userId,
-                company_id: companyId,
-                status: { [Op.ne]: 2 } // Not deleted
-            },
+        const personalNotifications = await commonQuery.findAllRecords(Notification, {
+            user_id: userId,
+            status: { [Op.ne]: 2 } // Not deleted
+        }, {
             order: [['created_at', 'DESC']],
             limit: 50
-        });
+        }, null);        
 
         // 2. Fetch Active Announcements
         // Active if: current date is between announcement_date and expiry_date (if exists)
         const today = dayjs().format("YYYY-MM-DD");
         
-        const activeAnnouncements = await Announcement.findAll({
-            where: {
-                company_id: companyId,
-                status: 0, // Active
-                announcement_date: { [Op.lte]: today },
-                [Op.or]: [
-                    { expiry_date: null },
-                    { expiry_date: { [Op.gte]: today } }
-                ]
-            }
-        });
+        const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
+            status: 0, // Active
+            announcement_date: { [Op.lte]: today },
+            [Op.or]: [
+                { expiry_date: null },
+                { expiry_date: { [Op.gte]: today } }
+            ]
+        }, {}, null);
 
         // 3. Filter Announcements by Target
         // target is comma separated string of role_keys or "all"
@@ -52,27 +45,31 @@ exports.getNotifications = async (req, res) => {
         // (which means a Notification record exists for it with type='ANNOUNCEMENT' and ref_id=announcement.id)
         
         const announcementReadRecords = personalNotifications.filter(n => n.type === 'ANNOUNCEMENT');
-        const readAnnouncementIds = announcementReadRecords.map(r => parseInt(r.ref_id));
+        const readAnnouncementMap = {};
+        announcementReadRecords.forEach(r => {
+            readAnnouncementMap[parseInt(r.reference_id)] = r.is_read;
+        });
 
         const mappedAnnouncements = filteredAnnouncements.map(ann => ({
-            id: `ANN_${ann.id}`, // Virtual ID to distinguish from real notifications
-            real_id: ann.id,
+            id: ann.id,
             type: 'ANNOUNCEMENT',
             title: ann.title,
             message: ann.content,
-            status: readAnnouncementIds.includes(ann.id) ? 1 : 0,
+            status: ann.status,
+            is_read: readAnnouncementMap[ann.id] || 0,
             created_at: ann.announcement_date,
             is_announcement: true
         }));
 
         const mappedNotifications = personalNotifications
-            .filter(n => n.type !== 'ANNOUNCEMENT') // Don't duplicate
+            .filter(n => n.type !== 'ANNOUNCEMENT')
             .map(n => ({
                 id: n.id,
                 type: n.type,
                 title: n.title,
                 message: n.message,
                 status: n.status,
+                is_read: n.is_read,
                 created_at: n.created_at,
                 is_announcement: false
             }));
@@ -92,43 +89,39 @@ exports.getNotifications = async (req, res) => {
  */
 exports.markAsRead = async (req, res) => {
     try {
-        const { id } = req.body;
+        const { id, is_announcement } = req.body;
         const userId = req.user.id;
-        const companyId = req.user.company_id;
 
-        if (typeof id === 'string' && id.startsWith('ANN_')) {
-            // It's a virtual announcement ID
-            const annId = id.split('_')[1];
-            
-            // Check if already exists
-            const existing = await Notification.findOne({
-                where: {
-                    user_id: userId,
-                    type: 'ANNOUNCEMENT',
-                    ref_id: annId
-                }
-            });
+        if (is_announcement) {
+            const existing = await commonQuery.findOneRecord(Notification, {
+                user_id: userId,
+                type: 'ANNOUNCEMENT',
+                reference_id: id,
+            }, {}, null);
 
             if (!existing) {
-                // Create a "read" record for this announcement
-                const ann = await Announcement.findByPk(annId);
+                const ann = await Announcement.findByPk(id);
                 if (ann) {
-                    await Notification.create({
-                        user_id: userId,
-                        company_id: companyId,
+                    const notification = await commonQuery.createRecord(Notification, {
                         type: 'ANNOUNCEMENT',
-                        ref_id: annId,
+                        reference_id: id,
                         title: ann.title,
                         message: ann.content,
-                        status: 1 // Read
-                    });
+                        status: 0, // Active
+                        is_read: 1 // Read
+                    }, null);
                 }
-            } else {
-                await existing.update({ status: 1 });
+            } else if (existing.is_read === 0) {
+                await commonQuery.updateRecordById(Notification, existing.id, { is_read: 1 }, null);
             }
         } else {
-            // It's a real notification ID
-            await Notification.update({ status: 1 }, { where: { id, user_id: userId } });
+            const notification = await commonQuery.findOneRecord(Notification, {
+                id
+            }, {}, null);
+
+            if (notification && notification.is_read === 0) {
+                await commonQuery.updateRecordById(Notification, notification.id, { is_read: 1 }, null);
+            }
         }
 
         return res.ok({ success: true });
@@ -145,8 +138,8 @@ exports.markAllAsRead = async (req, res) => {
         const userId = req.user.id;
         const companyId = req.user.company_id;
 
-        // 1. Update all existing notifications to status 1
-        await Notification.update({ status: 1 }, { where: { user_id: userId, status: 0 } });
+        // 1. Update all existing notifications to is_read 1
+        await Notification.update({ is_read: 1 }, { where: { user_id: userId, is_read: 0 } });
 
         // 2. We should ideally also mark all active announcements as read by creating records for them
         // But for performance, we might skip this unless explicitly requested. 
@@ -169,7 +162,7 @@ exports.getUnreadCount = async (req, res) => {
 
         // Count real unread notifications
         const notificationCount = await Notification.count({
-            where: { user_id: userId, status: 0 }
+            where: { user_id: userId, is_read: 0 }
         });
 
         // Count unread announcements
@@ -188,8 +181,8 @@ exports.getUnreadCount = async (req, res) => {
 
         const readAnnouncementIds = (await Notification.findAll({
             where: { user_id: userId, type: 'ANNOUNCEMENT' },
-            attributes: ['ref_id']
-        })).map(r => parseInt(r.ref_id));
+            attributes: ['reference_id']
+        })).map(r => parseInt(r.reference_id));
 
         const unreadAnnouncements = activeAnnouncements.filter(ann => {
             // Check role target

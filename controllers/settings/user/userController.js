@@ -49,36 +49,39 @@ async function sendPasswordEmail(user, rawToken, req, type = "setup") {
         : "We received a request to reset your password. Click below to proceed.";
 
     const html = `
-      <div style="font-family: Arial, sans-serif; background:#f4f6f8; padding:20px;">
+      <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:40px 20px;">
         <table align="center" cellpadding="0" cellspacing="0" width="100%" 
-          style="max-width:600px; background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+          style="max-width:600px; background:#ffffff; border-radius:4px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
           <tr>
-            <td style="padding:20px; text-align:center; background:#2563eb; color:#ffffff; font-size:20px; font-weight:bold;">
-              ERP App
+            <td style="padding:16px; text-align:center; background:#2563eb; color:#ffffff;">
+              <h1 style="margin:0; font-size:24px; font-weight:600;">
+                ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}
+              </h1>
             </td>
           </tr>
           <tr>
-            <td style="padding:30px; font-size:15px; color:#333;">
-              <p style="margin:0 0 15px;">Hello <strong>${user.name || "User"
-      }</strong>,</p>
-              <p style="margin:0 0 20px;">${introText}</p>
+            <td style="padding:30px; font-size:14px; color:#333;">
+              <p>Hello <strong>${user.user_name || "User"}</strong>,</p>
+              <p style="margin:0 0 25px;">${introText}</p>
               <div style="text-align:center; margin:30px 0;">
                 <a href="${url}" 
-                  style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:6px; font-weight:bold; display:inline-block;">
+                  style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 30px; border-radius:4px; font-weight:600; display:inline-block; font-size:14px;">
                   ${actionText}
                 </a>
               </div>
-              <p style="margin:0 0 15px;">Or copy & paste this link into your browser:</p>
-              <p style="word-break:break-all; color:#2563eb;">${url}</p>
-              <p style="margin-top:30px; color:#777; font-size:13px;">
-                If you didn’t request this, please ignore this email. <br/>
+              <p style="margin:25px 0 10px; font-size:13px; color:#666;">Or copy & paste this link into your browser:</p>
+              <p style="word-break:break-all; color:#2563eb; font-size:13px; margin:0;">${url}</p>
+              <p style="margin-top:30px; color:#888; font-size:12px;">
+                If you didn't request this, please ignore this email. <br/>
                 This link is valid for <strong>1 hour</strong>.
               </p>
             </td>
           </tr>
           <tr>
-            <td style="padding:15px; text-align:center; background:#f4f6f8; font-size:12px; color:#777;">
-              © ${new Date().getFullYear()} ERP App. All rights reserved.
+            <td style="padding:20px; text-align:center; background:#f9f9f9; border-top:1px solid #e0e0e0;">
+              <p style="margin:0; font-size:12px; color:#888;">
+                © ${new Date().getFullYear()} ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}. All rights reserved.
+              </p>
             </td>
           </tr>
         </table>
@@ -86,7 +89,7 @@ async function sendPasswordEmail(user, rawToken, req, type = "setup") {
     `;
 
     await transporter.sendMail({
-      from: `"ERP App" <${process.env.EMAIL_USER}>`,
+      from: `"${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}" <${process.env.EMAIL_USER}>`,
       to: user.email,
       subject,
       html,
