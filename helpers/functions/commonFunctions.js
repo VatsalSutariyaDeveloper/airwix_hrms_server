@@ -470,7 +470,7 @@ exports.initializeCompanyRoles = async (company_id, branch_id, user_id, transact
             { is_system: true, status: 0, company_id: -1, branch_id: -1 },
             {},
             transaction,
-            false
+            {}
         );
 
         if (systemRoles && systemRoles.length > 0) {
@@ -489,7 +489,7 @@ exports.initializeCompanyRoles = async (company_id, branch_id, user_id, transact
                     status: 0
                 };
             });
-            return await commonQuery.bulkCreate(RolePermission, rolesToCreate, {}, transaction, false);
+            return await commonQuery.bulkCreate(RolePermission, rolesToCreate, {}, transaction, {});
         }
         return [];
     } catch (error) {

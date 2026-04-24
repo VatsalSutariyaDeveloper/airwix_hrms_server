@@ -67,6 +67,7 @@ if (cluster.isMaster) {
   const systemLogRoutes = require("./routes/systemLogRoutes");
   const reportsRoutes = require("./routes/reportsRoutes");
   const announcementRoutes = require("./routes/announcementRoutes");
+  const notificationRoutes = require("./routes/notificationRoutes");
   const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
 
   const app = express();
@@ -121,6 +122,7 @@ if (cluster.isMaster) {
   app.use("/api/reports", reportsRoutes);
   app.use("/api/system-logs", systemLogRoutes);
   app.use("/api/announcements", announcementRoutes);
+  app.use("/api/notifications", notificationRoutes);
   app.use(errorHandler);
 
   app.get("/force-currency-update", async (req, res) => {

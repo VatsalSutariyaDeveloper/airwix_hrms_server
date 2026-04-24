@@ -9,13 +9,14 @@ const ensureSingleDefault = async (POST, existing, transaction) => {
     await commonQuery.updateRecordById(
       CompanyMaster,
       { [Op.or]: [
-            { id: parentId },
-            { company_id: parentId }
-          ],
-          id: { [Op.ne]: existing.id },
-          status: { [Op.ne]: 2 }},
+          { id: parentId },
+          { company_id: parentId }
+        ],
+        id: { [Op.ne]: existing.id },
+        status: { [Op.ne]: 2 }
+      },
       { is_default: 2 },
-        transaction
+      transaction
     );
   }
 };
@@ -82,11 +83,7 @@ exports.create = async (req, res) => {
     //   return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile Number is required" });
     // }
 
-    const parentCompany = await CompanyMaster.findOne({
-      where: { id: company_id },
-      attributes: ['id', 'company_id'],
-      transaction
-    });
+    const parentCompany = await commonQuery.findOneRecord(CompanyMaster, company_id, { attributes: ['id', 'company_id'] }, transaction, false, {});
 
     if (!parentCompany) {
       await transaction.rollback();
@@ -120,7 +117,7 @@ exports.create = async (req, res) => {
         {},
         transaction,
         false,
-        false
+        {}
       );
 
       if (mobileExistsOutside) {
@@ -132,11 +129,7 @@ exports.create = async (req, res) => {
     }
     
     // Find the last company to determine the next sequential code.
-    const lastCompany = await CompanyMaster.findOne({
-      where: { status: { [Op.or]: [0,1,2]} },
-      order: [["company_code", "DESC"]],
-      transaction
-    });
+    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, { status: { [Op.or]: [0,1,2]} }, {}, transaction, false, {});
 
     let nextNumber = 1;
     if (lastCompany && lastCompany.company_code) {
@@ -164,13 +157,9 @@ exports.create = async (req, res) => {
 
     let record = null;
     if (company_id){
-      record = await CompanyMaster.findOne({
-        where: { id: company_id, status: 0 },
-        attributes: ['id', 'company_id', 'organization_id', 'business_type_id'],
-        transaction
-      });
+      record = await commonQuery.findOneRecord(CompanyMaster, company_id, { attributes: ['id', 'company_id', 'organization_id', 'business_type_id'] }, transaction, false, {});
       if (!record) {
-          return res.error(404, "Invalid or missing company record.");
+        return res.error(404, "Invalid or missing company record.");
       }
     }
 
@@ -208,7 +197,7 @@ exports.create = async (req, res) => {
         BranchMaster,
         branchPayload,
         transaction,
-        false
+        {}
     );
 
     await commonQuery.updateRecordById(
@@ -217,7 +206,7 @@ exports.create = async (req, res) => {
       { branch_id: newBranch.id },
       transaction,
       false,
-      false
+      {}
     );
 
     await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
@@ -227,9 +216,9 @@ exports.create = async (req, res) => {
     await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
 
     // Create UserCompanyRole entry for all Super Admins (is_super_admin: true)
-    const superAdmins = await commonQuery.findAllRecords(User, { is_super_admin: true, status: 0 }, { attributes: ['id'] }, transaction);
-    if (superAdmins && superAdmins.length > 0) {
-      for (const admin of superAdmins) {
+    // const superAdmins = await commonQuery.findAllRecords(User, { is_super_admin: true, status: 0 }, { attributes: ['id'] }, transaction);
+    // if (superAdmins && superAdmins.length > 0) {
+    //   for (const admin of superAdmins) {
         // Find an existing role entry for this superadmin to copy permissions from
         // const existingRoleEntry = await commonQuery.findOneRecord(UserCompanyRoles, { user_id: admin.id, role_id: 1 }, {}, transaction, false);
         // if (existingRoleEntry) {
@@ -244,11 +233,11 @@ exports.create = async (req, res) => {
         // }
 
         // Ensure company_access is updated for all Super Admins
-        if (admin.id !== req.user.id) {
-          await updateUserAccess(admin.id, newCompany.id, 'company_access', transaction);
-        }
-      }
-    }
+    //     if (admin.id !== req.user.id) {
+    //       await updateUserAccess(admin.id, newCompany.id, 'company_access', transaction);
+    //     }
+    //   }
+    // }
 
     await transaction.commit();
     return res.success(constants.COMPANY_CREATED, newCompany); 

@@ -34,11 +34,6 @@ exports.create = async (req, res) => {
       transaction
     );
 
-    // Send notifications if active
-    if (announcement.status === 0) {
-      await sendAnnouncementNotifications(announcement);
-    }
-
     await transaction.commit();
     return res.success(constants.ANNOUNCEMENT_CREATED);
   } catch (err) {
@@ -98,11 +93,6 @@ exports.update = async (req, res) => {
     }
 
     const announcement = await commonQuery.updateRecordById(Announcement, id, req.body, transaction);
-
-    // If it was just activated, send notifications
-    if (announcement.status == 0) {
-      await sendAnnouncementNotifications(announcement);
-    }
 
     await transaction.commit();
     return res.success(constants.ANNOUNCEMENT_UPDATED);
@@ -250,47 +240,4 @@ exports.getActiveAnnouncements = async (req, res) => {
   }
 };
 
-/**
- * Helper to send notifications to targeted users
- */
-async function sendAnnouncementNotifications(announcement) {
-  try {
-    const { target_type, company_id, branch_id, title, content, id } = announcement;
-    let userFilter = { company_id, status: 0 };
 
-    if (!target_type || target_type === 0) {
-    } else if (target_type === 1) {
-      userFilter['$RolePermission.role_key$'] = constants.ROLE_KEYS.EMPLOYEE;
-    } else if (target_type === 2) {
-      const roleIds = target.toString().split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      if (roleIds.length > 0) {
-        userFilter.role_id = { [Op.in]: roleIds };
-      }
-    } else if (target_type === 3) {
-      const userIds = target.toString().split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      if (userIds.length > 0) {
-        userFilter.id = { [Op.in]: userIds };
-      }
-    }
-
-    const users = await commonQuery.findAllRecords(User, userFilter, { 
-      include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
-      attributes: ['id'] 
-    });
-
-    for (const user of users) {
-      await notificationService.createNotification({
-        user_id: user.id,
-        title: `Announcement: ${title}`,
-        message: content.length > 100 ? content.substring(0, 97) + "..." : content,
-        type: "ANNOUNCEMENT",
-        reference_id: id,
-        status_code: 0,
-        company_id,
-        branch_id
-      });
-    }
-  } catch (err) {
-    console.error("Failed to send announcement notifications:", err);
-  }
-}

@@ -66,6 +66,7 @@ async function authMiddleware(req, res, next) {
       organization_id: decoded.organization_id || null, // Decrypt organization_id
       branch_id: decoded.branch_id,
       role_id: decoded.role_id,
+      role_key: decoded.role_key,
       branch_access: decoded.branch_access || "",
       permissions: decoded.permissions || [],
       access_by: decoded.access_by || "web login",
@@ -85,6 +86,7 @@ async function authMiddleware(req, res, next) {
         branchId: decoded.branch_id,
         branchAccess: decoded.branch_access || "",
         roleId: decoded.role_id,
+        roleKey: decoded.role_key,
         is_attendance_supervisor: decoded.is_attendance_supervisor,
         is_reporting_manager: decoded.is_reporting_manager,
         is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,

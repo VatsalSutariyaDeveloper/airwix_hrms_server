@@ -339,6 +339,7 @@ exports.login = async (req, res) => {
 
     const token = generateToken({
       ...user,
+      role_key: user.RolePermission?.role_key,
       access: "employee"
     }, finalCompanyId, access_by);
 
@@ -846,6 +847,7 @@ exports.generatePin = async (req, res) => {
 console.log("entity",entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
+      role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
       access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
@@ -940,6 +942,7 @@ exports.pinLogin = async (req, res) => {
         mobile_no, 
         status: { [Op.in]: [0, 1] } 
       }, 
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
       transaction 
     });
 
@@ -1105,6 +1108,7 @@ console.log("entity",entity.device_type)
 
     const token = generateToken({
       ...entity.get({ plain: true }),
+      role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
       access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);

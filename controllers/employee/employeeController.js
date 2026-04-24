@@ -812,11 +812,8 @@ exports.getProfile = async (req, res) => {
             general_info: {
                 salary_cycle: plainRecord.employeeSalaryTemplate?.salary_type || 'N/A',
                 weekly_off: plainRecord.weeklyOffTemplate?.name || 'N/A',
-                holiday: (() => {
-                    const count = plainRecord.holidayTemplate?.holidayTransactions?.length || 0;
-                    const name = plainRecord.holidayTemplate?.name || 'N/A';
-                    return count > 0 && name !== 'N/A' ? `${count} ${name}` : name;
-                })(),
+                holiday: plainRecord.holidayTemplate?.name || 'N/A',
+                holiday_transactions: plainRecord.holidayTemplate?.holidayTransactions,
                 leave: plainRecord.leaveTemplate?.template_name || 'N/A',
                 shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
@@ -861,6 +858,7 @@ exports.getProfile = async (req, res) => {
             },
             document_center: {
                 aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc, constants.EMPLOYEE_DOC_FOLDER),
+                aadhaar_back_doc: getFileUrl(plainRecord.aadhaar_back_doc, constants.EMPLOYEE_DOC_FOLDER),
                 pan_doc: getFileUrl(plainRecord.pan_doc, constants.EMPLOYEE_DOC_FOLDER),
                 driving_license_doc: getFileUrl(plainRecord.driving_license_doc, constants.EMPLOYEE_DOC_FOLDER),
                 voter_id_doc: getFileUrl(plainRecord.voter_id_doc, constants.EMPLOYEE_DOC_FOLDER),

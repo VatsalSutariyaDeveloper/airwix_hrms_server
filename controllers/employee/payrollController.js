@@ -1797,32 +1797,62 @@ exports.getCalculationHistory = async (req, res) => {
 
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
-        let { employee_id } = req.body;
-        if (!employee_id) {
-            employee_id = req.user.employee_id;
-        }
+        let { employee_id, year } = req.body;
         const company_id = req.user.company_id;
+        const selectedYear = year || new Date().getFullYear();
+
+        // Get min and max years across both attendance and payslips
+        let yearRangeQuery = "";
+        let yearReplacements = { company_id };
+
+        if (!employee_id && !req.user.employee_id) {
+            yearRangeQuery = `
+                SELECT MIN(year) as min_year, MAX(year) as max_year FROM (
+                    SELECT EXTRACT(YEAR FROM ad.attendance_date)::INTEGER as year 
+                    FROM attendance_day ad 
+                    JOIN employees e ON ad.employee_id = e.id 
+                    WHERE e.company_id = :company_id AND ad.status != 2
+                    UNION
+                    SELECT year FROM payslips WHERE company_id = :company_id
+                ) combined_years`;
+        } else {
+            const targetEmployeeId = employee_id || req.user.employee_id;
+            yearRangeQuery = `
+                SELECT MIN(year) as min_year, MAX(year) as max_year FROM (
+                    SELECT EXTRACT(YEAR FROM attendance_date)::INTEGER as year 
+                    FROM attendance_day 
+                    WHERE employee_id = :employee_id AND status != 2
+                    UNION
+                    SELECT year FROM payslips WHERE employee_id = :employee_id
+                ) combined_years`;
+            yearReplacements.employee_id = targetEmployeeId;
+        }
+
+        const [yearRange] = await sequelize.query(yearRangeQuery, {
+            replacements: yearReplacements,
+            type: sequelize.QueryTypes.SELECT
+        });
 
         // If no employee_id provided, we assume we want the overall company-wide payroll cycles
-        if (!employee_id) {
-            // 1. Get unique months/years from AttendanceDay for the entire company
+        if (!employee_id && !req.user.employee_id) {
+            // 1. Get unique months for the selected year from AttendanceDay
             const attendanceMonths = await sequelize.query(`
                 SELECT DISTINCT 
                     EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
                     EXTRACT(YEAR FROM attendance_date)::INTEGER as year
                 FROM attendance_day ad
                 JOIN employees e ON ad.employee_id = e.id
-                WHERE e.company_id = :company_id AND ad.status != 2
-                ORDER BY year DESC, month DESC
-                LIMIT 24
+                WHERE e.company_id = :company_id AND ad.status != 2 
+                AND EXTRACT(YEAR FROM attendance_date) = :year
+                ORDER BY month DESC
             `, {
-                replacements: { company_id },
+                replacements: { company_id, year: selectedYear },
                 type: sequelize.QueryTypes.SELECT
             });
 
-            // 2. Get existing payslip summaries by month/year
+            // 2. Get existing payslip summaries by month for the selected year
             const payslipSummaries = await Payslip.findAll({
-                where: { company_id },
+                where: { company_id, year: selectedYear },
                 attributes: [
                     'month', 'year',
                     [sequelize.fn('SUM', sequelize.col('fixed_gross')), 'total_ctc'],
@@ -1835,24 +1865,20 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
 
             // 3. Combine and Format
             const monthSet = new Set();
-            attendanceMonths.forEach(am => monthSet.add(`${am.month}-${am.year}`));
-            payslipSummaries.forEach(ps => monthSet.add(`${ps.month}-${ps.year}`));
+            attendanceMonths.forEach(am => monthSet.add(am.month));
+            payslipSummaries.forEach(ps => monthSet.add(ps.month));
 
-            const sortedPeriods = Array.from(monthSet).map(key => {
-                const [month, year] = key.split('-').map(Number);
-                return { month, year };
-            }).sort((a, b) => b.year - a.year || b.month - a.month);
+            const sortedMonths = Array.from(monthSet).sort((a, b) => b - a);
 
-            const result = sortedPeriods.map(period => {
-                const summary = payslipSummaries.find(ps => parseInt(ps.month) === period.month && parseInt(ps.year) === period.year);
-                const monthName = formatDateTime(new Date(period.year, period.month - 1, 1), "MMM");
-
+            const result = sortedMonths.map(month => {
+                const summary = payslipSummaries.find(ps => parseInt(ps.month) === month);
+                const monthName = formatDateTime(new Date(selectedYear, month - 1, 1), "MMM");
                 const statusValue = summary ? parseInt(summary.getDataValue('status')) : 0;
 
                 return {
-                    month: period.month,
-                    year: period.year,
-                    label: `${monthName} ${period.year}`,
+                    month: month,
+                    year: selectedYear,
+                    label: `${monthName} ${selectedYear}`,
                     ctc: summary ? parseFloat(summary.getDataValue('total_ctc') || 0).toFixed(2) : "0.00",
                     net_payable: summary ? parseFloat(summary.getDataValue('total_net_payable') || 0).toFixed(2) : "0.00",
                     employee_count: summary ? summary.getDataValue('employee_count') : 0,
@@ -1860,43 +1886,48 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 };
             });
 
-            return res.ok(result);
+            return res.ok({
+                min_year: yearRange?.min_year || selectedYear,
+                max_year: yearRange?.max_year || selectedYear,
+                data: result
+            });
         }
 
-        // If employee_id is provided, maintain original logic for individual employee history
-        // 1. Get unique months/years from AttendanceDay
+        const targetEmployeeId = employee_id || req.user.employee_id;
+
+        // Individual employee logic
+        // 1. Get unique months for the selected year from AttendanceDay
         const attendanceMonths = await sequelize.query(`
             SELECT DISTINCT 
                 EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
                 EXTRACT(YEAR FROM attendance_date)::INTEGER as year
             FROM attendance_day
             WHERE employee_id = :employee_id AND status != 2
-            ORDER BY year DESC, month DESC
+            AND EXTRACT(YEAR FROM attendance_date) = :year
+            ORDER BY month DESC
         `, {
-            replacements: { employee_id },
+            replacements: { employee_id: targetEmployeeId, year: selectedYear },
             type: sequelize.QueryTypes.SELECT
         });
 
-        // 2. Get existing payslips
+        // 2. Get existing payslips for the selected year
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
-            employee_id,
+            employee_id: targetEmployeeId,
+            year: selectedYear
         });
 
         // 3. Combine unique months
-        const allPeriodKeys = new Set();
-        attendanceMonths.forEach(am => allPeriodKeys.add(`${am.month}-${am.year}`));
-        existingPayslips.forEach(ep => allPeriodKeys.add(`${ep.month}-${ep.year}`));
+        const monthSet = new Set();
+        attendanceMonths.forEach(am => monthSet.add(am.month));
+        existingPayslips.forEach(ep => monthSet.add(ep.month));
 
-        const sortedPeriods = Array.from(allPeriodKeys).map(key => {
-            const [month, year] = key.split('-').map(Number);
-            return { month, year };
-        }).sort((a, b) => b.year - a.year || b.month - a.month);
+        const sortedMonths = Array.from(monthSet).sort((a, b) => b - a);
 
         // 4. Format Result
         const result = [];
-        for (const am of sortedPeriods) {
-            const existing = existingPayslips.find(p => p.month === am.month && p.year === am.year);
-            const monthName = formatDateTime(new Date(am.year, am.month - 1, 1), "MMM");
+        for (const month of sortedMonths) {
+            const existing = existingPayslips.find(p => p.month === month);
+            const monthName = formatDateTime(new Date(selectedYear, month - 1, 1), "MMM");
 
             let ctc = "0.00";
             let net_payable = "0.00";
@@ -1908,20 +1939,20 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 payslip_id = existing.id;
             } else {
                 try {
-                    const summary = await performSalaryCalculation(employee_id, am.month, am.year);
+                    const summary = await performSalaryCalculation(targetEmployeeId, month, selectedYear);
                     if (summary && summary.salary) {
                         ctc = summary.salary.ctc_monthly;
                         net_payable = summary.salary.netPayable;
                     }
                 } catch (e) {
-                    console.error(`Calculation failed for ${monthName} ${am.year}:`, e.message);
+                    console.error(`Calculation failed for ${monthName} ${selectedYear}:`, e.message);
                 }
             }
 
             result.push({
-                month: am.month,
-                year: am.year,
-                label: `${monthName} ${am.year}`,
+                month: month,
+                year: selectedYear,
+                label: `${monthName} ${selectedYear}`,
                 is_calculated: !!existing,
                 ctc,
                 net_payable,
@@ -1930,7 +1961,11 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             });
         }
 
-        return res.ok(result);
+        return res.ok({
+            min_year: yearRange?.min_year || selectedYear,
+            max_year: yearRange?.max_year || selectedYear,
+            data: result
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
