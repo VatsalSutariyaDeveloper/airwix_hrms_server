@@ -2175,7 +2175,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     }
   } else {
     // [NEW] Clear existing punches if new times are provided, to ensure a clean state
-    if (inTime || outTime) {
+    if (inTime !== undefined || outTime !== undefined) {
       console.log(`[manualPunch] Clearing all existing and unassigned punches for day ID ${dayId} / Date ${date} before creating new times.`);
       await commonQuery.hardDeleteRecords(AttendancePunch, { 
         [Op.or]: [

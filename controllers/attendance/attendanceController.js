@@ -512,12 +512,12 @@ exports.updateAttendanceDay = async (req, res) => {
       if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
       }
-    } else if ([1, 13].includes(req.body.status)) {
+    } else if ([1, 6, 13].includes(req.body.status)) {
       if(!req.body.note && isTrackInOutOn){
         // requiredFields.first_in = "In Time";
         // requiredFields.last_out = "Out Time";
       }
-      if (req.body.status === 1) {
+      if ([1, 6].includes(req.body.status)) {
           requiredFields.leave_category_id = "Leave Category";
       }
     }
@@ -670,7 +670,7 @@ exports.updateAttendanceDay = async (req, res) => {
         if (!isPunchAllowed) {
              effectiveFirstIn = null;
              effectiveLastOut = null;
-             needsPunchUpdate = false;
+             needsPunchUpdate = true;
         }
     }
 
@@ -717,7 +717,7 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     // Only trigger punch update if strictly needed
-    if (needsPunchUpdate && (effectiveFirstIn || effectiveLastOut || req.body.punches)) {
+    if (needsPunchUpdate) {
       console.log(
         "[updateAttendanceDay] manualPunch start",
         JSON.stringify({
@@ -772,7 +772,9 @@ exports.updateAttendanceDay = async (req, res) => {
         employee: emp, // Pass pre-fetched employee
         existingDay: day, // Pass pre-fetched day
         punches: req.body.punches, // Pass punches array if provided
-        // forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
+        forcedStatus: effectiveStatus, // Pass forced status to ensure it's respected during rebuild
+        leave_category_id: leave_category_id,
+        leave_session: leave_session,
         isHoliday: (holidayPolicy !== 'COMP_OFF') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL + BLOCK: all time → overtime
         isHolidayAllowNormal: (holidayPolicy === 'ALLOW_NORMAL') ? isNonWorkingForPolicy : false, // ALLOW_NORMAL: status = Present (not Holiday)
         isHolidayCompOff: (holidayPolicy === 'COMP_OFF') ? isNonWorkingForPolicy : false // COMP_OFF: all time → worked_minutes, no overtime
@@ -1094,7 +1096,7 @@ exports.deleteAttendanceDay = async (req, res) => {
     const days = await commonQuery.findAllRecords(AttendanceDay, { 
       employee_id, 
       attendance_date,
-    }, {}, t, { company_id: true });
+    }, {}, t, {});
 
     for (const day of days) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
@@ -1107,12 +1109,12 @@ exports.deleteAttendanceDay = async (req, res) => {
       // 2. Delete punches by day_id specifically
       await commonQuery.hardDeleteRecords(AttendancePunch, {
         day_id: day.id
-      }, t, { company_id: true });
+      }, t, {});
 
       // 3. Delete the day summary
       await commonQuery.hardDeleteRecords(AttendanceDay, { 
         id: day.id
-      }, t, { company_id: true });
+      }, t, {});
     }
 
     // If no AttendanceDay record was found, we still clear any auto-generated leaves
@@ -1126,7 +1128,7 @@ exports.deleteAttendanceDay = async (req, res) => {
       punch_time: {
         [Op.between]: [`${attendance_date} 00:00:00`, `${attendance_date} 23:59:59`]
       }
-    }, t, { company_id: true });
+    }, t, {});
 
     // 5. Rebuild attendance day to restore default statuses (Holiday, Weekly Off, etc.)
     await rebuildAttendanceDay(employee_id, attendance_date, {
@@ -1358,7 +1360,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
           order: [["id", "ASC"]]
         }
       ]
-    }, null, false, { company_id: true });
+    }, null, false, {});
 
     // 2. Fetch all raw punches for this day
     // const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1552,7 +1554,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         }
       ],
       order: [["attendance_date", "ASC"]]
-    }, null, { company_id: true });
+    }, null, {});
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {

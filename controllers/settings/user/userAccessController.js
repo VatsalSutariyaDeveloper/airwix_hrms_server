@@ -65,7 +65,7 @@ exports.sessionData = async (req, res) => {
         });
     }
 
-    const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || userData.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
+    const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
 
     const companyAccessList = normalizeCompanyAccess(userData.company_access || "");
     if (!isAdmin && companyAccessList.length === 0) {
