@@ -2473,7 +2473,7 @@ exports.getSalaryOverview = async (req, res) => {
                         statutory: summary.breakdown.statutory || {},
                         employer: summary.breakdown.employer || {},
                         breakdown: summary.breakdown,
-                        payment_history: summary.payment_history,
+                        // payment_history: summary.payment_history,
                         ot_amount: summary.salary.overtimeAmount,
                         total_fine: summary.salary.totalFine,
                         fine_amount: summary.salary.totalFine,

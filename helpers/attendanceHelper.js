@@ -246,6 +246,26 @@ async function punch(employeeId, meta, transaction = null) {
     }
   }
 
+  // 0️⃣.E Check for Approved Out Duty
+  const approvedOutDuty = await commonQuery.findOneRecord(OutDutyRequest, {
+    employee_id: employeeId,
+    approval_status: constants.OUT_DUTY_STATUS.APPROVED,
+    start_date: { [Op.lte]: targetDayDate },
+    end_date: { [Op.gte]: targetDayDate },
+    status: 0
+  }, {}, transaction);
+
+  let isHalfDayOutDuty = false;
+  if (approvedOutDuty) {
+    if (approvedOutDuty.start_date === targetDayDate && approvedOutDuty.start_session !== 0) {
+      isHalfDayOutDuty = true;
+    } else if (approvedOutDuty.end_date === targetDayDate && approvedOutDuty.end_session !== 0) {
+      isHalfDayOutDuty = true;
+    } else if (parseFloat(approvedOutDuty.total_days) < 1 && approvedOutDuty.start_date === approvedOutDuty.end_date) {
+      isHalfDayOutDuty = true;
+    }
+  }
+
   // 1️⃣ Check Holiday & Weekly Off Policy
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, targetDayDate, transaction);
   if (template && template.holiday_policy === "BLOCK_ATTENDANCE") {
@@ -255,7 +275,8 @@ async function punch(employeeId, meta, transaction = null) {
   }
 
   // 1️⃣.2️⃣ MULTIPLE PUNCH RESTRICTION
-  if (punchType === "IN" && template && !template.allow_multiple_punches) {
+  // [MOD] Bypass multiple punch restriction if there is an approved half-day out-duty request
+  if (punchType === "IN" && template && !template.allow_multiple_punches && !isHalfDayOutDuty) {
     // Find the last IN (Globally)
     const lastIn = (lastPunchGlobal?.punch_type === "IN")
       ? lastPunchGlobal
@@ -706,36 +727,57 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }, {}, transaction);
 
   // --- OUT DUTY PROCESSING ---
-  if (approvedOutDuty && !hasPunches) {
+  let isOutDutyHalfDay = false;
+  let isOutDutyFullDay = false;
+
+  if (approvedOutDuty) {
+    if (approvedOutDuty.start_date === date && approvedOutDuty.start_session !== 0) {
+      isOutDutyHalfDay = true;
+    } else if (approvedOutDuty.end_date === date && approvedOutDuty.end_session !== 0) {
+      isOutDutyHalfDay = true;
+    } else if (parseFloat(approvedOutDuty.total_days) < 1 && approvedOutDuty.start_date === approvedOutDuty.end_date) {
+      isOutDutyHalfDay = true;
+    } else {
+      isOutDutyFullDay = true;
+    }
+
+    if (!hasPunches) {
       const odPayload = {
-          employee_id: employeeId,
-          attendance_date: date,
-          status: 12, // OUT_DUTY
-          shift_id: null,
-          user_id: meta.user_id || 0,
-          branch_id: meta.branch_id || employee.branch_id,
-          company_id: meta.company_id || employee.company_id,
-          note: ""
-          // note: "System: Out Duty auto-detected"
+        employee_id: employeeId,
+        attendance_date: date,
+        status: isOutDutyHalfDay ? 13 : 12, // 13: HALF_OUT_DUTY, 12: OUT_DUTY
+        shift_id: null,
+        user_id: meta.user_id || 0,
+        branch_id: meta.branch_id || employee.branch_id,
+        company_id: meta.company_id || employee.company_id,
+        note: ""
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
-          employee_id: employeeId,
-          attendance_date: date,
-          company_id: employee.company_id
+        employee_id: employeeId,
+        attendance_date: date,
+        company_id: employee.company_id
       }, {}, transaction, false, { company_id: true });
 
       if (existingDayRecord) {
-          await commonQuery.updateRecordById(AttendanceDay, existingDayRecord.id, odPayload, transaction, false, { company_id: true });
+        await commonQuery.updateRecordById(AttendanceDay, existingDayRecord.id, odPayload, transaction, false, { company_id: true });
       } else {
-          await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
+        await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
       }
       return;
-  } else if (approvedOutDuty && hasPunches) {
-      // If they have punches while out duty, we treat it as PRESENT (0) but keep the flag?
-      // Actually, usually status 12 is for Out Duty.
-      // We set meta.forcedStatus to ensure it uses 12.
-      meta.forcedStatus = 12;
+    } else {
+      // If they have punches while out duty
+      if (isOutDutyFullDay) {
+        meta.forcedStatus = 12; // OUT_DUTY
+        meta.skipFineCalculation = true;
+        meta.skipOvertimeCalculation = true;
+      } else {
+        meta.forcedStatus = 13; // HALF_OUT_DUTY
+        // For half day out duty, we WANT to calculate fine and OT
+        meta.skipFineCalculation = false;
+        meta.skipOvertimeCalculation = false;
+      }
+    }
   }
 
   // --- LEAVE PROCESSING ---
@@ -1188,6 +1230,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let rawEarlyOT = earlyOTMins;
   let rawLateOT = lateOTMins;
 
+  if (meta.skipOvertimeCalculation) {
+    rawEarlyOT = 0;
+    rawLateOT = 0;
+  }
+
   const isNonWorkingDay = (meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff;
 
   if (template && shift && !isNonWorkingDay) {
@@ -1273,24 +1320,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Skip late entry/early exit calculation if flag is set (for out-of-shift timing case)
     if (!meta.skipFineCalculation) {
-      if (firstIn) {
+      // Check for Flexible Shift: if actual work duration >= shift duration, skip late/fine calculation
+      let skipLateFineForFlexibleShift = false;
+      if (shift.shift_type === "Flexible Shift" && firstIn && lastOut) {
         const actualIn = dayjs(firstIn.punch_time);
-
-        // LATE ENTRY CALCULATION
-        const diffIn = actualIn.diff(shiftStart, "minute", true);
-        if (diffIn > (shift.grace_minutes || 0)) {
-          lateMinutes = Math.floor(diffIn);
+        const actualOut = dayjs(lastOut.punch_time);
+        const actualWorkDuration = actualOut.diff(actualIn, "minute", true);
+        
+        if (actualWorkDuration >= expectedShiftWorkMinutes) {
+          skipLateFineForFlexibleShift = true;
         }
       }
 
-      if (lastOut) {
-        const actualOut = dayjs(lastOut.punch_time);
-        const isManualNonWorking = existingDay && [3, 4].includes(existingDay.status);
+      if (!skipLateFineForFlexibleShift) {
+        if (firstIn) {
+          const actualIn = dayjs(firstIn.punch_time);
 
-        if (!isWeeklyOff && !isHoliday && !isManualNonWorking) {
-          const diffOut = shiftEnd.diff(actualOut, "minute", true);
-          if (diffOut > (shift.early_exit_grace || 0)) {
-            earlyOutMinutes = Math.floor(diffOut);
+          // LATE ENTRY CALCULATION
+          const diffIn = actualIn.diff(shiftStart, "minute", true);
+          if (diffIn > (shift.grace_minutes || 0)) {
+            lateMinutes = Math.floor(diffIn);
+          }
+        }
+
+        if (lastOut) {
+          const actualOut = dayjs(lastOut.punch_time);
+          const isManualNonWorking = existingDay && [3, 4].includes(existingDay.status);
+
+          if (!isWeeklyOff && !isHoliday && !isManualNonWorking) {
+            const diffOut = shiftEnd.diff(actualOut, "minute", true);
+            if (diffOut > (shift.early_exit_grace || 0)) {
+              earlyOutMinutes = Math.floor(diffOut);
+            }
           }
         }
       }
@@ -1978,7 +2039,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // ✅ Final check: If skipFineCalculation flag is set, ensure all values are 0
   if (meta.skipFineCalculation) {
-    finalWorkedMinutes = 0;
+    if (status !== 12 && status !== 13) {
+      finalWorkedMinutes = 0;
+    }
     lateMinutes = 0;
     earlyOutMinutes = 0;
     fineAmount = 0;
@@ -1988,6 +2051,21 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       early_exit: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
       excess_breaks: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 }
     };
+  }
+
+  // ✅ Skip fine and overtime calculations for full-day out-duty (status 12 only)
+  // Half-day out-duty (status 13) allows fine/overtime calculations
+  const isFullDayOutDuty = (status === 12);
+  if (isFullDayOutDuty) {
+    fineAmount = 0;
+    fineMinutes = 0;
+    fineData = {
+      late_entry: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
+      early_exit: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 },
+      excess_breaks: { minutes: 0, amount: 0, rate: 0, calculation_type: 5 }
+    };
+    lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
+    earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
   }
 
   const attendancePayload = {

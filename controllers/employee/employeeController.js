@@ -1739,7 +1739,6 @@ exports.facePunch = async (req, res) => {
 
         const time = now.toTimeString().split(' ')[0];
 
-        console.log("start time",time)
         const timings = { 
             ai: 0, 
             db: 0, 
@@ -1766,7 +1765,6 @@ exports.facePunch = async (req, res) => {
 
         const imageBuffer = files[0].buffer;
         const originalName = files[0].originalname;
-        debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
 
         // 🚀 PARALLEL TASK 1: Call AI Service (Optimized with Raw Buffer)
         const getEmbeddingTask = (async () => {
@@ -1775,7 +1773,6 @@ exports.facePunch = async (req, res) => {
                 const formData = new FormData();
                 formData.append('image', imageBuffer, originalName);
 
-                debugLog("AI-Call", "Sending to Python...");
                 // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
                 //     headers: { ...formData.getHeaders() }
                 // });
@@ -1792,12 +1789,6 @@ exports.facePunch = async (req, res) => {
                     throw new Error(aiResponse.data.message);
                 }
             } catch (error) {
-                const rawError = error.response?.data?.message || error.message;
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time",time)
-                console.error("❌ AI Service Failed:", rawError);
-                writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
-                
                 const friendlyMsg = error.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
                 throw new Error(friendlyMsg);
             }
@@ -1823,8 +1814,6 @@ exports.facePunch = async (req, res) => {
             getEmbeddingTask,
             getEmployeesTask
         ]);
-
-        debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
 
         // --- MATCHING LOGIC ---
         const matchStart = Date.now();
@@ -1852,7 +1841,6 @@ exports.facePunch = async (req, res) => {
 
         timings.matching = Date.now() - matchStart;
         const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
-        debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
 
         // --- VALIDATION & CONDITIONAL FILE SAVING ---
         if (bestMatch && minDistance < (process.env.FACE_MATCH_THRESHOLD || 0.4)) {
@@ -1865,14 +1853,6 @@ exports.facePunch = async (req, res) => {
 
                 const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
                 
-                if (!savedFilename) {
-                    console.error("❌ [Punch] Image saved, but filename not found in response!", savedFiles);
-                    writeLogToFile('face_recognition.log', `❌ [Punch] Image saved, but filename not found in savedFiles object. Matches found but image reference missing.`);
-                } else {
-                    debugLog("Punch", `Saved Image: ${savedFilename}`);
-                    writeLogToFile('face_recognition.log', `🖼️  [Image Saved] Success Image: ${savedFilename} | Path: ${constants.ATTENDANCE_FOLDER}`);
-                }
-
                 // 2. Use the robust punch helper
                 const punchResult = await punch(bestMatch.id, {
                     punch_time: now,
@@ -1900,11 +1880,6 @@ exports.facePunch = async (req, res) => {
                 });
 
                 timings.total = Date.now() - startTime;
-                const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
-                console.log(successMsg);
-                writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time2222",time)
 
                 return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
                     employee_name: bestMatch.first_name,
@@ -1915,21 +1890,13 @@ exports.facePunch = async (req, res) => {
                     // timings: timings
                 });
             } catch (error) {
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time333",time)
-
                 if (transaction && !transaction.finished) await transaction.rollback();
                 console.error("Error creating attendance records:", error);
-                writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
                 return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
             }
         } else {
             // 🚀 FAST FAIL: Return error immediately, log in background
             timings.total = Date.now() - startTime;
-            const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
-            console.log(failMsg);
-            writeLogToFile('face_recognition.log', failMsg);
-
             return res.error(constants.FACE_NOT_RECOGNIZED, {
                 message: `Face Not Recognized`,
                 match_score: matchPercentage,
