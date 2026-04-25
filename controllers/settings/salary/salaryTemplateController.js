@@ -255,36 +255,39 @@ exports.update = async (req, res) => {
 
     await commonQuery.updateRecordById(SalaryTemplate, id, templateData, transaction);
 
-    // 2. Update Transactions (Syncing Logic)
-    if (POST.components && Array.isArray(POST.components)) {
-      // Delete old transactions first (Soft Delete or Hard delete since we are replacing)
-      // Here we use status: 2 for soft delete
-      await commonQuery.hardDeleteRecords(SalaryTemplateTransaction, { salary_template_id: id }, transaction);
-    
-      // Insert new transactions
-      const componentData = POST.components.map(comp => ({
-        salary_template_id: id,
-        component_id: comp.component_id,
-        component_category: comp.component_category,
-        monthly_amount: comp.monthly_amount,
-        yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
-        included_in_ctc: comp.included_in_ctc,
-        is_employer_contribution: comp.is_employer_contribution,
-        calculation_type: comp.calculation_type,
-        percentage_of: comp.percentage_of,
-        percentage_value: comp.percentage_value,
-        formula: comp.formula,
-        status: 0
-      }));
+    // Skip transactions sync and employee sync if only_template is true
+    if (!POST.only_template) {
+      // 2. Update Transactions (Syncing Logic)
+      if (POST.components && Array.isArray(POST.components)) {
+        // Delete old transactions first (Soft Delete or Hard delete since we are replacing)
+        // Here we use status: 2 for soft delete
+        await commonQuery.hardDeleteRecords(SalaryTemplateTransaction, { salary_template_id: id }, transaction);
+      
+        // Insert new transactions
+        const componentData = POST.components.map(comp => ({
+          salary_template_id: id,
+          component_id: comp.component_id,
+          component_category: comp.component_category,
+          monthly_amount: comp.monthly_amount,
+          yearly_amount: (parseFloat(comp.monthly_amount) || 0) * 12,
+          included_in_ctc: comp.included_in_ctc,
+          is_employer_contribution: comp.is_employer_contribution,
+          calculation_type: comp.calculation_type,
+          percentage_of: comp.percentage_of,
+          percentage_value: comp.percentage_value,
+          formula: comp.formula,
+          status: 0
+        }));
 
-      await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
-    }
+        await commonQuery.bulkCreate(SalaryTemplateTransaction, componentData, {}, transaction);
+      }
 
-    // Trigger sync for all employees using this template
-    const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
-    if (employeesToSync.length > 0) {
-        const employeeIds = employeesToSync.map(emp => emp.id);
-        await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'salary_template_id', id, transaction);
+      // Trigger sync for all employees using this template
+      const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
+      if (employeesToSync.length > 0) {
+          const employeeIds = employeesToSync.map(emp => emp.id);
+          await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'salary_template_id', id, transaction);
+      }
     }
 
     await transaction.commit();

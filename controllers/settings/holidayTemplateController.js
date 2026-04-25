@@ -69,15 +69,18 @@ exports.update = async (req, res) => {
 
     await commonQuery.updateRecordById(HolidayTemplate, id, POST, transaction);
 
-    if (POST.holiday_transactions) {
-      await syncHolidayTransactions(id, POST.holiday_transactions, existingHolidayTemplate.holidayTransactions || [], transaction);
-    }
+    // Skip holiday transactions sync and employee sync if only_template is true
+    if (!POST.only_template) {
+      if (POST.holiday_transactions) {
+        await syncHolidayTransactions(id, POST.holiday_transactions, existingHolidayTemplate.holidayTransactions || [], transaction);
+      }
 
-    // Trigger sync for all employees using this template
-    const employeesToSync = await commonQuery.findAllRecords(Employee, { holiday_template: id, status: 0 }, { attributes: ['id'] }, transaction);
-    if (employeesToSync.length > 0) {
-        const employeeIds = employeesToSync.map(emp => emp.id);
-        await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'holiday_template', id, transaction);
+      // Trigger sync for all employees using this template
+      const employeesToSync = await commonQuery.findAllRecords(Employee, { holiday_template: id, status: 0 }, { attributes: ['id'] }, transaction);
+      if (employeesToSync.length > 0) {
+          const employeeIds = employeesToSync.map(emp => emp.id);
+          await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'holiday_template', id, transaction);
+      }
     }
 
     await transaction.commit();

@@ -22,35 +22,35 @@ const sendWhatsappMessage = async (mobile_no, message) => {
         return { success: true, message: "Logged message in Dev Mode" };
     }
 
-    try {
-        /**
-         * Generic Implementation for automated WhatsApp sending.
-         * Common providers like UltraMsg, Green-API, or local gateways use this simple POST structure.
-         */
-        const apiUrl = process.env.WHATSAPP_API_URL; // e.g., https://api.ultramsg.com/instanceXXXX/messages/chat
-        const apiKey = process.env.WHATSAPP_API_KEY; // Your secret token/key
+    // try {
+    //     /**
+    //      * Generic Implementation for automated WhatsApp sending.
+    //      * Common providers like UltraMsg, Green-API, or local gateways use this simple POST structure.
+    //      */
+    //     const apiUrl = process.env.WHATSAPP_API_URL; // e.g., https://api.ultramsg.com/instanceXXXX/messages/chat
+    //     const apiKey = process.env.WHATSAPP_API_KEY; // Your secret token/key
 
-        if (!apiUrl || !apiKey) {
-            console.warn("WhatsApp Service: No API URL or Key configured in .env.");
-            return { success: false, message: "WhatsApp API is not configured." };
-        }
+    //     if (!apiUrl || !apiKey) {
+    //         console.warn("WhatsApp Service: No API URL or Key configured in .env.");
+    //         return { success: false, message: "WhatsApp API is not configured." };
+    //     }
 
-        const response = await axios.post(apiUrl, {
-            token: apiKey,  // Some providers use 'token'
-            to: mobile_no,
-            body: message
-        });
+    //     const response = await axios.post(apiUrl, {
+    //         token: apiKey,  // Some providers use 'token'
+    //         to: mobile_no,
+    //         body: message
+    //     });
 
-        // Check for common 'sent' status in third party APIs
-        if (response.data && (response.data.sent === "true" || response.data.error === false || response.status === 200)) {
-            return { success: true, data: response.data };
-        }
+    //     // Check for common 'sent' status in third party APIs
+    //     if (response.data && (response.data.sent === "true" || response.data.error === false || response.status === 200)) {
+    //         return { success: true, data: response.data };
+    //     }
 
-        return { success: false, message: "Failed to send message via gateway.", data: response.data };
-    } catch (error) {
-        console.error("WhatsApp Service Error:", error.response?.data || error.message);
-        return { success: false, message: error.message };
-    }
+    //     return { success: false, message: "Failed to send message via gateway.", data: response.data };
+    // } catch (error) {
+    //     console.error("WhatsApp Service Error:", error.response?.data || error.message);
+    //     return { success: false, message: error.message };
+    // }
 };
 
 /**

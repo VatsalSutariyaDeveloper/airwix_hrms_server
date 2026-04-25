@@ -166,70 +166,73 @@ exports.update = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        if (req.body.breaks && Array.isArray(req.body.breaks)) {
-            const commonFields = {
-                shift_template_id: req.params.id,
-                user_id: req.user?.id || 0,
-                branch_id: req.user.branch_id || 0,
-                company_id: req.user.company_id || 0,
-            };
-
-            const incomingIds = req.body.breaks
-                .map(b => b.id)
-                .filter(id => id !== undefined && id !== null && id !== "");
-
-            // Soft-delete breaks that exist in DB but are not present in the request
-            const existingBreaks = await commonQuery.findAllRecords(
-                ShiftBreak,
-                { shift_template_id: req.params.id },
-                { attributes: ['id'] },
-                transaction,
-                {}   // skip tenant filter — filter by shift_template_id is enough
-            );
-            const idsToDelete = existingBreaks
-                .map(b => b.id)
-                .filter(id => !incomingIds.includes(id));
-            
-            if (idsToDelete.length > 0) {
-                await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction);
-            }
-
-            const toCreate = [];
-            for (const b of req.body.breaks) {
-                const { id, ...breakWithoutId } = b; // Remove the id field
-                const breakData = {
-                    ...breakWithoutId,
-                    ...commonFields,
-                    start_buffer: breakWithoutId.start_buffer === "" ? null : breakWithoutId.start_buffer,
-                    buffer_end: breakWithoutId.buffer_end === "" ? null : breakWithoutId.buffer_end,
-                    start_time: breakWithoutId.start_time === "" ? null : breakWithoutId.start_time,
-                    end_time: breakWithoutId.end_time === "" ? null : breakWithoutId.end_time,
+        // Skip breaks sync and employee sync if only_template is true
+        if (!req.body.only_template) {
+            if (req.body.breaks && Array.isArray(req.body.breaks)) {
+                const commonFields = {
+                    shift_template_id: req.params.id,
+                    user_id: req.user?.id || 0,
+                    branch_id: req.user.branch_id || 0,
+                    company_id: req.user.company_id || 0,
                 };
 
-                if (b.id) {
-                    // Update existing break - only if it's a valid database ID (not a large timestamp)
-                    if (typeof b.id === 'number' && b.id < 2147483647) {
-                        await commonQuery.updateRecordById(ShiftBreak, b.id, breakData, transaction);
+                const incomingIds = req.body.breaks
+                    .map(b => b.id)
+                    .filter(id => id !== undefined && id !== null && id !== "");
+
+                // Soft-delete breaks that exist in DB but are not present in the request
+                const existingBreaks = await commonQuery.findAllRecords(
+                    ShiftBreak,
+                    { shift_template_id: req.params.id },
+                    { attributes: ['id'] },
+                    transaction,
+                    {}   // skip tenant filter — filter by shift_template_id is enough
+                );
+                const idsToDelete = existingBreaks
+                    .map(b => b.id)
+                    .filter(id => !incomingIds.includes(id));
+                
+                if (idsToDelete.length > 0) {
+                    await commonQuery.softDeleteById(ShiftBreak, idsToDelete, transaction);
+                }
+
+                const toCreate = [];
+                for (const b of req.body.breaks) {
+                    const { id, ...breakWithoutId } = b; // Remove the id field
+                    const breakData = {
+                        ...breakWithoutId,
+                        ...commonFields,
+                        start_buffer: breakWithoutId.start_buffer === "" ? null : breakWithoutId.start_buffer,
+                        buffer_end: breakWithoutId.buffer_end === "" ? null : breakWithoutId.buffer_end,
+                        start_time: breakWithoutId.start_time === "" ? null : breakWithoutId.start_time,
+                        end_time: breakWithoutId.end_time === "" ? null : breakWithoutId.end_time,
+                    };
+
+                    if (b.id) {
+                        // Update existing break - only if it's a valid database ID (not a large timestamp)
+                        if (typeof b.id === 'number' && b.id < 2147483647) {
+                            await commonQuery.updateRecordById(ShiftBreak, b.id, breakData, transaction);
+                        } else {
+                            // Treat large timestamp IDs as new breaks
+                            toCreate.push(breakData);
+                        }
                     } else {
-                        // Treat large timestamp IDs as new breaks
+                        // Collect new breaks to bulk-create
                         toCreate.push(breakData);
                     }
-                } else {
-                    // Collect new breaks to bulk-create
-                    toCreate.push(breakData);
+                }
+
+                if (toCreate.length > 0) {
+                    await commonQuery.bulkCreate(ShiftBreak, toCreate, {}, transaction);
                 }
             }
 
-            if (toCreate.length > 0) {
-                await commonQuery.bulkCreate(ShiftBreak, toCreate, {}, transaction);
+            // Trigger sync for all employees using this template
+            const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
+            if (employeesToSync.length > 0) {
+                const employeeIds = employeesToSync.map(emp => emp.id);
+                await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'shift_template', req.params.id, transaction);
             }
-        }
-
-        // Trigger sync for all employees using this template
-        const employeesToSync = await commonQuery.findAllRecords(Employee, { shift_template: req.params.id, status: 0 }, { attributes: ['id'] }, transaction);
-        if (employeesToSync.length > 0) {
-            const employeeIds = employeesToSync.map(emp => emp.id);
-            await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'shift_template', req.params.id, transaction);
         }
 
         await transaction.commit();

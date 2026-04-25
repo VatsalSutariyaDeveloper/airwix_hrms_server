@@ -732,6 +732,9 @@ exports.getMyResignation = async (req, res) => {
             employee_id: employeeId,
             status: 0
         }, {
+            include: [
+                { model: ResignationReason, as: 'reason_type' }
+            ],
             order: [['createdAt', 'DESC']]
         });
         return res.ok(record);

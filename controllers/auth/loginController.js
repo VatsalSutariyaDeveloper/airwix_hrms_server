@@ -9,6 +9,7 @@ const otpRateLimit = require("../../helpers/otpRateLimit");
 const { clearUserCache } = require("../../helpers/permissionCache");
 const { addToBlacklist } = require("../../middlewares/authMiddleware");
 const { generateToken } = require("../../helpers/tokenHelper");
+const nodemailer = require("nodemailer");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -339,6 +340,7 @@ exports.login = async (req, res) => {
 
     const token = generateToken({
       ...user,
+      role_key: user.RolePermission?.role_key,
       access: "employee"
     }, finalCompanyId, access_by);
 
@@ -846,6 +848,7 @@ exports.generatePin = async (req, res) => {
 console.log("entity",entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
+      role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
       access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
@@ -940,6 +943,7 @@ exports.pinLogin = async (req, res) => {
         mobile_no, 
         status: { [Op.in]: [0, 1] } 
       }, 
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
       transaction 
     });
 
@@ -1105,6 +1109,7 @@ console.log("entity",entity.device_type)
 
     const token = generateToken({
       ...entity.get({ plain: true }),
+      role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
       access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
@@ -1276,7 +1281,74 @@ exports.verifyPin = async (req, res) => {
 };
 
 /**
- * 7. Forgot PIN (Sends WhatsApp link)
+ * Send PIN reset email
+ */
+async function sendPinResetEmail(user, setupLink, req) {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: parseInt(process.env.EMAIL_PORT, 10),
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USERNAME,
+        pass: process.env.EMAIL_PASSWORD,
+      },
+    });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:40px 20px;">
+        <table align="center" cellpadding="0" cellspacing="0" width="100%" 
+          style="max-width:600px; background:#ffffff; border-radius:4px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="padding:30px; text-align:center; background:#2563eb; color:#ffffff;">
+              <h1 style="margin:0; font-size:24px; font-weight:600;">
+                ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px; font-size:14px; color:#333;">
+              <p>Hello <strong>${user.user_name || "User"}</strong>,</p>
+              <p style="margin:0 0 25px;">We received a request to reset your PIN. Click below to proceed.</p>
+              <div style="text-align:center; margin:30px 0;">
+                <a href="${setupLink}" 
+                  style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 30px; border-radius:4px; font-weight:600; display:inline-block; font-size:14px;">
+                  Reset PIN
+                </a>
+              </div>
+              <p style="margin:25px 0 10px; font-size:13px; color:#666;">Or copy & paste this link into your browser:</p>
+              <p style="word-break:break-all; color:#2563eb; font-size:13px; margin:0;">${setupLink}</p>
+              <p style="margin-top:30px; color:#888; font-size:12px;">
+                If you didn't request this, please ignore this email. <br/>
+                This link is valid for <strong>1 hour</strong>.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px; text-align:center; background:#f9f9f9; border-top:1px solid #e0e0e0;">
+              <p style="margin:0; font-size:12px; color:#888;">
+                © ${new Date().getFullYear()} ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </div>
+    `;
+
+    await transporter.sendMail({
+      from: `"${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}" <${process.env.EMAIL_USER}>`,
+      to: user.email,
+      subject: "Reset your PIN",
+      html,
+    });
+  } catch (err) {
+    console.error("Failed to send PIN reset email:", err);
+    throw new Error("Email service failed. Please try again later.");
+  }
+}
+
+/**
+ * 7. Forgot PIN (Sends Email link)
  */
 exports.forgotPin = async (req, res) => {
     try {
@@ -1297,6 +1369,10 @@ exports.forgotPin = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
         }
 
+        if (!user.email) {
+            return res.error(constants.VALIDATION_ERROR, { message: "No email found for this user." });
+        }
+
         // Generate Token
         const rawToken = crypto.randomBytes(32).toString("hex");
         const expires = Date.now() + 60 * 60 * 1000; // 1 hour
@@ -1308,9 +1384,11 @@ exports.forgotPin = async (req, res) => {
 
         const setupLink = `${process.env.FRONTEND_URL}auth/reset-pin/${rawToken}`;
 
-        await whatsappService.sendForgotPinLink(user, setupLink);
+        await sendPinResetEmail(user, setupLink, req);
 
-        return res.success("PIN reset link sent to WhatsApp.");
+        // Mask email for security
+        const maskedEmail = user.email.replace(/(.{2})(.*)(@.*)/, "$1***$3");
+        return res.success("PIN reset link sent to email.", { email: maskedEmail });
     } catch (err) {
         return handleError(err, res, req);
     }

@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee } = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -65,7 +65,7 @@ exports.sessionData = async (req, res) => {
         });
     }
 
-    const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || userData.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
+    const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
 
     const companyAccessList = normalizeCompanyAccess(userData.company_access || "");
     if (!isAdmin && companyAccessList.length === 0) {
@@ -90,7 +90,7 @@ exports.sessionData = async (req, res) => {
     }
 
     // 3. Fetch Core Data (Parallel - Standard Sequelize)
-    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList, employeeSettings, totalCompanyBranches] = await Promise.all([
+    const [companyList, sidebarModuleList, companySettings, allPermissions, branchList, employeeSettings, totalCompanyBranches, companySettingsList] = await Promise.all([
       // A. Company List
       CompanyMaster.findAll({
         where: where,
@@ -155,7 +155,8 @@ exports.sessionData = async (req, res) => {
           // F. Employee Settings
       EmployeeSettings.findAll({
           where: { 
-              company_id: company_id, 
+              company_id: company_id,
+              branch_id: branch_id,
               status: 0 
           },
           attributes: ['id', 'settings_name', 'settings_value'],
@@ -165,6 +166,17 @@ exports.sessionData = async (req, res) => {
       // G. Total Branches Count
       BranchMaster.count({
           where: { company_id: record.id, status: 0 },
+          transaction
+      }),
+
+      // H. Company Settings
+      CompanySettings.findAll({
+          where: {
+              company_id: company_id,
+              branch_id: branch_id,
+              status: 0
+          },
+          attributes: ['id', 'settings_name', 'settings_value'],
           transaction
       })
     ]);
@@ -329,7 +341,8 @@ exports.sessionData = async (req, res) => {
       branch_list: branchList,
       branch: currentBranch,
       total_company_branches: totalCompanyBranches,
-      employeeSettings: employeeSettings || []
+      employeeSettings: employeeSettings || [],
+      company_settings: companySettingsList || []
     };
 
     await transaction.commit();

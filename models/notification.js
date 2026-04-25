@@ -23,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
             allowNull: true,
             comment: "Primary Key of the related entity"
         },
-        status: {
+        is_read: {
             type: DataTypes.INTEGER,
             defaultValue: 0,
             comment: "0: Unread, 1: Read"
@@ -32,6 +32,7 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.STRING(255),
             allowNull: true
         },
+        status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
         status_code : {
             type: DataTypes.INTEGER,
             defaultValue: 0,

@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType, CompanySettings } = require("../../models");
 const { commonQuery, handleError, fail, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -15,6 +15,41 @@ const employee = require("../../models/employee");
  * Payroll Controller - Phase 5 Conclusion
  * Handles the "consumption" of attendance data to generate salary summaries.
  */
+
+/**
+ * Helper function to apply rounding based on company settings
+ * @param {number} amount - The amount to round
+ * @param {number} roundOffType - 1: round to nearest integer (0.50→1, 0.40→0), 2: round to nearest 10 (5→10, 4→0), 3: round to nearest 100 (55→100, 45→0)
+ * @returns {object} - { roundedAmount: number, roundOffAmount: number }
+ */
+const applyRounding = (amount, roundOffType) => {
+    if (!roundOffType || roundOffType === 0) {
+        return { roundedAmount: amount, roundOffAmount: 0 };
+    }
+
+    let roundedAmount;
+    let roundOffAmount;
+
+    switch (roundOffType) {
+        case 1:
+            // Round to nearest integer (0.50→1, 0.40→0)
+            roundedAmount = Math.round(amount);
+            break;
+        case 2:
+            // Round to nearest 10 (5→10, 4→0)
+            roundedAmount = Math.round(amount / 10) * 10;
+            break;
+        case 3:
+            // Round to nearest 100 (55→100, 45→0)
+            roundedAmount = Math.round(amount / 100) * 100;
+            break;
+        default:
+            roundedAmount = amount;
+    }
+
+    roundOffAmount = roundedAmount - amount;
+    return { roundedAmount, roundOffAmount };
+};
 
 /**
  * Internal helper to evaluate formula-based components
@@ -54,6 +89,13 @@ const evaluateComponentFormula = (formula, valuesMap) => {
 const performSalaryCalculation = async (employee_id, month, year, transaction = null) => {
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    // Fetch company settings for rounding configuration
+    const companySettings = await commonQuery.findOneRecord(CompanySettings, {
+        settings_name: 'round_off_salary',
+        status: 0
+    }, {}, transaction);
+    const roundOffType = companySettings?.settings_value || 0;
 
     // 1. Fetch Employee with Salary Mapping & Overrides using ORM for automatic nesting
     const employee = await commonQuery.findOneRecord(Employee, employee_id, {
@@ -259,7 +301,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 break;
         }
         totalFine += parseFloat(day.fine_amount || 0);
-        totalOTAmount += Math.round(parseFloat(day.overtime_amount || 0));
+        totalOTAmount += parseFloat(day.overtime_amount || 0);
         totalOTMins += parseInt(day.overtime_minutes || 0);
         totalWorkedMins += parseInt(day.worked_minutes || 0);
     });
@@ -357,7 +399,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Check if Overtime should be included in total earnings based on attendance configuration
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
     const includeOTInTotal = activeAttendanceTemplate ? (activeAttendanceTemplate.include_overtime_in_total === true || activeAttendanceTemplate.include_overtime_in_total === 'true') : false;
-    const otAmount = includeOTInTotal ? Math.round(totalOTAmount) : 0;
+    const otAmount = includeOTInTotal ? totalOTAmount : 0;
 
     // Step E: Use advances, incentives and reimbursements from employee include (already fetched)
     const incentives = employee.employeeIncentive || [];
@@ -376,7 +418,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             id: day.id,
             date: day.attendance_date,
             minutes: parseInt(day.overtime_minutes || 0),
-            amount: Math.round(parseFloat(day.overtime_amount || 0)),
+            amount: parseFloat(day.overtime_amount || 0),
             note: day.note || '',
             overtime_data: day.overtime_data || null
         }));
@@ -388,7 +430,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             type: "fine",
             id: day.id,
             date: day.attendance_date,
-            amount: Math.round(parseFloat(day.fine_amount || 0)),
+            amount: parseFloat(day.fine_amount || 0),
             note: day.note || '',
             fine_data: day.fine_data || null
         }));
@@ -434,8 +476,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         earnings.push({
             name: "Leave Encashment",
             // base_amount: encashmentAmount,
-            amount: Math.round(encashmentAmount),
-            actual_amount: Math.round(encashmentAmount),
+            amount: encashmentAmount.toFixed(2),
+            actual_amount: encashmentAmount,
             days: totalEncashedDays,
             is_encashment: true
         });
@@ -575,10 +617,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
             if (comp.component_type === "DEDUCTION") {
                 totalDeductions += amount;
-                deductions.push({ name: comp.component_name, amount: Math.round(amount), is_statutory: true });
+                deductions.push({ name: comp.component_name, amount: amount.toFixed(2), is_statutory: true });
             } else {
                 takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, amount: Math.round(amount), actual_amount: Math.round(amount), is_statutory: true });
+                earnings.push({ name: comp.component_name, amount: amount.toFixed(2), actual_amount: amount, is_statutory: true });
             }
             return;
         }
@@ -587,8 +629,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             earnings.push({
                 name: comp.component_name,
-                amount: Math.round(finalAmount),
-                actual_amount: Math.round(finalAmount)
+                amount: finalAmount.toFixed(2),
+                actual_amount: finalAmount
             });
 
             takeHomeEarnings += finalAmount;
@@ -608,17 +650,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             deductions.push({
                 name: comp.component_name,
-                amount: Math.round(actualAmount),
+                amount: actualAmount.toFixed(2),
                 is_food: isFoodComp,
                 meal_count: lunchCount,
-                rate: Math.round(rateValue)
+                rate: rateValue
             });
             totalDeductions += actualAmount;
         } else if (comp.component_type === "BENEFIT") {
             earnings.push({
                 name: comp.component_name,
-                amount: Math.round(actualAmount),
-                actual_amount: Math.round(actualAmount),
+                amount: actualAmount.toFixed(2),
+                actual_amount: actualAmount,
                 is_benefit: true
             });
             takeHomeEarnings += actualAmount;
@@ -628,15 +670,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Add OT and Incentives
     if (otAmount > 0) {
-        earnings.push({ name: "Overtime", amount: Math.round(otAmount), actual_amount: Math.round(otAmount), is_ot: true });
+        earnings.push({ name: "Overtime", amount: otAmount.toFixed(2), is_ot: true });
         takeHomeEarnings += otAmount;
     }
 
-
-
     // Add single Incentive earning with total amount
     if (totalIncentive > 0) {
-        earnings.push({ name: "Incentive", amount: Math.round(totalIncentive), actual_amount: Math.round(totalIncentive), is_incentive: true });
+        earnings.push({ name: "Incentive", amount: totalIncentive.toFixed(2), actual_amount: totalIncentive, is_incentive: true });
         takeHomeEarnings += totalIncentive;
     }
 
@@ -653,7 +693,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // });
 
     if (totalFine > 0) {
-        deductions.push({ name: "Fines", amount: Math.round(totalFine), is_fine: true });
+        deductions.push({ name: "Fines", amount: totalFine.toFixed(2), is_fine: true });
         totalDeductions += totalFine;
     }
 
@@ -675,7 +715,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 if (!statutory[name]) {
                     statutory[name] = parseFloat(amount);
                     if (!deductions.find(d => d.name === name)) {
-                        deductions.push({ name, amount: parseFloat(amount), is_statutory: true });
+                        deductions.push({ name, amount: amount.toFixed(2), is_statutory: true });
                         totalDeductions += parseFloat(amount);
                     }
                 }
@@ -776,10 +816,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     if (tdsAmount > 0) {
         statutory["Income Tax (TDS)"] = tdsAmount;
         statutory["Income Tax (TDS) %"] = tdsPercentage;
-        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount, is_statutory: true });
+        deductions.push({ name: "Income Tax (TDS)", amount: tdsAmount.toFixed(2), is_statutory: true });
         totalDeductions += tdsAmount;
     }
     const netPayable = takeHomeEarnings - totalDeductions;
+
+    // Apply rounding based on company settings
+    const { roundedAmount: roundedNetPayable, roundOffAmount } = applyRounding(netPayable, roundOffType);
 
     // Calculate totals for breakdown arrays
     const totalEarningsBreakdown = earnings.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
@@ -798,27 +841,28 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         period: { month, year, daysInMonth, daysInCalculation, monthName: formatDateTime(new Date(year, month - 1, 1), "MMMM") },
         attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalWeeklyOffs: offDays.totalWeeklyOffs, totalHolidays: offDays.totalHolidays, goneWeeklyOffs: offDays.goneWeeklyOffs, goneHolidays: offDays.goneHolidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
-            ctc_monthly: Math.round(monthlyGross),
-            perDaySalary: Math.round(perDaySalary),
-            lwpDeduction: Math.round(lwpDeductionTotal),
-            totalFine: Math.round(totalFine),
-            overtimeAmount: Math.round(otAmount),
-            incentiveAmount: Math.round(totalIncentive),
-            reimbursementAmount: Math.round(totalReimbursement),
+            ctc_monthly: monthlyGross,
+            perDaySalary: perDaySalary.toFixed(2),
+            lwpDeduction: lwpDeductionTotal.toFixed(2),
+            totalFine: totalFine,
+            overtimeAmount: otAmount.toFixed(2),
+            incentiveAmount: totalIncentive,
+            reimbursementAmount: totalReimbursement,
             // advanceAmount: totalAdvance.toFixed(2),
-            encashmentAmount: Math.round(encashmentAmount),
+            encashmentAmount: encashmentAmount,
             tdsPercentage: tdsPercentage.toFixed(2),
-            netPayable: netPayable < 0 ? "0" : Math.round(netPayable).toString(),
-            takeHomeEarnings: Math.round(takeHomeEarnings).toString(),
-            totalDeductions: Math.round(totalDeductions).toString()
+            netPayable: roundedNetPayable < 0 ? "0" : roundedNetPayable.toString(),
+            roundOffAmount: roundOffAmount.toFixed(2),
+            takeHomeEarnings: takeHomeEarnings,
+            totalDeductions: totalDeductions
         },
         breakdown: {
             earnings,
             deductions,
             statutory,
             employer,
-            total_earnings: Math.round(totalEarningsBreakdown).toString(),
-            total_deductions: Math.round(totalDeductionsBreakdown).toString()
+            total_earnings: totalEarningsBreakdown,
+            total_deductions: totalDeductionsBreakdown
         },
         overtime_history: overtimeHistory,
         fine_history: fineHistory,
@@ -1038,6 +1082,7 @@ const formatPayslipToSummary = async (payslip) => {
             encashmentAmount: encashmentAmount.toFixed(2),
             advanceAmount: advanceAmount,
             netPayable: parseFloat(payslip.net_salary || 0).toFixed(2),
+            roundOffAmount: parseFloat(payslip.round_off_amount || 0).toFixed(2),
             takeHomeEarnings: parseFloat(payslip.paid_gross || 0).toFixed(2),
             total_deductions: parseFloat(payslip.total_deduction || 0).toFixed(2),
             totalDeductions: parseFloat(payslip.total_deduction || 0).toFixed(2)
@@ -1216,6 +1261,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         paid_gross: summary.salary.takeHomeEarnings, // Total Earnings before deductions
         total_deduction: summary.salary.totalDeductions,
         net_salary: net_take_home_pay ? parseFloat(net_take_home_pay) : summary.salary.netPayable,
+        round_off_amount: summary.salary.roundOffAmount || 0,
         paid_amount: paidAmount,
         pending_amount: pendingAmount,
 
@@ -1751,32 +1797,62 @@ exports.getCalculationHistory = async (req, res) => {
 
 exports.getAvailableMonthsForCalculation = async (req, res) => {
     try {
-        let { employee_id } = req.body;
-        if (!employee_id) {
-            employee_id = req.user.employee_id;
-        }
+        let { employee_id, year } = req.body;
         const company_id = req.user.company_id;
+        const selectedYear = year || new Date().getFullYear();
+
+        // Get min and max years across both attendance and payslips
+        let yearRangeQuery = "";
+        let yearReplacements = { company_id };
+
+        if (!employee_id && !req.user.employee_id) {
+            yearRangeQuery = `
+                SELECT MIN(year) as min_year, MAX(year) as max_year FROM (
+                    SELECT EXTRACT(YEAR FROM ad.attendance_date)::INTEGER as year 
+                    FROM attendance_day ad 
+                    JOIN employees e ON ad.employee_id = e.id 
+                    WHERE e.company_id = :company_id AND ad.status != 2
+                    UNION
+                    SELECT year FROM payslips WHERE company_id = :company_id
+                ) combined_years`;
+        } else {
+            const targetEmployeeId = employee_id || req.user.employee_id;
+            yearRangeQuery = `
+                SELECT MIN(year) as min_year, MAX(year) as max_year FROM (
+                    SELECT EXTRACT(YEAR FROM attendance_date)::INTEGER as year 
+                    FROM attendance_day 
+                    WHERE employee_id = :employee_id AND status != 2
+                    UNION
+                    SELECT year FROM payslips WHERE employee_id = :employee_id
+                ) combined_years`;
+            yearReplacements.employee_id = targetEmployeeId;
+        }
+
+        const [yearRange] = await sequelize.query(yearRangeQuery, {
+            replacements: yearReplacements,
+            type: sequelize.QueryTypes.SELECT
+        });
 
         // If no employee_id provided, we assume we want the overall company-wide payroll cycles
-        if (!employee_id) {
-            // 1. Get unique months/years from AttendanceDay for the entire company
+        if (!employee_id && !req.user.employee_id) {
+            // 1. Get unique months for the selected year from AttendanceDay
             const attendanceMonths = await sequelize.query(`
                 SELECT DISTINCT 
                     EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
                     EXTRACT(YEAR FROM attendance_date)::INTEGER as year
                 FROM attendance_day ad
                 JOIN employees e ON ad.employee_id = e.id
-                WHERE e.company_id = :company_id AND ad.status != 2
-                ORDER BY year DESC, month DESC
-                LIMIT 24
+                WHERE e.company_id = :company_id AND ad.status != 2 
+                AND EXTRACT(YEAR FROM attendance_date) = :year
+                ORDER BY month DESC
             `, {
-                replacements: { company_id },
+                replacements: { company_id, year: selectedYear },
                 type: sequelize.QueryTypes.SELECT
             });
 
-            // 2. Get existing payslip summaries by month/year
+            // 2. Get existing payslip summaries by month for the selected year
             const payslipSummaries = await Payslip.findAll({
-                where: { company_id },
+                where: { company_id, year: selectedYear },
                 attributes: [
                     'month', 'year',
                     [sequelize.fn('SUM', sequelize.col('fixed_gross')), 'total_ctc'],
@@ -1789,24 +1865,20 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
 
             // 3. Combine and Format
             const monthSet = new Set();
-            attendanceMonths.forEach(am => monthSet.add(`${am.month}-${am.year}`));
-            payslipSummaries.forEach(ps => monthSet.add(`${ps.month}-${ps.year}`));
+            attendanceMonths.forEach(am => monthSet.add(am.month));
+            payslipSummaries.forEach(ps => monthSet.add(ps.month));
 
-            const sortedPeriods = Array.from(monthSet).map(key => {
-                const [month, year] = key.split('-').map(Number);
-                return { month, year };
-            }).sort((a, b) => b.year - a.year || b.month - a.month);
+            const sortedMonths = Array.from(monthSet).sort((a, b) => b - a);
 
-            const result = sortedPeriods.map(period => {
-                const summary = payslipSummaries.find(ps => parseInt(ps.month) === period.month && parseInt(ps.year) === period.year);
-                const monthName = formatDateTime(new Date(period.year, period.month - 1, 1), "MMM");
-
+            const result = sortedMonths.map(month => {
+                const summary = payslipSummaries.find(ps => parseInt(ps.month) === month);
+                const monthName = formatDateTime(new Date(selectedYear, month - 1, 1), "MMM");
                 const statusValue = summary ? parseInt(summary.getDataValue('status')) : 0;
 
                 return {
-                    month: period.month,
-                    year: period.year,
-                    label: `${monthName} ${period.year}`,
+                    month: month,
+                    year: selectedYear,
+                    label: `${monthName} ${selectedYear}`,
                     ctc: summary ? parseFloat(summary.getDataValue('total_ctc') || 0).toFixed(2) : "0.00",
                     net_payable: summary ? parseFloat(summary.getDataValue('total_net_payable') || 0).toFixed(2) : "0.00",
                     employee_count: summary ? summary.getDataValue('employee_count') : 0,
@@ -1814,43 +1886,48 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 };
             });
 
-            return res.ok(result);
+            return res.ok({
+                min_year: yearRange?.min_year || selectedYear,
+                max_year: yearRange?.max_year || selectedYear,
+                data: result
+            });
         }
 
-        // If employee_id is provided, maintain original logic for individual employee history
-        // 1. Get unique months/years from AttendanceDay
+        const targetEmployeeId = employee_id || req.user.employee_id;
+
+        // Individual employee logic
+        // 1. Get unique months for the selected year from AttendanceDay
         const attendanceMonths = await sequelize.query(`
             SELECT DISTINCT 
                 EXTRACT(MONTH FROM attendance_date)::INTEGER as month,
                 EXTRACT(YEAR FROM attendance_date)::INTEGER as year
             FROM attendance_day
             WHERE employee_id = :employee_id AND status != 2
-            ORDER BY year DESC, month DESC
+            AND EXTRACT(YEAR FROM attendance_date) = :year
+            ORDER BY month DESC
         `, {
-            replacements: { employee_id },
+            replacements: { employee_id: targetEmployeeId, year: selectedYear },
             type: sequelize.QueryTypes.SELECT
         });
 
-        // 2. Get existing payslips
+        // 2. Get existing payslips for the selected year
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
-            employee_id,
+            employee_id: targetEmployeeId,
+            year: selectedYear
         });
 
         // 3. Combine unique months
-        const allPeriodKeys = new Set();
-        attendanceMonths.forEach(am => allPeriodKeys.add(`${am.month}-${am.year}`));
-        existingPayslips.forEach(ep => allPeriodKeys.add(`${ep.month}-${ep.year}`));
+        const monthSet = new Set();
+        attendanceMonths.forEach(am => monthSet.add(am.month));
+        existingPayslips.forEach(ep => monthSet.add(ep.month));
 
-        const sortedPeriods = Array.from(allPeriodKeys).map(key => {
-            const [month, year] = key.split('-').map(Number);
-            return { month, year };
-        }).sort((a, b) => b.year - a.year || b.month - a.month);
+        const sortedMonths = Array.from(monthSet).sort((a, b) => b - a);
 
         // 4. Format Result
         const result = [];
-        for (const am of sortedPeriods) {
-            const existing = existingPayslips.find(p => p.month === am.month && p.year === am.year);
-            const monthName = formatDateTime(new Date(am.year, am.month - 1, 1), "MMM");
+        for (const month of sortedMonths) {
+            const existing = existingPayslips.find(p => p.month === month);
+            const monthName = formatDateTime(new Date(selectedYear, month - 1, 1), "MMM");
 
             let ctc = "0.00";
             let net_payable = "0.00";
@@ -1862,20 +1939,20 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 payslip_id = existing.id;
             } else {
                 try {
-                    const summary = await performSalaryCalculation(employee_id, am.month, am.year);
+                    const summary = await performSalaryCalculation(targetEmployeeId, month, selectedYear);
                     if (summary && summary.salary) {
                         ctc = summary.salary.ctc_monthly;
                         net_payable = summary.salary.netPayable;
                     }
                 } catch (e) {
-                    console.error(`Calculation failed for ${monthName} ${am.year}:`, e.message);
+                    console.error(`Calculation failed for ${monthName} ${selectedYear}:`, e.message);
                 }
             }
 
             result.push({
-                month: am.month,
-                year: am.year,
-                label: `${monthName} ${am.year}`,
+                month: month,
+                year: selectedYear,
+                label: `${monthName} ${selectedYear}`,
                 is_calculated: !!existing,
                 ctc,
                 net_payable,
@@ -1884,7 +1961,11 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             });
         }
 
-        return res.ok(result);
+        return res.ok({
+            min_year: yearRange?.min_year || selectedYear,
+            max_year: yearRange?.max_year || selectedYear,
+            data: result
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -2348,6 +2429,7 @@ exports.getSalaryOverview = async (req, res) => {
                     fine_amount: fine.toFixed(2),
                     ctc_monthly: payslip.fixed_gross || 0,
                     tds_calculation_data: payslip.tds_calculation_data,
+                    roundOffAmount: payslip.round_off_amount,
                     is_loaded: true,
                     is_finalized: true
                 });
@@ -2361,13 +2443,21 @@ exports.getSalaryOverview = async (req, res) => {
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
                     const netPayable = summary.breakdown.total_earnings - summary.breakdown.total_deductions;
 
+                    // Fetch company settings for rounding configuration
+                    const companySettings = await commonQuery.findOneRecord(CompanySettings, {
+                        settings_name: 'round_off_salary',
+                        status: 0
+                    });
+                    const roundOffType = companySettings?.settings_value || 0;
+                    const { roundedAmount: roundedNetPayable } = applyRounding(netPayable, roundOffType);
+
                     overview.push({
                         month: m.month,
                         year: m.year,
                         month_label: `${monthName}, ${yearShort}`,
-                        due_amount: netPayable.toFixed(2),
+                        due_amount: roundedNetPayable < 0 ? "0" : roundedNetPayable.toFixed(2),
                         date_range: `01 ${monthName}'${yearShort} - ${isCurrentMonth ? formatDateTime(new Date(), "DD MMM'YY") : formatDateTime(dayjs(`${m.year}-${m.month}-01`).endOf('month').toDate(), "DD MMM'YY")}`,
-                        net_receivable: netPayable.toFixed(2),
+                        net_receivable: roundedNetPayable < 0 ? "0" : roundedNetPayable.toFixed(2),
                         payable_days: payableDays % 1 === 0 ? payableDays.toString() : payableDays.toFixed(1),
                         actualDaysValue: summary.attendance.actualDaysValue || 0,
                         lwp_days: summary.attendance.totalLWP,
@@ -2389,6 +2479,7 @@ exports.getSalaryOverview = async (req, res) => {
                         fine_amount: summary.salary.totalFine,
                         ctc_monthly: summary.salary.ctc_monthly,
                         tds_calculation_data: summary.tds_calculation_data,
+                        roundOffAmount: summary.salary.roundOffAmount,
                         is_loaded: true,
                         is_finalized: false
                     });
