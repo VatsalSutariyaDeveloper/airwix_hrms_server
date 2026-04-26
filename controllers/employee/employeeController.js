@@ -2428,7 +2428,7 @@ exports.inviteUser = async (req, res) => {
             setup_link: setupLink,
             user_id: user.id,
             email: user.email,
-            whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
+            whatsapp_status: whatsappRes?.success ? "Sent" : "Failed"
         });
 
     } catch (err) {

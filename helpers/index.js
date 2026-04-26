@@ -14,6 +14,7 @@ const { logActivity, logQuery, logError, writeLogToFile, archiveAndCleanupLogs }
 const  otpService = require("./otpService");
 const { Err, fail } = require("./Err");
 const { getContext } = require("../utils/requestContext");
+const whatsappService = require("./whatsappService");
 
   module.exports = {
     sequelize,
@@ -60,7 +61,7 @@ const { getContext } = require("../utils/requestContext");
     getRoutePermissionId,
     otpService,
     tokenHelper: require("./tokenHelper"),
-    whatsappService: require("./whatsappService"),
+    whatsappService,
     Err,
     fail
 };
