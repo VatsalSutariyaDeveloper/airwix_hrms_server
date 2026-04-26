@@ -1,6 +1,6 @@
 const NodeCache = require("node-cache");
 const { literal, Op } = require("sequelize");
-const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings, CompanySettings } = require("../../models");
+const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings, CompanySettings, sequelize } = require("../../models");
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
@@ -660,10 +660,7 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
     const settings = await getCompanySetting(company_id);
     const company_branch_punch_config = settings.company_branch_punch_config;
     const company_punch_config = settings.company_punch_config;
-    console.log('company_branch_punch_config', company_branch_punch_config);
-    console.log('company_punch_config', company_punch_config);
-    let where = { status: 0 }; 
-
+    let where = { status: 0 };
     if (company_punch_config === false || company_punch_config === "false") {
         const company = await commonQuery.findOneRecord(CompanyMaster, { id: company_id }, { attributes: ["organization_id"] }, null, false, {});
         if (company && company.organization_id) {
@@ -677,7 +674,14 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
         where.company_id = company_id;
     } else {
         where.company_id = company_id;
-        where.branch_id = branch_id;
+        where[Op.or] = [
+            { branch_id: branch_id },
+            {
+                access_branches: {
+                    [Op.contains]: [branch_id]   // 👈 important
+                }
+            }
+        ];
     }
     console.log('where', where);
     return where;

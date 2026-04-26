@@ -896,7 +896,7 @@ console.log("entity",entity.device_type)
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);
@@ -1157,7 +1157,7 @@ console.log("entity",entity.device_type)
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
-      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance device") : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
     };
 
     if (!isDevice) clearUserCache(entity.user_id);

@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, ActivityLog } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -41,17 +41,24 @@ exports.attendancePunch = async (req, res) => {
       }
     }
 
+    // --- [FIX] Resolve Device ID for Attendance Devices ---
+    let resolvedDeviceId = req.body.device_id || null;
+    if (req.user?.access === 'attendance') {
+      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
+      resolvedDeviceId = device ? device.id : req.user.id; // Fallback to User ID if not found
+    }
+
     const result = await punch(
       req.body.employee_id, 
       {
       ...req.body,
-      user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
+      user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
       company_id: req.user.company_id,
       branch_id: req.user.branch_id,
       ip_address: req.ip,
       latitude: req.body.latitude || null,
       longitude: req.body.longitude || null,
-      device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
+      device_id: resolvedDeviceId,
       image_name: punchImage
     }, t);
     
@@ -76,13 +83,30 @@ exports.syncPunches = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Punches array is required");
     }
 
+    console.log(`[SyncPunches] Received ${punches.length} punches from device/app.`);
+    console.log(`[SyncPunches] User Context: ID=${req.user?.id}, Access=${req.user?.access}, Company=${req.user?.company_id}`);
+
+    // Resolve Device ID once for the entire sync batch
+    let resolvedDeviceId = null;
+    console.log("req.user",req.user)
+    if (req.user?.access === 'attendance') {
+      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
+      resolvedDeviceId = device ? device.id : req.user.id;
+      console.log(`[SyncPunches] Resolved DeviceMaster ID: ${resolvedDeviceId} from User ID: ${req.user.id}`);
+    }
+
     // Sort punches by time to ensure sequential processing (crucial for auto-toggle logic and night shifts)
     const sortedPunches = punches
       .filter(p => p.employee_id && p.punch_time)
       .sort((a, b) => dayjs(a.punch_time).valueOf() - dayjs(b.punch_time).valueOf());
 
+    console.log(`[SyncPunches] After filtering/sorting: ${sortedPunches.length} valid punches to process.`);
+
     const results = [];
     for (const punchData of sortedPunches) {
+      console.log(`\n--- [Sync] Processing Punch: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
+      console.log(`\n--- [Sync] Processing Punch:`,punchData);
+      
       try {
         // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
@@ -94,13 +118,13 @@ exports.syncPunches = async (req, res) => {
           punchData.employee_id,
           {
             ...punchData,
-            user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
+            user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
             company_id: req.user.company_id,
-            branch_id: punchData.branch_id || req.user.branch_id,
+            branch_id: req.user.branch_id,
             ip_address: punchData.ip_address || req.ip,
             latitude: punchData.latitude || null,
             longitude: punchData.longitude || null,
-            device_id: req.user?.access === 'attendance device' ? req.user.id : (punchData.device_id || null),
+            device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
             bypassGapCheck: true, // Offline punches are already captured, ignore 2-min validation
             skipRebuild: false 
@@ -114,8 +138,32 @@ exports.syncPunches = async (req, res) => {
           punch_id: result.punchId,
           type: result.punchType 
         });
+        console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         // Log the failure for this specific punch but proceed with the sync
+        console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
+        
+        // 🚀 NEW: Store the failed punch attempt in ActivityLog for debugging
+        try {
+          await ActivityLog.create({
+            company_id: req.user.company_id,
+            branch_id: req.user.branch_id,
+            user_id: req.user.id,
+            entity_name: "AttendanceSync",
+            action_type: "ERROR",
+            log_message: `Sync Failed: ${punchErr.message || "Unknown Error"}`,
+            new_data: { 
+              ...punchData, 
+              error: punchErr.message,
+              stack: punchErr.stack
+            },
+            ip_address: req.ip,
+            access_type: "attendance device"
+          }, { transaction: t });
+        } catch (logErr) {
+          console.error("❌ Failed to log sync error to DB:", logErr);
+        }
+
         results.push({ 
           employee_id: punchData.employee_id, 
           punch_time: punchData.punch_time, 
@@ -283,7 +331,7 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches"]
+        attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches"]
       },
       true,
       "createdAt",
@@ -323,6 +371,12 @@ exports.getAttendanceSummary = async (req, res) => {
       const itemOutDutyMap = new Set(itemOutDuties.map(o => o.employee_id));
 
       employeesResult.items.forEach(emp => {
+        if (emp.profile_image) {
+          emp.setDataValue('profile_image_url', `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}`);
+        } else {
+          emp.setDataValue('profile_image_url', null);
+        }
+
         const day = emp.attendanceDays?.[0];
         if (day) {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
@@ -884,64 +938,77 @@ exports.updateAttendanceDay = async (req, res) => {
              }
         }
     } else {
+        // Skip fine and overtime calculations for out-duty days (status 12 and 13)
+        const isOutDutyStatus = [12, 13].includes(effectiveStatus);
 
         if (first_in !== undefined) payload.first_in = first_in;
         if (last_out !== undefined) payload.last_out = last_out;
         
-        const finesAllowed = template ? (template.fines_allowed !== false) : true;
-        if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
-        
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
 
-        // Re-calculate Overtime from Data if provided
-        if (overtime_data !== undefined) {
-            const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-            payload.overtime_data = finalOTData;
-            if (finalOTData && typeof finalOTData === 'object') {
-                const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
-                const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
-                
-                // Prioritize calculated values if provided summary is 0/null
-                payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
-                payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+        // Only calculate fine/overtime if NOT out-duty status
+        if (!isOutDutyStatus) {
+            const finesAllowed = template ? (template.fines_allowed !== false) : true;
+            if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
+
+            // Re-calculate Overtime from Data if provided
+            if (overtime_data !== undefined) {
+                const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+                payload.overtime_data = finalOTData;
+                if (finalOTData && typeof finalOTData === 'object') {
+                    const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+                    const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+                    
+                    // Prioritize calculated values if provided summary is 0/null
+                    payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+                    payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+                } else {
+                    payload.overtime_amount = 0;
+                    payload.overtime_minutes = 0;
+                }
             } else {
-                payload.overtime_amount = 0;
-                payload.overtime_minutes = 0;
+                if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+                if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
             }
-        } else {
-            if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-            if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-        }
 
-        // Re-calculate Fine from Data if provided
-        if (!finesAllowed) {
-            payload.fine_data = null;
-            payload.fine_amount = 0;
-            payload.fine_minutes = 0;
-        } else if (fine_data !== undefined) {
-            const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
-            payload.fine_data = finalFineData;
-            if (finalFineData && typeof finalFineData === 'object') {
-                const calcFineAmount = parseFloat((
-                    parseFloat(finalFineData.late_entry?.amount || 0) + 
-                    parseFloat(finalFineData.early_exit?.amount || 0) + 
-                    parseFloat(finalFineData.excess_breaks?.amount || 0)
-                ).toFixed(2));
-                const calcFineMinutes = parseInt(finalFineData.late_entry?.minutes || 0) + 
-                                       parseInt(finalFineData.early_exit?.minutes || 0) + 
-                                       parseInt(finalFineData.excess_breaks?.minutes || 0);
-
-                // Prioritize calculated values if provided summary is 0/null
-                payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
-                payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
-            } else {
+            // Re-calculate Fine from Data if provided
+            if (!finesAllowed) {
                 payload.fine_data = null;
                 payload.fine_amount = 0;
                 payload.fine_minutes = 0;
+            } else if (fine_data !== undefined) {
+                const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+                payload.fine_data = finalFineData;
+                if (finalFineData && typeof finalFineData === 'object') {
+                    const calcFineAmount = parseFloat((
+                        parseFloat(finalFineData.late_entry?.amount || 0) + 
+                        parseFloat(finalFineData.early_exit?.amount || 0) + 
+                        parseFloat(finalFineData.excess_breaks?.amount || 0)
+                    ).toFixed(2));
+                    const calcFineMinutes = parseInt(finalFineData.late_entry?.minutes || 0) + 
+                                           parseInt(finalFineData.early_exit?.minutes || 0) + 
+                                           parseInt(finalFineData.excess_breaks?.minutes || 0);
+
+                    // Prioritize calculated values if provided summary is 0/null
+                    payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
+                    payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
+                } else {
+                    payload.fine_data = null;
+                    payload.fine_amount = 0;
+                    payload.fine_minutes = 0;
+                }
+            } else {
+                if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+                if (fine_amount !== undefined) payload.fine_amount = fine_amount;
             }
         } else {
-            if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
-            if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+            // Clear fine and overtime for out-duty days
+            payload.fine_minutes = 0;
+            payload.fine_data = null;
+            payload.fine_amount = 0;
+            payload.overtime_minutes = 0;
+            payload.overtime_data = null;
+            payload.overtime_amount = 0;
         }
 
         if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
@@ -1178,7 +1245,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    }, t, { comapany_id: true });
+    }, t, { company_id: true });
     const empMap = new Map(employees.map(e => [e.id, e]));
 
     for (const employee_id of employee_ids) {
@@ -1485,7 +1552,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
+      attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1495,6 +1562,12 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     if (!employee) {
       return res.error(constants.NOT_FOUND, "Employee not found");
+    }
+
+    if (employee.profile_image) {
+      employee.setDataValue('profile_image_url', `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employee.profile_image}`);
+    } else {
+      employee.setDataValue('profile_image_url', null);
     }
 
     // 1.1 Check for Approved Out Duty Request for TODAY

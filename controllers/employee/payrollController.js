@@ -484,16 +484,19 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         takeHomeEarnings += encashmentAmount;
     }
 
+    // Calculate current pro-rated gross/ctc base for formulas to use current amounts
+    const currentGross = parseFloat(((monthlyGross / (daysInCalculation || 1)) * payableDaysValue).toFixed(2));
+
     // Values map for formula evaluation - initialize with globals
     const valuesMap = {
         BASIC: 0,
-        GROSS: monthlyGross,
-        CTC: monthlyGross,
+        GROSS: currentGross,
+        CTC: currentGross,
         CANTEEN_ATTENDANCE: lunchCount,
         DAYS_IN_MONTH: daysInMonth,
         PRESENT_DAYS: totalPresentDays,
         ABSENT_DAYS: absentDays,
-        PAYABLE_DAYS: daysInMonth - totalLWP
+        PAYABLE_DAYS: payableDaysValue
     };
 
     // Pre-process components and pre-populate valuesMap with nominal amounts
@@ -545,7 +548,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 if (calcType === 'ATTENDANCE_BASED') {
                     actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
                 } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
-                    actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                    // Only apply LWP impact if not already pro-rated via percentage/formula base
+                    const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
+                    if (!isAlreadyProRated) {
+                        actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                    }
                 }
             }
 
@@ -593,7 +600,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             if (calcType === 'ATTENDANCE_BASED') {
                 actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
             } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
-                actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                // Only apply LWP impact if not already pro-rated via percentage/formula base
+                const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && formula && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
+                if (!isAlreadyProRated) {
+                    actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                }
             }
         }
 
@@ -2473,7 +2484,7 @@ exports.getSalaryOverview = async (req, res) => {
                         statutory: summary.breakdown.statutory || {},
                         employer: summary.breakdown.employer || {},
                         breakdown: summary.breakdown,
-                        payment_history: summary.payment_history,
+                        // payment_history: summary.payment_history,
                         ot_amount: summary.salary.overtimeAmount,
                         total_fine: summary.salary.totalFine,
                         fine_amount: summary.salary.totalFine,

@@ -8,12 +8,13 @@ const { getExpDateByItem, convertStock } = require("./functions/helperFunction")
 const { updateItemCurrentStock } = require("./functions/inventoryFunctions");
 const { fixDecimals, fixNum, fixQty, parseDate, formatDateTime, initializeCompanySettings, initializeCompanyRoles } = require("./functions/commonFunctions");
 const { constants, ENTITIES } = require("./constants");
-const { getCompanySetting,clearCompanyCache, getCompanySubscription, clearCompanySubscriptionCache, clearAllCompanySubscriptionCache, reloadCompanyCache, reloadRoutePermissions, getRoutePermissionId, updateSubscriptionCache, reloadCompanySubscriptionCache, reloadCompanySettingsCache } = require("./cache");
+const { getCompanySetting,clearCompanyCache, clearAllCompaniesCache, getCompanySubscription, clearCompanySubscriptionCache, clearAllCompanySubscriptionCache, reloadCompanyCache, reloadRoutePermissions, getRoutePermissionId, updateSubscriptionCache, reloadCompanySubscriptionCache, reloadCompanySettingsCache } = require("./cache");
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
 const { logActivity, logQuery, logError, writeLogToFile, archiveAndCleanupLogs } = require("./functions/logFunctions");
 const  otpService = require("./otpService");
 const { Err, fail } = require("./Err");
 const { getContext } = require("../utils/requestContext");
+const whatsappService = require("./whatsappService");
 
   module.exports = {
     sequelize,
@@ -49,6 +50,7 @@ const { getContext } = require("../utils/requestContext");
     getCompanySetting,
     reloadCompanySettingsCache,
     clearCompanyCache,
+    clearAllCompaniesCache,
     getCompanySubscription,
     reloadCompanySubscriptionCache,
     clearCompanySubscriptionCache,
@@ -59,7 +61,7 @@ const { getContext } = require("../utils/requestContext");
     getRoutePermissionId,
     otpService,
     tokenHelper: require("./tokenHelper"),
-    whatsappService: require("./whatsappService"),
+    whatsappService,
     Err,
     fail
 };

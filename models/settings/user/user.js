@@ -46,7 +46,7 @@ module.exports = (sequelize, DataTypes) => {
         user_id: sequelize.col("User.id"),
         role_id: sequelize.col("User.role_id"),
       },
-      as: "ComapanyRole",
+      as: "CompanyRole",
       constraints: false,
     });
     User.belongsTo(models.Employee, {

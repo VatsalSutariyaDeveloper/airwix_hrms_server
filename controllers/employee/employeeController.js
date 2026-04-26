@@ -29,7 +29,9 @@ const {
     DeviceMaster,
     OutDutyRequest,
     CompanyMaster,
-    Organization
+    Organization,
+    BranchMaster,
+    LeaveRequest
 } = require("../../models");
 
 const {
@@ -1570,162 +1572,162 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
  * 3. Sends image to Python to get the Face Vector.
  * 4. Updates Employee record with new Profile Image AND Face Vector.
  */
-exports.registerFace = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { id } = req.body;
-        const { branch_id, company_id } = req.user;
+// exports.registerFace = async (req, res) => {
+//     const transaction = await sequelize.transaction();
+//     try {
+//         const { id } = req.body;
+//         const { branch_id, company_id } = req.user;
 
-        if (!branch_id) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
-        }
+//         if (!branch_id) {
+//             await transaction.rollback();
+//             return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
+//         }
 
-        const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
+//         const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
 
-        if(req.user.access == "attendance device"){
-            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
-            if (!device) {
-                await transaction.rollback();
-                return res.status(401).json({
-                    success: false,
-                    error: "UNAUTHORIZED",
-                    message: "Device not Exist."
-                });
-            }
-        }
+//         if(req.user.access == "attendance"){
+//             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
+//             if (!device) {
+//                 await transaction.rollback();
+//                 return res.status(401).json({
+//                     success: false,
+//                     error: "UNAUTHORIZED",
+//                     message: "Device not Exist."
+//                 });
+//             }
+//         }
 
-        // Check if image file exists
-        if (!req.files || (!req.files.image && !req.files['image'])) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
-        }
+//         // Check if image file exists
+//         if (!req.files || (!req.files.image && !req.files['image'])) {
+//             await transaction.rollback();
+//             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+//         }
 
-        const employee = await commonQuery.findOneRecord(Employee, {
-            id,
-            ...punchWhere,
-            status: STATUS.ACTIVE
-        }, {}, null, false, {});
-        if (!employee) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND);
-        }
+//         const employee = await commonQuery.findOneRecord(Employee, {
+//             id,
+//             ...punchWhere,
+//             status: STATUS.ACTIVE
+//         }, {}, null, false, {});
+//         if (!employee) {
+//             await transaction.rollback();
+//             return res.error(constants.NOT_FOUND);
+//         }
 
-        // 1. Save File to Disk (Permanent Profile Image)
-        // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/employee/images/'
-        const savedFiles = await uploadFile(
-            req,
-            res,
-            constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
-            transaction,
-            employee.profile_image     // ✅ Delete old image if exists in IMG_FOLDER
-        );
+//         // 1. Save File to Disk (Permanent Profile Image)
+//         // We use EMPLOYEE_IMG_FOLDER to store it in 'uploads/employee/images/'
+//         const savedFiles = await uploadFile(
+//             req,
+//             res,
+//             constants.EMPLOYEE_IMG_FOLDER, // ✅ Save to User Images folder
+//             transaction,
+//             employee.profile_image     // ✅ Delete old image if exists in IMG_FOLDER
+//         );
 
-        const filename = savedFiles.image;
+//         const filename = savedFiles.image;
 
-        if (!filename) {
-            await transaction.rollback();
-            return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
-        }
+//         if (!filename) {
+//             await transaction.rollback();
+//             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+//         }
 
-        // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
-        // In case it was previously uploaded via the general update API.
-        if (employee.profile_image) {
-            await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
-        }
+//         // 1.1 Cleanup Old Image from alternative folder (DOC_FOLDER) 
+//         // In case it was previously uploaded via the general update API.
+//         if (employee.profile_image) {
+//             await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
+//         }
 
-        // 2. Send to Python to get Face Embedding
-        // We read the file we just saved to ensure Python sees exactly what is on disk
-        const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+//         // 2. Send to Python to get Face Embedding
+//         // We read the file we just saved to ensure Python sees exactly what is on disk
+//         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
 
-        let faceDescriptor;
-        try {
-            const fileBuffer = fs.readFileSync(fullFilePath);
+//         let faceDescriptor;
+//         try {
+//             const fileBuffer = fs.readFileSync(fullFilePath);
 
-            // const formData = new FormData();
-            // formData.append('image', fileBuffer, filename);
-            // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
-            //     headers: { ...formData.getHeaders() }
-            // });
+//             // const formData = new FormData();
+//             // formData.append('image', fileBuffer, filename);
+//             // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
+//             //     headers: { ...formData.getHeaders() }
+//             // });
 
-            //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
-            const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
-                headers: { 'Content-Type': 'application/octet-stream' }
-            });            
+//             //for fast python service which accepts raw buffer instead of form data to reduce overhead and latency
+//             const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, fileBuffer, {
+//                 headers: { 'Content-Type': 'application/octet-stream' }
+//             });            
 
-            if (aiResponse.data.status) {
-                faceDescriptor = aiResponse.data.embedding;
-            } else {
-                throw new Error(aiResponse.data.message);
-            }
+//             if (aiResponse.data.status) {
+//                 faceDescriptor = aiResponse.data.embedding;
+//             } else {
+//                 throw new Error(aiResponse.data.message);
+//             }
 
-            // 2.1 Unique Face Check
-            const threshold = process.env.FACE_MATCH_THRESHOLD || 0.4;
-            const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
-                status: 0,
-                face_descriptor: { [Op.ne]: null },
-                id: { [Op.ne]: id } 
-            }, {
-                attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
-                raw: true
-            }, null, { company_id: true });
+//             // 2.1 Unique Face Check
+//             const threshold = process.env.FACE_MATCH_THRESHOLD || 0.4;
+//             const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
+//                 status: 0,
+//                 face_descriptor: { [Op.ne]: null },
+//                 id: { [Op.ne]: id } 
+//             }, {
+//                 attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+//                 raw: true
+//             }, null, { company_id: true });
 
-            for (const emp of employeesWithFaces) {
-                let storedVector = emp.face_descriptor;
-                if (typeof storedVector === 'string') {
-                    try {
-                        storedVector = JSON.parse(storedVector);
-                    } catch (e) { continue; }
-                }
-                if (!Array.isArray(storedVector)) continue;
+//             for (const emp of employeesWithFaces) {
+//                 let storedVector = emp.face_descriptor;
+//                 if (typeof storedVector === 'string') {
+//                     try {
+//                         storedVector = JSON.parse(storedVector);
+//                     } catch (e) { continue; }
+//                 }
+//                 if (!Array.isArray(storedVector)) continue;
 
-                const dist = calculateCosineDistance(faceDescriptor, storedVector);
-                if (dist < threshold) {
-                    const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
-                    const branchName = branch?.branch_name || "N/A";
+//                 const dist = calculateCosineDistance(faceDescriptor, storedVector);
+//                 if (dist < threshold) {
+//                     const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
+//                     const branchName = branch?.branch_name || "N/A";
                     
-                    await transaction.rollback();
-                    // Clean up the uploaded file since the process failed validation
-                    try { fs.unlinkSync(fullFilePath); } catch (e) { }
+//                     await transaction.rollback();
+//                     // Clean up the uploaded file since the process failed validation
+//                     try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
-                    return res.error(constants.VALIDATION_ERROR, { 
-                        message: `${emp.first_name} already exist in ${branchName}` 
-                    });
-                }
-            }
-        } catch (aiError) {
-            if (!transaction.finished) await transaction.rollback();
-            // Optional: Delete the file we just wrote since the process failed
-            try { fs.unlinkSync(fullFilePath); } catch (e) { }
+//                     return res.error(constants.VALIDATION_ERROR, { 
+//                         message: `${emp.first_name} already exist in ${branchName}` 
+//                     });
+//                 }
+//             }
+//         } catch (aiError) {
+//             if (!transaction.finished) await transaction.rollback();
+//             // Optional: Delete the file we just wrote since the process failed
+//             try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
-            console.error("AI Service Error:", aiError.message);
-            writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
+//             console.error("AI Service Error:", aiError.message);
+//             writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
             
-            const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
-            return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
-        }
+//             const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
+//             return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
+//         }
 
-        // 3. Update Employee Record
-        // - Updates 'profile_image' (Visible in App/Admin)
-        // - Updates 'face_descriptor' (Used for AI Matching)
-        await employee.update({
-            profile_image: filename,
-            face_descriptor: faceDescriptor
-        }, { transaction });
+//         // 3. Update Employee Record
+//         // - Updates 'profile_image' (Visible in App/Admin)
+//         // - Updates 'face_descriptor' (Used for AI Matching)
+//         await employee.update({
+//             profile_image: filename,
+//             face_descriptor: faceDescriptor
+//         }, { transaction });
 
-        await transaction.commit();
+//         await transaction.commit();
 
-        writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS] ID: ${id}, Filename: ${filename}`);
+//         writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS] ID: ${id}, Filename: ${filename}`);
 
-        return res.success("Face Registered & Profile Picture Updated", {
-            image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
-        });
+//         return res.success("Face Registered & Profile Picture Updated", {
+//             image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
+//         });
 
-    } catch (err) {
-        if (!transaction.finished) await transaction.rollback();
-        return handleError(err, res, req);
-    }
-};
+//     } catch (err) {
+//         if (!transaction.finished) await transaction.rollback();
+//         return handleError(err, res, req);
+//     }
+// };
 /**
  * Face Punch (Attendance)
  * - Uses 'uploadFile' utility to save to 'uploads/attendance/'
@@ -1739,7 +1741,6 @@ exports.facePunch = async (req, res) => {
 
         const time = now.toTimeString().split(' ')[0];
 
-        console.log("start time",time)
         const timings = { 
             ai: 0, 
             db: 0, 
@@ -1748,7 +1749,7 @@ exports.facePunch = async (req, res) => {
             total: 0 
         };
 
-        if(req.user.access == "attendance device"){
+        if(req.user.access == "attendance"){
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
             if (!device) {
                 return res.status(401).json({
@@ -1766,7 +1767,6 @@ exports.facePunch = async (req, res) => {
 
         const imageBuffer = files[0].buffer;
         const originalName = files[0].originalname;
-        debugLog("Punch", `Image Size: ${imageBuffer.length} bytes`);
 
         // 🚀 PARALLEL TASK 1: Call AI Service (Optimized with Raw Buffer)
         const getEmbeddingTask = (async () => {
@@ -1775,7 +1775,6 @@ exports.facePunch = async (req, res) => {
                 const formData = new FormData();
                 formData.append('image', imageBuffer, originalName);
 
-                debugLog("AI-Call", "Sending to Python...");
                 // const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/generate-embedding`, formData, {
                 //     headers: { ...formData.getHeaders() }
                 // });
@@ -1792,12 +1791,6 @@ exports.facePunch = async (req, res) => {
                     throw new Error(aiResponse.data.message);
                 }
             } catch (error) {
-                const rawError = error.response?.data?.message || error.message;
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time",time)
-                console.error("❌ AI Service Failed:", rawError);
-                writeLogToFile('face_recognition.log', `❌ [AI Service Error] ${rawError}`);
-                
                 const friendlyMsg = error.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
                 throw new Error(friendlyMsg);
             }
@@ -1823,8 +1816,6 @@ exports.facePunch = async (req, res) => {
             getEmbeddingTask,
             getEmployeesTask
         ]);
-
-        debugLog("DB-Fetch", `Found ${employees.length} active employees with faces`);
 
         // --- MATCHING LOGIC ---
         const matchStart = Date.now();
@@ -1852,7 +1843,6 @@ exports.facePunch = async (req, res) => {
 
         timings.matching = Date.now() - matchStart;
         const matchPercentage = ((1 - minDistance) * 100).toFixed(2);
-        debugLog("Final-Result", `Best: ${bestMatch ? bestMatch.first_name : 'None'} | Score: ${matchPercentage}%`);
 
         // --- VALIDATION & CONDITIONAL FILE SAVING ---
         if (bestMatch && minDistance < (process.env.FACE_MATCH_THRESHOLD || 0.4)) {
@@ -1865,25 +1855,17 @@ exports.facePunch = async (req, res) => {
 
                 const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
                 
-                if (!savedFilename) {
-                    console.error("❌ [Punch] Image saved, but filename not found in response!", savedFiles);
-                    writeLogToFile('face_recognition.log', `❌ [Punch] Image saved, but filename not found in savedFiles object. Matches found but image reference missing.`);
-                } else {
-                    debugLog("Punch", `Saved Image: ${savedFilename}`);
-                    writeLogToFile('face_recognition.log', `🖼️  [Image Saved] Success Image: ${savedFilename} | Path: ${constants.ATTENDANCE_FOLDER}`);
-                }
-
                 // 2. Use the robust punch helper
                 const punchResult = await punch(bestMatch.id, {
                     punch_time: now,
                     image_name: savedFilename,
-                    user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || bestMatch.user_id),
+                    user_id: req.user?.access === 'attendance' ? 0 : (req.user?.id || bestMatch.user_id),
                     company_id: req.user?.company_id || bestMatch.company_id,
                     branch_id: req.user?.branch_id || bestMatch.branch_id,
                     ip_address: req.ip,
                     latitude: req.body.latitude || null,
                     longitude: req.body.longitude || null,
-                    device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
+                    device_id: req.user?.access === 'attendance' ? req.user.id : (req.body.device_id || null),
                     attendance_by: 'face',
                     skipRebuild: true 
                 }, transaction);
@@ -1900,11 +1882,6 @@ exports.facePunch = async (req, res) => {
                 });
 
                 timings.total = Date.now() - startTime;
-                const successMsg = `✅ [Punch Success] ${bestMatch.first_name} (${bestMatch.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
-                console.log(successMsg);
-                writeLogToFile('face_recognition.log', successMsg + ` | AI: ${timings.ai}ms | DB: ${timings.db}ms`);
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time2222",time)
 
                 return res.success(`${bestMatch.first_name}: Punch Success (${matchPercentage}%)`, {
                     employee_name: bestMatch.first_name,
@@ -1915,21 +1892,13 @@ exports.facePunch = async (req, res) => {
                     // timings: timings
                 });
             } catch (error) {
-                const time = now.toTimeString().split(' ')[0];
-                console.log("end time333",time)
-
                 if (transaction && !transaction.finished) await transaction.rollback();
                 console.error("Error creating attendance records:", error);
-                writeLogToFile('face_recognition.log', `❌ [DB Error] Failed to create attendance records: ${error.message}`);
                 return res.error(constants.SERVER_ERROR, { message: error.message || "Failed to create attendance records" });
             }
         } else {
             // 🚀 FAST FAIL: Return error immediately, log in background
             timings.total = Date.now() - startTime;
-            const failMsg = `❌ [Punch Failed] Match: ${matchPercentage}% | Total: ${timings.total}ms | AI: ${timings.ai}ms | DB: ${timings.db}ms`;
-            console.log(failMsg);
-            writeLogToFile('face_recognition.log', failMsg);
-
             return res.error(constants.FACE_NOT_RECOGNIZED, {
                 message: `Face Not Recognized`,
                 match_score: matchPercentage,
@@ -1947,132 +1916,153 @@ exports.facePunch = async (req, res) => {
 };
 
 // ------------------------------------------------ OFFLINE ------------------------------------------------
-// exports.registerFace = async (req, res) => {
-//     const transaction = await sequelize.transaction();
-//     try {
-//         const { id } = req.body;
+exports.registerFace = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const employeeId = req.body.employee_id || req.body.id;
+        const { branch_id, company_id } = req.user;
 
-//         if(req.user.access == "attendance device"){
-//             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
-//             if (!device) {
-//                 return res.status(401).json({
-//                     success: false,
-//                     error: "UNAUTHORIZED",
-//                     message: "Device not Exist."
-//                 });
-//             }
-//         }
+        console.log("--- [Register Face] ---");
+        console.log("req.body:", req.body);
+        console.log("req.files:", req.files ? Object.keys(req.files) : "None");
+        if (!branch_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
+        }
 
-//         // 1. Check if the actual Profile image file exists
-//         if (!req.files || (!req.files.image && !req.files['image'])) {
-//             await transaction.rollback();
-//             return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
-//         }
+        const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
 
-//         // 🚀 2. Grab the pre-calculated Math Vector sent from Flutter
-//         // Make sure your Flutter 'home_repository.dart' appends this as 'face_descriptor' in FormData
-//         const faceDescriptorString = req.body.face_descriptor; 
+        if(req.user.access == "attendance"){
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
+            if (!device) {
+                await transaction.rollback();
+                return res.status(401).json({
+                    success: false,
+                    error: "UNAUTHORIZED",
+                    message: "Device not Exist."
+                });
+            }
+
+            if(!employeeId){
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { message: "Please Select Employee" });
+            }
+        }
+
+        // 1. Check if the actual Profile image file exists
+        if (!req.files || (!req.files.image && !req.files['image'])) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Image is required" });
+        }
+
+        // 🚀 2. Grab the pre-calculated Math Vector sent from Flutter
+        // Make sure your Flutter 'home_repository.dart' appends this as 'face_descriptor' in FormData
+        const faceDescriptorString = req.body.face_descriptor; 
         
-//         if (!faceDescriptorString) {
-//             await transaction.rollback();
-//             return res.error(constants.VALIDATION_ERROR, { message: "Face mathematical vector is missing from app" });
-//         }
+        if (!faceDescriptorString) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Face mathematical vector is missing from app" });
+        }
 
-//         let faceDescriptor;
-//         try {
-//             // Convert the JSON string from Flutter back into an Array of numbers
-//             faceDescriptor = JSON.parse(faceDescriptorString);
-//         } catch (e) {
-//             await transaction.rollback();
-//             return res.error(constants.VALIDATION_ERROR, { message: "Invalid face vector format" });
-//         }
+        let faceDescriptor;
+        try {
+            // Convert the JSON string from Flutter back into an Array of numbers
+            faceDescriptor = JSON.parse(faceDescriptorString);
+        } catch (e) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Invalid face vector format" });
+        }
 
-//         const employee = await commonQuery.findOneRecord(Employee, id);
-//         if (!employee) {
-//             await transaction.rollback();
-//             return res.error(constants.NOT_FOUND);
-//         }
+        const employee = await commonQuery.findOneRecord(Employee, {
+            id: employeeId,
+            ...punchWhere,
+            status: STATUS.ACTIVE
+        }, {}, null, false, {});
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
 
-//         // 3. Save Profile Image File to Disk
-//         const savedFiles = await uploadFile(
-//             req,
-//             res,
-//             constants.EMPLOYEE_IMG_FOLDER, 
-//             transaction,
-//             employee.profile_image     
-//         );
+        // 3. Save Profile Image File to Disk
+        const savedFiles = await uploadFile(
+            req,
+            res,
+            constants.EMPLOYEE_IMG_FOLDER, 
+            transaction,
+            employee.profile_image     
+        );
 
-//         const filename = savedFiles.image;
+        const filename = savedFiles.image;
 
-//         if (!filename) {
-//             await transaction.rollback();
-//             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
-//         }
+        if (!filename) {
+            await transaction.rollback();
+            return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
+        }
 
-//         // Delete old profile picture if it exists
-//         if (employee.profile_image) {
-//             await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
-//         }
+        // Delete old profile picture if it exists
+        if (employee.profile_image) {
+            await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
+        }
 
-//         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+        const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
 
-//         // 4. Unique Face Check (Using standard JS Math, no Python!)
-//         // Note: MobileFaceNet vectors usually need a tighter threshold (like 0.2 to 0.35)
-//         const threshold = process.env.FACE_MATCH_THRESHOLD || 0.35; 
+        // 4. Unique Face Check (Using standard JS Math, no Python!)
+        // Note: MobileFaceNet vectors usually need a tighter threshold (like 0.2 to 0.35)
+        const threshold = process.env.FACE_MATCH_THRESHOLD || 0.35; 
         
-//         const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
-//             status: 0,
-//             face_descriptor: { [Op.ne]: null },
-//             id: { [Op.ne]: id } 
-//         }, {
-//             attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
-//             raw: true
-//         }, null, { company_id: true });
+        const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            face_descriptor: { [Op.ne]: null },
+            id: { [Op.ne]: employeeId } 
+        }, {
+            attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+            raw: true
+        }, null, { company_id: true });
 
-//         for (const emp of employeesWithFaces) {
-//             let storedVector = emp.face_descriptor;
-//             if (typeof storedVector === 'string') {
-//                 try {
-//                     storedVector = JSON.parse(storedVector);
-//                 } catch (e) { continue; }
-//             }
-//             if (!Array.isArray(storedVector)) continue;
+        for (const emp of employeesWithFaces) {
+            let storedVector = emp.face_descriptor;
+            if (typeof storedVector === 'string') {
+                try {
+                    storedVector = JSON.parse(storedVector);
+                } catch (e) { continue; }
+            }
+            if (!Array.isArray(storedVector)) continue;
 
-//             const dist = calculateCosineDistance(faceDescriptor, storedVector);
+            const dist = calculateCosineDistance(faceDescriptor, storedVector);
             
-//             if (dist < threshold) {
-//                 const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
-//                 const branchName = branch?.branch_name || "N/A";
+            if (dist < threshold) {
+                const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
+                const branchName = branch?.branch_name || "N/A";
                 
-//                 await transaction.rollback();
-//                 // Clean up the uploaded file since validation failed
-//                 try { fs.unlinkSync(fullFilePath); } catch (e) { }
+                await transaction.rollback();
+                // Clean up the uploaded file since validation failed
+                try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
-//                 return res.error(constants.VALIDATION_ERROR, { 
-//                     message: `${emp.first_name} already exists in ${branchName}` 
-//                 });
-//             }
-//         }
+                return res.error(constants.VALIDATION_ERROR, { 
+                    message: `${emp.first_name} already exists in ${branchName}` 
+                });
+            }
+        }
 
-//         // 5. Save the new vector directly into the database!
-//         await employee.update({
-//             profile_image: filename,
-//             face_descriptor: faceDescriptor // 🚀 Stores the array directly
-//         }, { transaction });
+        // 5. Save the new vector directly into the database!
+        await employee.update({
+            profile_image: filename,
+            face_descriptor: faceDescriptor // 🚀 Stores the array directly
+        }, { transaction });
 
-//         await transaction.commit();
+        await transaction.commit();
 
-//         writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS_OFFLINE_AI] ID: ${id}, Filename: ${filename}`);
+        writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS_OFFLINE_AI] ID: ${employeeId}, Filename: ${filename}`);
 
-//         return res.success("Face Registered Successfully", {
-//             image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
-//         });
+        return res.success("Face Registered Successfully", {
+            image_url: `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${filename}`
+        });
 
-//     } catch (err) {
-//         if (!transaction.finished) await transaction.rollback();
-//         return handleError(err, res, req);
-//     }
-// };
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
 
 /**
  * Face Punch (Attendance) - OFFLINE FLUTTER VERSION
@@ -2096,7 +2086,7 @@ exports.facePunch = async (req, res) => {
 //             total: 0 
 //         };
 
-//         if (req.user.access == "attendance device") {
+//         if (req.user.access == "attendance") {
 //             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
 //             if (!device) {
 //                 return res.status(401).json({
@@ -2144,13 +2134,13 @@ exports.facePunch = async (req, res) => {
 //             const punchResult = await punch(employee.id, {
 //                 punch_time: new Date(),
 //                 image_name: savedFilename,
-//                 user_id: req.user?.access === 'attendance device' ? 0 : (req.user?.id || employee.user_id),
+//                 user_id: req.user?.access === 'attendance' ? 0 : (req.user?.id || employee.user_id),
 //                 company_id: req.user?.company_id || employee.company_id,
 //                 branch_id: req.user?.branch_id || employee.branch_id,
 //                 ip_address: req.ip,
 //                 latitude: latitude || null,
 //                 longitude: longitude || null,
-//                 device_id: req.user?.access === 'attendance device' ? req.user.id : (device_id || null),
+//                 device_id: req.user?.access === 'attendance' ? req.user.id : (device_id || null),
 //                 attendance_by: 'face',
 //                 skipRebuild: true 
 //             }, transaction);
@@ -2438,7 +2428,7 @@ exports.inviteUser = async (req, res) => {
             setup_link: setupLink,
             user_id: user.id,
             email: user.email,
-            whatsapp_status: whatsappRes.success ? "Sent" : "Failed"
+            whatsapp_status: whatsappRes?.success ? "Sent" : "Failed"
         });
 
     } catch (err) {
@@ -2812,9 +2802,55 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             ];
         }
 
+        const settings = await getCompanySetting(req.user.company_id);
         const employees = await Employee.findAll({
             where,
-            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image'],
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image', 'access_branches', 'company_id', 'branch_id'],
+            include: [
+                {
+                    model: CompanyMaster,
+                    as: 'company',
+                    attributes: ['organization_id']
+                },
+                {
+                    model: EmployeeAttendanceTemplate,
+                    as: 'employeeAttendanceTemplate',
+                    attributes: ['id', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins']
+                },
+                {
+                    model: ShiftTemplate,
+                    as: 'shiftTemplate',
+                    attributes: ['id', 'shift_name', 'start_time', 'end_time', 'is_night_shift', 'punch_in', 'punch_out', 'first_possible_punch_in', 'last_possible_punch_out']
+                },
+                {
+                    model: AttendancePunch,
+                    as: 'attendancePunches',
+                    attributes: ['id', 'punch_time', 'punch_type'],
+                    limit: 10,
+                    order: [['punch_time', 'DESC']],
+                    separate: true
+                },
+                {
+                    model: EmployeeHoliday,
+                    as: 'employeeHolidays',
+                    attributes: ['id', 'name', 'date', 'holiday_type'],
+                    separate: true
+                },
+                {
+                    model: EmployeeWeeklyOff,
+                    as: 'employeeWeeklyOffs',
+                    attributes: ['id', 'day_of_week', 'week_no', 'is_off'],
+                    separate: true
+                },
+                {
+                    model: LeaveRequest,
+                    as: 'leaveRequests',
+                    attributes: ['id', 'start_date', 'end_date', 'approval_status'],
+                    where: { approval_status: 3 }, // 3: APPROVED
+                    required: false,
+                    separate: true
+                }
+            ],
             order: [['first_name', 'ASC']]
         });
 
@@ -2824,10 +2860,34 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             employee_code: emp.employee_code,
             face_descriptor: emp.face_descriptor,
             has_face_descriptor: !!emp.face_descriptor,
-            profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` : null
+            access_branches: emp.access_branches,
+            organization_id: emp.company?.organization_id,
+            company_id: emp.company_id,
+            branch_id: emp.branch_id,
+            profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` : null,
+            
+            // --- VALIDATION DATA ---
+            attendance_template: emp.employeeAttendanceTemplate,
+            assigned_shift: emp.shiftTemplate,
+            recent_punches: emp.attendancePunches || [],
+            holidays: emp.employeeHolidays || [],
+            weekly_offs: emp.employeeWeeklyOffs?.map(w => ({
+                id: w.id,
+                day_of_week: w.day_of_week,
+                day_name: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][w.day_of_week],
+                week_no: w.week_no,
+                is_off: w.is_off
+            })) || [],
+            leaves: emp.leaveRequests || []
         }));
 
-        return res.success("Employee list fetched successfully", { employees: employeeList });
+        return res.success("Employee list fetched successfully", { 
+            employees: employeeList,
+            settings: {
+                company_punch_config: settings.company_punch_config,
+                company_branch_punch_config: settings.company_branch_punch_config
+            }
+        });
 
     } catch (err) {
         return handleError(err, res, req);

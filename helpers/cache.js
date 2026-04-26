@@ -73,6 +73,10 @@ const clearCompanyCache = (company_id) => {
     settingsCache.del(`settings_${Number(company_id)}`);
 };
 
+const clearAllCompaniesCache = () => {
+    settingsCache.flushAll();
+};
+
 
 // ================= SUBSCRIPTION CACHE =================
 const reloadCompanySubscriptionCache = async (company_id) => {
@@ -266,6 +270,7 @@ module.exports = {
     getCompanySetting,
     reloadCompanySettingsCache,
     clearCompanyCache,
+    clearAllCompaniesCache,
 
     getCompanySubscription,
     reloadCompanySubscriptionCache,

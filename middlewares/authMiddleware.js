@@ -74,7 +74,7 @@ async function authMiddleware(req, res, next) {
       is_reporting_manager: decoded.is_reporting_manager,
       is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
-      access: decoded.access || (decoded.role_key ? "employee" : "attendance device")
+      access: decoded.access || (decoded.role_key ? "employee" : "attendance")
     };
 // console.log("req.user",req.user)
     requestContext.run(
@@ -91,7 +91,7 @@ async function authMiddleware(req, res, next) {
         is_reporting_manager: decoded.is_reporting_manager,
         is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
         is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
-        access: decoded.access || (decoded.role_key ? "employee" : "attendance device"),
+        access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
         ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip,
         userAgent: req.headers["user-agent"] || "unknown",
         endpoint: `${req.method} ${req.originalUrl}`
