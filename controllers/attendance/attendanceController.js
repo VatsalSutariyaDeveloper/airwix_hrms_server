@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, ActivityLog } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -41,17 +41,24 @@ exports.attendancePunch = async (req, res) => {
       }
     }
 
+    // --- [FIX] Resolve Device ID for Attendance Devices ---
+    let resolvedDeviceId = req.body.device_id || null;
+    if (req.user?.access === 'attendance') {
+      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
+      resolvedDeviceId = device ? device.id : req.user.id; // Fallback to User ID if not found
+    }
+
     const result = await punch(
       req.body.employee_id, 
       {
       ...req.body,
-      user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
+      user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
       company_id: req.user.company_id,
       branch_id: req.user.branch_id,
       ip_address: req.ip,
       latitude: req.body.latitude || null,
       longitude: req.body.longitude || null,
-      device_id: req.user?.access === 'attendance device' ? req.user.id : (req.body.device_id || null),
+      device_id: resolvedDeviceId,
       image_name: punchImage
     }, t);
     
@@ -76,13 +83,30 @@ exports.syncPunches = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Punches array is required");
     }
 
+    console.log(`[SyncPunches] Received ${punches.length} punches from device/app.`);
+    console.log(`[SyncPunches] User Context: ID=${req.user?.id}, Access=${req.user?.access}, Company=${req.user?.company_id}`);
+
+    // Resolve Device ID once for the entire sync batch
+    let resolvedDeviceId = null;
+    console.log("req.user",req.user)
+    if (req.user?.access === 'attendance') {
+      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
+      resolvedDeviceId = device ? device.id : req.user.id;
+      console.log(`[SyncPunches] Resolved DeviceMaster ID: ${resolvedDeviceId} from User ID: ${req.user.id}`);
+    }
+
     // Sort punches by time to ensure sequential processing (crucial for auto-toggle logic and night shifts)
     const sortedPunches = punches
       .filter(p => p.employee_id && p.punch_time)
       .sort((a, b) => dayjs(a.punch_time).valueOf() - dayjs(b.punch_time).valueOf());
 
+    console.log(`[SyncPunches] After filtering/sorting: ${sortedPunches.length} valid punches to process.`);
+
     const results = [];
     for (const punchData of sortedPunches) {
+      console.log(`\n--- [Sync] Processing Punch: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
+      console.log(`\n--- [Sync] Processing Punch:`,punchData);
+      
       try {
         // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
@@ -94,13 +118,13 @@ exports.syncPunches = async (req, res) => {
           punchData.employee_id,
           {
             ...punchData,
-            user_id: req.user?.access === 'attendance device' ? 0 : req.user.id,
+            user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
             company_id: req.user.company_id,
-            branch_id: punchData.branch_id || req.user.branch_id,
+            branch_id: req.user.branch_id,
             ip_address: punchData.ip_address || req.ip,
             latitude: punchData.latitude || null,
             longitude: punchData.longitude || null,
-            device_id: req.user?.access === 'attendance device' ? req.user.id : (punchData.device_id || null),
+            device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
             bypassGapCheck: true, // Offline punches are already captured, ignore 2-min validation
             skipRebuild: false 
@@ -114,8 +138,32 @@ exports.syncPunches = async (req, res) => {
           punch_id: result.punchId,
           type: result.punchType 
         });
+        console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         // Log the failure for this specific punch but proceed with the sync
+        console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
+        
+        // 🚀 NEW: Store the failed punch attempt in ActivityLog for debugging
+        try {
+          await ActivityLog.create({
+            company_id: req.user.company_id,
+            branch_id: req.user.branch_id,
+            user_id: req.user.id,
+            entity_name: "AttendanceSync",
+            action_type: "ERROR",
+            log_message: `Sync Failed: ${punchErr.message || "Unknown Error"}`,
+            new_data: { 
+              ...punchData, 
+              error: punchErr.message,
+              stack: punchErr.stack
+            },
+            ip_address: req.ip,
+            access_type: "attendance device"
+          }, { transaction: t });
+        } catch (logErr) {
+          console.error("❌ Failed to log sync error to DB:", logErr);
+        }
+
         results.push({ 
           employee_id: punchData.employee_id, 
           punch_time: punchData.punch_time, 
@@ -1197,7 +1245,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    }, t, { comapany_id: true });
+    }, t, { company_id: true });
     const empMap = new Map(employees.map(e => [e.id, e]));
 
     for (const employee_id of employee_ids) {

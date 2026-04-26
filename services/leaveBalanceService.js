@@ -936,7 +936,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 is_encashment: false,
                 status: 0,
                 reason: { [Op.ne]: AUTO_REASON }
-            }, {}, t);
+            }, {}, t, false, {});
 
             // 2. Find existing auto-generated request for this specific date
             const existingAuto = await commonQuery.findOneRecord(LeaveRequest, {
@@ -945,7 +945,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 end_date: date,
                 status: 0,
                 reason: AUTO_REASON
-            }, {}, t);
+            }, {}, t, false, {});
 
             // If a manual request covers this day, we should probably not have an auto-generated one competing.
             if (manualRequest && amount > 0) {
@@ -954,7 +954,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 if (existingAuto) {
                     console.log(`[syncLeaveRecord] Cancelling competing auto-request: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
-                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
+                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t, false, {});
                 }
                 if (!transaction) await t.commit();
                 return null;
@@ -971,7 +971,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 if (existingAuto) {
                     console.log(`[syncLeaveRecord] Cancelling auto-request because amount is 0: #${existingAuto.id}`);
                     await this.adjustLeaveBalance(employeeId, existingAuto.leave_category_id, -existingAuto.total_days, t, date, employee);
-                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t);
+                    await commonQuery.updateRecordById(LeaveRequest, existingAuto.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED, status: 2 }, t, false, {});
                 } 
                 
                 if (manualRequest) {
@@ -986,7 +986,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                         if (manualRequest.start_date === date && manualRequest.end_date === date) {
                             console.log(`[syncLeaveRecord] Cancelling single-day manual request: #${manualRequest.id}`);
                             await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
-                            await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED }, t);
+                            await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED }, t, false, {});
                         } else {
                             // Multi-day request: We can't easily "split" it, but we MUST refund the balance for this day.
                             console.log(`[syncLeaveRecord] Refunding 1 day from multi-day manual request: #${manualRequest.id}`);

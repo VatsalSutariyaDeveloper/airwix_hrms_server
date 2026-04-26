@@ -155,7 +155,7 @@ const runWorker = async () => {
             employee_code: { [Op.in]: employeeCodesInFile },
             company_id,
             status: { [Op.ne]: 2 }
-        }, { attributes: ['id', 'employee_code', 'first_name', 'branch_id'], raw: true }, transaction, { comapany_id: true });
+        }, { attributes: ['id', 'employee_code', 'first_name', 'branch_id'], raw: true }, transaction, { company_id: true });
 
         const employeeMap = new Map();
         existingEmployees.forEach(emp => {

@@ -115,7 +115,6 @@ exports.update = async (req, res) => {
 
         await transaction.commit();
         try {
-            // Reload cache if the helper function exists
             reloadCompanySettingsCache(req.user.company_id);
         } catch (cacheErr) {
             console.error('Error reloading company settings cache:', cacheErr);

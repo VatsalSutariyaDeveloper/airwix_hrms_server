@@ -1,5 +1,5 @@
 const { CompanySettingsMaster, CompanyConfigration, CompanyMaster } = require("../../models");
-const { validateRequest, commonQuery, handleError, sequelize, constants } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, sequelize, constants, clearAllCompaniesCache } = require("../../helpers");
 
 const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL', 'PAYROLL']; // Add your groups
 
@@ -101,6 +101,7 @@ exports.create = async (req, res) => {
         await syncSettingsToAllCompanies(transaction);
 
         await transaction.commit();
+        clearAllCompaniesCache();
         return res.success(constants.COMPANY_SETTING_MASTER_CREATED);
 
     } catch (err) {
@@ -183,6 +184,7 @@ exports.update = async (req, res) => {
 
     if (!result) return res.error(constants.COMPANY_SETTING_MASTER_NOT_FOUND);
 
+    clearAllCompaniesCache();
     return res.success(constants.COMPANY_SETTING_MASTER_UPDATED);
 
   } catch (err) {
@@ -218,6 +220,7 @@ exports.delete = async (req, res) => {
       return res.error(constants.ALREADY_DELETED);
     }
     await transaction.commit();
+    clearAllCompaniesCache();
     return res.success(constants.COMPANY_SETTING_MASTER_DELETED);
   } catch (err) {
     await transaction.rollback();
