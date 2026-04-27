@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
+const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField, StateMaster, CountryMaster } = require("../../models");
 const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService, uploadFile, writeLogToFile } = require("../../helpers");
 const { generateCustomFieldImageUrls, handleCustomFieldImages, handleDetailAttachments } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
@@ -147,6 +147,21 @@ exports.getDetailsByToken = async (req, res) => {
             }
         });
 
+        // Process experience_details to add full attachment URLs
+        if (employee.experience_details && Array.isArray(employee.experience_details)) {
+            employee.experience_details = employee.experience_details.map(detail => {
+                const updatedDetail = { ...detail };
+                if (updatedDetail.attachments && Array.isArray(updatedDetail.attachments)) {
+                    updatedDetail.attachments = updatedDetail.attachments.map(attachment => {
+                        if (attachment && !attachment.startsWith('http')) {
+                            return `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${attachment.replace(/^\/+/, '')}`;
+                        }
+                        return attachment;
+                    });
+                }
+                return updatedDetail;
+            });
+        }
 
         const customFields = await CustomField.findAll({
             where: {
@@ -621,6 +636,40 @@ exports.getOnboardingById = async (req, res) => {
                 }
                 return updatedDetail;
             });
+        }
+
+        // Fetch state and country names for permanent address
+        if (employee.permanent_state_id) {
+            const permanentState = await StateMaster.findOne({
+                where: { id: employee.permanent_state_id },
+                attributes: ['state_name']
+            });
+            employee.permanent_state_name = permanentState ? permanentState.state_name : null;
+        }
+
+        if (employee.permanent_country_id) {
+            const permanentCountry = await CountryMaster.findOne({
+                where: { id: employee.permanent_country_id },
+                attributes: ['country_name']
+            });
+            employee.permanent_country_name = permanentCountry ? permanentCountry.country_name : null;
+        }
+
+        // Fetch state and country names for present address
+        if (employee.present_state_id) {
+            const presentState = await StateMaster.findOne({
+                where: { id: employee.present_state_id },
+                attributes: ['state_name']
+            });
+            employee.present_state_name = presentState ? presentState.state_name : null;
+        }
+
+        if (employee.present_country_id) {
+            const presentCountry = await CountryMaster.findOne({
+                where: { id: employee.present_country_id },
+                attributes: ['country_name']
+            });
+            employee.present_country_name = presentCountry ? presentCountry.country_name : null;
         }
 
         const response = {
