@@ -118,11 +118,11 @@ exports.getAttendanceReport = async (req, res) => {
 
     const outDutyMap = new Map();
     outDuties.forEach(od => {
-      const currDate = dayjs(od.start_date);
+      let currDate = dayjs(od.start_date);
       const limitDate = dayjs(od.end_date);
       while(currDate.isBefore(limitDate) || currDate.isSame(limitDate, 'day')) {
          outDutyMap.set(`${od.employee_id}_${currDate.format('YYYY-MM-DD')}`, true);
-         currDate.add(1, 'day');
+         currDate = currDate.add(1, 'day');
       }
     });
 

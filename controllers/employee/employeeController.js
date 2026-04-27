@@ -31,7 +31,8 @@ const {
     CompanyMaster,
     Organization,
     BranchMaster,
-    LeaveRequest
+    LeaveRequest,
+    CanteenAttendance
 } = require("../../models");
 
 const {
@@ -2849,6 +2850,17 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                     where: { approval_status: 3 }, // 3: APPROVED
                     required: false,
                     separate: true
+                },
+                {
+                    model: CanteenAttendance,
+                    as: 'canteenAttendances',
+                    attributes: ['id'],
+                    where: {
+                        date: dayjs().format('YYYY-MM-DD'),
+                        status: 0
+                    },
+                    required: false,
+                    separate: true
                 }
             ],
             order: [['first_name', 'ASC']]
@@ -2878,7 +2890,8 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 week_no: w.week_no,
                 is_off: w.is_off
             })) || [],
-            leaves: emp.leaveRequests || []
+            leaves: emp.leaveRequests || [],
+            canteen_attendance_count: emp.canteenAttendances?.length || 0
         }));
 
         return res.success("Employee list fetched successfully", { 
