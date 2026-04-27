@@ -880,7 +880,7 @@ exports.getProfile = async (req, res) => {
             },
             additional_details: {
                 professional_reference: plainRecord.professional_reference || [],
-                custom_fields: plainRecord.custom_fields || {}
+                custom_fields: plainRecord.custom_fields || []
             },
         };
 

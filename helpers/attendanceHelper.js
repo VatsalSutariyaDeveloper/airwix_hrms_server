@@ -893,12 +893,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Determine if today is a half day based on sessions
     let isHalfDay = false;
+    let currentSession = 0;
     if (approvedLeave.start_date === date && approvedLeave.start_session !== 0) {
       isHalfDay = true;
+      currentSession = approvedLeave.start_session;
     } else if (approvedLeave.end_date === date && approvedLeave.end_session !== 0) {
       isHalfDay = true;
+      currentSession = approvedLeave.end_session;
     } else if (parseFloat(approvedLeave.total_days) < 1 && approvedLeave.start_date === approvedLeave.end_date) {
       isHalfDay = true;
+      currentSession = 1; // Default to Session 1 if unknown but < 1 day
     }
 
     // Auto Attendance Status Mapping
@@ -906,6 +910,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const overrideStatus = rules.auto_attendance_status;
     if (overrideStatus && overrideStatus !== 'default') {
       finalStatus = parseInt(overrideStatus);
+    }
+
+    // Store session in meta for shift adjustment later
+    if (isHalfDay) {
+        meta.leave_is_half_day = true;
+        meta.leave_session = currentSession;
     }
 
 
@@ -1172,6 +1182,35 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shiftStart = dayjs(`${date} ${shift.start_time}`);
     shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
+
+    // [User Request] Handle Half-Day Sessions (Shift adjustment for Leaves)
+    if (meta.leave_is_half_day && meta.leave_session) {
+      const duration = shiftEnd.diff(shiftStart, 'minute');
+      const halfDuration = Math.round(duration / 2);
+
+      if (meta.leave_session == 1) { // Session 1 Leave (First Half) -> Expected Work is Second Half
+        shiftStart = shiftStart.add(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 1 Leave. New Start: ${shiftStart.format('HH:mm')}`);
+      } else if (meta.leave_session == 2) { // Session 2 Leave (Second Half) -> Expected Work is First Half
+        shiftEnd = shiftEnd.subtract(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 2 Leave. New End: ${shiftEnd.format('HH:mm')}`);
+      }
+    }
+
+    // Also handle Out Duty Sessions if it's a half-day
+    if (isOutDutyHalfDay && approvedOutDuty) {
+      const odSession = (approvedOutDuty.start_date === date) ? approvedOutDuty.start_session : approvedOutDuty.end_session;
+      const duration = shiftEnd.diff(shiftStart, 'minute');
+      const halfDuration = Math.round(duration / 2);
+
+      if (odSession == 1) { // Session 1 Out Duty -> Expected Work (in office) is Second Half
+        shiftStart = shiftStart.add(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 1 Out Duty. New Start: ${shiftStart.format('HH:mm')}`);
+      } else if (odSession == 2) { // Session 2 Out Duty -> Expected Work (in office) is First Half
+        shiftEnd = shiftEnd.subtract(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 2 Out Duty. New End: ${shiftEnd.format('HH:mm')}`);
+      }
+    }
   }
 
   // 1. Calculate Gross Minutes in each region (Shift, Early OT, Late OT)
