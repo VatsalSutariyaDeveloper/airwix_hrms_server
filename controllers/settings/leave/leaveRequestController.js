@@ -132,6 +132,12 @@ exports.create = async (req, res) => {
             } else if (rules.limit_window === 'yearly') {
                 startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
                 endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
+            } else if (rules.limit_window.endsWith('_month')) {
+                const months = parseInt(rules.limit_window.split('_')[0]);
+                if (!isNaN(months) && months > 0) {
+                    startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+                }
             }
 
             if (startDateRange && endDateRange) {
@@ -148,7 +154,7 @@ exports.create = async (req, res) => {
 
                 if ((totalUsed + total_days) > rules.max_total_days) {
                     await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${rules.max_total_days} days allowed per ${rules.limit_window}. Already used: ${totalUsed} days.` });
+                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${rules.max_total_days} days allowed per ${rules.limit_window.replace('_', ' ')}. Already used: ${totalUsed} days.` });
                 }
             }
         }

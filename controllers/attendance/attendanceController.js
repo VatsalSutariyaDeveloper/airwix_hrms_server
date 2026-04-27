@@ -43,7 +43,7 @@ exports.attendancePunch = async (req, res) => {
 
     // --- [FIX] Resolve Device ID for Attendance Devices ---
     let resolvedDeviceId = req.body.device_id || null;
-    if (req.user?.access === 'attendance') {
+    if (['attendance', 'canteen'].includes(req.user?.access)) {
       const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
       resolvedDeviceId = device ? device.id : req.user.id; // Fallback to User ID if not found
     }
@@ -59,7 +59,8 @@ exports.attendancePunch = async (req, res) => {
       latitude: req.body.latitude || null,
       longitude: req.body.longitude || null,
       device_id: resolvedDeviceId,
-      image_name: punchImage
+      image_name: punchImage,
+      access: req.user.access
     }, t);
     
     await t.commit();
@@ -89,7 +90,7 @@ exports.syncPunches = async (req, res) => {
     // Resolve Device ID once for the entire sync batch
     let resolvedDeviceId = null;
     console.log("req.user",req.user)
-    if (req.user?.access === 'attendance') {
+    if (['attendance', 'canteen'].includes(req.user?.access)) {
       const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
       resolvedDeviceId = device ? device.id : req.user.id;
       console.log(`[SyncPunches] Resolved DeviceMaster ID: ${resolvedDeviceId} from User ID: ${req.user.id}`);
@@ -127,7 +128,8 @@ exports.syncPunches = async (req, res) => {
             device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
             bypassGapCheck: true, // Offline punches are already captured, ignore 2-min validation
-            skipRebuild: false 
+            skipRebuild: false,
+            access: req.user.access
           },
           t
         );

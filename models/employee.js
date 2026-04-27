@@ -146,6 +146,10 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.JSONB,
             defaultValue: []
         },
+        family_details: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
         face_descriptor: {
             type: DataTypes.JSONB,
             defaultValue: null,

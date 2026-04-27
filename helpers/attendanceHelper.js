@@ -148,8 +148,8 @@ async function punch(employeeId, meta, transaction = null) {
 
   // --- BRANCH ACCESS CHECK ---
   const settings = await getCompanySetting(meta.device_company_id);
-  const company_punch_config = settings.company_punch_config === false || settings.company_punch_config === "false";
-  const company_branch_punch_config = settings.company_branch_punch_config === false || settings.company_branch_punch_config === "false";
+  const company_punch_config = settings.company_punch_config === true || settings.company_punch_config === "true";
+  const company_branch_punch_config = settings.company_branch_punch_config === true || settings.company_branch_punch_config === "true";
 
   if (company_punch_config) {
     // 🚀 ORGANIZATION WIDE: Check if device company belongs to the same organization
@@ -184,7 +184,44 @@ async function punch(employeeId, meta, transaction = null) {
     }
   }
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
-  
+ 
+  // --- CANTEEN ATTENDANCE LOGIC ---
+  let isCanteenPunch = false;
+  if (meta.device_id) {
+    const device = await commonQuery.findOneRecord(DeviceMaster, { id: meta.device_id }, {}, transaction, false, {});
+    if (device && device.device_type === 1) { // 1: Canteen
+      isCanteenPunch = true;
+    }
+  }
+
+  // Also check if the user performing the sync/punch has canteen access
+  if (meta.access === 'canteen') {
+    isCanteenPunch = true;
+  }
+
+  if (isCanteenPunch) {
+    // [User Request] Ensure only one canteen attendance per day
+    const existingCanteen = await commonQuery.findOneRecord(CanteenAttendance, {
+      employee_id: employeeId,
+      date: targetDayDate,
+      status: 0
+    }, {}, transaction, false, {});
+
+    if (existingCanteen) {
+      throw new Err("Canteen attendance already marked for today");
+    }
+
+    await commonQuery.createRecord(CanteenAttendance, {
+      employee_id: employeeId,
+      date: targetDayDate,
+      status: 0, // PRESENT
+      company_id: meta.company_id || employee.company_id,
+      branch_id: meta.branch_id || employee.branch_id,
+      user_id: meta.user_id || 0
+    }, transaction);
+    return { punchType: 'CanteenPunch', punchTime: now, punchId: 'N/A', targetDayDate };
+  }
+
   console.log(`[Punch] Looking for last punch in company: ${meta.company_id || employee.company_id}`);
   console.log(`[Punch] Proceeding to lastPunchGlobal query...`);
   const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
@@ -206,7 +243,6 @@ async function punch(employeeId, meta, transaction = null) {
   // 1️⃣.2 Determine punch type (IN / OUT) dynamically
   let punchType = meta.punch_type;
   let lastInDay = null; // Store for date alignment
-console.log("punchType",punchType)
   if (!punchType) {
     if (lastPunchGlobal && lastPunchGlobal.punch_type === "IN") {
       // 🚀 Fetch the day record of the last IN to align the cutoff with the actual shift
@@ -215,7 +251,6 @@ console.log("punchType",punchType)
         id: lastPunchGlobal.day_id,
         company_id: { [Op.in]: allowedCompanyIds }
       }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
-      console.log("lastInDay",lastInDay)
       // 🚀 Rule: Calculate cutoff based on the FIRST "IN" of this logical day
       const firstIn = await commonQuery.findOneRecord(AttendancePunch, {
         day_id: lastPunchGlobal.day_id,
@@ -237,7 +272,6 @@ console.log("punchType",punchType)
           const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
             attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
           }, transaction, false, {});
-          console.log("lastShift",lastShift)
           if (lastShift) {
             let shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
 
@@ -511,24 +545,6 @@ console.log("punchType",punchType)
     ...cleanMeta,
   }, transaction, {});
 
-  // --- CANTEEN ATTENDANCE LOGIC ---
-  if (meta.device_id) {
-    const device = await commonQuery.findOneRecord(DeviceMaster, { id: meta.device_id }, {}, transaction, false, {});
-    if (device && device.device_type === 1) { // 1: Canteen
-        // Check if already marked for today to avoid duplicates if needed, 
-        // but typically canteen can have multiple punches (different meals). 
-        // For now, following "mark present".
-        await commonQuery.createRecord(CanteenAttendance, {
-            employee_id: employeeId,
-            date: targetDayDate,
-            status: 0, // PRESENT
-            company_id: meta.company_id || employee.company_id,
-            branch_id: meta.branch_id || employee.branch_id,
-            user_id: meta.user_id || 0
-        }, transaction);
-    }
-  }
-
   // 4.1 Send Notification
   try {
     const { User: UserModel } = require("../models");
@@ -552,7 +568,7 @@ console.log("punchType",punchType)
 
   // 5️⃣ Recalculate day attendance
   if (!meta.skipRebuild) {
-    await rebuildAttendanceDay(employeeId, targetDayDate, { ...meta, shift_id: shift ? shift.id : null }, transaction);
+    await rebuildAttendanceDay(employeeId, targetDayDate, { ...meta, forceRebuild: true, shift_id: shift ? shift.id : null }, transaction);
   }
 
   return { punchType, punchTime: now, punchId: newPunch.id, targetDayDate };
@@ -877,12 +893,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Determine if today is a half day based on sessions
     let isHalfDay = false;
+    let currentSession = 0;
     if (approvedLeave.start_date === date && approvedLeave.start_session !== 0) {
       isHalfDay = true;
+      currentSession = approvedLeave.start_session;
     } else if (approvedLeave.end_date === date && approvedLeave.end_session !== 0) {
       isHalfDay = true;
+      currentSession = approvedLeave.end_session;
     } else if (parseFloat(approvedLeave.total_days) < 1 && approvedLeave.start_date === approvedLeave.end_date) {
       isHalfDay = true;
+      currentSession = 1; // Default to Session 1 if unknown but < 1 day
     }
 
     // Auto Attendance Status Mapping
@@ -890,6 +910,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const overrideStatus = rules.auto_attendance_status;
     if (overrideStatus && overrideStatus !== 'default') {
       finalStatus = parseInt(overrideStatus);
+    }
+
+    // Store session in meta for shift adjustment later
+    if (isHalfDay) {
+        meta.leave_is_half_day = true;
+        meta.leave_session = currentSession;
     }
 
 
@@ -1139,8 +1165,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // --- REFACTORED WORKED TIME & BREAK CALCULATION ---
-  const firstIn = punches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
-  const lastOut = [...punches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
+  const firstIn = allDayPunches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
+  const lastOut = [...allDayPunches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
 
   let shiftWorkedMins = 0;
   let earlyOTMins = 0;
@@ -1156,6 +1182,35 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shiftStart = dayjs(`${date} ${shift.start_time}`);
     shiftEnd = dayjs(`${date} ${shift.end_time}`);
     if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
+
+    // [User Request] Handle Half-Day Sessions (Shift adjustment for Leaves)
+    if (meta.leave_is_half_day && meta.leave_session) {
+      const duration = shiftEnd.diff(shiftStart, 'minute');
+      const halfDuration = Math.round(duration / 2);
+
+      if (meta.leave_session == 1) { // Session 1 Leave (First Half) -> Expected Work is Second Half
+        shiftStart = shiftStart.add(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 1 Leave. New Start: ${shiftStart.format('HH:mm')}`);
+      } else if (meta.leave_session == 2) { // Session 2 Leave (Second Half) -> Expected Work is First Half
+        shiftEnd = shiftEnd.subtract(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 2 Leave. New End: ${shiftEnd.format('HH:mm')}`);
+      }
+    }
+
+    // Also handle Out Duty Sessions if it's a half-day
+    if (isOutDutyHalfDay && approvedOutDuty) {
+      const odSession = (approvedOutDuty.start_date === date) ? approvedOutDuty.start_session : approvedOutDuty.end_session;
+      const duration = shiftEnd.diff(shiftStart, 'minute');
+      const halfDuration = Math.round(duration / 2);
+
+      if (odSession == 1) { // Session 1 Out Duty -> Expected Work (in office) is Second Half
+        shiftStart = shiftStart.add(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 1 Out Duty. New Start: ${shiftStart.format('HH:mm')}`);
+      } else if (odSession == 2) { // Session 2 Out Duty -> Expected Work (in office) is First Half
+        shiftEnd = shiftEnd.subtract(halfDuration, 'minute');
+        console.log(`[Rebuild] Adjusting shift for Session 2 Out Duty. New End: ${shiftEnd.format('HH:mm')}`);
+      }
+    }
   }
 
   // 1. Calculate Gross Minutes in each region (Shift, Early OT, Late OT)
@@ -2225,7 +2280,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const isCronRun = (meta.user_id === 0 || meta.user_id === undefined);
     const isSpecialStatus = [5, 9].includes(parseInt(existingDay2.status));
 
-    if (isCronRun && !isSpecialStatus) {
+    if (isCronRun && !isSpecialStatus && !meta.forceRebuild) {
       console.log(`[Rebuild] Skipping automated rebuild for finalized record ${existingDay2.id} (Status: ${existingDay2.status}) for ${employeeId} on ${date}`);
       return;
     }
@@ -2435,7 +2490,7 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
     await rebuildAttendanceDay(
       employeeId,
       date,
-      { ...meta, shift_id: shift ? shift.id : meta.shift_id, preserveStatus, isHoliday: meta.isHoliday },
+      { ...meta, forceRebuild: true, shift_id: shift ? shift.id : meta.shift_id, preserveStatus, isHoliday: meta.isHoliday },
       transaction
     );
   }

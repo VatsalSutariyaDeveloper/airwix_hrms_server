@@ -661,7 +661,7 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
     const company_branch_punch_config = settings.company_branch_punch_config;
     const company_punch_config = settings.company_punch_config;
     let where = { status: 0 };
-    if (company_punch_config === false || company_punch_config === "false") {
+    if (company_punch_config === true || company_punch_config === "true") {
         const company = await commonQuery.findOneRecord(CompanyMaster, { id: company_id }, { attributes: ["organization_id"] }, null, false, {});
         if (company && company.organization_id) {
             const orgCompanies = await commonQuery.findAllRecords(CompanyMaster, { organization_id: company.organization_id, status: 0 }, { attributes: ["id"] }, null, {});
@@ -670,7 +670,7 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
         } else {
             where.company_id = company_id;
         }
-    } else if (company_branch_punch_config === false || company_branch_punch_config === "false") {
+    } else if (company_branch_punch_config === true || company_branch_punch_config === "true") {
         where.company_id = company_id;
     } else {
         where.company_id = company_id;

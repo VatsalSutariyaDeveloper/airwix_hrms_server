@@ -1,19 +1,19 @@
 const crypto = require('crypto');
-const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField } = require("../../models");
+const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField, StateMaster, CountryMaster } = require("../../models");
 const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService, uploadFile, writeLogToFile } = require("../../helpers");
-const { generateCustomFieldImageUrls, handleCustomFieldImages } = require("../../helpers/customFieldImageHandler");
+const { generateCustomFieldImageUrls, handleCustomFieldImages, handleDetailAttachments } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const emailService = require("../../services/emailService");
 
 const FILE_COLUMNS = [
-    'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'
+    'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', 'signature_doc'
 ];
 
 /**
  * Helper: Parse JSON fields from Multipart/Form-Data
  */
 const parseJsonFields = (body) => {
-    const fieldsToParse = ["custom_fields"];
+    const fieldsToParse = ["custom_fields", "education_details", "family_details", "experience_details", "professional_reference"];
 
     fieldsToParse.forEach((field) => {
         if (body[field] && typeof body[field] === "string") {
@@ -139,7 +139,7 @@ exports.getDetailsByToken = async (req, res) => {
         }
 
         const baseUrl = process.env.IMG_URL || `${req.protocol}://${req.get('host')}/`;
-        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'];
+        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', 'signature_doc'];
 
         FILE_COLUMNS.forEach(col => {
             if (employee[col] && !employee[col].startsWith('http')) {
@@ -147,6 +147,21 @@ exports.getDetailsByToken = async (req, res) => {
             }
         });
 
+        // Process experience_details to add full attachment URLs
+        if (employee.experience_details && Array.isArray(employee.experience_details)) {
+            employee.experience_details = employee.experience_details.map(detail => {
+                const updatedDetail = { ...detail };
+                if (updatedDetail.attachments && Array.isArray(updatedDetail.attachments)) {
+                    updatedDetail.attachments = updatedDetail.attachments.map(attachment => {
+                        if (attachment && !attachment.startsWith('http')) {
+                            return `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${attachment.replace(/^\/+/, '')}`;
+                        }
+                        return attachment;
+                    });
+                }
+                return updatedDetail;
+            });
+        }
 
         const customFields = await CustomField.findAll({
             where: {
@@ -237,7 +252,8 @@ exports.submitDetails = async (req, res) => {
             'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_state_id', 'permanent_country_id', 'permanent_pincode',
             'bank_name', 'bank_ifsc_code', 'bank_account_number', 'bank_account_holder_name', 'upi_id', 'name_as_per_bank',
             'uan_number', 'pan_number', 'aadhaar_number', 'name_as_per_aadhaar', 'name_as_per_pan',
-            'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', "custom_fields"
+            'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'signature_doc', 'uan_doc',
+            "custom_fields", "education_details", "family_details", "experience_details", "professional_reference"
         ];
 
         const updateData = {};
@@ -252,31 +268,50 @@ exports.submitDetails = async (req, res) => {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
             console.log("Saved files:", savedFiles);
 
-            FILE_COLUMNS.forEach(col => {
-                if (savedFiles[col]) {
-                    updateData[col] = savedFiles[col];
+                FILE_COLUMNS.forEach(col => {
+                    if (savedFiles[col]) {
+                        updateData[col] = savedFiles[col];
                     console.log(`Updating ${col} with filename: ${savedFiles[col]}`);
-                }
-            });
+                    }
+                });
+
+            // Handle experience_details attachments from savedFiles
+            if (Array.isArray(updateData.experience_details)) {
+                updateData.experience_details = updateData.experience_details.map((detail, detailIndex) => {
+                    const updatedDetail = { ...detail };
+                    if (updatedDetail.attachments && Array.isArray(updatedDetail.attachments)) {
+                        updatedDetail.attachments = updatedDetail.attachments.map(attachmentKey => {
+                            if (savedFiles[attachmentKey]) {
+                                console.log(`Found saved file for ${attachmentKey}: ${savedFiles[attachmentKey]}`);
+                                return savedFiles[attachmentKey];
+                            }
+                            return attachmentKey;
+                        }).filter(a => a !== null);
+                    }
+                    return updatedDetail;
+                });
+            }
         }
 
         if (data.is_final_submission) {
             updateData.onboarding_status = 1;
         }
 
+        // Prepare all files array for detail attachments
+        const allFilesArray = [];
+        if (req.files) {
+            if (Array.isArray(req.files)) {
+                allFilesArray.push(...req.files);
+            } else {
+                Object.values(req.files).forEach(v => {
+                    if (Array.isArray(v)) allFilesArray.push(...v);
+                    else allFilesArray.push(v);
+                });
+            }
+        }
+
         // Handle custom field images (they may consume uploaded files)
         if (Array.isArray(updateData.custom_fields)) {
-            const allFilesArray = [];
-            if (req.files) {
-                if (Array.isArray(req.files)) {
-                    allFilesArray.push(...req.files);
-                } else {
-                    Object.values(req.files).forEach(v => {
-                        if (Array.isArray(v)) allFilesArray.push(...v);
-                        else allFilesArray.push(v);
-                    });
-                }
-            }
             writeLogToFile("onboarding_debug.log", `[OnboardingSubmit] Custom fields before handling: ${JSON.stringify(updateData.custom_fields)}`);
             writeLogToFile("onboarding_debug.log", `[OnboardingSubmit] All files available for custom fields: ${allFilesArray.map(f => f.fieldname).join(", ")}`);
             updateData.custom_fields = await handleCustomFieldImages(
@@ -570,7 +605,7 @@ exports.getOnboardingById = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Onboarding record not found" });
         }
 
-        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc'];
+        const FILE_COLUMNS = ['aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', 'signature_doc'];
 
         if (employee.get) {
             employee = employee.get({ plain: true });
@@ -585,6 +620,56 @@ exports.getOnboardingById = async (req, res) => {
         // Process custom fields to add full image URLs
         if (employee.custom_fields && Array.isArray(employee.custom_fields)) {
             employee.custom_fields = generateCustomFieldImageUrls(employee.custom_fields, constants.CUSTOM_FIELD_IMG_FOLDER);
+        }
+
+        // Process experience_details to add full attachment URLs
+        if (employee.experience_details && Array.isArray(employee.experience_details)) {
+            employee.experience_details = employee.experience_details.map(detail => {
+                const updatedDetail = { ...detail };
+                if (updatedDetail.attachments && Array.isArray(updatedDetail.attachments)) {
+                    updatedDetail.attachments = updatedDetail.attachments.map(attachment => {
+                        if (attachment && !attachment.startsWith('http')) {
+                            return `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${attachment.replace(/^\/+/, '')}`;
+                        }
+                        return attachment;
+                    });
+                }
+                return updatedDetail;
+            });
+        }
+
+        // Fetch state and country names for permanent address
+        if (employee.permanent_state_id) {
+            const permanentState = await StateMaster.findOne({
+                where: { id: employee.permanent_state_id },
+                attributes: ['state_name']
+            });
+            employee.permanent_state_name = permanentState ? permanentState.state_name : null;
+        }
+
+        if (employee.permanent_country_id) {
+            const permanentCountry = await CountryMaster.findOne({
+                where: { id: employee.permanent_country_id },
+                attributes: ['country_name']
+            });
+            employee.permanent_country_name = permanentCountry ? permanentCountry.country_name : null;
+        }
+
+        // Fetch state and country names for present address
+        if (employee.present_state_id) {
+            const presentState = await StateMaster.findOne({
+                where: { id: employee.present_state_id },
+                attributes: ['state_name']
+            });
+            employee.present_state_name = presentState ? presentState.state_name : null;
+        }
+
+        if (employee.present_country_id) {
+            const presentCountry = await CountryMaster.findOne({
+                where: { id: employee.present_country_id },
+                attributes: ['country_name']
+            });
+            employee.present_country_name = presentCountry ? presentCountry.country_name : null;
         }
 
         const response = {

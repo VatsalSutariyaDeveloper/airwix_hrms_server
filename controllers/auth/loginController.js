@@ -1105,7 +1105,6 @@ exports.pinLogin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
-console.log("entity",entity.device_type)
 
     const token = generateToken({
       ...entity.get({ plain: true }),

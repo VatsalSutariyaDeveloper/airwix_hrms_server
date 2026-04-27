@@ -1,6 +1,4 @@
 const { uploadFile, deleteFile } = require('./fileUpload');
-const { writeLogToFile } = require("./functions/logFunctions");
-
 /**
  * Handles image uploads for custom fields
  */
@@ -24,7 +22,7 @@ const handleCustomFieldImages = async (
     customFields.map(async (field) => {
       const { field_name, type, key } = field;
       const fieldType = (type || field.field_type || "").toLowerCase();
-      writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Processing field: ${field_name}, type: ${fieldType}, key: ${key}`);
+      console.log("onboarding_debug.log", `[handleCustomFieldImages] Processing field: ${field_name}, type: ${fieldType}, key: ${key}`);
 
       delete field.image_url;
       delete field.image_urls;
@@ -51,15 +49,15 @@ const handleCustomFieldImages = async (
       for (const k of keysToProcess) {
           const uploadedFile = allFiles.find(f => f.fieldname === k);
           if (uploadedFile) {
-              writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Found file for key ${k}: ${uploadedFile.originalname}`);
+              console.log("onboarding_debug.log", `[handleCustomFieldImages] Found file for key ${k}: ${uploadedFile.originalname}`);
               const tempReq = { file: uploadedFile };
               const saved = await uploadFile(tempReq, res, folder, transaction);
               if (saved[k]) {
-                  writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] Saved file for key ${k}: ${saved[k]}`);
+                  console.log("onboarding_debug.log", `[handleCustomFieldImages] Saved file for key ${k}: ${saved[k]}`);
                   newFiles.push(saved[k]);
               }
           } else {
-              writeLogToFile("onboarding_debug.log", `[handleCustomFieldImages] NO file found for key ${k}`);
+              console.log("onboarding_debug.log", `[handleCustomFieldImages] NO file found for key ${k}`);
           }
       }
       
@@ -117,7 +115,68 @@ const generateCustomFieldImageUrls = (customFields, folder) => {
   });
 };
 
+/**
+ * Handles attachment uploads for detail arrays (experience_details, education_details, family_details, professional_reference)
+ * Expects attachments array to contain keys like "experience_attachment_0_0" which correspond to uploaded file fieldnames
+ */
+const handleDetailAttachments = async (req, res, detailArray = [], allFiles = [], folder, transaction) => {
+  if (!Array.isArray(detailArray) || detailArray.length === 0) {
+    return detailArray;
+  }
+
+  console.log("onboarding_debug.log", `[handleDetailAttachments] Processing detail array with ${detailArray.length} items`);
+  console.log("onboarding_debug.log", `[handleDetailAttachments] Available files: ${allFiles.map(f => f.fieldname).join(", ")}`);
+
+  const updatedDetails = await Promise.all(
+    detailArray.map(async (detail, detailIndex) => {
+      const updatedDetail = { ...detail };
+      
+      if (updatedDetail.attachments && Array.isArray(updatedDetail.attachments)) {
+        console.log("onboarding_debug.log", `[handleDetailAttachments] Detail ${detailIndex} has ${updatedDetail.attachments.length} attachments: ${JSON.stringify(updatedDetail.attachments)}`);
+        
+        const processedAttachments = await Promise.all(
+          updatedDetail.attachments.map(async (attachmentKey) => {
+            // If attachment is already a string filename (not a key pattern), keep it
+            if (typeof attachmentKey === 'string' && !attachmentKey.includes('_attachment_')) {
+              console.log("onboarding_debug.log", `[handleDetailAttachments] Keeping existing filename: ${attachmentKey}`);
+              return attachmentKey;
+            }
+            
+            // If attachment is a key pattern, try to find and upload the file
+            if (typeof attachmentKey === 'string') {
+              const uploadedFile = allFiles.find(f => f.fieldname === attachmentKey);
+              if (uploadedFile) {
+                console.log("onboarding_debug.log", `[handleDetailAttachments] Found file for key ${attachmentKey}: ${uploadedFile.originalname}`);
+                const tempReq = { files: { [attachmentKey]: uploadedFile } };
+                const saved = await uploadFile(tempReq, res, folder, transaction);
+                if (saved[attachmentKey]) {
+                  console.log("onboarding_debug.log", `[handleDetailAttachments] Saved file for key ${attachmentKey}: ${saved[attachmentKey]}`);
+                  return saved[attachmentKey];
+                }
+              } else {
+                console.log("onboarding_debug.log", `[handleDetailAttachments] NO file found for key ${attachmentKey}`);
+              }
+            }
+            
+            // If no file found, return null to remove invalid attachment
+            return null;
+          })
+        );
+        
+        // Filter out null values
+        updatedDetail.attachments = processedAttachments.filter(a => a !== null);
+        console.log("onboarding_debug.log", `[handleDetailAttachments] Detail ${detailIndex} after processing: ${updatedDetail.attachments.length} attachments`);
+      }
+      
+      return updatedDetail;
+    })
+  );
+
+  return updatedDetails;
+};
+
 module.exports = {
   handleCustomFieldImages,
-  generateCustomFieldImageUrls
+  generateCustomFieldImageUrls,
+  handleDetailAttachments
 };
