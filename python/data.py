@@ -92,6 +92,57 @@ while len(data) < num_records:
         perm_pincode = random.randint(110001, 850001)
         perm_state = fake.state()
 
+    # Generate Education Details
+    education_details = [
+        {
+            "course": random.choice(["B.Sc IT", "B.Tech", "B.Com", "B.A", "M.Sc", "M.Tech", "MBA", "MCA"]),
+            "board_unit": random.choice(["GU", "CBSE", "ICSE", "GSEB", "GTU"]),
+            "percentage": f"{random.uniform(5.0, 10.0):.2f}",
+            "passing_year": str(random.randint(2015, 2025))
+        }
+    ]
+
+    # Generate Experience Details
+    experience_details = [
+        {
+            "salary": str(random.randint(100000, 1000000)),
+            "location": random.choice(["Ahmedabad", "Mumbai", "Delhi", "Bangalore", "Pune", "Surat"]),
+            # "attachments": [
+            #     f"{random.randint(1000000000000, 9999999999999)}_pexels-willianjusten-32715513.jpeg",
+            #     f"{random.randint(1000000000000, 9999999999999)}_image.jpg"
+            # ],
+            "designation": fake.job(),
+            "company_name": fake.company(),
+            "duration_end": fake.date_between(start_date='-2y', end_date='today').strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            "duration_start": fake.date_between(start_date='-5y', end_date='-2y').strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            "reference_name": fake.name(),
+            "reference_mobile": f"{random.randint(6000000000, 9999999999)}",
+            "total_experience": str(random.randint(1, 10)),
+            "reason_for_leaving": fake.sentence(),
+            "reference_designation": fake.job()
+        }
+    ]
+
+    # Generate Professional Reference
+    professional_reference = [
+        {
+            "name": fake.name(),
+            "contact_no": f"{random.randint(6000000000, 9999999999)}",
+            "designation": fake.job(),
+            "employee_code": f"EMP-{random.randint(1, 100)}"
+        }
+    ]
+
+    # Generate Family Details
+    family_details = [
+        {
+            "name": fake.name(),
+            "dob_age": fake.date_of_birth(minimum_age=18, maximum_age=70).strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            "contact_no": f"{random.randint(6000000000, 9999999999)}",
+            "relationship": random.choice(["Father", "Mother", "Spouse", "Brother", "Sister", "Son", "Daughter"])
+        }
+    ]
+
     row = {
         "Department": f"DEPT_{len(data) + 1}",
         "Designation": f"DES_{len(data) + 1}",
@@ -149,7 +200,11 @@ while len(data) < num_records:
         "Bank Account Number": bank_account, # 12 Digit Integer
         "Bank Ifsc Code": f"{random.choice(['HDFC', 'SBIN', 'ICIC', 'UTIB'])}0{random.randint(100000, 999999)}",
         "Bank Account Holder Name": full_name,
-        "Upi Id": f"{first_name.lower()}.{len(data)}@okbank"
+        "Upi Id": f"{first_name.lower()}.{len(data)}@okbank",
+        "Education Details": str(education_details),
+        "Experience Details": str(experience_details),
+        "Professional Reference": str(professional_reference),
+        "Family Details": str(family_details)
     }
     data.append(row)
 
