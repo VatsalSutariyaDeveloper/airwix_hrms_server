@@ -296,6 +296,7 @@ exports.getLateEntryReport = async (req, res) => {
         }
       ]
     };
+
     if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
       employeeWhere.branch_id = branch_id;
     }
@@ -312,9 +313,23 @@ exports.getLateEntryReport = async (req, res) => {
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        distinct: true,
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
-          { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
+          { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+          {
+            model: AttendanceDay,
+            as: 'attendanceDays',
+            required: true,
+            where: {
+              attendance_date: { [Op.between]: [startDate, endDate] },
+              [Op.or]: [
+                sequelize.literal(`"attendanceDays".fine_data->'late_entry' IS NOT NULL`),
+                sequelize.literal(`"attendanceDays".fine_data->'early_exit' IS NOT NULL`)
+              ],
+              status: { [Op.ne]: 2 }
+            }
+          }
         ]
       },
       { company_id: true, branch_id: true },
@@ -323,20 +338,15 @@ exports.getLateEntryReport = async (req, res) => {
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
 
-    const employeeIds = employees.items.map(e => e.id);
-
-    // Fetch all attendance records with late minutes OR early exit minutes > 0
-    const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
-      employee_id: { [Op.in]: employeeIds },
-      attendance_date: { [Op.between]: [startDate, endDate] },
-      [Op.or]: [
-        sequelize.literal(`fine_data->'late_entry' IS NOT NULL`),
-        sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)
-      ],
-      status: { [Op.ne]: 2 }
-    }, {
-      order: [['attendance_date', 'ASC']]
-    }, null, { company_id: true });
+    // Extract attendance records from the joined data
+    const attendanceRecords = [];
+    employees.items.forEach(emp => {
+      if (emp.attendanceDays && emp.attendanceDays.length > 0) {
+        emp.attendanceDays.forEach(ad => {
+          attendanceRecords.push(ad);
+        });
+      }
+    });
 
     // Group punctuality records by employee
     const punctualityDataMap = {};
@@ -392,8 +402,14 @@ exports.getLateEntryReport = async (req, res) => {
     }
 
     employees.items.forEach(emp => {
-      const pInfo = punctualityDataMap[emp.id];
-      if (!pInfo) return;
+      const pInfo = punctualityDataMap[emp.id] || { 
+        days: {}, 
+        totalLateMins: 0, 
+        totalEarlyMins: 0,
+        lateCount: 0, 
+        earlyCount: 0,
+        totalFineAmount: 0 
+      };
 
       const totalLateMins = pInfo.totalLateMins || 0;
       const totalEarlyMins = pInfo.totalEarlyMins || 0;
