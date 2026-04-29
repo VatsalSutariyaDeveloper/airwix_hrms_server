@@ -225,7 +225,14 @@ exports.update = async (req, res) => {
     const salaryTemplate = await commonQuery.findOneRecord(
       SalaryTemplate,
       id,
-      {},
+      {
+        include: [
+          {
+            model: SalaryTemplateTransaction,
+            as: "salaryTemplateTransactions"
+          }
+        ]
+      },
       transaction
     );
 
@@ -286,7 +293,15 @@ exports.update = async (req, res) => {
       const employeesToSync = await commonQuery.findAllRecords(Employee, { salary_template_id: id, status: 0 }, { attributes: ['id'] }, transaction);
       if (employeesToSync.length > 0) {
           const employeeIds = employeesToSync.map(emp => emp.id);
-          await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'salary_template_id', id, transaction);
+          
+          const oldMasterComponentsMap = new Map();
+          if (salaryTemplate.salaryTemplateTransactions && Array.isArray(salaryTemplate.salaryTemplateTransactions)) {
+              salaryTemplate.salaryTemplateTransactions.forEach(t => {
+                  oldMasterComponentsMap.set(t.component_id, t);
+              });
+          }
+
+          await EmployeeTemplateService.bulkSyncSpecificTemplate(employeeIds, 'salary_template_id', id, transaction, { oldMasterComponentsMap });
       }
     }
 

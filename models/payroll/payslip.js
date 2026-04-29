@@ -26,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
     statutory_details: { type: DataTypes.JSON, allowNull: true },
     employer_details: { type: DataTypes.JSON, allowNull: true },
     reimbursement_details: { type: DataTypes.JSON, allowNull: true },
+    encashment_details: { type: DataTypes.JSON, allowNull: true },
     payment_history: { type: DataTypes.JSON, allowNull: true },
 
     // Summary Totals

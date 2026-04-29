@@ -8,6 +8,7 @@ const {
     LeaveTemplateCategory,
     SalaryTemplateTransaction,
     SalaryTemplate,
+    SalaryComponent,
     ShiftTemplate,
     PrintTemplate,
     EmployeeAttendanceTemplate,
@@ -568,13 +569,35 @@ class EmployeeTemplateService {
         }
 
         if (items && Array.isArray(items)) {
+            const existingTrans = await commonQuery.findAllRecords(EmployeeSalaryTemplateTransaction, { employee_id: employeeId }, {}, transaction);
+            const existingMap = new Map(existingTrans.map(t => [t.component_id, t]));
+
             const mappedItems = items.map(i => {
                 const d = i.toJSON ? i.toJSON() : i;
+                const existing = existingMap.get(d.component_id);
+                
+                let keepExistingAmount = existing ? true : false;
+                if (existing && meta && meta.oldMasterComponentsMap) {
+                    const compId = d.component_id;
+                    const oldMasterComp = meta.oldMasterComponentsMap.get(compId) || meta.oldMasterComponentsMap.get(String(compId)) || meta.oldMasterComponentsMap.get(Number(compId));
+                    if (oldMasterComp) {
+                        const amountChanged = parseFloat(oldMasterComp.monthly_amount || 0) !== parseFloat(d.monthly_amount || 0) || 
+                                              parseFloat(oldMasterComp.yearly_amount || 0) !== parseFloat(d.yearly_amount || 0);
+                        const calcChanged = oldMasterComp.calculation_type !== d.calculation_type ||
+                                            oldMasterComp.formula !== d.formula ||
+                                            oldMasterComp.percentage_of !== d.percentage_of ||
+                                            parseFloat(oldMasterComp.percentage_value || 0) !== parseFloat(d.percentage_value || 0);
+                        if (amountChanged || calcChanged) keepExistingAmount = false;
+                    }
+                }
+
                 delete d.id; delete d.created_at; delete d.updated_at;
                 return { 
                     ...d, 
                     employee_id: employeeId, 
-                    employee_salary_template_id: employeeSalaryTemplateId 
+                    employee_salary_template_id: employeeSalaryTemplateId,
+                    monthly_amount: keepExistingAmount ? existing.monthly_amount : d.monthly_amount,
+                    yearly_amount: keepExistingAmount ? existing.yearly_amount : d.yearly_amount
                 };
             });
 
@@ -629,15 +652,41 @@ class EmployeeTemplateService {
         const empTemplateIdMap = new Map(allEmpTemplates.map(et => [et.employee_id, et.id]));
 
         // 2. Sync Components in Bulk
+        const existingTrans = await commonQuery.findAllRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: employeeIds } }, {}, transaction);
+        const existingTransMap = new Map();
+        existingTrans.forEach(t => {
+            const key = `${t.employee_id}_${t.component_id}`;
+            existingTransMap.set(key, t);
+        });
+
         const componentPayloads = [];
         for (const empId of employeeIds) {
             const empTemplateId = empTemplateIdMap.get(empId);
             for (const comp of masterComponents) {
                 const d = comp.toJSON ? comp.toJSON() : comp;
+                const existing = existingTransMap.get(`${empId}_${comp.component_id}`);
+                
+                let keepExistingAmount = existing ? true : false;
+                if (existing && meta && meta.oldMasterComponentsMap) {
+                    const compId = comp.component_id;
+                    const oldMasterComp = meta.oldMasterComponentsMap.get(compId) || meta.oldMasterComponentsMap.get(String(compId)) || meta.oldMasterComponentsMap.get(Number(compId));
+                    if (oldMasterComp) {
+                        const amountChanged = parseFloat(oldMasterComp.monthly_amount || 0) !== parseFloat(d.monthly_amount || 0) || 
+                                              parseFloat(oldMasterComp.yearly_amount || 0) !== parseFloat(d.yearly_amount || 0);
+                        const calcChanged = oldMasterComp.calculation_type !== d.calculation_type ||
+                                            oldMasterComp.formula !== d.formula ||
+                                            oldMasterComp.percentage_of !== d.percentage_of ||
+                                            parseFloat(oldMasterComp.percentage_value || 0) !== parseFloat(d.percentage_value || 0);
+                        if (amountChanged || calcChanged) keepExistingAmount = false;
+                    }
+                }
+
                 const payload = { 
                     ...d, 
                     employee_id: empId, 
-                    employee_salary_template_id: empTemplateId 
+                    employee_salary_template_id: empTemplateId,
+                    monthly_amount: keepExistingAmount ? existing.monthly_amount : d.monthly_amount,
+                    yearly_amount: keepExistingAmount ? existing.yearly_amount : d.yearly_amount
                 };
                 delete payload.id; delete payload.created_at; delete payload.updated_at;
                 componentPayloads.push(payload);
@@ -935,6 +984,191 @@ class EmployeeTemplateService {
     //         await commonQuery.bulkCreate(EmployeePrintTemplate, items, {}, transaction);
     //     }
     // }
+    static async calculateComponentAmount(component, earnings) {
+        if (component.calculation_type === 'FIXED') {
+            return parseFloat(component.monthly_amount || 0);
+        }
+
+        if (component.calculation_type === 'PERCENTAGE') {
+            const pct = parseFloat(component.percentage_value || 0);
+            let basisAmount = 0;
+
+            if (component.percentage_of === 'BASIC') {
+                const basic = earnings.find(e => e.component_name?.toUpperCase() === 'BASIC' || e.component?.component_name?.toUpperCase() === 'BASIC');
+                basisAmount = parseFloat(basic?.monthly_amount || 0);
+            } else if (component.percentage_of === 'GROSS') {
+                basisAmount = earnings.reduce((sum, e) => sum + parseFloat(e.monthly_amount || 0), 0);
+            } else if (component.percentage_of === 'CTC') {
+                // Circular dependency usually, but for simple cases:
+                basisAmount = 0; 
+            }
+            return (basisAmount * pct) / 100;
+        }
+
+        // For Formula/Attendance/Canteen, we keep existing or default to 0 for now as they need engine context
+        return parseFloat(component.monthly_amount || 0);
+    }
+
+    static async recalculateSalaryStructureTotals(id, type = 'employee', transaction) {
+        const Model = type === 'employee' ? EmployeeSalaryTemplateTransaction : SalaryTemplateTransaction;
+        const HeaderModel = type === 'employee' ? EmployeeSalaryTemplate : SalaryTemplate;
+        const whereField = type === 'employee' ? 'employee_id' : 'salary_template_id';
+
+        const components = await commonQuery.findAllRecords(Model, { [whereField]: id, status: 0 }, {
+            include: [{ model: SalaryComponent, as: "component" }]
+        }, transaction);
+
+        if (!components || components.length === 0) return;
+
+        // Separate earnings for percentage calculations
+        const earnings = components.filter(c => c.component?.component_type === 'EARNING');
+        
+        // Recalculate each component's amount if it's dependent (Smart recalculation)
+        for (const comp of components) {
+            if (comp.calculation_type === 'PERCENTAGE') {
+                const newAmount = await this.calculateComponentAmount(comp, earnings);
+                if (newAmount !== parseFloat(comp.monthly_amount || 0)) {
+                    await commonQuery.updateRecordById(Model, comp.id, {
+                        monthly_amount: newAmount,
+                        yearly_amount: newAmount * 12
+                    }, transaction);
+                    comp.monthly_amount = newAmount; // Update in-memory for totals
+                }
+            }
+        }
+
+        // Calculate Totals
+        let gross_salary = 0;
+        let ctc_monthly = 0;
+        let total_deductions = 0;
+
+        components.forEach(comp => {
+            const amt = parseFloat(comp.monthly_amount || 0);
+            const master = comp.component;
+
+            if (master?.component_type === 'EARNING' && master?.is_part_of_gross) {
+                gross_salary += amt;
+            }
+            if (comp.included_in_ctc !== false) {
+                ctc_monthly += amt;
+            }
+            if (master?.component_type === 'DEDUCTION') {
+                total_deductions += amt;
+            }
+        });
+
+        // Update Header
+        const headerWhereField = type === 'employee' ? 'employee_id' : 'id';
+        const header = await commonQuery.findOneRecord(HeaderModel, { [headerWhereField]: id }, {}, transaction);
+        if (header) {
+            await commonQuery.updateRecordById(HeaderModel, header.id, {
+                gross_salary: gross_salary,
+                ctc_monthly: ctc_monthly,
+                ctc_yearly: ctc_monthly * 12,
+                total_deductions: total_deductions,
+                net_salary: gross_salary - total_deductions
+            }, transaction);
+        }
+    }
+
+    static async cascadeComponentUpdate(oldComponent, newComponentData, transaction) {
+        const oldCalcType = oldComponent.calculation_type;
+        const oldPctValue = oldComponent.percentage_value;
+        const oldPctOf = oldComponent.percentage_of;
+        const oldFormula = oldComponent.formula;
+        const oldFixedAmount = oldComponent.fixed_amount;
+        
+        const componentId = oldComponent.id;
+
+        const whereClause = {
+            component_id: componentId,
+            calculation_type: oldCalcType || null,
+            status: 0
+        };
+
+        // if (oldCalcType === 'PERCENTAGE') {
+        //     whereClause.percentage_value = oldPctValue || null;
+        //     whereClause.percentage_of = oldPctOf || null;
+        // } else if (oldCalcType === 'FORMULA') {
+        //     whereClause.formula = oldFormula || null;
+        // } else if (oldCalcType === 'FIXED') {
+        //     whereClause.monthly_amount = oldFixedAmount || null;
+        // }
+
+        const updatePayload = {
+            calculation_type: newComponentData.calculation_type || oldCalcType,
+            percentage_value: newComponentData.percentage_value !== undefined ? newComponentData.percentage_value : oldPctValue,
+            percentage_of: newComponentData.percentage_of || oldPctOf,
+            formula: newComponentData.formula !== undefined ? newComponentData.formula : oldFormula,
+        };
+
+        if (updatePayload.calculation_type === 'FIXED') {
+            const newAmount = newComponentData.fixed_amount !== undefined ? newComponentData.fixed_amount : oldFixedAmount;
+            updatePayload.monthly_amount = newAmount;
+            updatePayload.yearly_amount = (parseFloat(newAmount) || 0) * 12;
+        } else {
+            updatePayload.monthly_amount = 0;
+            updatePayload.yearly_amount = 0;
+        }
+
+        // 1. Update matching master template components
+        const affectedTemplateTxns = await commonQuery.findAllRecords(SalaryTemplateTransaction, whereClause, {}, transaction);
+        const affectedTemplateIds = [...new Set(affectedTemplateTxns.map(tx => tx.salary_template_id))];
+
+        await commonQuery.updateRecordById(SalaryTemplateTransaction, whereClause, updatePayload, transaction);
+
+        // Recalculate totals for all affected templates
+        for (const templateId of affectedTemplateIds) {
+            await this.recalculateSalaryStructureTotals(templateId, 'master', transaction);
+        }
+
+        // 2. Find employees using this component with the old calculation
+        const matchingEmployeeTxns = await commonQuery.findAllRecords(EmployeeSalaryTemplateTransaction, whereClause, {}, transaction);
+
+        const employeeIds = [...new Set(matchingEmployeeTxns.map(tx => tx.employee_id))];
+        
+        if (employeeIds.length > 0) {
+            const employeeData = await commonQuery.findAllRecords(Employee, { id: { [Op.in]: employeeIds } }, {
+                attributes: ['id', 'salary_template_id', 'branch_id', 'company_id'],
+            }, transaction);
+
+            const templateToEmployees = {};
+            for (const emp of employeeData) {
+                if (emp.salary_template_id) {
+                    if (!templateToEmployees[emp.salary_template_id]) templateToEmployees[emp.salary_template_id] = [];
+                    templateToEmployees[emp.salary_template_id].push(emp);
+                }
+            }
+
+            for (const templateId of Object.keys(templateToEmployees)) {
+                const emps = templateToEmployees[templateId];
+                const empIds = emps.map(e => e.id);
+                
+                const oldMasterMap = new Map();
+                const oldCompData = oldComponent.toJSON ? oldComponent.toJSON() : { ...oldComponent };
+                oldCompData.monthly_amount = oldCompData.fixed_amount;
+                oldCompData.yearly_amount = (parseFloat(oldCompData.fixed_amount) || 0) * 12;
+
+                oldMasterMap.set(componentId, oldCompData);
+
+                const meta = {
+                    oldMasterComponentsMap: oldMasterMap
+                };
+                
+                await this.bulkSyncSalaryTemplate(
+                    empIds,
+                    templateId,
+                    transaction,
+                    meta
+                );
+
+                // Recalculate totals for all synced employees
+                for (const empId of empIds) {
+                    await this.recalculateSalaryStructureTotals(empId, 'employee', transaction);
+                }
+            }
+        }
+    }
 }
 
 module.exports = EmployeeTemplateService;

@@ -39,6 +39,7 @@ module.exports = (sequelize, DataTypes) => {
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             is_encashment: { type: DataTypes.BOOLEAN, defaultValue: false },
+            is_settled_encashment: { type: DataTypes.BOOLEAN, defaultValue: false },
             start_session: { 
                 type: DataTypes.SMALLINT, 
                 defaultValue: 0,
@@ -50,9 +51,9 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "0=Full Day, 1=Session 1, 2=Session 2"
             },
             request_type: {
-                type: DataTypes.ENUM('DEBIT', 'CREDIT'),
+                type: DataTypes.ENUM('DEBIT', 'CREDIT', 'ENCASHMENT'),
                 defaultValue: 'DEBIT',
-                comment: "DEBIT: Taken leave, CREDIT: Earned leave"
+                comment: "DEBIT: Taken leave, CREDIT: Earned leave, ENCASHMENT: Encashment request"
             }
         },
         {

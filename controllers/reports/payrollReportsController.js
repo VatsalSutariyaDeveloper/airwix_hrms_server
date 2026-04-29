@@ -192,12 +192,14 @@ exports.getCTCBreakdownReport = async (req, res) => {
             fieldConfig,
             {
                 attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
+                distinct: true,
                 include: [
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                     { model: Department, as: 'department', attributes: ['name'] },
                     { 
                         model: EmployeeSalaryTemplate, 
                         as: 'employeeSalaryTemplate',
+                        required: true,
                         include: [{
                             separate: true,
                             model: EmployeeSalaryTemplateTransaction,

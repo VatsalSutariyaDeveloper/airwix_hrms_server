@@ -1,6 +1,6 @@
 const NodeCache = require("node-cache");
 const { literal, Op } = require("sequelize");
-const { SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings, CompanySettings, sequelize } = require("../../models");
+const { SalaryComponent, SeriesTypeMaster, ItemMaster, Notification, ItemUnitMaster, CompanySettingsMaster, CompanyConfigration, CompanySubscription, CompanyMaster, EmployeeSettings, CompanySettings, sequelize } = require("../../models");
 const commonQuery = require("../commonQuery");
 const { getCompanySetting, updateSubscriptionCache } = require("../cache");
 const dayjs = require("dayjs"); 
@@ -453,9 +453,121 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
             );
         }
 
+        await this.initializeSalaryComponents(company_id, branch_id, user_id, transaction);
+
         return data; 
     } catch (error) {
         console.error("Error initializing company settings:", error);
+        throw error;
+    }
+};
+
+exports.initializeSalaryComponents = async (company_id, branch_id, user_id, transaction) => {
+    try {
+        const standardComponents = [
+            {
+                component_name: "Basic",
+                component_type: "EARNING",
+                component_category: "FIXED",
+                calculation_type: "ATTENDANCE_BASED",
+                is_system_component: true,
+                is_lwp_impacted: true,
+                is_part_of_ctc: true,
+                is_part_of_gross: true,
+                is_part_of_take_home: true,
+                is_taxable: true,
+                sort_order: 1
+            },
+            {
+                component_name: "HRA",
+                component_type: "EARNING",
+                component_category: "FIXED",
+                calculation_type: "FIXED",
+                is_system_component: true,
+                is_lwp_impacted: true,
+                is_part_of_ctc: true,
+                is_part_of_gross: true,
+                is_part_of_take_home: true,
+                is_taxable: true,
+                sort_order: 2
+            },
+            {
+                component_name: "Food Deduction",
+                component_type: "DEDUCTION",
+                component_category: "VARIABLE",
+                calculation_type: "FORMULA",
+                formula: "{CANTEEN_ATTENDANCE} * 40",
+                is_system_component: true,
+                is_lwp_impacted: false,
+                is_part_of_ctc: false,
+                is_part_of_gross: false,
+                is_part_of_take_home: true,
+                is_taxable: false,
+                sort_order: 3
+            },
+            {
+                component_name: "Leave Encashment",
+                component_type: "EMPLOYER_CONTRIBUTION",
+                component_category: "STATUTORY",
+                calculation_type: "PERCENTAGE",
+                percentage_of: "BASIC",
+                percentage_value: 4.81,
+                is_system_component: true,
+                is_lwp_impacted: false,
+                is_part_of_ctc: true,
+                is_part_of_gross: false,
+                is_part_of_take_home: false,
+                is_taxable: true,
+                is_statutory: true,
+                sort_order: 4
+            },
+            {
+                component_name: "Bonus",
+                component_type: "EMPLOYER_CONTRIBUTION",
+                component_category: "STATUTORY",
+                calculation_type: "PERCENTAGE",
+                percentage_of: "BASIC",
+                percentage_value: 8.33,
+                is_system_component: true,
+                is_lwp_impacted: false,
+                is_part_of_ctc: true,
+                is_part_of_gross: false,
+                is_part_of_take_home: false,
+                is_taxable: true,
+                is_statutory: true,
+                sort_order: 5
+            }
+        ];
+
+        const payload = standardComponents.map(comp => ({
+            ...comp,
+            company_id,
+            branch_id: branch_id || 0,
+            user_id: user_id || 0,
+            status: 0
+        }));
+
+        // Use update or create logic for each to ensure existing ones are updated to new standard
+        for (const comp of payload) {
+            const [record, created] = await SalaryComponent.findOrCreate({
+                where: {
+                    component_name: comp.component_name,
+                    company_id: comp.company_id,
+                    status: { [Op.ne]: 2 }
+                },
+                defaults: comp,
+                transaction
+            });
+
+            if (!created) {
+                // Update existing record with new standard values if it was already created
+                await record.update(comp, { transaction });
+            }
+        }
+
+        return true;
+    } catch (error) {
+        console.error("Error initializing salary components:", error);
         throw error;
     }
 };

@@ -731,12 +731,21 @@ exports.updateStatus = async (req, res) => {
 // 6. Get Pending Approvals
 exports.getPendingApprovals = async (req, res) => {
     try {
-        // console.log("req.user",req.user)
-        // const employeeId = req.body.employee_id;
-        const requests = await commonQuery.findAllRecords(LeaveRequest, {
+        const isEncashment = req.body.is_encashment === true || req.body.request_type === 'ENCASHMENT';
+
+        const whereClause = {
             approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
             status: 0
-        }, {
+        };
+
+        if (isEncashment) {
+            whereClause.is_encashment = true;
+            whereClause.request_type = 'ENCASHMENT';
+        } else {
+            whereClause.request_type = { [Op.ne]: 'ENCASHMENT' };
+        }
+
+        const requests = await commonQuery.findAllRecords(LeaveRequest, whereClause, {
             attributes: [
                 "id",
                 "employee_id",
@@ -840,7 +849,9 @@ exports.getPendingApprovals = async (req, res) => {
                 };
                 const statusLabel = statusLabels[raw.approval_status] || "PENDING";
                 const total = raw.employee?.leaveTemplate?.approval_levels || 1;
-                const typeLabel = (raw.request_type === 'CREDIT' ? " [EARNED]" : "");
+                let typeLabel = "";
+                if (raw.request_type === 'CREDIT') typeLabel = " [EARNED]";
+                else if (raw.request_type === 'ENCASHMENT') typeLabel = " [ENCASHMENT]";
                 raw.tracking_summary = `${statusLabel}${typeLabel} (Stage ${raw.current_level} of ${total})`;
 
                 if (raw.document) {

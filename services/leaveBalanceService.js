@@ -127,7 +127,7 @@ console.log("start",start,"end",end)
     /**
      * Primary entry point: Assigns/Syncs leaves to an employee.
      */
-    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}, oldBalancesMap = null) {
+    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}, oldBalancesMap = null, meta = {}) {
         const { allowRollover = false } = options;
         const t = transaction || (await sequelize.transaction());
         try {
@@ -350,6 +350,42 @@ console.log("start",start,"end",end)
                             if (category.unused_leave_rule === 'CARRY_FORWARD') {
                                 const limit = parseFloat(category.carry_forward_limit || 0);
                                 carryForward = Math.min(remaining, limit);
+                            } else if (category.unused_leave_rule === 'ENCASH' && remaining > 0) {
+                                // Calculate previous cycle end date (the day before new cycle starts)
+                                const prevCycleEnd = start.subtract(1, 'day').format('YYYY-MM-DD');
+                                
+                                // Apply carry_forward_limit to encashment (excess lapses)
+                                const limit = parseFloat(category.carry_forward_limit || 0);
+                                const encashDays = limit > 0 ? Math.min(remaining, limit) : remaining;
+                                const lapsedDays = remaining - encashDays;
+                                
+                                // Check if encashment request already exists for this cycle
+                                const existingEncashment = await commonQuery.findOneRecord(LeaveRequest, {
+                                    employee_id: employeeId,
+                                    leave_category_id: category.id,
+                                    is_encashment: true,
+                                    request_type: 'ENCASHMENT',
+                                    start_date: prevCycleEnd,
+                                }, {}, t);
+
+                                if (!existingEncashment) {
+                                    // Auto-create approved encashment request
+                                    await commonQuery.createRecord(LeaveRequest, {
+                                        employee_id: employeeId,
+                                        leave_category_id: category.id,
+                                        start_date: prevCycleEnd,
+                                        end_date: prevCycleEnd,
+                                        total_days: encashDays,
+                                        reason: `Auto-generated: ${template.leave_policy_cycle} cycle end encashment${lapsedDays > 0 ? ` (${lapsedDays} days lapsed)` : ''}`,
+                                        approval_status: constants.LEAVE_APPROVAL_STATUS.PENDING,
+                                        current_level: 1,
+                                        is_encashment: true,
+                                        is_settled_encashment: false,
+                                        request_type: 'ENCASHMENT',
+                                    }, t);
+                                    console.log(`[Year-End Encash] Created PENDING encashment request for Emp ${employeeId}, Category ${category.leave_category_name}, Days: ${encashDays}${lapsedDays > 0 ? ` (${lapsedDays} lapsed)` : ''}`);
+                                }
+                                carryForward = 0; // Encashed leaves are not carried forward
                             }
                             used = 0; // New cycle starts with 0 used
                         }
@@ -369,6 +405,21 @@ console.log("start",start,"end",end)
                 }
 console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 let totalAllowance = Math.round((allocated + carryForward) * 2) / 2;
+
+                // Smart update detection logic:
+                if (oldBalancesMap && meta && meta.oldMasterCategoriesMap) {
+                    const oldBal = oldBalancesMap.get(category.id);
+                    const oldMasterCat = meta.oldMasterCategoriesMap.get(category.id);
+                    if (oldBal && oldMasterCat) {
+                        // Did the template's count change?
+                        const countChanged = parseFloat(oldMasterCat.leave_count || 0) !== parseFloat(category.leave_count || 0);
+                        if (!countChanged) {
+                            // If it didn't change in the template, KEEP the employee's existing allocated amount!
+                            totalAllowance = parseFloat(oldBal.total_allocated || 0);
+                        }
+                    }
+                }
+
                 let pending = Math.round((totalAllowance - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
@@ -490,7 +541,8 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 }
                 employeeOldBalancesMap.get(bal.employee_id).set(bal.leave_category_id, {
                     used_leaves: bal.used_leaves,
-                    carry_forward_leaves: bal.carry_forward_leaves
+                    carry_forward_leaves: bal.carry_forward_leaves,
+                    total_allocated: bal.total_allocated
                 });
             }
 
@@ -519,7 +571,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
                 for (const emp of employees) {
                     const oldBalancesMap = employeeOldBalancesMap.get(emp.id) || null;
-                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template, null, {}, oldBalancesMap);
+                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template, null, {}, oldBalancesMap, meta);
                 }
             }
 
