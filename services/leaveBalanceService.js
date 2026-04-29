@@ -127,7 +127,7 @@ console.log("start",start,"end",end)
     /**
      * Primary entry point: Assigns/Syncs leaves to an employee.
      */
-    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}, oldBalancesMap = null) {
+    static async initializeBalance(employeeId, templateId, transaction = null, preFetchedEmployee = null, preFetchedTemplate = null, asOf = null, options = {}, oldBalancesMap = null, meta = {}) {
         const { allowRollover = false } = options;
         const t = transaction || (await sequelize.transaction());
         try {
@@ -369,6 +369,21 @@ console.log("start",start,"end",end)
                 }
 console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 let totalAllowance = Math.round((allocated + carryForward) * 2) / 2;
+
+                // Smart update detection logic:
+                if (oldBalancesMap && meta && meta.oldMasterCategoriesMap) {
+                    const oldBal = oldBalancesMap.get(category.id);
+                    const oldMasterCat = meta.oldMasterCategoriesMap.get(category.id);
+                    if (oldBal && oldMasterCat) {
+                        // Did the template's count change?
+                        const countChanged = parseFloat(oldMasterCat.leave_count || 0) !== parseFloat(category.leave_count || 0);
+                        if (!countChanged) {
+                            // If it didn't change in the template, KEEP the employee's existing allocated amount!
+                            totalAllowance = parseFloat(oldBal.total_allocated || 0);
+                        }
+                    }
+                }
+
                 let pending = Math.round((totalAllowance - used) * 2) / 2;
 
                 // Ensure unpaid leaves or zero-allocation categories don't show negative pending leaves
@@ -490,7 +505,8 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 }
                 employeeOldBalancesMap.get(bal.employee_id).set(bal.leave_category_id, {
                     used_leaves: bal.used_leaves,
-                    carry_forward_leaves: bal.carry_forward_leaves
+                    carry_forward_leaves: bal.carry_forward_leaves,
+                    total_allocated: bal.total_allocated
                 });
             }
 
@@ -519,7 +535,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
                 for (const emp of employees) {
                     const oldBalancesMap = employeeOldBalancesMap.get(emp.id) || null;
-                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template, null, {}, oldBalancesMap);
+                    await this.initializeBalance(emp.id, newTemplateId, t, emp, template, null, {}, oldBalancesMap, meta);
                 }
             }
 

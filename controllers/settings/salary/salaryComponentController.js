@@ -210,11 +210,19 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, enumError);
     }
 
-    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction);
+    const oldComponent = await commonQuery.findOneRecord(SalaryComponent, id, {}, null, false, false);
+
+    const updated = await commonQuery.updateRecordById(SalaryComponent, id, POST, transaction, false, false);
 
     if (!updated) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND);
+    }
+
+    // Smart Cascade Update
+    if (POST.cascade_update && oldComponent) {
+      const EmployeeTemplateService = require("../../../services/employeeTemplateService");
+      await EmployeeTemplateService.cascadeComponentUpdate(oldComponent, POST, transaction);
     }
 
     await transaction.commit();

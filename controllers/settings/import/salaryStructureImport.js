@@ -128,17 +128,19 @@ const runWorker = async () => {
             const normHeader = normalizeText(header).replace(/[^a-z0-9]/g, '');
             if (!normHeader || normHeader === 'total') return;
 
-            // Priority 1: Exact alphanumeric match
+            // Strict Match: Exact alphanumeric match
             let matchedComp = normalizedComponents.find(c => c.normName === normHeader);
 
-            // Priority 2: Fuzzy match (Excel header contains DB name or vice-versa)
+            // Essential Aliases (only if no exact match found)
             if (!matchedComp) {
-                // We look for the longest match to avoid "PF" matching "PF Deduction" when it should match "Employer PF"
-                const matches = normalizedComponents.filter(c => 
-                    (normHeader.includes(c.normName) || c.normName.includes(normHeader)) && c.normName.length > 1
-                ).sort((a, b) => b.normName.length - a.normName.length);
-                
-                if (matches.length > 0) matchedComp = matches[0];
+                const nh = normalizeText(header).replace(/[^a-z0-9]/g, '');
+                if (nh === 'pl' || nh === 'leaveencashments' || nh === 'leaveenchashments') {
+                    matchedComp = normalizedComponents.find(c => c.normName === 'leaveencashment' || c.normName === 'leaveenchashment');
+                } else if (nh === 'bonuses') {
+                    matchedComp = normalizedComponents.find(c => c.normName === 'bonus');
+                } else if (nh === 'gratuities') {
+                    matchedComp = normalizedComponents.find(c => c.normName === 'gratuity');
+                }
             }
 
             if (matchedComp) {
@@ -191,8 +193,18 @@ const runWorker = async () => {
             edliStat: getStatHeader(["employer", "edli", "status"]),
             rEsiStat: getStatHeader(["employer", "esi", "status"]),
             rLwfStat: getStatHeader(["employer", "lwf", "status"]),
-            grossKey: headers.find(h => normalizeText(h) === "gross" || normalizeText(h) === "monthly gross"),
-            ctcKey: headers.find(h => normalizeText(h) === "ctc" || normalizeText(h) === "monthly ctc"),
+            gratuityStat: getStatHeader(["gratuity", "status"]),
+            leaveEncashmentStat: getStatHeader(["leave", "encashment", "status"]),
+            bonusStat: getStatHeader(["bonus", "status"]),
+            tdsStat: getStatHeader(["tds", "status"]),
+            grossKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh === "gross" || nh === "monthly gross" || nh === "total gross";
+            }),
+            ctcKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh === "ctc" || nh === "monthly ctc" || nh === "grand ctc" || nh === "total ctc" || nh.includes("ctc");
+            }),
             effectiveDateKey: headers.find(h => normalizeText(h).includes("effective") || normalizeText(h).includes("revision date")),
             calculationBasisKey: headers.find(h => {
                 const nh = normalizeText(h);
@@ -257,8 +269,10 @@ const runWorker = async () => {
                 const rowTransactions = [];
 
                 headerComponentMap.forEach((comp, colIdx) => {
-                    const value = parseFloat(row[headers[colIdx]]) || 0;
-                    if (value === 0) return;
+                    const rawValue = row[headers[colIdx]];
+                    if (rawValue === undefined || rawValue === null || String(rawValue).trim() === "") return;
+                    
+                    const value = parseFloat(rawValue) || 0;
 
                     const payload = {
                         employee_id: employee.id,
@@ -296,7 +310,11 @@ const runWorker = async () => {
                     employee_pf: { enabled: false, calculation_type: '12% of Basic', amount: 0 },
                     employee_esi: { enabled: false, calculation_type: '0.75% of Gross', amount: 0 },
                     pt: { enabled: false, calculation_type: 'None', amount: 0, state_id: '' },
-                    employee_lwf: { enabled: false, calculation_type: 'None', amount: 0, state_id: '' }
+                    employee_lwf: { enabled: false, calculation_type: 'None', amount: 0, state_id: '' },
+                    gratuity: { enabled: false, included_in_ctc: true, amount: 0 },
+                    leave_encashment: { enabled: false, calculation_type: 'Attendance', included_in_ctc: true, amount: 0 },
+                    bonus: { enabled: false, calculation_type: 'Attendance', included_in_ctc: true, amount: 0 },
+                    tds: { enabled: false, strategy: 'smart', amount: 0 }
                 };
 
                 const findCompValue = (keywords) => {
@@ -413,8 +431,121 @@ const runWorker = async () => {
                 if (statHeaderKeys.edliStat) statutory_config.pf_edli_admin.enabled = isYes(row[statHeaderKeys.edliStat]);
                 if (statHeaderKeys.rEsiStat) statutory_config.employer_esi.enabled = isYes(row[statHeaderKeys.rEsiStat]);
                 if (statHeaderKeys.rLwfStat) statutory_config.employer_lwf.enabled = isYes(row[statHeaderKeys.rLwfStat]);
+                if (statHeaderKeys.gratuityStat) statutory_config.gratuity.enabled = isYes(row[statHeaderKeys.gratuityStat]);
+                if (statHeaderKeys.leaveEncashmentStat) statutory_config.leave_encashment.enabled = isYes(row[statHeaderKeys.leaveEncashmentStat]);
+                if (statHeaderKeys.bonusStat) statutory_config.bonus.enabled = isYes(row[statHeaderKeys.bonusStat]);
+                if (statHeaderKeys.tdsStat) statutory_config.tds.enabled = isYes(row[statHeaderKeys.tdsStat]);
 
-                if (statHeaderKeys.grossKey && row[statHeaderKeys.grossKey]) ctcMonthly = parseFloat(row[statHeaderKeys.ctcKey]) || ctcMonthly;
+                // --- Bonus, Gratuity, Leave Encashment Logic ---
+                const gratuityAmt = findCompValue(["gratuity", "gratuity provision", "gratuity employer", "gratuity contribution"]);
+                if (statutory_config.gratuity.enabled) {
+                    const amt = (gratuityAmt && gratuityAmt.amount > 0) ? gratuityAmt.amount : Math.round(basicAmount * 0.0481);
+                    statutory_config.gratuity.amount = amt;
+                    statutory_config.gratuity.calculation_type = (gratuityAmt && gratuityAmt.amount > 0) ? 'Fixed' : 'Attendance';
+                    if ((!gratuityAmt || gratuityAmt.amount === 0) && amt > 0) {
+                        const compId = allComponents.find(c => normalizeText(c.component_name).includes('gratuity'))?.id;
+                        if (compId) {
+                            // Clear existing if it was 0
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                            if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
+
+                            rowTransactions.push({
+                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
+                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
+                                company_id, branch_id: employee.branch_id, user_id
+                            });
+                        }
+                    }
+                }
+
+                const leAmt = findCompValue(["leave encashments", "leave enchashments", "leave encashment", "leave enchashment", "pl", "privilege leave"]);
+                if (statutory_config.leave_encashment.enabled) {
+                    const amt = (leAmt && leAmt.amount > 0) ? leAmt.amount : Math.round(basicAmount * 0.0481);
+                    statutory_config.leave_encashment.amount = amt;
+                    statutory_config.leave_encashment.calculation_type = (leAmt && leAmt.amount > 0) ? 'Fixed' : 'Attendance';
+                    if ((!leAmt || leAmt.amount === 0) && amt > 0) {
+                        const compId = allComponents.find(c => {
+                            const n = normalizeText(c.component_name);
+                            return n.includes('leave encashment') || n.includes('leave enchashment') || n === 'pl';
+                        })?.id;
+                        if (compId) {
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                            if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
+
+                            rowTransactions.push({
+                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
+                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
+                                company_id, branch_id: employee.branch_id, user_id
+                            });
+                        }
+                    }
+                }
+
+                const bonusAmtValue = findCompValue(["bonuses", "bonus", "bonus provision", "exgratia", "ex-gratia"]);
+                if (statutory_config.bonus.enabled) {
+                    const amt = (bonusAmtValue && bonusAmtValue.amount > 0) ? bonusAmtValue.amount : Math.round(basicAmount * 0.0833);
+                    statutory_config.bonus.amount = amt;
+                    statutory_config.bonus.calculation_type = (bonusAmtValue && bonusAmtValue.amount > 0) ? 'Fixed' : 'Attendance';
+                    if ((!bonusAmtValue || bonusAmtValue.amount === 0) && amt > 0) {
+                        const compId = allComponents.find(c => normalizeText(c.component_name).includes('bonus'))?.id;
+                        if (compId) {
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                            if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
+
+                            rowTransactions.push({
+                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
+                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
+                                company_id, branch_id: employee.branch_id, user_id
+                            });
+                        }
+                    }
+                }
+
+                const tdsAmt = findCompValue(["tds", "tds deduction", "income tax", "tds amount"]);
+                if (tdsAmt) {
+                    statutory_config.tds.enabled = true;
+                    statutory_config.tds.amount = tdsAmt.amount;
+                }
+
+                // --- EDLI & Admin Charges ---
+                if (statutory_config.pf_edli_admin.enabled) {
+                    const edliAmtValue = findCompValue(["edli", "admin charges", "pf admin"]);
+                    const amt = edliAmtValue ? edliAmtValue.amount : Math.round(basicAmount * 0.005); // 0.5% default
+                    statutory_config.pf_edli_admin.amount = amt;
+                    if (!edliAmtValue && amt > 0) {
+                        const compId = allComponents.find(c => {
+                            const n = normalizeText(c.component_name);
+                            return n.includes('edli') || n.includes('admin charges');
+                        })?.id;
+                        if (compId) {
+                            rowTransactions.push({
+                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
+                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
+                                company_id, branch_id: employee.branch_id, user_id
+                            });
+                        }
+                    }
+                }
+
+                // --- Final CTC Reconciliation ---
+                // Re-calculate CTC from all components to ensure total consistency
+                let calculatedTotalCtc = 0;
+                rowTransactions.forEach(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    // Include if explicitly flagged OR if it's an employer contribution/statutory component
+                    if (t.included_in_ctc || t.is_employer_contribution || (comp && comp.component_category === 'STATUTORY')) {
+                        calculatedTotalCtc += (parseFloat(t.monthly_amount) || 0);
+                    }
+                });
+                
+                // We prioritize the calculated sum to ensure UI/Backend consistency
+                ctcMonthly = calculatedTotalCtc;
+
+                // However, if Excel specifically provided a HIGHER CTC (e.g. including hidden items), we respect it
+                if (statHeaderKeys.ctcKey && row[statHeaderKeys.ctcKey]) {
+                    const excelCTC = parseFloat(row[statHeaderKeys.ctcKey]) || 0;
+                    if (excelCTC > ctcMonthly) ctcMonthly = excelCTC;
+                }
 
                 let calculationBasis = 'WORKING_DAYS';
                 if (statHeaderKeys.calculationBasisKey && row[statHeaderKeys.calculationBasisKey]) {
@@ -526,6 +657,7 @@ const runWorker = async () => {
             await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: empIdsWithTransactions } }, transaction);
             if (transactionsToCreate.length > 0) {
                 const CHUNK_SIZE = 1000;
+                console.log("transactionsToCreate",transactionsToCreate)
                 for (let i = 0; i < transactionsToCreate.length; i += CHUNK_SIZE) {
                     await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, transactionsToCreate.slice(i, i + CHUNK_SIZE), {}, transaction);
                 }

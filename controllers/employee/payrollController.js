@@ -734,16 +734,75 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         };
 
         // Employee Shares
-        if (sc.employee_pf?.enabled) addStatRecord("Employee PF", sc.employee_pf.amount, false);
+        if (sc.employee_pf?.enabled) {
+            let amount = sc.employee_pf.amount;
+            if (sc.employee_pf.calculation_type === '12% of Basic' || sc.employee_pf.calculation_type === 'Variable') {
+                const basic = valuesMap.BASIC || 0;
+                amount = Math.min(basic * 0.12, 1800);
+            }
+            addStatRecord("Employee PF", amount, false);
+        }
         if (sc.employee_esi?.enabled) addStatRecord("Employee ESI", sc.employee_esi.amount, false);
         if (sc.pt?.enabled) addStatRecord("Professional Tax", sc.pt.amount, false);
         if (sc.employee_lwf?.enabled) addStatRecord("Employee LWF", sc.employee_lwf.amount, false);
 
         // Employer Shares
-        if (sc.employer_pf?.enabled) addStatRecord("Employer PF", sc.employer_pf.amount, true);
+        if (sc.employer_pf?.enabled) {
+            let amount = sc.employer_pf.amount;
+            if (sc.employer_pf.calculation_type === 'Variable' || sc.employer_pf.calculation_type === '12% of Basic') {
+                const basic = valuesMap.BASIC || 0;
+                amount = Math.min(basic * 0.12, 1800);
+            }
+            addStatRecord("Employer PF", amount, true);
+        }
         if (sc.employer_esi?.enabled) addStatRecord("Employer ESI", sc.employer_esi.amount, true);
         if (sc.employer_lwf?.enabled) addStatRecord("Employer LWF", sc.employer_lwf.amount, true);
         if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
+        
+        // Gratuity Provision (Employer Side)
+        if (sc.gratuity?.enabled) {
+            const joiningDate = dayjs(employee.joining_date);
+            const payrollDate = dayjs(startDate);
+            const serviceYears = payrollDate.diff(joiningDate, 'year', true);
+
+            if (serviceYears >= 5) {
+                const basic = valuesMap.BASIC || 0;
+                const amount = Math.round(basic * 0.0481);
+                addStatRecord("Gratuity Provision", amount, true);
+            }
+        }
+
+        // Leave Encashment Provision (Employer Side)
+        if (sc.leave_encashment?.enabled) {
+            const basic = valuesMap.BASIC || 0;
+            const baseAmount = sc.leave_encashment.amount || basic;
+            const calcType = sc.leave_encashment.calculation_type || 'Attendance';
+            
+            let amount = 0;
+            if (calcType === 'Fixed') {
+                amount = sc.leave_encashment.amount || 0;
+            } else if (calcType === 'Attendance') {
+                // amount / workingday * 1.25 (roughly 4.81% of monthly)
+                amount = Math.round(baseAmount * 0.0481);
+            }
+            addStatRecord("Leave Encashment Provision", amount, true);
+        }
+
+        // Statutory Bonus Provision (Employer Side)
+        if (sc.bonus?.enabled) {
+            const basic = valuesMap.BASIC || 0;
+            const baseAmount = sc.bonus.amount || basic;
+            const calcType = sc.bonus.calculation_type || 'Attendance';
+
+            let amount = 0;
+            if (calcType === 'Fixed') {
+                amount = sc.bonus.amount || 0;
+            } else if (calcType === 'Attendance') {
+                // standard 8.33% of Basic or custom base
+                amount = Math.round(baseAmount * 0.0833);
+            }
+            addStatRecord("Bonus Provision", amount, true);
+        }
     }
 
 
