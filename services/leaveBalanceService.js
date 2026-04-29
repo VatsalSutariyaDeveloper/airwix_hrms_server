@@ -350,6 +350,42 @@ console.log("start",start,"end",end)
                             if (category.unused_leave_rule === 'CARRY_FORWARD') {
                                 const limit = parseFloat(category.carry_forward_limit || 0);
                                 carryForward = Math.min(remaining, limit);
+                            } else if (category.unused_leave_rule === 'ENCASH' && remaining > 0) {
+                                // Calculate previous cycle end date (the day before new cycle starts)
+                                const prevCycleEnd = start.subtract(1, 'day').format('YYYY-MM-DD');
+                                
+                                // Apply carry_forward_limit to encashment (excess lapses)
+                                const limit = parseFloat(category.carry_forward_limit || 0);
+                                const encashDays = limit > 0 ? Math.min(remaining, limit) : remaining;
+                                const lapsedDays = remaining - encashDays;
+                                
+                                // Check if encashment request already exists for this cycle
+                                const existingEncashment = await commonQuery.findOneRecord(LeaveRequest, {
+                                    employee_id: employeeId,
+                                    leave_category_id: category.id,
+                                    is_encashment: true,
+                                    request_type: 'ENCASHMENT',
+                                    start_date: prevCycleEnd,
+                                }, {}, t);
+
+                                if (!existingEncashment) {
+                                    // Auto-create approved encashment request
+                                    await commonQuery.createRecord(LeaveRequest, {
+                                        employee_id: employeeId,
+                                        leave_category_id: category.id,
+                                        start_date: prevCycleEnd,
+                                        end_date: prevCycleEnd,
+                                        total_days: encashDays,
+                                        reason: `Auto-generated: ${template.leave_policy_cycle} cycle end encashment${lapsedDays > 0 ? ` (${lapsedDays} days lapsed)` : ''}`,
+                                        approval_status: constants.LEAVE_APPROVAL_STATUS.PENDING,
+                                        current_level: 1,
+                                        is_encashment: true,
+                                        is_settled_encashment: false,
+                                        request_type: 'ENCASHMENT',
+                                    }, t);
+                                    console.log(`[Year-End Encash] Created PENDING encashment request for Emp ${employeeId}, Category ${category.leave_category_name}, Days: ${encashDays}${lapsedDays > 0 ? ` (${lapsedDays} lapsed)` : ''}`);
+                                }
+                                carryForward = 0; // Encashed leaves are not carried forward
                             }
                             used = 0; // New cycle starts with 0 used
                         }

@@ -59,6 +59,15 @@ const parseExcelDate = (val, rowIndex, fieldName) => {
     return null;
 };
 
+const parseExcelAmount = (val) => {
+    if (val === undefined || val === null || val === "") return 0;
+    if (typeof val === 'number') return val;
+    // Remove commas and other non-numeric chars except decimal point and minus sign
+    const cleaned = String(val).replace(/[^0-9.-]/g, '');
+    const parsed = parseFloat(cleaned);
+    return isNaN(parsed) ? 0 : parsed;
+};
+
 const runWorker = async () => {
     try { await sequelize.authenticate(); } catch (error) {
         parentPort.postMessage({ status: "ERROR", error: "Database connection failed." });
@@ -108,11 +117,11 @@ const runWorker = async () => {
         const basicCompId = allComponents.find(c => normalizeText(c.component_name) === 'basic')?.id;
         const employeePFCompId = allComponents.find(c => {
             const n = normalizeText(c.component_name);
-            return n.includes('pf') && (n.includes('deduction') || n.includes('employee'));
+            return n === 'pf' || (n.includes('pf') && (n.includes('deduction') || n.includes('employee') || n.includes('provident')));
         })?.id;
         const employerPFCompId = allComponents.find(c => {
             const n = normalizeText(c.component_name);
-            return n.includes('pf') && (n.includes('employer') || n.includes('contribution'));
+            return n.includes('employer') || n.includes('contribution') || (n.includes('pf') && (n.includes('employer') || n.includes('contribution')));
         })?.id;
 
         // 2. Identify which columns are components
@@ -203,7 +212,7 @@ const runWorker = async () => {
             }),
             ctcKey: headers.find(h => {
                 const nh = normalizeText(h);
-                return nh === "ctc" || nh === "monthly ctc" || nh === "grand ctc" || nh === "total ctc" || nh.includes("ctc");
+                return nh === "ctc" || nh === "monthly ctc" || nh === "grand ctc" || nh === "total ctc" || nh.includes("ctc") || nh.includes("cost to company");
             }),
             effectiveDateKey: headers.find(h => normalizeText(h).includes("effective") || normalizeText(h).includes("revision date")),
             calculationBasisKey: headers.find(h => {
@@ -211,7 +220,7 @@ const runWorker = async () => {
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis");
             })
         };
-
+        
         let createdCount = 0;
         let errorCount = 0;
         const errorSample = [];
@@ -272,7 +281,7 @@ const runWorker = async () => {
                     const rawValue = row[headers[colIdx]];
                     if (rawValue === undefined || rawValue === null || String(rawValue).trim() === "") return;
                     
-                    const value = parseFloat(rawValue) || 0;
+                    const value = parseExcelAmount(rawValue);
 
                     const payload = {
                         employee_id: employee.id,
@@ -537,14 +546,42 @@ const runWorker = async () => {
                         calculatedTotalCtc += (parseFloat(t.monthly_amount) || 0);
                     }
                 });
+
+                // Add statutory amounts that might NOT be in rowTransactions (because component ID was missing)
+                // but are enabled and marked as included in CTC
+                if (!rowTransactions.find(t => t.component_id === employerPFCompId) && statutory_config.employer_pf.enabled && statutory_config.employer_pf.included_in_ctc) {
+                    calculatedTotalCtc += (statutory_config.employer_pf.amount || 0);
+                }
+                if (!rowTransactions.find(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    return normalizeText(comp?.component_name || "").includes('gratuity');
+                }) && statutory_config.gratuity.enabled && statutory_config.gratuity.included_in_ctc) {
+                    calculatedTotalCtc += (statutory_config.gratuity.amount || 0);
+                }
+                if (!rowTransactions.find(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    return normalizeText(comp?.component_name || "").includes('bonus');
+                }) && statutory_config.bonus.enabled && statutory_config.bonus.included_in_ctc) {
+                    calculatedTotalCtc += (statutory_config.bonus.amount || 0);
+                }
+                if (!rowTransactions.find(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    const n = normalizeText(comp?.component_name || "");
+                    return n.includes('leave encashment') || n.includes('leave enchashment') || n === 'pl';
+                }) && statutory_config.leave_encashment.enabled && statutory_config.leave_encashment.included_in_ctc) {
+                    calculatedTotalCtc += (statutory_config.leave_encashment.amount || 0);
+                }
                 
                 // We prioritize the calculated sum to ensure UI/Backend consistency
                 ctcMonthly = calculatedTotalCtc;
 
+                const excelCTC = parseExcelAmount(row[statHeaderKeys.ctcKey]);
+
                 // However, if Excel specifically provided a HIGHER CTC (e.g. including hidden items), we respect it
-                if (statHeaderKeys.ctcKey && row[statHeaderKeys.ctcKey]) {
-                    const excelCTC = parseFloat(row[statHeaderKeys.ctcKey]) || 0;
-                    if (excelCTC > ctcMonthly) ctcMonthly = excelCTC;
+                if (statHeaderKeys.ctcKey && excelCTC > 0) {
+                    if (excelCTC > ctcMonthly) {
+                        ctcMonthly = excelCTC;
+                    }
                 }
 
                 let calculationBasis = 'WORKING_DAYS';
@@ -657,7 +694,6 @@ const runWorker = async () => {
             await commonQuery.hardDeleteRecords(EmployeeSalaryTemplateTransaction, { employee_id: { [Op.in]: empIdsWithTransactions } }, transaction);
             if (transactionsToCreate.length > 0) {
                 const CHUNK_SIZE = 1000;
-                console.log("transactionsToCreate",transactionsToCreate)
                 for (let i = 0; i < transactionsToCreate.length; i += CHUNK_SIZE) {
                     await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, transactionsToCreate.slice(i, i + CHUNK_SIZE), {}, transaction);
                 }

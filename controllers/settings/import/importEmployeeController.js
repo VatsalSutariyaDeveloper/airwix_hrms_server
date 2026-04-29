@@ -13,8 +13,6 @@ const { validateRequest, handleError, constants } = require("../../../helpers");
  * Handles CLIENT DISCONNECTION to abort worker.
  */
 exports.importData = async (req, res) => {
-  console.log("BODY:", req.body);
-  console.log("FILE:", req.file);
   let worker = null;
   let isAborted = false;
   let cancelTimeout = null;
