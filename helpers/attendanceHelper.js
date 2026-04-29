@@ -108,6 +108,7 @@ async function punch(employeeId, meta, transaction = null) {
   const baseDate = dayjs().format("YYYY-MM-DD");
   const now = meta.punch_time ? parseDateTime(meta.punch_time, baseDate) : new Date();
   const today = dayjs(now).format("YYYY-MM-DD");
+  let targetDayDate = today;
 
   // 1️⃣.0 Fetch Employee with Attendance Template (Needed for rules)
   const punchWhere = await getPunchAllowedWhere(meta.company_id, meta.branch_id);
@@ -217,7 +218,8 @@ async function punch(employeeId, meta, transaction = null) {
       status: 0, // PRESENT
       company_id: meta.company_id || employee.company_id,
       branch_id: meta.branch_id || employee.branch_id,
-      user_id: meta.user_id || 0
+      user_id: meta.user_id || 0,
+      face_descriptor: meta.face_descriptor || null
     }, transaction);
     return { punchType: 'CanteenPunch', punchTime: now, punchId: 'N/A', targetDayDate };
   }
@@ -306,7 +308,7 @@ async function punch(employeeId, meta, transaction = null) {
   } 
 
   // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
-  let targetDayDate = today;
+  targetDayDate = today;
   if (punchType === "OUT" && lastPunchGlobal) {
     if (!lastInDay) {
       lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
