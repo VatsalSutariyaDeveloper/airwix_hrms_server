@@ -39,7 +39,7 @@ const normalizeText = (v) => {
 const parseExcelDate = (val, rowIndex, fieldName) => {
     if (!val) return null;
     if (val instanceof Date) return val;
-    
+
     // Excel numeric date
     if (!isNaN(val) && typeof val === 'number') {
         return new Date(Math.round((val - 25569) * 86400 * 1000));
@@ -47,7 +47,7 @@ const parseExcelDate = (val, rowIndex, fieldName) => {
 
     const d = new Date(val);
     if (!isNaN(d.getTime())) return d;
-    
+
     // Try DD-MM-YYYY or DD/MM/YYYY
     const parts = String(val).split(/[-/]/);
     if (parts.length === 3) {
@@ -81,7 +81,7 @@ const runWorker = async () => {
         const workbook = xlsx.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        
+
         // 🔍 Find the header row dynamically
         const allRows = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
         let headerRowIndex = 0;
@@ -98,7 +98,7 @@ const runWorker = async () => {
 
         const originalRows = xlsx.utils.sheet_to_json(worksheet, { range: headerRowIndex });
         const headers = (allRows[headerRowIndex] || []).map(h => String(h || "").trim());
-        
+
         if (isCancelled) fail("IMPORT_CANCELLED");
 
         transaction = await sequelize.transaction();
@@ -126,13 +126,13 @@ const runWorker = async () => {
 
         // 2. Identify which columns are components
         const headerComponentMap = new Map();
-        
+
         // Build a normalized component list for matching
         const normalizedComponents = allComponents.map(c => ({
             ...c,
             normName: normalizeText(c.component_name).replace(/[^a-z0-9]/g, '')
         }));
-        
+
         headers.forEach((header, index) => {
             const normHeader = normalizeText(header).replace(/[^a-z0-9]/g, '');
             if (!normHeader || normHeader === 'total') return;
@@ -160,7 +160,7 @@ const runWorker = async () => {
         // 3. Fetch all employees to map code to ID
         const empCodeKey = headers.find(h => normalizeText(h).includes("code"));
         const empNameKey = headers.find(h => normalizeText(h).includes("name of employee") || normalizeText(h).includes("employee name"));
-        
+
         const employeeCodesInFile = [...new Set(originalRows.map(r => String(r[empCodeKey] || "").trim()).filter(Boolean))];
         const existingEmployees = await commonQuery.findAllRecords(Employee, {
             employee_code: { [Op.in]: employeeCodesInFile },
@@ -177,7 +177,7 @@ const runWorker = async () => {
         const existingTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, {
             employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
         }, { raw: true }, transaction);
-        
+
         const templateMap = new Map();
         existingTemplates.forEach(t => templateMap.set(t.employee_id, t));
 
@@ -220,7 +220,7 @@ const runWorker = async () => {
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis");
             })
         };
-        
+
         let createdCount = 0;
         let errorCount = 0;
         const errorSample = [];
@@ -256,10 +256,10 @@ const runWorker = async () => {
         for (let i = 0; i < originalRows.length; i++) {
             const row = originalRows[i];
             const rowIndex = i + headerRowIndex + 2;
-            
+
             const empCodeValue = empCodeKey ? String(row[empCodeKey] || "").trim() : "";
             const empNameValue = empNameKey ? String(row[empNameKey] || "").trim() : "Unknown";
-            
+
             if (!empCodeValue || normalizeText(empCodeValue) === "total") continue;
 
             const employee = employeeMap.get(normalizeText(empCodeValue));
@@ -280,17 +280,17 @@ const runWorker = async () => {
                 headerComponentMap.forEach((comp, colIdx) => {
                     const rawValue = row[headers[colIdx]];
                     if (rawValue === undefined || rawValue === null || String(rawValue).trim() === "") return;
-                    
+
                     const value = parseExcelAmount(rawValue);
 
                     const payload = {
                         employee_id: employee.id,
                         component_id: comp.id,
-                        component_category: (comp.component_type === 'EARNING' || comp.component_type === 'DEDUCTION') ? (comp.component_category || 'FIXED') : 
-                                            (comp.component_type === 'ANNUAL_COMPONENT' ? 'ANNUAL_COMPONENT' : 
-                                            (comp.component_type === 'EMPLOYER_CONTRIBUTION' ? 'EMPLOYER_CONTRIBUTION' : 
-                                            (comp.component_type === 'VARIABLE_EARNING' ? 'VARIABLE_EARNING' : 
-                                            (comp.component_type === 'BENEFIT' ? 'BENEFIT' : 'STATUTORY')))),
+                        component_category: (comp.component_type === 'EARNING' || comp.component_type === 'DEDUCTION') ? (comp.component_category || 'FIXED') :
+                            (comp.component_type === 'ANNUAL_COMPONENT' ? 'ANNUAL_COMPONENT' :
+                                (comp.component_type === 'EMPLOYER_CONTRIBUTION' ? 'EMPLOYER_CONTRIBUTION' :
+                                    (comp.component_type === 'VARIABLE_EARNING' ? 'VARIABLE_EARNING' :
+                                        (comp.component_type === 'BENEFIT' ? 'BENEFIT' : 'STATUTORY')))),
                         monthly_amount: value,
                         yearly_amount: value * 12,
                         included_in_ctc: true,
@@ -306,7 +306,7 @@ const runWorker = async () => {
                     else if (comp.component_type === 'VARIABLE_EARNING') { ctcMonthly += value; }
                     else if (comp.component_type === 'BENEFIT') { ctcMonthly += value; }
                     else if (comp.component_category === 'STATUTORY') { ctcMonthly += value; }
-                    
+
                     rowTransactions.push(payload);
                 });
 
@@ -339,26 +339,48 @@ const runWorker = async () => {
                 const basicAmount = basicTrans ? basicTrans.monthly_amount : 0;
 
                 // --- Employee PF Logic ---
-                if (statHeaderKeys.ePfStat) statutory_config.employee_pf.enabled = isYes(row[statHeaderKeys.ePfStat]);
-                else if (rowTransactions.find(t => t.component_id === employeePFCompId)) statutory_config.employee_pf.enabled = true;
+                // Enable Employee PF if: PF STATUS is yes, OR PF LIMIT is yes, OR there's a PF transaction
+                if (statHeaderKeys.ePfStat && isYes(row[statHeaderKeys.ePfStat])) {
+                    statutory_config.employee_pf.enabled = true;
+                } else if (statHeaderKeys.ePfLim && isYes(row[statHeaderKeys.ePfLim])) {
+                    statutory_config.employee_pf.enabled = true;
+                } else if (rowTransactions.find(t => t.component_id === employeePFCompId)) {
+                    statutory_config.employee_pf.enabled = true;
+                }
 
                 if (statutory_config.employee_pf.enabled) {
                     let amt = 0;
+                    const excelPFAmt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+
                     if (statHeaderKeys.ePfLim) {
                         const limVal = row[statHeaderKeys.ePfLim];
-                        statutory_config.employee_pf.calculation_type = normalizeLimit(limVal, 'employee');
+
                         if (isYes(limVal)) {
-                            amt = 1800;
+                            // PF LIMIT (Employee Statutory) = yes: set calculation_type = ₹1,800 Fixed, max limit 1800
+                            statutory_config.employee_pf.calculation_type = '₹1,800 Fixed';
+                            amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
                         } else if (normalizeText(limVal) === 'no') {
-                            amt = Math.round(basicAmount * 0.12);
+                            // PF LIMIT = no: calculation_type = 12% of Basic
+                            statutory_config.employee_pf.calculation_type = '12% of Basic';
+                            amt = excelPFAmt > 0 ? excelPFAmt : Math.round(basicAmount * 0.12);
                         } else {
-                            amt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+                            // If no clear yes/no, use normalizeLimit logic
+                            statutory_config.employee_pf.calculation_type = normalizeLimit(limVal, 'employee');
+                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
                         }
                     } else {
-                        amt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+                        // No limit column: if Excel has amount, use it with max 1800 limit
+                        if (excelPFAmt > 0) {
+                            amt = Math.min(excelPFAmt, 1800);
+                            statutory_config.employee_pf.calculation_type = '₹1,800 Fixed';
+                        } else {
+                            // No Excel amount: calculate 12% of Basic with max 1800
+                            amt = Math.min(Math.round(basicAmount * 0.12), 1800);
+                            statutory_config.employee_pf.calculation_type = '12% of Basic';
+                        }
                     }
                     statutory_config.employee_pf.amount = amt;
-                    
+
                     const t = rowTransactions.find(t => t.component_id === employeePFCompId);
                     if (t) {
                         t.monthly_amount = amt;
@@ -380,25 +402,47 @@ const runWorker = async () => {
                 }
 
                 // --- Employer PF Logic ---
-                if (statHeaderKeys.rPfStat) statutory_config.employer_pf.enabled = isYes(row[statHeaderKeys.rPfStat]);
-                else if (rowTransactions.find(t => t.component_id === employerPFCompId)) statutory_config.employer_pf.enabled = true;
+                // Enable Employer PF if: PF STATUS is yes, OR PF LIMIT is yes, OR there's a PF transaction
+                if (statHeaderKeys.rPfStat && isYes(row[statHeaderKeys.rPfStat])) {
+                    statutory_config.employer_pf.enabled = true;
+                } else if (statHeaderKeys.rPfLim && isYes(row[statHeaderKeys.rPfLim])) {
+                    statutory_config.employer_pf.enabled = true;
+                } else if (rowTransactions.find(t => t.component_id === employerPFCompId)) {
+                    statutory_config.employer_pf.enabled = true;
+                }
 
                 if (statutory_config.employer_pf.enabled) {
                     let amt = 0;
+                    const excelPFAmt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+
                     if (statHeaderKeys.rPfLim) {
                         const limVal = row[statHeaderKeys.rPfLim];
-                        statutory_config.employer_pf.calculation_type = normalizeLimit(limVal, 'employer');
+
                         if (isYes(limVal)) {
-                            amt = 1800;
+                            // PF LIMIT (Employer Statutory) = yes: set calculation_type = ₹ 1800 Limit, max limit 1800
+                            statutory_config.employer_pf.calculation_type = '₹ 1800 Limit';
+                            amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
                         } else if (normalizeText(limVal) === 'no') {
-                            amt = Math.round(basicAmount * 0.12);
+                            // PF LIMIT = no: calculation_type = 12% of Basic
+                            statutory_config.employer_pf.calculation_type = '12% of Basic';
+                            amt = excelPFAmt > 0 ? excelPFAmt : Math.round(basicAmount * 0.12);
                         } else {
-                            amt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+                            // If no clear yes/no, use normalizeLimit logic
+                            statutory_config.employer_pf.calculation_type = normalizeLimit(limVal, 'employer');
+                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
                         }
                     } else {
-                        amt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+                        // No limit column: if Excel has amount, use it with max 1800 limit
+                        if (excelPFAmt > 0) {
+                            amt = Math.min(excelPFAmt, 1800);
+                            statutory_config.employer_pf.calculation_type = '₹ 1800 Limit';
+                        } else {
+                            // No Excel amount: calculate 12% of Basic with max 1800
+                            amt = Math.min(Math.round(basicAmount * 0.12), 1800);
+                            statutory_config.employer_pf.calculation_type = '12% of Basic';
+                        }
                     }
-                    
+
                     const t = rowTransactions.find(t => t.component_id === employerPFCompId);
                     const oldAmt = t ? t.monthly_amount : 0;
                     statutory_config.employer_pf.amount = amt;
@@ -571,17 +615,18 @@ const runWorker = async () => {
                 }) && statutory_config.leave_encashment.enabled && statutory_config.leave_encashment.included_in_ctc) {
                     calculatedTotalCtc += (statutory_config.leave_encashment.amount || 0);
                 }
-                
-                // We prioritize the calculated sum to ensure UI/Backend consistency
-                ctcMonthly = calculatedTotalCtc;
 
+                // Check for Excel Grand CTC / CTC column
                 const excelCTC = parseExcelAmount(row[statHeaderKeys.ctcKey]);
+                const excelGrandCTC = parseExcelAmount(row['(A+B+C+D)']) || parseExcelAmount(row['Grand CTC']) || parseExcelAmount(row['CTC']);
 
-                // However, if Excel specifically provided a HIGHER CTC (e.g. including hidden items), we respect it
-                if (statHeaderKeys.ctcKey && excelCTC > 0) {
-                    if (excelCTC > ctcMonthly) {
-                        ctcMonthly = excelCTC;
-                    }
+                // Use Excel CTC value directly if provided, otherwise use calculated value
+                if (excelGrandCTC > 0) {
+                    ctcMonthly = excelGrandCTC;
+                } else if (statHeaderKeys.ctcKey && excelCTC > 0) {
+                    ctcMonthly = excelCTC;
+                } else {
+                    ctcMonthly = calculatedTotalCtc;
                 }
 
                 let calculationBasis = 'WORKING_DAYS';
@@ -613,16 +658,16 @@ const runWorker = async () => {
                 if (template) {
                     const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
                     revisionsToCreate.push({
-                        employee_id: employee.id, 
-                        previous_ctc: oldCTC, 
+                        employee_id: employee.id,
+                        previous_ctc: oldCTC,
                         new_ctc: ctcMonthly,
-                        effective_date: effectiveDate, 
+                        effective_date: effectiveDate,
                         increment_amount: ctcMonthly - oldCTC,
                         increment_percentage: oldCTC > 0 ? ((ctcMonthly - oldCTC) / oldCTC) * 100 : 0,
-                        remarks: "Salary Revised via Excel Import", 
-                        status: 1, 
+                        remarks: "Salary Revised via Excel Import",
+                        status: 1,
                         approved_by: user_id,
-                        company_id, 
+                        company_id,
                         branch_id: employee.branch_id
                     });
                 }
