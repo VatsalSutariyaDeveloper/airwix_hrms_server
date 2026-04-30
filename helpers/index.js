@@ -62,6 +62,7 @@ const whatsappService = require("./whatsappService");
     otpService,
     tokenHelper: require("./tokenHelper"),
     whatsappService,
+    cryptoHelper: require("./cryptoHelper"),
     Err,
     fail
 };

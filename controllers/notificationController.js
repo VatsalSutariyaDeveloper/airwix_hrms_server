@@ -22,10 +22,11 @@ exports.getNotifications = async (req, res) => {
         // 2. Fetch Active Announcements
         // Active if: current date is between announcement_date and expiry_date (if exists)
         const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
         
         const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
             status: 0, // Active
-            announcement_date: { [Op.lte]: today },
+            announcement_date: { [Op.lte]: todayEnd },
             [Op.or]: [
                 { expiry_date: null },
                 { expiry_date: { [Op.gte]: today } }
@@ -167,11 +168,12 @@ exports.getUnreadCount = async (req, res) => {
 
         // Count unread announcements
         const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
         const activeAnnouncements = await Announcement.findAll({
             where: {
                 company_id: companyId,
                 status: 0,
-                announcement_date: { [Op.lte]: today },
+                announcement_date: { [Op.lte]: todayEnd },
                 [Op.or]: [
                     { expiry_date: null },
                     { expiry_date: { [Op.gte]: today } }

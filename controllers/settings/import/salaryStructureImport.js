@@ -99,11 +99,28 @@ const runWorker = async () => {
         const originalRows = xlsx.utils.sheet_to_json(worksheet, { range: headerRowIndex });
         const headers = (allRows[headerRowIndex] || []).map(h => String(h || "").trim());
 
+        // Check for duplicate column names in Excel
+        const headerNameMap = new Map();
+        const duplicateHeaders = [];
+        headers.forEach((header, idx) => {
+            const normHeader = normalizeText(header);
+            if (!normHeader) return;
+            if (headerNameMap.has(normHeader)) {
+                duplicateHeaders.push(header);
+            } else {
+                headerNameMap.set(normHeader, idx);
+            }
+        });
+        if (duplicateHeaders.length > 0) {
+            console.log("Duplicate Excel columns found:", [...new Set(duplicateHeaders)]);
+            throw new Error(`Duplicate column names found in Excel: ${[...new Set(duplicateHeaders)].join(', ')}. Please ensure all column names are unique.`);
+        }
+
         if (isCancelled) fail("IMPORT_CANCELLED");
 
         transaction = await sequelize.transaction();
 
-        // 1. Pre-fetch all active salary components to map names to IDs
+        // 1. Pre-fetch active salary components to map names to IDs
         const allComponents = await commonQuery.findAllRecords(SalaryComponent, {
             status: 0
         }, { attributes: ['id', 'component_name', 'component_type', 'component_category'], raw: true }, transaction, false);
@@ -149,6 +166,14 @@ const runWorker = async () => {
                     matchedComp = normalizedComponents.find(c => c.normName === 'bonus');
                 } else if (nh === 'gratuities') {
                     matchedComp = normalizedComponents.find(c => c.normName === 'gratuity');
+                } else if (nh === 'employerpfemployee') {
+                    matchedComp = normalizedComponents.find(c => c.normName.includes('pf') && (c.normName.includes('deduction') || c.normName.includes('employee')));
+                } else if (nh === 'employerpfemployer') {
+                    matchedComp = normalizedComponents.find(c => c.normName.includes('pf') && c.normName.includes('employer'));
+                } else if (nh === 'esicemployee') {
+                    matchedComp = normalizedComponents.find(c => c.normName.includes('esi') && c.normName.includes('deduction'));
+                } else if (nh === 'esicemployer') {
+                    matchedComp = normalizedComponents.find(c => c.normName.includes('esi') && c.normName.includes('employer'));
                 }
             }
 
@@ -192,15 +217,15 @@ const runWorker = async () => {
         };
 
         const statHeaderKeys = {
-            ePfStat: getStatHeader(["employee", "pf", "status"]),
-            ePfLim: getStatHeader(["employee", "pf", "limit"]),
-            eEsiStat: getStatHeader(["employee", "esi", "status"]),
+            ePfStat: getStatHeader(["employee", "pf", "status"]) || getStatHeader(["employer", "pf", "employee"]),
+            ePfLim: getStatHeader(["employee", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employee"]),
+            eEsiStat: getStatHeader(["employee", "esi", "status"]) || getStatHeader(["esic", "employee"]),
             ptStat: getStatHeader(["pt", "status"]),
             eLwfStat: getStatHeader(["employee", "lwf", "status"]),
-            rPfStat: getStatHeader(["employer", "pf", "status"]),
-            rPfLim: getStatHeader(["employer", "pf", "limit"]),
+            rPfStat: getStatHeader(["employer", "pf", "status"]) || getStatHeader(["employer", "pf", "employer"]),
+            rPfLim: getStatHeader(["employer", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employer"]),
             edliStat: getStatHeader(["employer", "edli", "status"]),
-            rEsiStat: getStatHeader(["employer", "esi", "status"]),
+            rEsiStat: getStatHeader(["employer", "esi", "status"]) || getStatHeader(["esic", "employer"]),
             rLwfStat: getStatHeader(["employer", "lwf", "status"]),
             gratuityStat: getStatHeader(["gratuity", "status"]),
             leaveEncashmentStat: getStatHeader(["leave", "encashment", "status"]),
@@ -350,19 +375,19 @@ const runWorker = async () => {
 
                 if (statutory_config.employee_pf.enabled) {
                     let amt = 0;
-                    const excelPFAmt = rowTransactions.find(t => t.component_id === employeePFCompId)?.monthly_amount || 0;
+                    const excelPFAmt = parseExcelAmount(row['PF_1']) || 0;
 
                     if (statHeaderKeys.ePfLim) {
                         const limVal = row[statHeaderKeys.ePfLim];
 
                         if (isYes(limVal)) {
-                            // PF LIMIT (Employee Statutory) = yes: set calculation_type = ₹1,800 Fixed, max limit 1800
-                            statutory_config.employee_pf.calculation_type = '₹1,800 Fixed';
+                            // PF LIMIT (Employee Statutory) = yes: set calculation_type = ₹ 1800 Limit, max limit 1800
+                            statutory_config.employee_pf.calculation_type = '₹ 1800 Limit';
                             amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
                         } else if (normalizeText(limVal) === 'no') {
-                            // PF LIMIT = no: calculation_type = 12% of Basic
+                            // PF LIMIT = no: calculation_type = 12% of Basic, use Excel amount
                             statutory_config.employee_pf.calculation_type = '12% of Basic';
-                            amt = excelPFAmt > 0 ? excelPFAmt : Math.round(basicAmount * 0.12);
+                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
                         } else {
                             // If no clear yes/no, use normalizeLimit logic
                             statutory_config.employee_pf.calculation_type = normalizeLimit(limVal, 'employee');
@@ -413,7 +438,7 @@ const runWorker = async () => {
 
                 if (statutory_config.employer_pf.enabled) {
                     let amt = 0;
-                    const excelPFAmt = rowTransactions.find(t => t.component_id === employerPFCompId)?.monthly_amount || 0;
+                    const excelPFAmt = parseExcelAmount(row['PF']) || 0;
 
                     if (statHeaderKeys.rPfLim) {
                         const limVal = row[statHeaderKeys.rPfLim];
@@ -423,9 +448,9 @@ const runWorker = async () => {
                             statutory_config.employer_pf.calculation_type = '₹ 1800 Limit';
                             amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
                         } else if (normalizeText(limVal) === 'no') {
-                            // PF LIMIT = no: calculation_type = 12% of Basic
+                            // PF LIMIT = no: calculation_type = 12% of Basic, use Excel amount
                             statutory_config.employer_pf.calculation_type = '12% of Basic';
-                            amt = excelPFAmt > 0 ? excelPFAmt : Math.round(basicAmount * 0.12);
+                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
                         } else {
                             // If no clear yes/no, use normalizeLimit logic
                             statutory_config.employer_pf.calculation_type = normalizeLimit(limVal, 'employer');
@@ -490,18 +515,16 @@ const runWorker = async () => {
                 if (statHeaderKeys.tdsStat) statutory_config.tds.enabled = isYes(row[statHeaderKeys.tdsStat]);
 
                 // --- Bonus, Gratuity, Leave Encashment Logic ---
-                const gratuityAmt = findCompValue(["gratuity", "gratuity provision", "gratuity employer", "gratuity contribution"]);
+                const excelGratuityAmt = parseExcelAmount(row['Gratuity']);
                 if (statutory_config.gratuity.enabled) {
-                    const amt = (gratuityAmt && gratuityAmt.amount > 0) ? gratuityAmt.amount : Math.round(basicAmount * 0.0481);
+                    const amt = excelGratuityAmt > 0 ? excelGratuityAmt : 0;
                     statutory_config.gratuity.amount = amt;
-                    statutory_config.gratuity.calculation_type = (gratuityAmt && gratuityAmt.amount > 0) ? 'Fixed' : 'Attendance';
-                    if ((!gratuityAmt || gratuityAmt.amount === 0) && amt > 0) {
+                    statutory_config.gratuity.calculation_type = 'Attendance';
+                    if (amt > 0) {
                         const compId = allComponents.find(c => normalizeText(c.component_name).includes('gratuity'))?.id;
                         if (compId) {
-                            // Clear existing if it was 0
                             const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
-
                             rowTransactions.push({
                                 employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
                                 monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
@@ -511,12 +534,12 @@ const runWorker = async () => {
                     }
                 }
 
-                const leAmt = findCompValue(["leave encashments", "leave enchashments", "leave encashment", "leave enchashment", "pl", "privilege leave"]);
+                const excelLeaveEncashAmt = parseExcelAmount(row['Leave Encashments']) || parseExcelAmount(row['Leave Encashment']);
                 if (statutory_config.leave_encashment.enabled) {
-                    const amt = (leAmt && leAmt.amount > 0) ? leAmt.amount : Math.round(basicAmount * 0.0481);
+                    const amt = excelLeaveEncashAmt > 0 ? excelLeaveEncashAmt : 0;
                     statutory_config.leave_encashment.amount = amt;
-                    statutory_config.leave_encashment.calculation_type = (leAmt && leAmt.amount > 0) ? 'Fixed' : 'Attendance';
-                    if ((!leAmt || leAmt.amount === 0) && amt > 0) {
+                    statutory_config.leave_encashment.calculation_type = 'Attendance';
+                    if (amt > 0) {
                         const compId = allComponents.find(c => {
                             const n = normalizeText(c.component_name);
                             return n.includes('leave encashment') || n.includes('leave enchashment') || n === 'pl';
@@ -524,7 +547,6 @@ const runWorker = async () => {
                         if (compId) {
                             const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
-
                             rowTransactions.push({
                                 employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
                                 monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
@@ -534,17 +556,16 @@ const runWorker = async () => {
                     }
                 }
 
-                const bonusAmtValue = findCompValue(["bonuses", "bonus", "bonus provision", "exgratia", "ex-gratia"]);
+                const excelBonusAmt = parseExcelAmount(row['Bonus']);
                 if (statutory_config.bonus.enabled) {
-                    const amt = (bonusAmtValue && bonusAmtValue.amount > 0) ? bonusAmtValue.amount : Math.round(basicAmount * 0.0833);
+                    const amt = excelBonusAmt > 0 ? excelBonusAmt : 0;
                     statutory_config.bonus.amount = amt;
-                    statutory_config.bonus.calculation_type = (bonusAmtValue && bonusAmtValue.amount > 0) ? 'Fixed' : 'Attendance';
-                    if ((!bonusAmtValue || bonusAmtValue.amount === 0) && amt > 0) {
+                    statutory_config.bonus.calculation_type = 'Attendance';
+                    if (amt > 0) {
                         const compId = allComponents.find(c => normalizeText(c.component_name).includes('bonus'))?.id;
                         if (compId) {
                             const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
-
                             rowTransactions.push({
                                 employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
                                 monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
@@ -680,6 +701,39 @@ const runWorker = async () => {
                     lwf_eligible: statutory_config.employee_lwf.enabled || statutory_config.employer_lwf.enabled
                 });
 
+                // Log Input Component Data (from Excel)
+                // console.log('\n╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗');
+                // console.log('║                                                          INPUT COMPONENT DATA (From Excel) - Employee: ' + empCodeValue.padEnd(15) + '                                                                                                                                                                                   ║');
+                // console.log('╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣');
+                // console.log('├─────────────────────────────────────────────────────────────┬──────────────────────────────┬──────────────────────────────┬──────────────────────────────┤');
+                // console.log('│ Excel Header                                                 │ Component Name               │ Component Type               │ Amount                       │');
+                // console.log('├─────────────────────────────────────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┤');
+                // headerComponentMap.forEach((comp, colIdx) => {
+                //     const rawValue = row[headers[colIdx]];
+                //     if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== "") {
+                //         const value = parseExcelAmount(rawValue);
+                //         console.log(`│ ${(headers[colIdx] || '').toString().padEnd(60)} │ ${(comp.component_name || '').toString().padEnd(28)} │ ${(comp.component_type || '').toString().padEnd(28)} │ ${value.toString().padEnd(28)} │`);
+                //     }
+                // });
+                // console.log('└─────────────────────────────────────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┘');
+                // console.log(`\n[Total Components from Excel]: ${rowTransactions.length}`);
+                // console.log('[Component IDs Mapped]:', rowTransactions.map(t => t.component_id).join(', '));
+                 // // Log Updated Component Data (Final State)
+                // console.log('\n╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗');
+                // console.log('║                                                          UPDATED COMPONENT DATA (Final) - Employee: ' + empCodeValue.padEnd(15) + '                                                                                                                                                                                       ║');
+                // console.log('╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣');
+                // console.log('├──────────────────────────────┬──────────────────────────────┬──────────────────────────────┬──────────────────────────────┬──────────────────────────────┤');
+                // console.log('│ Component ID                 │ Component Name               │ Category                     │ Monthly Amount               │ Yearly Amount                │');
+                // console.log('├──────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┤');
+                // rowTransactions.forEach(t => {
+                //     const comp = allComponents.find(c => c.id === t.component_id);
+                //     console.log(`│ ${(t.component_id || '').toString().padEnd(28)} │ ${(comp?.component_name || 'N/A').toString().padEnd(28)} │ ${(t.component_category || '').toString().padEnd(28)} │ ${(t.monthly_amount || 0).toString().padEnd(28)} │ ${(t.yearly_amount || 0).toString().padEnd(28)} │`);
+                // });
+                // console.log('└──────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┘');
+                // console.log(`\n[Total Updated Components]: ${rowTransactions.length}`);
+                // console.log('[Sum of Monthly Amounts]:', rowTransactions.reduce((sum, t) => sum + (t.monthly_amount || 0), 0));
+
+                // Log both Excel Input and Updated Statutory Config at the end
                 // Store row transactions temporarily - we'll need template IDs to save them
                 employee.rowTransactions = rowTransactions;
                 createdCount++;
@@ -687,8 +741,81 @@ const runWorker = async () => {
                 if (createdCount % 100 === 0 && parentPort) {
                     parentPort.postMessage({ status: "PROGRESS", progress: Math.round((createdCount / originalRows.length) * 100) });
                 }
+                // console.log('\n========================================');
+                // console.log('STATUTORY CONFIG COMPARISON - Employee:', empCodeValue);
+                // console.log('========================================');
+                // console.log('\n--- EXCEL INPUT DATA ---');
+                // console.log('Employee Statutory:');
+                // console.log('  PF STATUS  :', row[statHeaderKeys.ePfStat] || 'N/A');
+                // console.log('  PF LIMIT   :', row[statHeaderKeys.ePfLim] || 'N/A');
+                // console.log('  ESIC STATUS:', row[statHeaderKeys.eEsiStat] || 'N/A');
+                // console.log('  PT STATUS  :', row[statHeaderKeys.ptStat] || 'N/A');
+                // console.log('  LWF STATUS :', row[statHeaderKeys.eLwfStat] || 'N/A');
+                // console.log('Employer Statutory:');
+                // console.log('  PF STATUS  :', row[statHeaderKeys.rPfStat] || 'N/A');
+                // console.log('  PF LIMIT   :', row[statHeaderKeys.rPfLim] || 'N/A');
+                // console.log('  EDLI STATUS:', row[statHeaderKeys.edliStat] || 'N/A');
+                // console.log('  ESI STATUS :', row[statHeaderKeys.rEsiStat] || 'N/A');
+                // console.log('  LWF STATUS :', row[statHeaderKeys.rLwfStat] || 'N/A');
+                
+                // console.log('\n--- EXCEL SALARY COMPONENTS ---');
+                // console.log('(A) Monthly Payable:');
+                // console.log('  BASIC     :', parseExcelAmount(row['BASIC']) || 0);
+                // console.log('  HRA       :', parseExcelAmount(row['HRA']) || 0);
+                // console.log('  TRANSPORT :', parseExcelAmount(row['TRANSPORT']) || 0);
+                // console.log('  MEDICAL   :', parseExcelAmount(row['MEDICAL']) || 0);
+                // console.log('  FOOD      :', parseExcelAmount(row['FOOD']) || 0);
+                // console.log('  SPECIAL   :', parseExcelAmount(row['SPECIAL']) || 0);
+                // console.log('  LTA       :', parseExcelAmount(row['LTA']) || 0);
+                // console.log('  (A) Total :', parseExcelAmount(row['(A) Total']) || parseExcelAmount(row['GROSS']) || 0);
+                // console.log('(B) Annually Payable:');
+                // console.log('  Bonus     :', parseExcelAmount(row['Bonus']) || 0);
+                // console.log('  (B) Total :', parseExcelAmount(row['(B) Total']) || parseExcelAmount(row['Bonus']) || 0);
+                // console.log('(C) Regulatory / Statutory (Employer):');
+                // console.log('  PF              :', parseExcelAmount(row['PF']) || 0);
+                // console.log('  Leave Encashment:', parseExcelAmount(row['Leave Encashments']) || parseExcelAmount(row['Leave Encashment']) || 0);
+                // console.log('  Gratuity        :', parseExcelAmount(row['Gratuity']) || 0);
+                // console.log('  ESIC            :', parseExcelAmount(row['ESIC']) || 0);
+                // console.log('  (C) Total       :', parseExcelAmount(row['(C) Total']) || 0);
+                // console.log('(D) Other Benefits:');
+                // console.log('  Mobile         :', parseExcelAmount(row['Mobile']) || 0);
+                // console.log('  Child Education:', parseExcelAmount(row['Child Education']) || 0);
+                // console.log('  Petrol         :', parseExcelAmount(row['Petrol']) || 0);
+                // console.log('  (D) Total      :', parseExcelAmount(row['(D) Total']) || 0);
+                // console.log('--- TOTALS ---');
+                // console.log('  Grand CTC (A+B+C+D):', parseExcelAmount(row['(A+B+C+D)']) || parseExcelAmount(row['Grand CTC']) || parseExcelAmount(row['CTC']) || 0);
+                // console.log('Employee Deduction:');
+                // const empPFDeduction = parseExcelAmount(row['PF_1']) || 0;
+                // const empESICDeduction = parseExcelAmount(row['ESIC_1']) || 0;
+                // const empFoodDeduction = parseExcelAmount(row['Food_1']) || parseExcelAmount(row['FOOD_1']) || parseExcelAmount(row['Food Deduction']) || parseExcelAmount(row['Food']) || 0;
+                // const totalDeduction = empPFDeduction + empESICDeduction + empFoodDeduction;
+                // const grossTotal = parseExcelAmount(row['(A) Total']) || parseExcelAmount(row['GROSS']) || 0;
+                // const netSalary = grossTotal - totalDeduction;
+                // console.log('  PF   :', empPFDeduction);
+                // console.log('  ESIC :', empESICDeduction);
+                // console.log('  Food :', empFoodDeduction);
+                // console.log('  Total Deduction:', totalDeduction);
+                // console.log('  Net Salary:', netSalary);
+                
+                // // Debug: Show all row keys to find Food column name
+                // console.log('\n[DEBUG] All row keys:', Object.keys(row).join(', '));
+                
+                // console.log('\n--- UPDATED STATUTORY_CONFIG ---');
+                // console.log('employee_pf     :', JSON.stringify(statutory_config.employee_pf));
+                // console.log('employer_pf     :', JSON.stringify(statutory_config.employer_pf));
+                // console.log('employee_esi    :', JSON.stringify(statutory_config.employee_esi));
+                // console.log('employer_esi    :', JSON.stringify(statutory_config.employer_esi));
+                // console.log('pt              :', JSON.stringify(statutory_config.pt));
+                // console.log('employee_lwf    :', JSON.stringify(statutory_config.employee_lwf));
+                // console.log('employer_lwf    :', JSON.stringify(statutory_config.employer_lwf));
+                // console.log('gratuity        :', JSON.stringify(statutory_config.gratuity));
+                // console.log('bonus           :', JSON.stringify(statutory_config.bonus));
+                // console.log('leave_encashment:', JSON.stringify(statutory_config.leave_encashment));
+                // console.log('pf_edli_admin   :', JSON.stringify(statutory_config.pf_edli_admin));
+                // console.log('tds             :', JSON.stringify(statutory_config.tds));
+                // console.log('========================================\n');
 
-            } catch (rowError) {
+                    } catch (rowError) {
                 errorCount++;
                 const msg = rowError.message || "Unknown error processing row";
                 errorSample.push(`Row ${rowIndex}: ${msg}`);

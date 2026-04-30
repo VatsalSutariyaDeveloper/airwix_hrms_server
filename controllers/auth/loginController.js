@@ -1,5 +1,5 @@
 const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
-const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService } = require("../../helpers");
+const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper } = require("../../helpers");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -488,31 +488,34 @@ exports.logout = async (req, res) => {
  */
 exports.verifyMobileNo = async (req, res) => {
   try {
-    const { mobile_no } = req.body;
+    let { mobile_no, device_id } = req.body;
+    
+    // Decrypt Device ID if provided
+    if (device_id) {
+        device_id = cryptoHelper.decryptId(device_id);
+    }
 
     if (!mobile_no) {
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
     }
 
-    let user = await User.findOne({
-      where: {
-        mobile_no,
-        status: { [Op.in]: [0, 1] }
-      },
+    let user = await commonQuery.findOneRecord(User, {
+      mobile_no,
+      status: { [Op.in]: [0, 1] }
+    }, {
       attributes: ['id', 'user_name', 'password', 'status']
-    });
+    }, null, false, {});
 
     let entity = user;
     let type = "user";
 
     if (!user) {
-      const device = await DeviceMaster.findOne({
-        where: {
-          mobile_no,
-          status: { [Op.in]: [0, 1] }
-        },
-        attributes: ['id', 'device_name', 'password', 'status']
-      });
+      const device = await commonQuery.findOneRecord(DeviceMaster, {
+        mobile_no,
+        status: { [Op.in]: [0, 1, 4] } // Active, Inactive, Pairing
+      }, {
+        attributes: ['id', 'device_name', 'password', 'status', 'device_id']
+      }, null, false, {});
       entity = device;
       type = "device";
     }
@@ -523,6 +526,25 @@ exports.verifyMobileNo = async (req, res) => {
 
     if (entity.status === 1) {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    // --- Device ID Verification ---
+    if (type === "device") {
+      if (!device_id) {
+        // If no device_id passed, check if it's in pairing stage
+        if (entity.status === 4) {
+          // Success: The responseData will include the device_id
+        } else {
+          return res.error(403, { message: "Device is not able to pair. Please initiate pairing from the admin panel." });
+        }
+      } else {
+        // If device_id is passed, it must match exactly
+        if (entity.device_id === device_id) {
+          // Success: Valid paired device
+        } else {
+          return res.error(403, { message: "Device not paired." });
+        }
+      }
     }
 
     const pin_set = !!entity.password;
@@ -568,10 +590,14 @@ exports.verifyMobileNo = async (req, res) => {
     //   type: type
     // });
 
+    const responseData = {
+      device_id: (type === "device" && entity.status === 4) ? cryptoHelper.encryptId(entity.device_id) : null
+    };
+
     if (!pin_set) {
-      return res.success("SET PIN");
+      return res.success("SET PIN", responseData);
     } else {
-      return res.success("ENTER PIN");
+      return res.success("ENTER PIN", responseData);
     }
 
 
@@ -619,7 +645,19 @@ exports.verifyOtpPin = async (req, res) => {
 exports.generatePin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { mobile_no, pin } = req.body;
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name } = req.body;
+
+    // Auto-detect device info if not provided in body
+    const parser = new UAParser(req.headers["user-agent"]);
+    const uaResult = parser.getResult();
+    
+    brand_name = brand_name || uaResult.device.vendor || "Unknown";
+    device_model = device_model || uaResult.device.model || "Unknown";
+    os_version = os_version || `${uaResult.os.name || ""} ${uaResult.os.version || ""}`.trim() || "Unknown";
+
+    if (device_id) {
+        device_id = cryptoHelper.decryptId(device_id);
+    }
 
     if (!mobile_no || !pin) {
       await transaction.rollback();
@@ -638,27 +676,64 @@ exports.generatePin = async (req, res) => {
       'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    let user = await User.findOne({
-      attributes: userAttributes.concat(['status']),
-      where: { 
-        mobile_no, 
-        status: { [Op.in]: [0, 1] } 
-      },
-      transaction
-    });
+    let user = await commonQuery.findOneRecord(User, { 
+      mobile_no, 
+      status: { [Op.in]: [0, 1] } 
+    }, {
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+      transaction 
+    }, transaction, false, {});
 
     let entity = user;
     let isDevice = false;
+
     if (!user) {
-      const device = await DeviceMaster.findOne({
-        where: { 
-          mobile_no, 
-          status: { [Op.in]: [0, 1] } 
-        },
-        transaction
-      });
-      entity = device;
-      isDevice = true;
+        // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
+        let device = null;
+        
+        if (device_id) {
+            // 1. Try to find an already paired device
+            device = await commonQuery.findOneRecord(DeviceMaster, {
+                mobile_no,
+                device_id: device_id,
+                status: { [Op.in]: [0, 1] }
+            }, {}, transaction, false, {});
+
+            // 2. If not found, look for a "Pairing" record created by Admin
+            if (!device) {
+                device = await commonQuery.findOneRecord(DeviceMaster, {
+                    mobile_no,
+                    status: 4 // PAIRING
+                }, { 
+                  order: [['id', 'ASC']], 
+                  transaction 
+                }, transaction, false, {});
+
+                if (device) {
+                    // Complete the pairing: store hardware ID and activate
+                    await commonQuery.updateRecordById(DeviceMaster, device.id, {
+                        device_id: device_id || device.device_id, // Hardware ID from request or preserved admin ID
+                        status: 0, // ACTIVE
+                        last_login_at: new Date(),
+                        ip_address: req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+                        device_model,
+                        os_version,
+                        brand_name
+                    }, transaction, false, {});
+                } else {
+                    await transaction.rollback();
+                    return res.error(404, { message: "Unable to pair device" });
+                }
+            }
+        } else {
+            device = await commonQuery.findOneRecord(DeviceMaster, {
+                mobile_no,
+                status: { [Op.in]: [0, 1] }
+            }, {}, transaction, false, {});
+        }
+
+        entity = device;
+        isDevice = true;
     }
 
     if (!entity) {
@@ -918,7 +993,19 @@ console.log("entity",entity.device_type)
 exports.pinLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { mobile_no, pin } = req.body;
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name } = req.body;
+
+    // Auto-detect device info if not provided in body
+    const parser = new UAParser(req.headers["user-agent"]);
+    const uaResult = parser.getResult();
+    
+    brand_name = brand_name || uaResult.device.vendor || "Unknown";
+    device_model = device_model || uaResult.device.model || "Unknown";
+    os_version = os_version || `${uaResult.os.name || ""} ${uaResult.os.version || ""}`.trim() || "Unknown";
+
+    if (device_id) {
+        device_id = cryptoHelper.decryptId(device_id);
+    }
 
     if (!mobile_no || !pin) {
       await transaction.rollback();
@@ -937,26 +1024,63 @@ exports.pinLogin = async (req, res) => {
         'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    let user = await User.findOne({ 
+    let user = await commonQuery.findOneRecord(User, { 
+      mobile_no, 
+      status: { [Op.in]: [0, 1] } 
+    }, {
       attributes: userAttributes.concat(['status']),
-      where: { 
-        mobile_no, 
-        status: { [Op.in]: [0, 1] } 
-      }, 
-      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-      transaction 
-    });
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }] 
+    }, transaction, false, {});
 
     let entity = user;
     let isDevice = false;
+
     if (!user) {
-      const device = await DeviceMaster.findOne({
-        where: { 
-          mobile_no, 
-          status: { [Op.in]: [0, 1] } 
-        }, 
-        transaction 
-      });
+      // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
+      let device = null;
+      
+      if (device_id) {
+          // 1. Try to find an already paired device
+          device = await commonQuery.findOneRecord(DeviceMaster, {
+              mobile_no,
+              device_id: device_id,
+              status: { [Op.in]: [0, 1] }
+          }, {}, transaction, false, {});
+
+          // 2. If not found, look for a "Pairing" record created by Admin
+          if (!device) {
+              device = await commonQuery.findOneRecord(DeviceMaster, {
+                  mobile_no,
+                  status: 4 // PAIRING
+              }, { 
+                order: [['id', 'ASC']], // Take the oldest pending record
+                transaction 
+              }, transaction, false, {});
+
+              if (device) {
+                  // Complete the pairing: store hardware ID and activate
+                  await commonQuery.updateRecordById(DeviceMaster, device.id, {
+                      device_id: device_id || device.device_id,
+                      status: 0, // ACTIVE
+                      last_login_at: new Date(),
+                      ip_address: req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+                      device_model,
+                      os_version,
+                      brand_name
+                  }, transaction, false, {});
+              } else {
+                  await transaction.rollback();
+                  return res.error(404, { message: "Unable to pair device" });
+              }
+          }
+      } else {
+          // Fallback if no device_id is sent (might be a legacy app)
+          device = await commonQuery.findOneRecord(DeviceMaster, {
+              mobile_no,
+              status: { [Op.in]: [0, 1] }
+          }, {}, transaction, false, {});
+      }
+
       entity = device;
       isDevice = true;
     }
@@ -1229,7 +1353,11 @@ exports.checkOtpRateLimit = async (req, res) => {
  */
 exports.verifyPin = async (req, res) => {
     try {
-        const { mobile_no, pin } = req.body;
+        let { mobile_no, pin, device_id } = req.body;
+
+        if (device_id) {
+            device_id = cryptoHelper.decryptId(device_id);
+        }
 
         if (!mobile_no || !pin) {
             return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
@@ -1248,16 +1376,22 @@ exports.verifyPin = async (req, res) => {
 
         let entity = user;
         if (!user) {
+            const whereClause = {
+                mobile_no,
+                status: { [Op.in]: [0, 1] }
+            };
+
+            if (device_id) {
+                whereClause.device_id = device_id;
+            }
+
             entity = await DeviceMaster.findOne({
-                where: { 
-                    mobile_no, 
-                    status: { [Op.in]: [0, 1] } 
-                }
+                where: whereClause
             });
         }
 
         if (!entity) {
-            return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+            return res.error(constants.NOT_FOUND, { message: "Wrong Credintial." });
         }
 
         if (entity.status === 1) {

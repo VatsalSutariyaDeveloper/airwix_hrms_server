@@ -122,13 +122,40 @@ exports.create = async (req, res) => {
         if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
             const refDate = dayjs(start_date);
             let startDateRange, endDateRange;
+            let totalMaxDays = parseFloat(rules.max_total_days);
 
             if (rules.limit_window === 'monthly') {
                 startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
                 endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+
+                if (rules.carry_forward) {
+                    const template = employee.leaveTemplate;
+                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+                    
+                    // If the cycle itself is monthly, carry forward doesn't apply across months unless we anchor to a year
+                    // But usually, carry_forward for monthly limits implies an annual cycle.
+                    if (cycleType !== 'MONTHLY') {
+                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                        const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
+                        totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
+                    }
+                }
             } else if (rules.limit_window === 'quarterly') {
                 startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
                 endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
+
+                if (rules.carry_forward) {
+                    const template = employee.leaveTemplate;
+                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+
+                    if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
+                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                        const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
+                        totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
+                    }
+                }
             } else if (rules.limit_window === 'yearly') {
                 startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
                 endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
@@ -152,9 +179,10 @@ exports.create = async (req, res) => {
                     transaction
                 }) || 0;
 
-                if ((totalUsed + total_days) > rules.max_total_days) {
+                if ((totalUsed + total_days) > totalMaxDays) {
                     await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${rules.max_total_days} days allowed per ${rules.limit_window.replace('_', ' ')}. Already used: ${totalUsed} days.` });
+                    const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
+                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
                 }
             }
         }
@@ -358,6 +386,74 @@ exports.update = async (req, res) => {
 
         // --- Automation Rules Validation ---
         const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+
+        // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
+        if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
+            const refDate = dayjs(start_date);
+            let startDateRange, endDateRange;
+            let totalMaxDays = parseFloat(rules.max_total_days);
+
+            if (rules.limit_window === 'monthly') {
+                startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+
+                if (rules.carry_forward) {
+                    const template = employee.leaveTemplate;
+                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+
+                    if (cycleType !== 'MONTHLY') {
+                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                        const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
+                        totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
+                    }
+                }
+            } else if (rules.limit_window === 'quarterly') {
+                startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
+
+                if (rules.carry_forward) {
+                    const template = employee.leaveTemplate;
+                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+
+                    if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
+                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                        const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
+                        totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
+                    }
+                }
+            } else if (rules.limit_window === 'yearly') {
+                startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
+                endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
+            } else if (rules.limit_window.endsWith('_month')) {
+                const months = parseInt(rules.limit_window.split('_')[0]);
+                if (!isNaN(months) && months > 0) {
+                    startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+                }
+            }
+
+            if (startDateRange && endDateRange) {
+                const totalUsed = await LeaveRequest.sum('total_days', {
+                    where: {
+                        employee_id,
+                        id: { [Op.ne]: id }, // Exclude current request
+                        leave_category_id,
+                        approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                        status: 0,
+                        start_date: { [Op.between]: [startDateRange, endDateRange] }
+                    },
+                    transaction
+                }) || 0;
+
+                if ((totalUsed + total_days) > totalMaxDays) {
+                    await transaction.rollback();
+                    const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
+                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
+                }
+            }
+        }
 
         // 4. Half Day / Full Day Restriction
         if (rules.allow_half_day === false || rules.allow_full_day === false) {

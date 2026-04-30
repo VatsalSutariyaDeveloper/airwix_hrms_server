@@ -3,23 +3,27 @@ module.exports = (sequelize, DataTypes) => {
         "DeviceMaster",
         {
             device_name: { type: DataTypes.STRING, allowNull: false },
-            imei_number: { type: DataTypes.STRING, allowNull: true },
+            device_id: { type: DataTypes.STRING, allowNull: true },
             ip_address: { type: DataTypes.STRING, allowNull: true },
             mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,
                 defaultValue: 0,
-                comment: "0: Active, 1: Inactive, 2: Deleted, 3: Pending"
+                comment: "0: Active, 1: Inactive, 2: Deleted, 3: Pending, 4: Pairing"
             },
             password: { type: DataTypes.STRING, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             branch_id: { type: DataTypes.INTEGER, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
+            last_login_at: { type: DataTypes.DATE, allowNull: true },
             device_type: {
                 type: DataTypes.SMALLINT,
                 defaultValue: 0,
                 comment: "0: Attendance, 1: Canteen"
             },
+            device_model: { type: DataTypes.STRING, allowNull: true },
+            os_version: { type: DataTypes.STRING, allowNull: true },
+            brand_name: { type: DataTypes.STRING, allowNull: true },
         },
         {                           
             tableName: "device_master",

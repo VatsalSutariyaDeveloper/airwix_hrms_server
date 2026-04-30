@@ -163,6 +163,9 @@ router.put("/device-master/:id", deviceMasterController.update);
 router.delete("/device-master", deviceMasterController.delete);
 router.patch("/device-master/status", deviceMasterController.updateStatus);
 router.post("/device-master/dropdown-list", deviceMasterController.dropdownList);
+router.put("/device-master/unpair/:id", deviceMasterController.unpairDevice);
+router.put("/device-master/pair/:id", deviceMasterController.pairDevice);
+router.get("/device-master/get/my", deviceMasterController.getMyDevices);
 
 // ==========================
 // 26. HOLIDAY TEMPLATE ROUTES

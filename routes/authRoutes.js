@@ -6,6 +6,7 @@ const { authMiddleware } = require("../middlewares/authMiddleware");
 const loginController = require("../controllers/auth/loginController");
 const loginHistoryController = require("../controllers/auth/loginHistoryController");
 const authController = require("../controllers/auth/authController");
+const deviceMasterController = require("../controllers/settings/deviceMasterController");
 // ==========================
 // 1. PUBLIC ROUTES (No Auth Required)
 // ==========================
@@ -57,6 +58,9 @@ router.get("/login-history/", loginHistoryController.getAll);
 router.get("/login-history/:id", loginHistoryController.getById);
 router.put("/login-history/:id", loginHistoryController.update);
 router.delete("/login-history/:id", loginHistoryController.delete);
+
+// USER DEVICE ROUTES (Protected)
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 🧪 DEV/ADMIN: Manual Cron Trigger Routes

@@ -1,13 +1,8 @@
 const { DeviceMaster } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, cryptoHelper } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 
-const STATUS = {
-    ACTIVE: 0,
-    INACTIVE: 1,
-    DELETED: 2,
-    PENDING_APPROVAL: 3
-};
+const STATUS = constants.DEVICE_STATUS;
 
 // Create a new device master record
 exports.create = async (req, res) => {
@@ -16,7 +11,7 @@ exports.create = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
-            // imei_number: "IMEI Number",
+            // device_id: "Device ID",
             // ip_address: "IP Address",
         };
 
@@ -25,12 +20,6 @@ exports.create = async (req, res) => {
                 {
                     model: DeviceMaster,
                     fields: ["device_name"],
-                },
-                {
-                    model: DeviceMaster,
-                    fields: ["mobile_no", "imei_number"],
-                    excludeCompany: true,
-                    excludeBranch: true,
                 }
             ]
         }, transaction);
@@ -56,7 +45,11 @@ exports.getAll = async (req, res) => {
         const fieldConfig = [
             ["device_name", true, true],
             ["ip_address", true, true],
-            ['imei_number', true, true]
+            ['device_id', true, true],
+            ['last_login_at', true, true],
+            ['brand_name', true, true],
+            ['device_model', true, true],
+            ['os_version', true, true]
         ];
 
         const data = await commonQuery.fetchPaginatedData(
@@ -102,13 +95,6 @@ exports.update = async (req, res) => {
                         model: DeviceMaster,
                         fields: ["device_name"],
                         excludeId: req.params.id,
-                    },
-                    {
-                        model: DeviceMaster,
-                        fields: ["mobile_no", "imei_number"],
-                        excludeId: req.params.id,
-                        excludeCompany: true,
-                        excludeBranch: true,
                     }
                 ]
             },
@@ -218,6 +204,101 @@ exports.dropdownList = async (req, res) => {
         const result = await commonQuery.findAllRecords(DeviceMaster, { status: 0 });
         return res.ok(result);
     } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Get all devices associated with the logged-in user's mobile number
+ */
+exports.getMyDevices = async (req, res) => {
+    try {
+        const devices = await commonQuery.findAllRecords(DeviceMaster, {
+            mobile_no: req.user.mobile_no,
+            status: { [Op.ne]: 2 }
+        }, {
+            order: [['last_login_at', 'DESC']]
+        });
+        return res.ok(devices);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Unpair a device (Clear its IMEI so it can be re-paired)
+ */
+exports.unpairDevice = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const updated = await commonQuery.updateRecordById(DeviceMaster, id, {
+            device_id: null,
+            ip_address: null,
+            last_login_at: null
+        }, transaction);
+
+        if (!updated) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, "Device not found or access denied.");
+        }
+
+        await transaction.commit();
+        return res.success("Device unpaired successfully. It can now be paired with a new physical device.");
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Initiate Device Pairing
+ * Generates a unique Device ID and sets status to PAIRING
+ */
+exports.pairDevice = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+
+        // Generate a unique device ID (e.g., DEV-6A7F21)
+        const generateDeviceId = () => {
+            const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+            return `DEV-${Date.now()}${randomStr}`;
+        };
+
+        let newDeviceId;
+        let isUnique = false;
+        let attempts = 0;
+
+        while (!isUnique && attempts < 10) {
+            newDeviceId = generateDeviceId();
+            const existing = await commonQuery.findOneRecord(DeviceMaster, { device_id: newDeviceId }, {}, transaction);
+            if (!existing) isUnique = true;
+            attempts++;
+        }
+
+        if (!isUnique) {
+            await transaction.rollback();
+            return res.error(constants.SERVER_ERROR, "Failed to generate a unique Device ID. Please try again.");
+        }
+
+        const updated = await commonQuery.updateRecordById(DeviceMaster, id, {
+            device_id: newDeviceId,
+            status: STATUS.PAIRING
+        }, transaction);
+
+        if (!updated) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, "Device not found.");
+        }
+
+        await transaction.commit();
+        return res.success("Pairing initiated. Use the generated Device ID to pair your terminal.", {
+            device_id: cryptoHelper.encryptId(newDeviceId),
+            status: "PAIRING"
+        });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
