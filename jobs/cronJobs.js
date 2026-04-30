@@ -5,6 +5,7 @@ const { archiveAndCleanupLogs } = require('../helpers');
 const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
+const DeviceHealthService = require("../services/deviceHealthService");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Named job handlers (reusable for both cron schedule & on-demand execution)
@@ -138,6 +139,11 @@ const jobAnnouncementExpiry = async (asOf = null) => {
     console.log(`✅ ${count} expired announcements updated to inactive status.`);
 };
 
+const jobDeviceHealthCheck = async (asOf = null) => {
+    console.log('⏰ Running device health check task...');
+    await DeviceHealthService.checkDeviceHealth();
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // All jobs registry (used by runAllNow)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,6 +157,7 @@ const ALL_JOBS = [
     { name: 'Attendance Rebuild',       fn: jobAttendanceRebuild },
     { name: 'Payslip PDF Cleanup',      fn: jobPayslipCleanup },
     { name: 'Announcement Expiry',      fn: jobAnnouncementExpiry },
+    { name: 'Device Health Check',      fn: jobDeviceHealthCheck },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,12 +227,12 @@ const initCronJobs = () => {
         await runAllNow(); // uses live date (no asOf)
     });
 
-    // ⏰ Payslip PDF Cleanup — runs every hour (not daily, so kept separate)
-    cron.schedule('0 * * * *', async () => {
-        await jobPayslipCleanup().catch(e => console.error('❌ Payslip PDF cleanup failed:', e));
+    // ⏰ Device Health Check — runs every 30 minutes
+    cron.schedule('*/30 * * * *', async () => {
+        await jobDeviceHealthCheck().catch(e => console.error('❌ Device health check failed:', e));
     });
 
-    console.log('🚀 Cron Jobs Initialized — All daily jobs scheduled at 12:00 AM midnight');
+    console.log('🚀 Cron Jobs Initialized — Daily jobs at 12:00 AM, Device Health every 30 mins');
 };
 
 module.exports = {

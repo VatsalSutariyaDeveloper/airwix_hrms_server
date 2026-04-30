@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
-const { User, CompanyMaster, BranchMaster } = require("../models");
+const { User, CompanyMaster, BranchMaster, DeviceMaster } = require("../models");
 const { constants } = require("../helpers");
 
 // In-memory token blacklist
@@ -57,6 +57,26 @@ async function authMiddleware(req, res, next) {
     if (decoded.branch_id) {
       const branch = await BranchMaster.findOne({ where: { id: decoded.branch_id, status: 0 } });
       if (!branch) return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
+    }
+
+    // 🚀 NEW: Verify Device ID if present (Multi-device security)
+    if (decoded.device_id) {
+      const device = await DeviceMaster.findOne({ 
+        where: { 
+          id: decoded.id,
+          device_id: decoded.device_id, 
+          status: 0 
+        } 
+      });
+      if (!device) {
+        return res.status(401).json({ success: false, message: "Unauthorized - Device session is invalid or revoked" });
+      }
+
+      // 💓 Heartbeat: Update last activity for online status tracking
+      DeviceMaster.update(
+        { last_login_at: new Date() },
+        { where: { id: device.id } }
+      ).catch(err => console.error("Device heartbeat update failed:", err));
     }
 
     req.user = {

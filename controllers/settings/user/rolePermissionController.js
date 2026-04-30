@@ -87,7 +87,7 @@ exports.dropdownList = async (req, res) => {
         ...(!req.user.is_super_admin ? { company_id: req.user.company_id } : {})
       },
       { 
-        attributes: ["id", "role_name"], 
+        attributes: ["id", "role_name", "role_key"], 
         order: [["p_role_id", "ASC"], ["id", "ASC"]] 
       },
       null,

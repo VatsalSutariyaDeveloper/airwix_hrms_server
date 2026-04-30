@@ -452,6 +452,16 @@ const constants = {
     { settings_name: "reimbursement_approval_level", settings_value: 1 },
     { settings_name: "reimbursement_approval_config", settings_value: [] },
   ],
+  /* =======================
+   * DEVICE STATUS
+   * ======================= */
+  DEVICE_STATUS: {
+    ACTIVE: 0,
+    INACTIVE: 1,
+    DELETED: 2,
+    PENDING: 3,
+    PAIRING: 4
+  },
 };
 
 const ENTITIES = {

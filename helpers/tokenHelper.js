@@ -25,7 +25,8 @@ const generateToken = (user, companyId, access_by = "web login") => {
       is_reporting_manager: user.is_reporting_manager || roleKey === constants.ROLE_KEYS.REPORTING_MANAGER,
       is_super_admin: user.is_super_admin || roleKey === constants.ROLE_KEYS.BUSINESS_ADMIN,
       is_admin: roleKey === constants.ROLE_KEYS.ADMIN,
-      access: user.access
+      access: user.access,
+      device_id: user.device_id || null
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn: "30d" }

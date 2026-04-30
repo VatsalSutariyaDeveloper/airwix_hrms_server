@@ -214,9 +214,10 @@ exports.getPendingCount = async (req, res) => {
 exports.getPendingAnnouncementCount = async (req, res) => {
     try {
         const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
         const whereClause = {
             status: 0,
-            announcement_date: { [Op.lte]: today },
+            announcement_date: { [Op.lte]: todayEnd },
             [Op.and]: [
                 {
                     [Op.or]: [

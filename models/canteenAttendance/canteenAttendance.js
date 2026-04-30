@@ -10,6 +10,11 @@ module.exports = (sequelize, DataTypes) => {
         user_id: { type: DataTypes.INTEGER, allowNull: true},
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
         company_id: { type: DataTypes.INTEGER, allowNull: true },
+        face_descriptor: {
+            type: DataTypes.JSONB,
+            defaultValue: null,
+            comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
+        },
     },
     {
       tableName: "canteen_attendance",
