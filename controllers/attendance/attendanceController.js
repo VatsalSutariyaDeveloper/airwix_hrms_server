@@ -127,7 +127,8 @@ exports.syncPunches = async (req, res) => {
             longitude: punchData.longitude || null,
             device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
-            bypassGapCheck: true, // Offline punches are already captured, ignore 2-min validation
+            face_descriptor: punchData.face_descriptor || null,
+            bypassGapCheck: true, 
             skipRebuild: false,
             access: req.user.access
           },

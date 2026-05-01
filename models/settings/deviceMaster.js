@@ -8,8 +8,8 @@ module.exports = (sequelize, DataTypes) => {
             mobile_no: { type: DataTypes.STRING, allowNull: true },
             status: {
                 type: DataTypes.SMALLINT,
-                defaultValue: 0,
-                comment: "0: Active, 1: Inactive, 2: Deleted, 3: Pending, 4: Pairing"
+                defaultValue: 1,
+                comment: "0: Paired, 1: Unpaired, 2: Deleted, 3: Pairing"
             },
             password: { type: DataTypes.STRING, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },

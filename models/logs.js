@@ -18,6 +18,7 @@ module.exports = (sequelize, DataTypes) => {
       endpoint: { type: DataTypes.STRING(255), allowNull: true, comment: "The API endpoint requested" },
       user_agent: { type: DataTypes.TEXT, allowNull: true, comment: "Device/Browser details" },
       caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
+      batch_id: { type: DataTypes.INTEGER, allowNull: true, comment: "Links to cron_job_runs.id for batch operations" },
     },
     {
       tableName: "logs", 

@@ -6,41 +6,43 @@ const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
 const DeviceHealthService = require("../services/deviceHealthService");
+const { CronJobRun, Logs, sequelize } = require("../models");
+const { commonQuery } = require("../helpers");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Named job handlers (reusable for both cron schedule & on-demand execution)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const jobLogCleanup = async (asOf = null) => {
+const jobLogCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily log cleanup task...');
     await archiveAndCleanupLogs(90);
     console.log('✅ Log cleanup completed.');
 };
 
-const jobMonthlyLeaveAccrual = async (asOf = null) => {
+const jobMonthlyLeaveAccrual = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running monthly leave accrual task...');
-    await LeaveBalanceService.processMonthlyAccruals(asOf);
+    await LeaveBalanceService.processMonthlyAccruals(asOf, batch_id);
     console.log('✅ Monthly leave accruals completed.');
 };
 
-const jobYearEndLeaveReset = async (asOf = null) => {
+const jobYearEndLeaveReset = async (asOf = null, batch_id = null) => {
     // We moved the logging inside the service to avoid daily terminal noise
-    await LeaveBalanceService.processYearEndReset(asOf);
+    await LeaveBalanceService.processYearEndReset(asOf, batch_id);
 };
 
-const jobContractorDeactivation = async (asOf = null) => {
+const jobContractorDeactivation = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily contractor deactivation task...');
     await ContractorDeactivationService.deactivateInactiveContractors(asOf);
     console.log('✅ Contractor deactivation completed.');
 };
 
-const jobResignationProcessing = async (asOf = null) => {
+const jobResignationProcessing = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily resignation/exit processing task...');
     const count = await ResignationService.processDailyExits(asOf);
     console.log(`✅ ${count} employee exits processed.`);
 };
 
-const jobAttendanceRebuild = async (asOf = null) => {
+const jobAttendanceRebuild = async (asOf = null, batch_id = null) => {
     const { requestContext } = require("../utils/requestContext");
     const dayjs = require('dayjs');
 
@@ -94,7 +96,7 @@ const jobAttendanceRebuild = async (asOf = null) => {
     });
 };
 
-const jobPayslipCleanup = async (asOf = null) => {
+const jobPayslipCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running hourly payslip PDF cleanup task...');
     const payslipDir = path.join(process.cwd(), 'uploads', 'payslips');
     if (fs.existsSync(payslipDir)) {
@@ -117,7 +119,7 @@ const jobPayslipCleanup = async (asOf = null) => {
     }
 };
 
-const jobAnnouncementExpiry = async (asOf = null) => {
+const jobAnnouncementExpiry = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily announcement expiry check task...');
     const dayjs = require('dayjs');
     const { Announcement } = require("../models");
@@ -139,7 +141,7 @@ const jobAnnouncementExpiry = async (asOf = null) => {
     console.log(`✅ ${count} expired announcements updated to inactive status.`);
 };
 
-const jobDeviceHealthCheck = async (asOf = null) => {
+const jobDeviceHealthCheck = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running device health check task...');
     await DeviceHealthService.checkDeviceHealth();
 };
@@ -161,6 +163,131 @@ const ALL_JOBS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Job Tracking Wrapper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Wraps a job function with tracking (logging start/end/status to CronJobRun)
+ */
+const runJobWithTracking = async (job, asOf = null) => {
+    console.log(`\n▶️  Starting: ${job.name}`);
+    const start = Date.now();
+    
+    // Create tracking record
+    const run = await CronJobRun.create({
+        job_name: job.name,
+        start_time: new Date(),
+        status: 'RUNNING',
+        as_of: asOf ? new Date(asOf) : null
+    });
+
+    try {
+        // Execute the actual job, passing the batch_id (run.id)
+        // Note: Individual services must be updated to accept and use this batch_id for logging.
+        await job.fn(asOf, run.id);
+        
+        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        
+        await run.update({
+            end_time: new Date(),
+            status: 'SUCCESS',
+            summary: { duration: `${duration}s` }
+        });
+
+        console.log(`✅ ${job.name} completed in ${duration}s`);
+        return { name: job.name, status: '✅ success', duration: `${duration}s`, runId: run.id };
+    } catch (err) {
+        const duration = ((Date.now() - start) / 1000).toFixed(2);
+        console.error(`❌ ${job.name} failed:`, err.message);
+
+        await run.update({
+            end_time: new Date(),
+            status: 'FAILED',
+            error_message: err.message,
+            summary: { duration: `${duration}s` }
+        });
+
+        return { name: job.name, status: '❌ failed', error: err.message, duration: `${duration}s`, runId: run.id };
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Revert Logic
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reverts changes made by a specific cron job run
+ */
+const revertCronJobRun = async (runId) => {
+    console.log(`\n🔙 Starting REVERT for Cron Job Run ID: ${runId}`);
+    
+    const run = await CronJobRun.findByPk(runId);
+    if (!run) throw new Error(`Cron job run ${runId} not found.`);
+    if (run.status === 'REVERTED') throw new Error(`Run ${runId} is already reverted.`);
+
+    const t = await sequelize.transaction();
+    try {
+        // Fetch all logs associated with this batch
+        const logs = await Logs.findAll({
+            where: { batch_id: runId },
+            order: [['id', 'DESC']], // Revert in reverse order of application
+            transaction: t
+        });
+
+        console.log(`Found ${logs.length} log entries to revert.`);
+
+        for (const log of logs) {
+            if (!log.old_data || !log.record_id) {
+                console.warn(`Skipping log ${log.id}: No old_data or record_id found.`);
+                continue;
+            }
+
+            const Model = require("../models")[log.entity_name];
+            if (!Model) {
+                console.warn(`Skipping log ${log.id}: Model ${log.entity_name} not found.`);
+                continue;
+            }
+
+            if (log.action_type === 'UPDATE' || log.action_type === 'STATUS_CHANGE') {
+                console.log(`Restoring ${log.entity_name} ID: ${log.record_id}`);
+                await Model.update(log.old_data, {
+                    where: { id: log.record_id },
+                    transaction: t
+                });
+            } else if (log.action_type === 'CREATE' || log.action_type === 'BULK_CREATE') {
+                console.log(`Deleting created record ${log.entity_name} ID: ${log.record_id}`);
+                await Model.destroy({
+                    where: { id: log.record_id },
+                    transaction: t
+                });
+            } else if (log.action_type === 'DELETE') {
+                console.log(`Restoring deleted ${log.entity_name} ID: ${log.record_id}`);
+                // Since it's a soft delete usually (status=2), we just restore the old data (which includes status=0/1)
+                await Model.update(log.old_data, {
+                    where: { id: log.record_id },
+                    transaction: t,
+                    paranoid: false // In case of hard delete (not common in this app but safe)
+                });
+            }
+        }
+
+        await run.update({
+            status: 'REVERTED',
+            reverted_at: new Date(),
+            summary: { ...run.summary, reverted_records: logs.length }
+        }, { transaction: t });
+
+        await t.commit();
+        console.log(`✅ Revert of Run ID ${runId} completed successfully.`);
+        return { success: true, revertedCount: logs.length };
+    } catch (err) {
+        await t.rollback();
+        console.error(`❌ Revert failed for Run ID ${runId}:`, err.message);
+        throw err;
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Run all jobs immediately (for testing / manual trigger)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -170,17 +297,8 @@ const runAllNow = async (asOf = null) => {
     const results = [];
 
     for (const job of ALL_JOBS) {
-        console.log(`\n▶️  Starting: ${job.name}`);
-        const start = Date.now();
-        try {
-            await job.fn(asOf);
-            const duration = ((Date.now() - start) / 1000).toFixed(2);
-            results.push({ name: job.name, status: '✅ success', duration: `${duration}s` });
-        } catch (err) {
-            const duration = ((Date.now() - start) / 1000).toFixed(2);
-            console.error(`❌ ${job.name} failed:`, err.message);
-            results.push({ name: job.name, status: '❌ failed', error: err.message, duration: `${duration}s` });
-        }
+        const result = await runJobWithTracking(job, asOf);
+        results.push(result);
     }
 
     console.log('\n📋 ===== CRON RUN SUMMARY =====');
@@ -201,18 +319,7 @@ const runJobNow = async (jobKey, asOf = null) => {
         throw new Error(`Unknown job: "${jobKey}". Available: ${ALL_JOBS.map(j => j.name).join(', ')}`);
     }
     const label = asOf ? ` [AS OF: ${asOf}]` : ' [LIVE DATE]';
-    console.log(`\n▶️  Manual trigger: ${job.name}${label}`);
-    const start = Date.now();
-    try {
-        await job.fn(asOf);
-        const duration = ((Date.now() - start) / 1000).toFixed(2);
-        console.log(`✅ ${job.name} completed in ${duration}s`);
-        return { name: job.name, status: '✅ success', duration: `${duration}s` };
-    } catch (err) {
-        const duration = ((Date.now() - start) / 1000).toFixed(2);
-        console.error(`❌ ${job.name} failed:`, err.message);
-        return { name: job.name, status: '❌ failed', error: err.message, duration: `${duration}s` };
-    }
+    return await runJobWithTracking(job, asOf);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,7 +335,7 @@ const initCronJobs = () => {
     });
 
     // ⏰ Device Health Check — runs every 30 minutes
-    cron.schedule('*/30 * * * *', async () => {
+    cron.schedule('*/5 * * * *', async () => {
         await jobDeviceHealthCheck().catch(e => console.error('❌ Device health check failed:', e));
     });
 
@@ -249,5 +356,6 @@ module.exports = {
     jobAttendanceRebuild,
     jobPayslipCleanup,
     jobAnnouncementExpiry,
+    revertCronJobRun,
 };
 

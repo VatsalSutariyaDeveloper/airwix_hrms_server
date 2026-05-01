@@ -205,6 +205,7 @@ exports.logQuery = async (logData, mainTransaction = null) => {
         endpoint: logData.endpoint || (ctx ? ctx.endpoint : 'unknown'),
         user_agent: logData.user_agent || (ctx ? ctx.userAgent : 'unknown'),
         caller: logData.caller,
+        batch_id: logData.batch_id
     };
     if (mainTransaction) {
         // [MAGIC FIX] Create a Nested Transaction (Savepoint)

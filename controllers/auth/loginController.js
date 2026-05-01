@@ -510,10 +510,15 @@ exports.verifyMobileNo = async (req, res) => {
     let type = "user";
 
     if (!user) {
-      const device = await commonQuery.findOneRecord(DeviceMaster, {
-        mobile_no,
-        status: { [Op.in]: [0, 1, 4] } // Active, Inactive, Pairing
-      }, {
+      const deviceWhere = { mobile_no };
+      if (device_id) {
+        deviceWhere.device_id = device_id;
+        deviceWhere.status = constants.DEVICE_STATUS.PAIRED;
+      } else {
+        deviceWhere.status = constants.DEVICE_STATUS.PAIRING;
+      }
+
+      const device = await commonQuery.findOneRecord(DeviceMaster, deviceWhere, {
         attributes: ['id', 'device_name', 'password', 'status', 'device_id']
       }, null, false, {});
       entity = device;
@@ -532,7 +537,7 @@ exports.verifyMobileNo = async (req, res) => {
     if (type === "device") {
       if (!device_id) {
         // If no device_id passed, check if it's in pairing stage
-        if (entity.status === 4) {
+        if (entity.status === constants.DEVICE_STATUS.PAIRING) {
           // Success: The responseData will include the device_id
         } else {
           return res.error(403, { message: "Device is not able to pair. Please initiate pairing from the admin panel." });
@@ -591,7 +596,7 @@ exports.verifyMobileNo = async (req, res) => {
     // });
 
     const responseData = {
-      device_id: (type === "device" && entity.status === 4) ? cryptoHelper.encryptId(entity.device_id) : null
+      device_id: (type === "device" && entity.status === constants.DEVICE_STATUS.PAIRING) ? cryptoHelper.encryptId(entity.device_id) : null
     };
 
     if (!pin_set) {
@@ -645,16 +650,8 @@ exports.verifyOtpPin = async (req, res) => {
 exports.generatePin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, pin, device_id, device_model, os_version, brand_name } = req.body;
-
-    // Auto-detect device info if not provided in body
-    const parser = new UAParser(req.headers["user-agent"]);
-    const uaResult = parser.getResult();
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address } = req.body;
     
-    brand_name = brand_name || uaResult.device.vendor || "Unknown";
-    device_model = device_model || uaResult.device.model || "Unknown";
-    os_version = os_version || `${uaResult.os.name || ""} ${uaResult.os.version || ""}`.trim() || "Unknown";
-
     if (device_id) {
         device_id = cryptoHelper.decryptId(device_id);
     }
@@ -703,7 +700,7 @@ exports.generatePin = async (req, res) => {
             if (!device) {
                 device = await commonQuery.findOneRecord(DeviceMaster, {
                     mobile_no,
-                    status: 4 // PAIRING
+                    status: constants.DEVICE_STATUS.PAIRING
                 }, { 
                   order: [['id', 'ASC']], 
                   transaction 
@@ -715,7 +712,7 @@ exports.generatePin = async (req, res) => {
                         device_id: device_id || device.device_id, // Hardware ID from request or preserved admin ID
                         status: 0, // ACTIVE
                         last_login_at: new Date(),
-                        ip_address: req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+                        ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
                         device_model,
                         os_version,
                         brand_name
@@ -993,16 +990,8 @@ console.log("entity",entity.device_type)
 exports.pinLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, pin, device_id, device_model, os_version, brand_name } = req.body;
-
-    // Auto-detect device info if not provided in body
-    const parser = new UAParser(req.headers["user-agent"]);
-    const uaResult = parser.getResult();
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address } = req.body;
     
-    brand_name = brand_name || uaResult.device.vendor || "Unknown";
-    device_model = device_model || uaResult.device.model || "Unknown";
-    os_version = os_version || `${uaResult.os.name || ""} ${uaResult.os.version || ""}`.trim() || "Unknown";
-
     if (device_id) {
         device_id = cryptoHelper.decryptId(device_id);
     }
@@ -1051,7 +1040,7 @@ exports.pinLogin = async (req, res) => {
           if (!device) {
               device = await commonQuery.findOneRecord(DeviceMaster, {
                   mobile_no,
-                  status: 4 // PAIRING
+                  status: constants.DEVICE_STATUS.PAIRING
               }, { 
                 order: [['id', 'ASC']], // Take the oldest pending record
                 transaction 
@@ -1063,7 +1052,7 @@ exports.pinLogin = async (req, res) => {
                       device_id: device_id || device.device_id,
                       status: 0, // ACTIVE
                       last_login_at: new Date(),
-                      ip_address: req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+                      ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
                       device_model,
                       os_version,
                       brand_name

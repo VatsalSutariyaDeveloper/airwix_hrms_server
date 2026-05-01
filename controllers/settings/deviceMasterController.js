@@ -1,6 +1,7 @@
-const { DeviceMaster } = require("../../models");
+const { DeviceMaster, Employee, User } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, cryptoHelper } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
+const { OS } = require("ua-parser-js/enums");
 
 const STATUS = constants.DEVICE_STATUS;
 
@@ -20,6 +21,18 @@ exports.create = async (req, res) => {
                 {
                     model: DeviceMaster,
                     fields: ["device_name"],
+                },
+                {
+                    model: Employee,
+                    fields: ["mobile_no"],
+                    excludeCompany: true,
+                    excludeBranch: true
+                },
+                {
+                    model: User,
+                    fields: ["mobile_no"],
+                    excludeCompany: true,
+                    excludeBranch: true
                 }
             ]
         }, transaction);
@@ -95,6 +108,18 @@ exports.update = async (req, res) => {
                         model: DeviceMaster,
                         fields: ["device_name"],
                         excludeId: req.params.id,
+                    },
+                    {
+                        model: Employee,
+                        fields: ["mobile_no"],
+                        excludeCompany: true,
+                        excludeBranch: true
+                    },
+                    {
+                        model: User,
+                        fields: ["mobile_no"],
+                        excludeCompany: true,
+                        excludeBranch: true
                     }
                 ]
             },
@@ -235,7 +260,11 @@ exports.unpairDevice = async (req, res) => {
         const updated = await commonQuery.updateRecordById(DeviceMaster, id, {
             device_id: null,
             ip_address: null,
-            last_login_at: null
+            last_login_at: null,
+            os_version:null,
+            brand_name:null,
+            device_model:null,
+            status: constants.DEVICE_STATUS.UNPAIRED // Unpaired
         }, transaction);
 
         if (!updated) {

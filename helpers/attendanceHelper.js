@@ -536,8 +536,19 @@ async function punch(employeeId, meta, transaction = null) {
     punch_time: now,
     device_id: cleanMeta.device_id,
     company_id: cleanMeta.company_id,
-    branch_id: cleanMeta.branch_id
+    branch_id: cleanMeta.branch_id,
+    face_descriptor: cleanMeta.face_descriptor ? "Present" : "Missing"
   });
+
+  // Handle face_descriptor parsing if it arrives as a string
+  let faceDescriptor = cleanMeta.face_descriptor || null;
+  if (typeof faceDescriptor === 'string' && faceDescriptor.startsWith('[')) {
+    try {
+      faceDescriptor = JSON.parse(faceDescriptor);
+    } catch (e) {
+      console.error("[Punch] Failed to parse face_descriptor string:", e.message);
+    }
+  }
 
   const newPunch = await commonQuery.createRecord(AttendancePunch, {
     employee_id: employeeId,
@@ -545,6 +556,7 @@ async function punch(employeeId, meta, transaction = null) {
     punch_type: punchType,
     punch_time: now,
     ...cleanMeta,
+    face_descriptor: faceDescriptor
   }, transaction, {});
 
   // 4.1 Send Notification
@@ -1410,10 +1422,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let regularWorkedMinutes = Math.max(0, finalWorkedMinutes - overtimeMinutes);
 
   // ✅ Check if work is completely outside shift hours - set flag to skip fine calculation
-  if (shift && shiftWorkedMins === 0 && template) {
-    // Always skip fine calculation when work is completely outside shift hours
-    meta.skipFineCalculation = true;
-  }
+  // if (shift && shiftWorkedMins === 0 && template) {
+  //   // Always skip fine calculation when work is completely outside shift hours
+  //   meta.skipFineCalculation = true;
+  // }
 
   // 4. Overtime Trimming (Optional, if not included in total)
   let expectedShiftWorkMinutes = 0;
