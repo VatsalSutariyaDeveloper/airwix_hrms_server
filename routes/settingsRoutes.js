@@ -37,6 +37,7 @@ const expenseTypeController = require("../controllers/settings/expenseTypeContro
 router.get("/user-access/session-data", userAccessController.sessionData);
 router.get("/switch-company", userAccessController.switchCompany);
 router.get("/switch-branch", userAccessController.switchBranch);
+router.get("/device-data", userAccessController.getCompanySettingsData);
 
 
 // ==========================

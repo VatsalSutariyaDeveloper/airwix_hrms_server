@@ -215,17 +215,81 @@ const runWorker = async () => {
                 return cleanKeywords.every(k => cH.includes(k));
             });
         };
+        const getPfAmountHeader = (type) => {
+            const candidates = headers.filter(h => {
+                const cH = cleanStr(h);
+                if (!cH.includes('pf')) return false;
+                if (cH.includes('status') || cH.includes('limit')) return false;
+
+                if (type === 'employee') {
+                    return cH.includes('employee') || cH.includes('deduction') || cH.includes('epfemployee') || cH.includes('providentfundemployee');
+                }
+
+                return cH.includes('employer') || cH.includes('contribution') || cH.includes('epfemployer') || cH.includes('providentfundemployer');
+            });
+
+            if (candidates.length > 0) return candidates[0];
+
+            if (type === 'employee') {
+                return headers.find(h => {
+                    const cH = cleanStr(h);
+                    return cH === 'pf1' || cH === 'epf1';
+                }) || headers.find(h => {
+                    const cH = cleanStr(h);
+                    return cH.includes('pf') && (cH.endsWith('1') || cH.includes('deduction'));
+                });
+            }
+
+            return headers.find(h => {
+                const cH = cleanStr(h);
+                return cH === 'pf' || cH === 'employerpf';
+            });
+        };
+        const getEsiAmountHeader = (type) => {
+            const candidates = headers.filter(h => {
+                const cH = cleanStr(h);
+                if (!cH.includes('esi') && !cH.includes('esic')) return false;
+                if (cH.includes('status')) return false;
+
+                if (type === 'employee') {
+                    return cH.includes('employee') || cH.includes('deduction');
+                }
+
+                return cH.includes('employer');
+            });
+
+            if (candidates.length > 0) return candidates[0];
+
+            if (type === 'employee') {
+                return headers.find(h => {
+                    const cH = cleanStr(h);
+                    return cH === 'esic1' || cH === 'esi1';
+                }) || headers.find(h => {
+                    const cH = cleanStr(h);
+                    return (cH.includes('esi') || cH.includes('esic')) && (cH.endsWith('1') || cH.includes('deduction'));
+                });
+            }
+
+            return headers.find(h => {
+                const cH = cleanStr(h);
+                return cH === 'esic' || cH === 'esi' || cH === 'employeresi' || cH === 'employeresic';
+            });
+        };
 
         const statHeaderKeys = {
             ePfStat: getStatHeader(["employee", "pf", "status"]) || getStatHeader(["employer", "pf", "employee"]),
             ePfLim: getStatHeader(["employee", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employee"]),
+            ePfAmt: getPfAmountHeader('employee'),
             eEsiStat: getStatHeader(["employee", "esi", "status"]) || getStatHeader(["esic", "employee"]),
+            eEsiAmt: getEsiAmountHeader('employee'),
             ptStat: getStatHeader(["pt", "status"]),
             eLwfStat: getStatHeader(["employee", "lwf", "status"]),
             rPfStat: getStatHeader(["employer", "pf", "status"]) || getStatHeader(["employer", "pf", "employer"]),
             rPfLim: getStatHeader(["employer", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employer"]),
+            rPfAmt: getPfAmountHeader('employer'),
             edliStat: getStatHeader(["employer", "edli", "status"]),
             rEsiStat: getStatHeader(["employer", "esi", "status"]) || getStatHeader(["esic", "employer"]),
+            rEsiAmt: getEsiAmountHeader('employer'),
             rLwfStat: getStatHeader(["employer", "lwf", "status"]),
             gratuityStat: getStatHeader(["gratuity", "status"]),
             leaveEncashmentStat: getStatHeader(["leave", "encashment", "status"]),
@@ -243,6 +307,10 @@ const runWorker = async () => {
             calculationBasisKey: headers.find(h => {
                 const nh = normalizeText(h);
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis");
+            }),
+            netSalaryKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh === "net salary" || nh === "net pay" || nh === "take home" || nh.includes("net salary");
             })
         };
 
@@ -257,19 +325,42 @@ const runWorker = async () => {
             return s === 'yes' || s === 'enabled' || s === 'active' || s === '1' || s === 'true' || s === 'y' || s === 'selected';
         };
 
-        const normalizeLimit = (val, side) => {
-            const s = cleanStr(val || "");
-            if (s === 'yes') {
-                return side === 'employee' ? '₹1,800 Fixed' : '₹ 1800 Limit';
+        const getPfImportConfig = (limitValue, excelAmount, defaultAmount) => {
+            const s = cleanStr(limitValue || "");
+            const hasExcelAmount = excelAmount > 0;
+
+            if (isYes(limitValue)) {
+                return {
+                    calculation_type: '₹1800 Limit',
+                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : 1800
+                };
             }
+
             if (s === 'no') {
-                return '12% of Basic';
+                return {
+                    calculation_type: '12% of Basic',
+                    amount: hasExcelAmount ? excelAmount : 0
+                };
             }
-            // Existing fallback logic
-            if (s.includes('1800')) {
-                return side === 'employee' ? '₹1,800 Fixed' : '₹ 1800 Limit';
+
+            if (s === 'no1800fixed' || s === 'no1800limit' || s === 'no1800capped' || s === 'no1800cap') {
+                return {
+                    calculation_type: '12% of Basic (₹1800 Limit)',
+                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : Math.min(defaultAmount, 1800)
+                };
             }
-            return '12% of Basic';
+
+            if (s.includes('1800') || s.includes('fixed') || s.includes('limit')) {
+                return {
+                    calculation_type: '12% of Basic (₹1800 Limit)',
+                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : Math.min(defaultAmount, 1800)
+                };
+            }
+
+            return {
+                calculation_type: '12% of Basic',
+                amount: hasExcelAmount ? excelAmount : 0
+            };
         };
 
         const templatesToUpdate = [];
@@ -375,32 +466,25 @@ const runWorker = async () => {
 
                 if (statutory_config.employee_pf.enabled) {
                     let amt = 0;
-                    const excelPFAmt = parseExcelAmount(row['PF_1']) || 0;
+                    const pfTransaction = rowTransactions.find(t => t.component_id === employeePFCompId);
+                    const excelPFAmt = parseExcelAmount(
+                        statHeaderKeys.ePfAmt ? row[statHeaderKeys.ePfAmt] : 0
+                    ) || pfTransaction?.monthly_amount || 0;
+                    const defaultPfAmount = Math.round(basicAmount * 0.12);
 
                     if (statHeaderKeys.ePfLim) {
                         const limVal = row[statHeaderKeys.ePfLim];
-
-                        if (isYes(limVal)) {
-                            // PF LIMIT (Employee Statutory) = yes: set calculation_type = ₹ 1800 Limit, max limit 1800
-                            statutory_config.employee_pf.calculation_type = '₹ 1800 Limit';
-                            amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
-                        } else if (normalizeText(limVal) === 'no') {
-                            // PF LIMIT = no: calculation_type = 12% of Basic, use Excel amount
-                            statutory_config.employee_pf.calculation_type = '12% of Basic';
-                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
-                        } else {
-                            // If no clear yes/no, use normalizeLimit logic
-                            statutory_config.employee_pf.calculation_type = normalizeLimit(limVal, 'employee');
-                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
-                        }
+                        const pfConfig = getPfImportConfig(limVal, excelPFAmt, defaultPfAmount);
+                        statutory_config.employee_pf.calculation_type = pfConfig.calculation_type;
+                        amt = pfConfig.amount;
                     } else {
                         // No limit column: if Excel has amount, use it with max 1800 limit
                         if (excelPFAmt > 0) {
                             amt = Math.min(excelPFAmt, 1800);
-                            statutory_config.employee_pf.calculation_type = '₹1,800 Fixed';
+                            statutory_config.employee_pf.calculation_type = '₹1800 Limit';
                         } else {
                             // No Excel amount: calculate 12% of Basic with max 1800
-                            amt = Math.min(Math.round(basicAmount * 0.12), 1800);
+                            amt = Math.min(defaultPfAmount, 1800);
                             statutory_config.employee_pf.calculation_type = '12% of Basic';
                         }
                     }
@@ -438,32 +522,25 @@ const runWorker = async () => {
 
                 if (statutory_config.employer_pf.enabled) {
                     let amt = 0;
-                    const excelPFAmt = parseExcelAmount(row['PF']) || 0;
+                    const pfTransaction = rowTransactions.find(t => t.component_id === employerPFCompId);
+                    const excelPFAmt = parseExcelAmount(
+                        statHeaderKeys.rPfAmt ? row[statHeaderKeys.rPfAmt] : 0
+                    ) || pfTransaction?.monthly_amount || 0;
+                    const defaultPfAmount = Math.round(basicAmount * 0.12);
 
                     if (statHeaderKeys.rPfLim) {
                         const limVal = row[statHeaderKeys.rPfLim];
-
-                        if (isYes(limVal)) {
-                            // PF LIMIT (Employer Statutory) = yes: set calculation_type = ₹ 1800 Limit, max limit 1800
-                            statutory_config.employer_pf.calculation_type = '₹ 1800 Limit';
-                            amt = excelPFAmt > 0 ? Math.min(excelPFAmt, 1800) : 1800;
-                        } else if (normalizeText(limVal) === 'no') {
-                            // PF LIMIT = no: calculation_type = 12% of Basic, use Excel amount
-                            statutory_config.employer_pf.calculation_type = '12% of Basic';
-                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
-                        } else {
-                            // If no clear yes/no, use normalizeLimit logic
-                            statutory_config.employer_pf.calculation_type = normalizeLimit(limVal, 'employer');
-                            amt = excelPFAmt > 0 ? excelPFAmt : 0;
-                        }
+                        const pfConfig = getPfImportConfig(limVal, excelPFAmt, defaultPfAmount);
+                        statutory_config.employer_pf.calculation_type = pfConfig.calculation_type;
+                        amt = pfConfig.amount;
                     } else {
                         // No limit column: if Excel has amount, use it with max 1800 limit
                         if (excelPFAmt > 0) {
                             amt = Math.min(excelPFAmt, 1800);
-                            statutory_config.employer_pf.calculation_type = '₹ 1800 Limit';
+                            statutory_config.employer_pf.calculation_type = '₹1800 Limit';
                         } else {
                             // No Excel amount: calculate 12% of Basic with max 1800
-                            amt = Math.min(Math.round(basicAmount * 0.12), 1800);
+                            amt = Math.min(defaultPfAmount, 1800);
                             statutory_config.employer_pf.calculation_type = '12% of Basic';
                         }
                     }
@@ -494,11 +571,25 @@ const runWorker = async () => {
                 }
 
                 // --- Other Statutory (ESI, PT, LWF) ---
-                const empESIAmt = findCompValue(["employer esi", "esic", "employer share esi"]);
+                const employerEsiTransaction = rowTransactions.find(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    const n = normalizeText(comp?.component_name || "");
+                    return n.includes('esi') && n.includes('employer');
+                });
+                const employeeEsiTransaction = rowTransactions.find(t => {
+                    const comp = allComponents.find(c => c.id === t.component_id);
+                    const n = normalizeText(comp?.component_name || "");
+                    return n.includes('esi') && (n.includes('employee') || n.includes('deduction'));
+                });
+                const empESIAmt = statHeaderKeys.rEsiAmt
+                    ? { enabled: true, amount: parseExcelAmount(row[statHeaderKeys.rEsiAmt]) || employerEsiTransaction?.monthly_amount || 0 }
+                    : findCompValue(["employer esi", "esic", "employer share esi"]);
                 if (empESIAmt) { statutory_config.employer_esi.enabled = true; statutory_config.employer_esi.amount = empESIAmt.amount; }
                 const empLWFAmt = findCompValue(["lwf", "labour welfare"]);
                 if (empLWFAmt) { statutory_config.employer_lwf.enabled = true; statutory_config.employer_lwf.amount = empLWFAmt.amount; }
-                const dedESIAmt = findCompValue(["esi deduction", "employee esi", "health insurance"]);
+                const dedESIAmt = statHeaderKeys.eEsiAmt
+                    ? { enabled: true, amount: parseExcelAmount(row[statHeaderKeys.eEsiAmt]) || employeeEsiTransaction?.monthly_amount || 0 }
+                    : findCompValue(["esi deduction", "employee esi", "health insurance"]);
                 if (dedESIAmt) { statutory_config.employee_esi.enabled = true; statutory_config.employee_esi.amount = dedESIAmt.amount; }
                 const dedPTAmt = findCompValue(["pt", "professional tax", "prof tax"]);
                 if (dedPTAmt) { statutory_config.pt.enabled = true; statutory_config.pt.amount = dedPTAmt.amount; }
@@ -772,10 +863,10 @@ const runWorker = async () => {
                 // console.log('  Bonus     :', parseExcelAmount(row['Bonus']) || 0);
                 // console.log('  (B) Total :', parseExcelAmount(row['(B) Total']) || parseExcelAmount(row['Bonus']) || 0);
                 // console.log('(C) Regulatory / Statutory (Employer):');
-                // console.log('  PF              :', parseExcelAmount(row['PF']) || 0);
+                // console.log('  PF              :', parseExcelAmount(statHeaderKeys.rPfAmt ? row[statHeaderKeys.rPfAmt] : 0) || 0);
                 // console.log('  Leave Encashment:', parseExcelAmount(row['Leave Encashments']) || parseExcelAmount(row['Leave Encashment']) || 0);
                 // console.log('  Gratuity        :', parseExcelAmount(row['Gratuity']) || 0);
-                // console.log('  ESIC            :', parseExcelAmount(row['ESIC']) || 0);
+                // console.log('  ESIC            :', parseExcelAmount(statHeaderKeys.rEsiAmt ? row[statHeaderKeys.rEsiAmt] : 0) || 0);
                 // console.log('  (C) Total       :', parseExcelAmount(row['(C) Total']) || 0);
                 // console.log('(D) Other Benefits:');
                 // console.log('  Mobile         :', parseExcelAmount(row['Mobile']) || 0);
@@ -785,17 +876,17 @@ const runWorker = async () => {
                 // console.log('--- TOTALS ---');
                 // console.log('  Grand CTC (A+B+C+D):', parseExcelAmount(row['(A+B+C+D)']) || parseExcelAmount(row['Grand CTC']) || parseExcelAmount(row['CTC']) || 0);
                 // console.log('Employee Deduction:');
-                // const empPFDeduction = parseExcelAmount(row['PF_1']) || 0;
-                // const empESICDeduction = parseExcelAmount(row['ESIC_1']) || 0;
+                // const empPFDeduction = parseExcelAmount(statHeaderKeys.ePfAmt ? row[statHeaderKeys.ePfAmt] : 0) || 0;
+                // const empESICDeduction = parseExcelAmount(statHeaderKeys.eEsiAmt ? row[statHeaderKeys.eEsiAmt] : 0) || 0;
                 // const empFoodDeduction = parseExcelAmount(row['Food_1']) || parseExcelAmount(row['FOOD_1']) || parseExcelAmount(row['Food Deduction']) || parseExcelAmount(row['Food']) || 0;
                 // const totalDeduction = empPFDeduction + empESICDeduction + empFoodDeduction;
-                // const grossTotal = parseExcelAmount(row['(A) Total']) || parseExcelAmount(row['GROSS']) || 0;
-                // const netSalary = grossTotal - totalDeduction;
                 // console.log('  PF   :', empPFDeduction);
                 // console.log('  ESIC :', empESICDeduction);
                 // console.log('  Food :', empFoodDeduction);
                 // console.log('  Total Deduction:', totalDeduction);
-                // console.log('  Net Salary:', netSalary);
+                // if (statHeaderKeys.netSalaryKey) {
+                //     console.log('  Net Salary:', parseExcelAmount(row[statHeaderKeys.netSalaryKey]) || 0);
+                // }
                 
                 // // Debug: Show all row keys to find Food column name
                 // console.log('\n[DEBUG] All row keys:', Object.keys(row).join(', '));

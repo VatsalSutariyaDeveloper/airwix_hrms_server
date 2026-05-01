@@ -1322,7 +1322,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         statutory_details: summary.breakdown.statutory || {},
         employer_details: summary.breakdown.employer || {},
         reimbursement_details: summary.reimbursement_history || [],
-        encashment_details: summary.encashment_history || {},
+        encashment_details: {},
         payment_history: {
             ...(summary.payment_history || {}),
             advances_adjusted: []
@@ -1396,21 +1396,17 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
     }
 
     // Process encashments (collect data)
-    const allEncashmentIds = (summary.encashment_history?.history || []).map(e => e.id);
-    let encashmentIdsToSettle = allEncashmentIds;
     let encashmentUpdateData = null;
-
-    console.log("encashmentIdsToSettle-------------------\n", encashmentIdsToSettle);
     
     if (encashment_ids_to_adjust && encashment_ids_to_adjust.length > 0) {
-        encashmentIdsToSettle = encashmentIdsToSettle.filter(id => encashment_ids_to_adjust.includes(id));
+        const allEncashmentIds = (summary.encashment_history?.history || []).map(e => e.id);
+        let encashmentIdsToSettle = allEncashmentIds.filter(id => encashment_ids_to_adjust.includes(id));
         
         if (encashmentIdsToSettle.length === 0) {
             throw new Error(`Invalid encashment IDs provided. Available encashment IDs: ${allEncashmentIds.join(', ') || 'none'}`);
         }
-    }
 
-    if (encashmentIdsToSettle.length > 0) {
+        if (encashmentIdsToSettle.length > 0) {
         await commonQuery.updateRecordById(
             LeaveRequest,
             { id: { [Op.in]: encashmentIdsToSettle }, employee_id },
@@ -1426,6 +1422,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
             history: settledHistory,
             sum: settledSum.toFixed(2),
         };
+        }
     }
 
     // Add collected data to payslip payload
@@ -2078,6 +2075,8 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 status: existing ? (existing.status === 0 ? "Draft" : (existing.status === 1 ? "Finalized" : "Paid")) : "No Calculation"
             });
         }
+
+        console.log("yearRange--------------------\n",yearRange);
 
         return res.ok({
             min_year: yearRange?.min_year || selectedYear,

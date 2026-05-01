@@ -1365,7 +1365,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     breakDeduction = Math.max(0, breakDeduction - template.paid_break_duration_mins);
   }
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakDeduction);
-
   // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), set worked minutes to 0 so all time goes to overtime
   // For COMP_OFF: keep finalWorkedMinutes (all time → worked_minutes)
   if ((meta.isHoliday || meta.isWeeklyOff) && !meta.isHolidayCompOff) {
@@ -1439,9 +1438,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // [MOD] Limit worked minutes to shift duration
-  if (shift && expectedShiftWorkMinutes > 0) {
-    finalWorkedMinutes = Math.min(finalWorkedMinutes, expectedShiftWorkMinutes);
-  }
+  // if (shift && expectedShiftWorkMinutes > 0) {
+  //   finalWorkedMinutes = Math.min(finalWorkedMinutes, expectedShiftWorkMinutes);
+  // }
   
   // [MOD] Do not trim worked minutes by policy here. 
   // We want worked_minutes to store total site duration (Total - Breaks), as requested.
@@ -2157,10 +2156,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Override fines and worked minutes for automated approvals (e.g. Short Leave treated as Present)
     if (status === 0 || status === 1) { // 0: Present, 1: Half Day
+      const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
+      const minHalfDay = shift ? (shift.min_half_day_minutes || 240) : 240;
       if (status === 0) {
-        finalWorkedMinutes = shift ? (shift.min_full_day_minutes || 480) : 480;
+        finalWorkedMinutes = Math.max(finalWorkedMinutes, minFullDay);
       } else if (status === 1) {
-        finalWorkedMinutes = shift ? (shift.min_half_day_minutes || 240) : 240;
+        finalWorkedMinutes = Math.max(finalWorkedMinutes, minHalfDay);
       }
     }
   }
@@ -2213,6 +2214,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     lateOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
     earlyOtData = { rate: 0, amount: 0, minutes: 0, calculation_type: 5 };
   }
+  const totalOtMins = (parseInt(lateOtData.minutes || 0) + parseInt(earlyOtData.minutes || 0));
 
   const attendancePayload = {
     employee_id: employeeId,
@@ -2220,10 +2222,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shift_id: meta.forceShiftIdNull ? null : (shift ? shift.id : null),
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
     last_out: lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null,
-    worked_minutes: Math.floor(finalWorkedMinutes),
+    worked_minutes: Math.floor(Math.max(finalWorkedMinutes, totalOtMins)),
     fine_minutes: (fineData.late_entry?.minutes || 0) + (fineData.early_exit?.minutes || 0) + (fineData.excess_breaks?.minutes || 0),
     total_break_minutes: totalBreakMinutes,
-    overtime_minutes: (parseInt(lateOtData.minutes || 0) + parseInt(earlyOtData.minutes || 0)),
+    overtime_minutes: totalOtMins,
     overtime_amount: parseFloat((parseFloat(lateOtData.amount || 0) + parseFloat(earlyOtData.amount || 0)).toFixed(2)),
     overtime_data: (
       (lateOtData.minutes === 0 && lateOtData.amount === 0 && lateOtData.rate === 0) &&

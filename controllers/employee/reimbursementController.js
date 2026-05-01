@@ -16,7 +16,7 @@ exports.create = async (req, res) => {
             expense_type: "Expense Type",
             amount: "Amount",
             date: "Date",
-            payment_type: "Payment Type"
+            // payment_type: "Payment Type"
         };
 
         if (!req.body.employee_id && req.user.employee_id) {
@@ -172,7 +172,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, approval_remark, approved_by } = req.body;
+        const { approval_status, remarks: approval_remark, approved_by, payment_type } = req.body;
 
         // 1. Fetch Reimbursement Record
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {}, transaction);
@@ -220,7 +220,8 @@ exports.updateStatus = async (req, res) => {
 
             const updateData = {
                 approval_history: history,
-                approval_remark: approval_remark || ""
+                approval_remark: approval_remark || "",
+                payment_type: payment_type
             };
 
             // Partial vs Final Approval

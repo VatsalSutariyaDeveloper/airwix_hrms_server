@@ -473,10 +473,10 @@ exports.switchBranch = async (req, res) => {
     } else {
         // 2. Validate Branch (Standard Sequelize)
         const branch = await BranchMaster.findOne({
-            where: { 
-                id: branch_id, 
+            where: {
+                id: branch_id,
                 company_id: company_id, // Security check
-                status: { [Op.ne]: 2 } 
+                status: { [Op.ne]: 2 }
             },
             transaction
         });
@@ -508,11 +508,30 @@ exports.switchBranch = async (req, res) => {
     return res.ok({ 
       token: newToken, 
       message: "Switched branch successfully",
-      current_branch_id: finalBranchId 
+      current_branch_id: finalBranchId
     });
 
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+exports.getCompanySettingsData = async (req, res) => {
+  try {
+    // Fetch specific company settings
+    const settings = await commonQuery.findAllRecords(CompanySettings, {
+      settings_name: {
+        [Op.in]: ['offline_data_sync', 'punch_cooldown_seconds', 'leave_past_datelimit']
+      },
+      status: 0
+    }, {
+      attributes: ['settings_name', 'settings_value']
+    });
+    
+    return res.ok(settings);
+
+  } catch (err) {
     return handleError(err, res, req);
   }
 };

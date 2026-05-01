@@ -1423,6 +1423,11 @@ exports.getAttendanceDayDetails = async (req, res) => {
               model: BranchMaster,
               as: "branch",
               attributes: ["branch_name"]
+            },
+            {
+              model: DeviceMaster,
+              as: "device",
+              attributes: ["device_name"]
             }
           ],
           required: false,
