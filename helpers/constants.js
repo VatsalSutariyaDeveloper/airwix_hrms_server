@@ -456,11 +456,10 @@ const constants = {
    * DEVICE STATUS
    * ======================= */
   DEVICE_STATUS: {
-    ACTIVE: 0,
-    INACTIVE: 1,
+    PAIRED: 0,
+    UNPAIRED: 1,
     DELETED: 2,
-    PENDING: 3,
-    PAIRING: 4
+    PAIRING: 3
   },
 };
 

@@ -175,6 +175,17 @@ const sanitizeTemplateFields = (body) => {
     });
 };
 
+// Helper: Auto set status to Exited if exit_date has passed
+const autoSetExitedStatus = (body) => {
+    if (body.exit_date) {
+        const exitDate = dayjs(body.exit_date);
+        const today = dayjs().startOf('day');
+        if (exitDate.isValid() && !exitDate.isAfter(today)) {
+            body.status = 4; // Exited
+        }
+    }
+};
+
 const handleExperienceAttachments = async (req, res, experienceDetails = [], allFiles = [], folder, transaction, existingEmployee = null) => {
     if (!Array.isArray(experienceDetails) || experienceDetails.length === 0) return experienceDetails;
 
@@ -231,6 +242,7 @@ exports.create = async (req, res) => {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
         sanitizeDateFields(req.body);
+        autoSetExitedStatus(req.body);
 
         const POST = req.body;
 
@@ -384,6 +396,7 @@ exports.update = async (req, res) => {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
         sanitizeDateFields(req.body);
+        autoSetExitedStatus(req.body);
 
         const { id } = req.params;
         const POST = req.body;
@@ -1988,9 +2001,9 @@ exports.registerFace = async (req, res) => {
         const savedFiles = await uploadFile(
             req,
             res,
-            constants.EMPLOYEE_IMG_FOLDER, 
+            constants.EMPLOYEE_IMG_FOLDER,
             transaction,
-            employee.profile_image     
+            employee.profile_image
         );
 
         const filename = savedFiles.image;
@@ -2009,16 +2022,20 @@ exports.registerFace = async (req, res) => {
 
         // 4. Unique Face Check (Using standard JS Math, no Python!)
         // Note: MobileFaceNet vectors usually need a tighter threshold (like 0.2 to 0.35)
-        const threshold = process.env.FACE_MATCH_THRESHOLD || 0.35; 
-        
+        // 4. Unique Face Check (Collision Detection)
+        // A distance of 0.30 means a 70% similarity match.
+        const threshold = 0.30;
+
         const employeesWithFaces = await commonQuery.findAllRecords(Employee, {
             status: 0,
             face_descriptor: { [Op.ne]: null },
-            id: { [Op.ne]: employeeId } 
+            id: { [Op.ne]: employeeId }
         }, {
             attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
             raw: true
         }, null, { company_id: true });
+
+        console.log(`\n🔍 --- STARTING COLLISION CHECK FOR EMP ID: ${employeeId} ---`);
 
         for (const emp of employeesWithFaces) {
             let storedVector = emp.face_descriptor;
@@ -2030,25 +2047,34 @@ exports.registerFace = async (req, res) => {
             if (!Array.isArray(storedVector)) continue;
 
             const dist = calculateCosineDistance(faceDescriptor, storedVector);
-            
+
+            // Convert distance back to a readable 0-100% format
+            const similarityPercentage = ((1 - dist) * 100).toFixed(2);
+
+            // 🚀 THE NEW CONSOLE LOG FOR LIVE MONITORING
+            console.log(`👤 Checked vs ${emp.first_name}: Match = ${similarityPercentage}% (Distance: ${dist.toFixed(4)})`);
+
             if (dist < threshold) {
                 const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
                 const branchName = branch?.branch_name || "N/A";
-                
+
+                console.log(`🚨 COLLISION DETECTED! ${emp.first_name} is a ${similarityPercentage}% match! Rejecting registration.`);
+
                 await transaction.rollback();
                 // Clean up the uploaded file since validation failed
                 try { fs.unlinkSync(fullFilePath); } catch (e) { }
 
-                return res.error(constants.VALIDATION_ERROR, { 
-                    message: `${emp.first_name} already exists in ${branchName}` 
+                return res.error(constants.VALIDATION_ERROR, {
+                    message: `${emp.first_name} already exists in ${branchName}`
                 });
             }
         }
+        console.log(`✅ NO COLLISIONS. Face is unique.\n`);
 
         // 5. Save the new vector directly into the database!
         await employee.update({
             profile_image: filename,
-            face_descriptor: faceDescriptor // 🚀 Stores the array directly
+            face_descriptor: JSON.stringify(faceDescriptor) // 🚀 Stores the array directly
         }, { transaction });
 
         await transaction.commit();
@@ -2846,7 +2872,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: LeaveRequest,
                     as: 'leaveRequests',
-                    attributes: ['id', 'start_date', 'end_date', 'approval_status'],
+                    attributes: ['id', 'start_date', 'end_date', 'start_session', 'end_session', 'approval_status'],
                     where: { approval_status: 3 }, // 3: APPROVED
                     required: false,
                     separate: true

@@ -52,26 +52,17 @@ exports.getNotifications = async (req, res) => {
         });
 
         const mappedAnnouncements = filteredAnnouncements.map(ann => ({
-            id: ann.id,
+            ...ann.dataValues,
             type: 'ANNOUNCEMENT',
-            title: ann.title,
             message: ann.content,
-            status: ann.status,
             is_read: readAnnouncementMap[ann.id] || 0,
-            created_at: ann.announcement_date,
             is_announcement: true
         }));
 
         const mappedNotifications = personalNotifications
             .filter(n => n.type !== 'ANNOUNCEMENT')
             .map(n => ({
-                id: n.id,
-                type: n.type,
-                title: n.title,
-                message: n.message,
-                status: n.status,
-                is_read: n.is_read,
-                created_at: n.created_at,
+                ...n.dataValues,
                 is_announcement: false
             }));
 

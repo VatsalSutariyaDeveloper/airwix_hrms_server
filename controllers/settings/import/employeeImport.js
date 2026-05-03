@@ -246,8 +246,8 @@ const runWorker = async () => {
         { key: "pf_number", aliases: ["pf number", "pf"] },
         { key: "pf_joining_date", aliases: ["pf joining date", "pf doj"] },
         { key: "pf_eligible", aliases: ["pf eligible", "pf eligibility"] },
-        { key: "esi_eligible", aliases: ["esi eligible", "esi eligibility"] },
-        { key: "esi_number", aliases: ["esi number", "esi"] },
+        { key: "esi_eligible", aliases: ["esi eligible", "esi eligibility", "esi status", "esic status", "esic eligibility", "esic eligible", "esic"] },
+        { key: "esi_number", aliases: ["esi number", "esi", "esic number", "esic no", "esic no.", "esic"] },
         { key: "pt_eligible", aliases: ["pt eligible", "pt eligibility"] },
         { key: "lwf_eligible", aliases: ["lwf eligible", "lwf eligibility"] },
         { key: "eps_eligible", aliases: ["eps eligible", "eps eligibility"] },
@@ -263,7 +263,8 @@ const runWorker = async () => {
         { key: "bank_ifsc_code", aliases: ["bank ifsc code", "ifsc code", "ifsc"] },
         { key: "bank_account_holder_name", aliases: ["bank account holder name", "account holder name"] },
         { key: "upi_id", aliases: ["upi id", "upi"] },
-        { key: "education_details", aliases: ["education details", "education", "qualification", "degree"] }
+        { key: "education_details", aliases: ["education details", "education", "qualification", "degree"] },
+        { key: "exit_date", aliases: ["exit date", "doe", "date of exit"] }
     ];
     
     // Always run auto-match for any headers that haven't been mapped yet
@@ -699,6 +700,7 @@ const runWorker = async () => {
 
                 if (!firstName) fail("First Name is required");
                 // if (!mobile) fail("Mobile Number is required");
+                const exitDate = parseExcelDate(record.exit_date, rowIndex, "Exit Date");
                 const joiningDate = parseExcelDate(record.joining_date, rowIndex, "Joining Date");
                 const dob = parseExcelDate(record.dob, rowIndex, "DOB");
                 const gender = getGenderValue(record.gender);
@@ -738,6 +740,7 @@ const runWorker = async () => {
                     same_as_current: record.same_as_current,
                     
                     joining_date: joiningDate,
+                    exit_date: exitDate,
 
                     permanent_address1: record.permanent_address1,
                     permanent_address2: record.permanent_address2,
@@ -847,6 +850,11 @@ const runWorker = async () => {
                     company_id,
                     user_id
                 };
+
+                // Auto set status to Exited if exit_date has passed
+                if (exitDate && moment(exitDate).startOf('day').isSameOrBefore(moment().startOf('day'))) {
+                    prepareData.status = 4; // Exited
+                }
 
                 // Check if this is an update or create (by employee_code only)
                 if (empCode && employeeData.existingEmployeeMap.has(empCode)) {

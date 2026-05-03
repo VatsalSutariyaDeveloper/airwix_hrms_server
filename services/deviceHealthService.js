@@ -40,11 +40,15 @@ const checkDeviceHealth = async () => {
             });
 
             // Default roles if no setting is found
-            let targetRoleKeys = [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN];
+            let targetRoleKeys = [constants.ROLE_KEYS.ADMIN];
             let thresholdMinutes = 30;
 
             if (settingsRecord && settingsRecord.settings_value) {
-                targetRoleKeys = settingsRecord.settings_value.role_keys || targetRoleKeys;
+                const settingsRoles = settingsRecord.settings_value.role_keys || [];
+                targetRoleKeys = [...new Set([
+                    ...(Array.isArray(settingsRoles) ? settingsRoles : [settingsRoles]), 
+                    constants.ROLE_KEYS.ADMIN
+                ])];
                 thresholdMinutes = settingsRecord.settings_value.threshold_minutes || thresholdMinutes;
             }
 

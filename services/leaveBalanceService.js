@@ -674,7 +674,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
     /**
      * Batch job to add monthly credits.
      */
-    static async processMonthlyAccruals(asOf = null) {
+    static async processMonthlyAccruals(asOf = null, batch_id = null) {
         const refDate = asOf ? dayjs(asOf) : dayjs();
 
         // Guard: Monthly accruals strictly run on the 1st of the month.
@@ -764,24 +764,13 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                         });
 
                         if (balance) {
-                            // Guard: If it was already updated today (the 1st), skip to prevent double-crediting
-                            // if initializeBalance already ran for this employee today.
-                            const wasUpdatedToday = dayjs(balance.updated_at).isSame(refDate, 'day');
-                            if (wasUpdatedToday && !asOf) {
-                                console.log(`[Accrual Sync] Skipping emp ${employee.id} cat ${category.id} - already updated today.`);
-                                continue;
-                            }
-
                             const newTotal = Math.round((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
                             const newPending = Math.round((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
                             
-                            await EmployeeLeaveBalance.update({
+                            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
                                 total_allocated: newTotal,
                                 pending_leaves: newPending
-                            }, {
-                                where: { id: balance.id },
-                                transaction
-                            });
+                            }, transaction, false, true, batch_id);
                         }
                     }
                 }
@@ -797,7 +786,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
     /**
      * Year-End Reset Logic.
      */
-    static async processYearEndReset(asOf = null) {
+    static async processYearEndReset(asOf = null, batch_id = null) {
         const transaction = await sequelize.transaction();
         try {
             const today = asOf ? dayjs(asOf) : dayjs();

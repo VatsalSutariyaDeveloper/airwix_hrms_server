@@ -37,6 +37,7 @@ const expenseTypeController = require("../controllers/settings/expenseTypeContro
 router.get("/user-access/session-data", userAccessController.sessionData);
 router.get("/switch-company", userAccessController.switchCompany);
 router.get("/switch-branch", userAccessController.switchBranch);
+router.get("/device-data", userAccessController.getCompanySettingsData);
 
 
 // ==========================
@@ -211,6 +212,7 @@ router.delete("/leave-template", leaveTemplateController.delete);
 router.patch("/leave-template/status", leaveTemplateController.updateStatus);
 router.post("/leave-template/dropdown-list", leaveTemplateController.dropdownList);
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
+router.get("/leave/download-sample", importEmployeeController.downloadLeaveSample);
 router.post("/leave/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 router.post("/attendance/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 router.post("/payroll/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);

@@ -260,7 +260,7 @@ function normalizeOrder(order) {
 
 module.exports = {
   // 1. Create Record
-  createRecord: async (model, data, transaction = null, requireTenantFields=true) => {
+  createRecord: async (model, data, transaction = null, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     let enrichedData = { ...data }
     let commonData = {
@@ -301,6 +301,7 @@ module.exports = {
         caller: caller,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
+        batch_id: batch_id || data.batch_id
       }, transaction);
 
     } catch (logErr) {
@@ -311,7 +312,7 @@ module.exports = {
   },
 
   // 2. Bulk Create
-  bulkCreate: async (Model, dataArray, extraFields, transaction = null, requireTenantFields=true) => {
+  bulkCreate: async (Model, dataArray, extraFields, transaction = null, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     if (!Array.isArray(dataArray) || !dataArray.length) return [];
     let enriched = dataArray.map((item) => ({ ...item, ...extraFields }));
@@ -370,6 +371,7 @@ module.exports = {
             caller: caller,
             ...commonData,
             ip_address: ctx ? ctx.ip : null,
+            batch_id: batch_id || extraFields.batch_id
           }, transaction);
         }
 
@@ -382,7 +384,7 @@ module.exports = {
   },
 
   // 3. Update Record
-  updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true) => {
+  updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
     let condition = await buildWhere(whereInput, requireTenantFields); 
@@ -441,6 +443,7 @@ module.exports = {
         caller: caller,
         ...commonData,
         ip_address: ctx ? ctx.ip : null,
+        batch_id: batch_id || data.batch_id
       }, transaction);
 
     } catch (logErr) {
@@ -451,7 +454,7 @@ module.exports = {
   },
 
   // 4. Soft Delete
-  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true) => {
+  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
     const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
@@ -490,6 +493,7 @@ module.exports = {
           company_id: ctx.company_id,
           branch_id: ctx.branch_id,
           ip_address: ctx.ip,
+          batch_id: batch_id
         }, transaction);
       }
 
@@ -504,7 +508,7 @@ module.exports = {
   findAllRecords: async (model, filters = {}, options = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields);
+    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus);
 
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -534,7 +538,7 @@ module.exports = {
   countRecords: async (model, filters = {}, options = {}, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields);
+    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus);
     
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
@@ -554,7 +558,7 @@ module.exports = {
   findOneRecord: async (model, whereInput = {}, options = {}, transaction = null, forceReload = false, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const condition = await buildWhere(whereInput, requireTenantFields);
+    const condition = await buildWhere(whereInput, requireTenantFields, !!safeOptions.skipStatus);
     
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -838,7 +842,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       let data = await module.exports.findAllRecords(
         model,
         filters, 
-        { ...options, skip, limit, order, subQuery: false, __caller: caller },
+        { ...options, skip, limit, order, subQuery: false, __caller: caller, skipStatus: !!options.skipStatus },
         null,
         requireTenantFields
       );
@@ -891,7 +895,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       delete countOptions.order;
       delete countOptions.limit;
       delete countOptions.offset;
-      const totalCount = await module.exports.countRecords(model, filters, countOptions, requireTenantFields);
+      const totalCount = await module.exports.countRecords(model, filters, { ...countOptions, skipStatus: !!options.skipStatus }, requireTenantFields);
 
       // Calculations
       let totals = {};

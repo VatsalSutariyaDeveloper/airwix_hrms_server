@@ -21,6 +21,7 @@ const statutoryLWFRuleController = require("../controllers/administration/statut
 const holidayController = require("../controllers/settings/holidayController");
 const approvalActionController = require("../controllers/administration/approvalActionController");
 const approvalMasterController = require("../controllers/administration/approvalMasterController");
+const cronJobController = require("../controllers/administration/cronJobController");
 
 
 // --- Helper to safely get handler ---
@@ -165,5 +166,14 @@ router.post("/approval/get-approval-history", approvalActionController.getApprov
 //approval master 
 
 router.post("/approval/type/configure", approvalMasterController.configureApprovalType);
+
+// =================================================================
+// 5. CRON JOBS & HISTORY
+// =================================================================
+router.post("/cron-job/get-transactions", cronJobController.fetchCronJobRuns);
+router.get("/cron-job/available-jobs", cronJobController.getAvailableJobs);
+router.get("/cron-job/:id", cronJobController.fetchRunDetails);
+router.post("/cron-job/revert/:id", cronJobController.revertRun);
+router.post("/cron-job/trigger", cronJobController.triggerJob);
 
 module.exports = router;
