@@ -123,7 +123,10 @@ const runWorker = async () => {
         // 1. Pre-fetch active salary components to map names to IDs
         const allComponents = await commonQuery.findAllRecords(SalaryComponent, {
             status: 0
-        }, { attributes: ['id', 'component_name', 'component_type', 'component_category'], raw: true }, transaction, false);
+        }, { 
+            attributes: ['id', 'component_name', 'component_type', 'component_category', 'calculation_type', 'formula', 'percentage_of', 'percentage_value'], 
+            raw: true 
+        }, transaction, false);
 
         const componentMap = new Map();
         allComponents.forEach(comp => {
@@ -280,7 +283,7 @@ const runWorker = async () => {
             ePfStat: getStatHeader(["employee", "pf", "status"]) || getStatHeader(["employer", "pf", "employee"]),
             ePfLim: getStatHeader(["employee", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employee"]),
             ePfAmt: getPfAmountHeader('employee'),
-            eEsiStat: getStatHeader(["employee", "esi", "status"]) || getStatHeader(["esic", "employee"]),
+            eEsiStat: getStatHeader(["employee", "esi", "status"]) || getStatHeader(["employee", "esic", "status"]) || getStatHeader(["esic", "employee"]) || getStatHeader(["esi", "employee"]),
             eEsiAmt: getEsiAmountHeader('employee'),
             ptStat: getStatHeader(["pt", "status"]),
             eLwfStat: getStatHeader(["employee", "lwf", "status"]),
@@ -288,7 +291,7 @@ const runWorker = async () => {
             rPfLim: getStatHeader(["employer", "pf", "limit"]) || getStatHeader(["employer", "pf", "limit", "employer"]),
             rPfAmt: getPfAmountHeader('employer'),
             edliStat: getStatHeader(["employer", "edli", "status"]),
-            rEsiStat: getStatHeader(["employer", "esi", "status"]) || getStatHeader(["esic", "employer"]),
+            rEsiStat: getStatHeader(["employer", "esi", "status"]) || getStatHeader(["employer", "esic", "status"]) || getStatHeader(["esic", "employer"]) || getStatHeader(["esi", "employer"]),
             rEsiAmt: getEsiAmountHeader('employer'),
             rLwfStat: getStatHeader(["employer", "lwf", "status"]),
             gratuityStat: getStatHeader(["gratuity", "status"]),
@@ -306,7 +309,7 @@ const runWorker = async () => {
             effectiveDateKey: headers.find(h => normalizeText(h).includes("effective") || normalizeText(h).includes("revision date")),
             calculationBasisKey: headers.find(h => {
                 const nh = normalizeText(h);
-                return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis");
+                return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis") || nh.includes("lwp computation") || nh.includes("lwp calculation");
             }),
             netSalaryKey: headers.find(h => {
                 const nh = normalizeText(h);
@@ -332,34 +335,27 @@ const runWorker = async () => {
             if (isYes(limitValue)) {
                 return {
                     calculation_type: '₹1800 Limit',
-                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : 1800
+                    amount: hasExcelAmount ? excelAmount : 1800
                 };
             }
 
             if (s === 'no') {
                 return {
                     calculation_type: '12% of Basic',
-                    amount: hasExcelAmount ? excelAmount : 0
+                    amount: hasExcelAmount ? excelAmount : defaultAmount
                 };
             }
 
-            if (s === 'no1800fixed' || s === 'no1800limit' || s === 'no1800capped' || s === 'no1800cap') {
+            if (s === 'no1800fixed' || s === 'no1800limit' || s === 'no1800capped' || s === 'no1800cap' || s.includes('1800') || s.includes('fixed') || s.includes('limit')) {
                 return {
                     calculation_type: '12% of Basic (₹1800 Limit)',
-                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : Math.min(defaultAmount, 1800)
-                };
-            }
-
-            if (s.includes('1800') || s.includes('fixed') || s.includes('limit')) {
-                return {
-                    calculation_type: '12% of Basic (₹1800 Limit)',
-                    amount: hasExcelAmount ? Math.min(excelAmount, 1800) : Math.min(defaultAmount, 1800)
+                    amount: hasExcelAmount ? excelAmount : Math.min(defaultAmount, 1800)
                 };
             }
 
             return {
                 calculation_type: '12% of Basic',
-                amount: hasExcelAmount ? excelAmount : 0
+                amount: hasExcelAmount ? excelAmount : defaultAmount
             };
         };
 
@@ -411,6 +407,13 @@ const runWorker = async () => {
                         yearly_amount: value * 12,
                         included_in_ctc: true,
                         is_employer_contribution: comp.component_type === 'EMPLOYER_CONTRIBUTION' || comp.component_category === 'STATUTORY',
+
+                        // Inherit calculation logic from Master Component
+                        calculation_type: comp.calculation_type || 'FIXED',
+                        formula: comp.formula,
+                        percentage_of: comp.percentage_of,
+                        percentage_value: comp.percentage_value,
+
                         company_id,
                         branch_id: employee.branch_id,
                         user_id
@@ -554,6 +557,7 @@ const runWorker = async () => {
                         t.monthly_amount = amt;
                         t.yearly_amount = amt * 12;
                     } else if (amt > 0 && employerPFCompId) {
+                        const pfComp = allComponents.find(c => c.id === employerPFCompId);
                         rowTransactions.push({
                             employee_id: employee.id,
                             component_id: employerPFCompId,
@@ -562,6 +566,12 @@ const runWorker = async () => {
                             yearly_amount: amt * 12,
                             included_in_ctc: true,
                             is_employer_contribution: true,
+                            
+                            calculation_type: pfComp?.calculation_type || 'FIXED',
+                            formula: pfComp?.formula,
+                            percentage_of: pfComp?.percentage_of,
+                            percentage_value: pfComp?.percentage_value,
+
                             company_id,
                             branch_id: employee.branch_id,
                             user_id
@@ -612,14 +622,25 @@ const runWorker = async () => {
                     statutory_config.gratuity.amount = amt;
                     statutory_config.gratuity.calculation_type = 'Attendance';
                     if (amt > 0) {
-                        const compId = allComponents.find(c => normalizeText(c.component_name).includes('gratuity'))?.id;
-                        if (compId) {
-                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                        const comp = allComponents.find(c => normalizeText(c.component_name).includes('gratuity'));
+                        if (comp) {
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === comp.id);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
                             rowTransactions.push({
-                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
-                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
-                                company_id, branch_id: employee.branch_id, user_id
+                                employee_id: employee.id, 
+                                component_id: comp.id, 
+                                component_category: 'STATUTORY',
+                                monthly_amount: amt, 
+                                yearly_amount: amt * 12, 
+                                included_in_ctc: true, 
+                                is_employer_contribution: true,
+                                calculation_type: comp.calculation_type || 'FIXED',
+                                formula: comp.formula,
+                                percentage_of: comp.percentage_of,
+                                percentage_value: comp.percentage_value,
+                                company_id, 
+                                branch_id: employee.branch_id, 
+                                user_id
                             });
                         }
                     }
@@ -631,17 +652,28 @@ const runWorker = async () => {
                     statutory_config.leave_encashment.amount = amt;
                     statutory_config.leave_encashment.calculation_type = 'Attendance';
                     if (amt > 0) {
-                        const compId = allComponents.find(c => {
+                        const comp = allComponents.find(c => {
                             const n = normalizeText(c.component_name);
                             return n.includes('leave encashment') || n.includes('leave enchashment') || n === 'pl';
-                        })?.id;
-                        if (compId) {
-                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                        });
+                        if (comp) {
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === comp.id);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
                             rowTransactions.push({
-                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
-                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
-                                company_id, branch_id: employee.branch_id, user_id
+                                employee_id: employee.id, 
+                                component_id: comp.id, 
+                                component_category: 'STATUTORY',
+                                monthly_amount: amt, 
+                                yearly_amount: amt * 12, 
+                                included_in_ctc: true, 
+                                is_employer_contribution: true,
+                                calculation_type: comp.calculation_type || 'FIXED',
+                                formula: comp.formula,
+                                percentage_of: comp.percentage_of,
+                                percentage_value: comp.percentage_value,
+                                company_id, 
+                                branch_id: employee.branch_id, 
+                                user_id
                             });
                         }
                     }
@@ -653,14 +685,25 @@ const runWorker = async () => {
                     statutory_config.bonus.amount = amt;
                     statutory_config.bonus.calculation_type = 'Attendance';
                     if (amt > 0) {
-                        const compId = allComponents.find(c => normalizeText(c.component_name).includes('bonus'))?.id;
-                        if (compId) {
-                            const existingIdx = rowTransactions.findIndex(t => t.component_id === compId);
+                        const comp = allComponents.find(c => normalizeText(c.component_name).includes('bonus'));
+                        if (comp) {
+                            const existingIdx = rowTransactions.findIndex(t => t.component_id === comp.id);
                             if (existingIdx !== -1) rowTransactions.splice(existingIdx, 1);
                             rowTransactions.push({
-                                employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
-                                monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
-                                company_id, branch_id: employee.branch_id, user_id
+                                employee_id: employee.id, 
+                                component_id: comp.id, 
+                                component_category: 'STATUTORY',
+                                monthly_amount: amt, 
+                                yearly_amount: amt * 12, 
+                                included_in_ctc: true, 
+                                is_employer_contribution: true,
+                                calculation_type: comp.calculation_type || 'FIXED',
+                                formula: comp.formula,
+                                percentage_of: comp.percentage_of,
+                                percentage_value: comp.percentage_value,
+                                company_id, 
+                                branch_id: employee.branch_id, 
+                                user_id
                             });
                         }
                     }
@@ -730,23 +773,52 @@ const runWorker = async () => {
 
                 // Check for Excel Grand CTC / CTC column
                 const excelCTC = parseExcelAmount(row[statHeaderKeys.ctcKey]);
-                const excelGrandCTC = parseExcelAmount(row['(A+B+C+D)']) || parseExcelAmount(row['Grand CTC']) || parseExcelAmount(row['CTC']);
+                const excelGrandCTC = parseExcelAmount(row['(A+B+C+D)']) || parseExcelAmount(row['Grand CTC']) || parseExcelAmount(row['CTC']) || excelCTC;
 
-                // Use Excel CTC value directly if provided, otherwise use calculated value
-                if (excelGrandCTC > 0) {
-                    ctcMonthly = excelGrandCTC;
-                } else if (statHeaderKeys.ctcKey && excelCTC > 0) {
-                    ctcMonthly = excelCTC;
-                } else {
-                    ctcMonthly = calculatedTotalCtc;
+                // --- Final CTC Reconciliation & Rounding ---
+                let finalCtcMonthly = excelGrandCTC > 0 ? excelGrandCTC : calculatedTotalCtc;
+                
+                // If there's a difference between provided CTC and calculated sum, add a Round Off adjustment
+                const diff = finalCtcMonthly - calculatedTotalCtc;
+                if (Math.abs(diff) > 0.01) {
+                    const roundOffComp = allComponents.find(c => normalizeText(c.component_name).includes('round'));
+                    if (roundOffComp) {
+                        rowTransactions.push({
+                            employee_id: employee.id,
+                            component_id: roundOffComp.id,
+                            component_category: 'FIXED',
+                            monthly_amount: diff,
+                            yearly_amount: diff * 12,
+                            included_in_ctc: true,
+                            is_employer_contribution: false,
+                            calculation_type: 'FIXED',
+                            company_id,
+                            branch_id: employee.branch_id,
+                            user_id
+                        });
+                        calculatedTotalCtc += diff;
+                    } else {
+                        // If no Round Off component, adjust the last earning component if possible
+                        const lastEarning = [...rowTransactions].reverse().find(t => {
+                            const c = allComponents.find(comp => comp.id === t.component_id);
+                            return c && c.component_type === 'EARNING';
+                        });
+                        if (lastEarning) {
+                            lastEarning.monthly_amount += diff;
+                            lastEarning.yearly_amount = lastEarning.monthly_amount * 12;
+                            calculatedTotalCtc += diff;
+                        }
+                    }
                 }
+
+                ctcMonthly = calculatedTotalCtc;
 
                 let calculationBasis = 'WORKING_DAYS';
                 if (statHeaderKeys.calculationBasisKey && row[statHeaderKeys.calculationBasisKey]) {
-                    const val = String(row[statHeaderKeys.calculationBasisKey]).trim().toUpperCase();
-                    if (["DAYS_IN_MONTH", "FIXED_30_DAYS", "WORKING_DAYS"].includes(val)) {
-                        calculationBasis = val;
-                    }
+                    const val = String(row[statHeaderKeys.calculationBasisKey]).trim().toLowerCase();
+                    if (val.includes("month") || val.includes("calendar")) calculationBasis = "DAYS_IN_MONTH";
+                    else if (val.includes("30") || val.includes("fixed")) calculationBasis = "FIXED_30_DAYS";
+                    else if (val.includes("working") || val.includes("26")) calculationBasis = "WORKING_DAYS";
                 }
 
                 const template = templateMap.get(employee.id);

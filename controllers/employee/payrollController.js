@@ -8,6 +8,7 @@ const fs = require("fs");
 const { handleExport } = require("../../helpers/functions/excelService");
 const { ensureLatestPayslip, calculateEmployeeOffDays } = require("../../services/payrollService");
 const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
+const PFService = require("../../services/compliance/pfService");
 const employee = require("../../models/employee");
 
 
@@ -86,7 +87,8 @@ const evaluateComponentFormula = (formula, valuesMap) => {
 /**
  * Internal helper to calculate salary for an employee
  */
-const performSalaryCalculation = async (employee_id, month, year, transaction = null) => {
+const performSalaryCalculation = async (employee_id, month, year, transaction = null, options = {}) => {
+    const skipStatutory = options.skipStatutory || false;
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
 
@@ -106,6 +108,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 include: [{
                     model: SalaryTemplateTransaction,
                     as: "salaryTemplateTransactions",
+                    order: [['id', 'ASC']],
                     include: [{ model: SalaryComponent, as: "component" }]
                 }]
             },
@@ -116,6 +119,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     separate: true,
                     model: EmployeeSalaryTemplateTransaction,
                     as: "employeeSalaryTemplateTransactions",
+                    order: [['id', 'ASC']],
                     include: [{ model: SalaryComponent, as: "component" }]
                 }]
             },
@@ -184,9 +188,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const template = employeeSalaryTemplate || baseSalaryTemplate;
 
     // Normalize components list regardless of which template was used
-    const rawComponents = employeeSalaryTemplate
+    let rawComponents = employeeSalaryTemplate
         ? (employeeSalaryTemplate.employeeSalaryTemplateTransactions || [])
         : (baseSalaryTemplate.salaryTemplateTransactions || []);
+
+    // Sort by ID ASC to match the sequence in Salary Structure
+    rawComponents = [...rawComponents].sort((a, b) => a.id - b.id);
 
     // Step A: Aggregate Counts
     let presentDays = 0, halfDays = 0, uncategorizedHalfDays = 0, absentDays = 0, leaveDays = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
@@ -606,17 +613,21 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         const isEmployer = plain.is_employer_contribution === true || plain.is_employer_contribution === 'true' || comp.component_type === 'EMPLOYER_CONTRIBUTION';
 
         if (isEmployer) {
-            employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
+            if (!skipStatutory) {
+                employer[comp.component_name] = (employer[comp.component_name] || 0) + amount;
+            }
             return;
         }
         if (comp.is_statutory) {
-            statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
-            if (comp.component_type === "DEDUCTION") {
-                totalDeductions += amount;
-                deductions.push({ name: comp.component_name, amount: amount.toFixed(2), is_statutory: true });
-            } else {
-                takeHomeEarnings += amount;
-                earnings.push({ name: comp.component_name, amount: amount.toFixed(2), actual_amount: amount, is_statutory: true });
+            if (!skipStatutory) {
+                statutory[comp.component_name] = (statutory[comp.component_name] || 0) + amount;
+                if (comp.component_type === "DEDUCTION") {
+                    totalDeductions += amount;
+                    deductions.push({ name: comp.component_name, amount: amount.toFixed(2), is_statutory: true });
+                } else {
+                    takeHomeEarnings += amount;
+                    earnings.push({ name: comp.component_name, amount: amount.toFixed(2), actual_amount: amount, is_statutory: true });
+                }
             }
             return;
         }
@@ -700,7 +711,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // }
 
     // Step G: Process Statutory Config (PF, ESI, PT, LWF)
-    if (template.statutory_config) {
+    if (template.statutory_config && !skipStatutory) {
         const sc = template.statutory_config;
 
         const addStatRecord = (name, amount, isEmployer = false) => {
@@ -720,12 +731,12 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         // Employee Shares
         if (sc.employee_pf?.enabled) {
-            let amount = sc.employee_pf.amount;
-            if (sc.employee_pf.calculation_type === '12% of Basic' || sc.employee_pf.calculation_type === 'Variable') {
-                const basic = valuesMap.BASIC || 0;
-                amount = Math.min(basic * 0.12, 1800);
-            }
-            addStatRecord("Employee PF", amount, false);
+            const pfResult = PFService.calculatePF(valuesMap.BASIC || 0, {
+                pf_calculation_type: sc.employee_pf.calculation_type,
+                pf_manual_amount: sc.employee_pf.manual_amount,
+                restrict_to_ceiling: sc.employee_pf.restrict_to_ceiling
+            });
+            addStatRecord("Employee PF", pfResult.employee_pf, false);
         }
         if (sc.employee_esi?.enabled) addStatRecord("Employee ESI", sc.employee_esi.amount, false);
         if (sc.pt?.enabled) addStatRecord("Professional Tax", sc.pt.amount, false);
@@ -733,12 +744,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         // Employer Shares
         if (sc.employer_pf?.enabled) {
-            let amount = sc.employer_pf.amount;
-            if (sc.employer_pf.calculation_type === 'Variable' || sc.employer_pf.calculation_type === '12% of Basic') {
-                const basic = valuesMap.BASIC || 0;
-                amount = Math.min(basic * 0.12, 1800);
+            const pfResult = PFService.calculatePF(valuesMap.BASIC || 0, {
+                pf_calculation_type: sc.employer_pf.calculation_type,
+                pf_manual_amount: sc.employer_pf.manual_amount,
+                restrict_to_ceiling: sc.employer_pf.restrict_to_ceiling
+            });
+            addStatRecord("Employer PF", pfResult.employer_pf, true);
+            
+            // If PF Admin/EDLI charges are calculated via service
+            if (sc.pf_edli_admin?.enabled) {
+                addStatRecord("PF EDLI/Admin", pfResult.admin_charges + pfResult.edli_amount, true);
             }
-            addStatRecord("Employer PF", amount, true);
         }
         if (sc.employer_esi?.enabled) addStatRecord("Employer ESI", sc.employer_esi.amount, true);
         if (sc.employer_lwf?.enabled) addStatRecord("Employer LWF", sc.employer_lwf.amount, true);
@@ -795,7 +811,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     let tdsAmount = 0;
     let tdsPercentage = 0;
     let tdsCalculationData = null;
-    if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled) {
+    if (template.statutory_config && template.statutory_config.tds && template.statutory_config.tds.enabled && !skipStatutory) {
         const tdsConfig = template.statutory_config.tds;
 
         // India Financial Year Logic (April to March)
@@ -1194,7 +1210,7 @@ const formatPayslipToSummary = async (payslip) => {
 /**
  * Helper to fetch salary summary (checks for existing payslip first, then fresh calculation)
  */
-const fetchSalarySummary = async (employee_id, month, year) => {
+const fetchSalarySummary = async (employee_id, month, year, options = {}) => {
     // 1. Check if a finalized/paid payslip already exists.
     const existingPayslips = await commonQuery.findAllRecords(Payslip, {
         employee_id,
@@ -1218,7 +1234,7 @@ const fetchSalarySummary = async (employee_id, month, year) => {
     }
 
     // 2. Otherwise perform fresh calculation based on attendance and template
-    return await performSalaryCalculation(employee_id, month, year);
+    return await performSalaryCalculation(employee_id, month, year, null, options);
 };
 
 exports.calculateMonthlySalary = async (req, res) => {
@@ -1228,7 +1244,7 @@ exports.calculateMonthlySalary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summary = await fetchSalarySummary(employee_id, month, year);
+        const summary = await fetchSalarySummary(employee_id, month, year, { skipStatutory: true });
         return res.ok(summary);
     } catch (err) {
         return handleError(err, res, req);
@@ -1244,7 +1260,7 @@ exports.calculateMonthlySalaryBulk = async (req, res) => {
 
         const results = await Promise.all(employee_ids.map(async (id) => {
             try {
-                const data = await fetchSalarySummary(id, month, year);
+                const data = await fetchSalarySummary(id, month, year, { skipStatutory: true });
                 return {
                     employee_id: id,
                     success: true,
@@ -1594,7 +1610,7 @@ exports.calculateBatchMonthlySalary = async (req, res) => {
 
         for (const emp of employees) {
             try {
-                const summary = await performSalaryCalculation(emp.id, month, year);
+                const summary = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: true });
                 summaries.push(summary);
             } catch (err) {
                 errors.push({ employee_id: emp.id, name: emp.first_name, error: err.message });
@@ -2555,7 +2571,7 @@ exports.getSalaryOverview = async (req, res) => {
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
-                    const summary = await performSalaryCalculation(employee_id, m.month, m.year);
+                    const summary = await performSalaryCalculation(employee_id, m.month, m.year, null, { skipStatutory: true });
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);

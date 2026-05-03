@@ -216,16 +216,20 @@ const runWorker = async () => {
 
             for (const col of leaveColumns) {
                 const countVal = record[col.header];
-                if (countVal === undefined || countVal === null || String(countVal).trim() === '') continue;
+                
+                // 1. If value is '-' or empty, ignore this category for this employee
+                if (countVal === undefined || countVal === null || String(countVal).trim() === '' || String(countVal).trim() === '-') {
+                    continue;
+                }
 
-                // Floor the input from Excel to 0.5
+                // 2. Parse and normalize the count (round to nearest 0.5)
                 const rawCount = parseFloat(countVal);
                 if (isNaN(rawCount)) {
-                    fail(`Invalid count '${countVal}' for category '${col.header}'`);
+                    fail(`Invalid numeric value '${countVal}' for category '${col.header}' at row ${rowIndex}`);
                 }
                 const addedCount = Math.floor(rawCount * 2) / 2;
 
-                // Find the category record: Try employee's template first, then fallback to company-wide
+                // 3. Find or Create the Leave Category in the company
                 let categoryData = employeeCategories ? employeeCategories.get(col.canonicalCleanedName) : null;
                 
                 if (!categoryData) {
@@ -233,7 +237,7 @@ const runWorker = async () => {
                 }
                 
                 if (!categoryData) {
-                    // CREATE CATEGORY IF NOT EXISTS (User requested auto-creation)
+                    // Create the category if it doesn't exist in the system at all
                     categoryData = await commonQuery.createRecord(LeaveTemplateCategory, {
                         leave_template_id: employeeTemplateId || defaultTemplate.id,
                         leave_category_name: col.categoryName,
@@ -246,7 +250,7 @@ const runWorker = async () => {
                         status: 0
                     }, transaction);
                     
-                    // Update maps for subsequent rows
+                    // Cache for performance in next iterations
                     categoryFallbackMap.set(col.canonicalCleanedName, categoryData);
                     if (employeeTemplateId) {
                         if (!templateCategoryMap.has(employeeTemplateId)) {
@@ -256,7 +260,7 @@ const runWorker = async () => {
                     }
                 }
 
-                // --- Cycle-Based Year/Month Determination ---
+                // 4. Determine target year/month based on template cycle
                 const targetTemplate = employeeTemplateId ? templateMap.get(employeeTemplateId) : defaultTemplate;
                 const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, targetTemplate.leave_policy_cycle, refDate, {
                     leave_period_start: targetTemplate.leave_period_start,
@@ -289,9 +293,10 @@ const runWorker = async () => {
                     status: 0
                 };
 
+                // 5. Update Existing or Create New Balance record
                 if (existing) {
-                    const currentTotal = parseFloat(existing.total_allocated || 0);
-                    const newTotal = Math.floor((currentTotal + addedCount) * 2) / 2;
+                    // DIRECT OVERWRITE logic: Excel value becomes the new total_allocated
+                    const newTotal = addedCount;
                     const used = parseFloat(existing.used_leaves || 0);
                     const newPending = Math.floor((newTotal - used) * 2) / 2;
 
@@ -299,11 +304,12 @@ const runWorker = async () => {
                         ...payload,
                         total_allocated: newTotal,
                         pending_leaves: newPending > 0 ? newPending : 0,
-                        used_leaves: used, // Preserve existing used leaves
+                        used_leaves: used, // Keep track of already used leaves
                         id: existing.id 
                     });
                     updatedCount++;
                 } else {
+                    // Create a new balance record for this employee/category/year
                     balancesToCreate.push(payload);
                     createdCount++;
                 }

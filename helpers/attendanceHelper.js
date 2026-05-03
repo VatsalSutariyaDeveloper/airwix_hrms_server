@@ -537,7 +537,8 @@ async function punch(employeeId, meta, transaction = null) {
     device_id: cleanMeta.device_id,
     company_id: cleanMeta.company_id,
     branch_id: cleanMeta.branch_id,
-    face_descriptor: cleanMeta.face_descriptor ? "Present" : "Missing"
+    face_descriptor: cleanMeta.face_descriptor ? "Present" : "Missing",
+    match_score: cleanMeta.match_score || "N/A"
   });
 
   // Handle face_descriptor parsing if it arrives as a string
@@ -556,7 +557,8 @@ async function punch(employeeId, meta, transaction = null) {
     punch_type: punchType,
     punch_time: now,
     ...cleanMeta,
-    face_descriptor: faceDescriptor
+    face_descriptor: faceDescriptor,
+    match_score: cleanMeta.match_score || null
   }, transaction, {});
 
   // 4.1 Send Notification
@@ -1238,6 +1240,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), all work time should be treated as overtime
           const sessionMinutes = pE.diff(pS, "minute");
           lateOTMins += sessionMinutes;
+        } else if (shift.shift_type === "Flexible Shift") {
+          // Flexible Shift: All work time counts towards shift worked minutes initially
+          shiftWorkedMins += pE.diff(pS, "minute");
         } else {
           // Normal shift logic (used for COMP_OFF holidays and regular days)
           // Shift Part
@@ -1430,23 +1435,27 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   // 4. Overtime Trimming (Optional, if not included in total)
   let expectedShiftWorkMinutes = 0;
   if (shift) {
-    const shiftStart = dayjs(`${date} ${shift.start_time}`);
-    let shiftEnd = dayjs(`${date} ${shift.end_time}`);
-    if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
+    if (shift.shift_type === "Flexible Shift" && shift.total_payable_hours) {
+      expectedShiftWorkMinutes = parseFloat(shift.total_payable_hours);
+    } else {
+      const shiftStart = dayjs(`${date} ${shift.start_time}`);
+      let shiftEnd = dayjs(`${date} ${shift.end_time}`);
+      if (shift.is_night_shift || shift.end_time < shift.start_time) shiftEnd = shiftEnd.add(1, "day");
 
-    let netMins = shiftEnd.diff(shiftStart, "minute");
-    // Deduct unpaid breaks from shift duration to get net expected work
-    if (shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks)) {
-      for (const sb of shift.ShiftBreaks) {
-        if (sb.pay_type === "Unpaid") {
-          const bS = dayjs(`${date} ${sb.start_time}`);
-          let bE = dayjs(`${date} ${sb.end_time}`);
-          if (bE.isBefore(bS)) bE = bE.add(1, "day");
-          netMins -= Math.max(0, bE.diff(bS, "minute"));
+      let netMins = shiftEnd.diff(shiftStart, "minute");
+      // Deduct unpaid breaks from shift duration to get net expected work
+      if (shift.ShiftBreaks && Array.isArray(shift.ShiftBreaks)) {
+        for (const sb of shift.ShiftBreaks) {
+          if (sb.pay_type === "Unpaid") {
+            const bS = dayjs(`${date} ${sb.start_time}`);
+            let bE = dayjs(`${date} ${sb.end_time}`);
+            if (bE.isBefore(bS)) bE = bE.add(1, "day");
+            netMins -= Math.max(0, bE.diff(bS, "minute"));
+          }
         }
       }
+      expectedShiftWorkMinutes = netMins;
     }
-    expectedShiftWorkMinutes = netMins;
   }
 
   // [MOD] Limit worked minutes to shift duration
@@ -1479,19 +1488,38 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Skip late entry/early exit calculation if flag is set (for out-of-shift timing case)
     if (!meta.skipFineCalculation) {
-      // Check for Flexible Shift: if actual work duration >= shift duration, skip late/fine calculation
-      let skipLateFineForFlexibleShift = false;
-      if (shift.shift_type === "Flexible Shift" && firstIn && lastOut) {
-        const actualIn = dayjs(firstIn.punch_time);
-        const actualOut = dayjs(lastOut.punch_time);
-        const actualWorkDuration = actualOut.diff(actualIn, "minute", true);
+      if (shift.shift_type === "Flexible Shift") {
+        // --- Flexible Shift Logic ---
+        // OT/Shortfall is based on total worked minutes vs expected shift minutes
+        earlyOvertimeMinutes = 0;
         
-        if (actualWorkDuration >= expectedShiftWorkMinutes) {
-          skipLateFineForFlexibleShift = true;
+        // [User Request] Only calculate fine/overtime after punch out
+        if (lastOut) {
+          if (finalWorkedMinutes > expectedShiftWorkMinutes) {
+            // Extra time becomes overtime
+            const extraMins = finalWorkedMinutes - expectedShiftWorkMinutes;
+            overtimeMinutes = extraMins;
+            earlyOvertimeMinutes = 0; // All OT is treated as standard OT for flexible shifts
+            lateMinutes = 0;
+            earlyOutMinutes = 0;
+          } else if (finalWorkedMinutes < expectedShiftWorkMinutes) {
+            // Shortfall becomes late minutes (fine)
+            lateMinutes = expectedShiftWorkMinutes - finalWorkedMinutes;
+            earlyOutMinutes = 0;
+            overtimeMinutes = 0;
+          } else {
+            lateMinutes = 0;
+            earlyOutMinutes = 0;
+            overtimeMinutes = 0;
+          }
+        } else {
+          // No punch out yet, do not calculate fine or overtime
+          lateMinutes = 0;
+          earlyOutMinutes = 0;
+          overtimeMinutes = 0;
         }
-      }
-
-      if (!skipLateFineForFlexibleShift) {
+      } else {
+        // --- Standard Shift Logic (Fixed Shift) ---
         if (firstIn) {
           const actualIn = dayjs(firstIn.punch_time);
 
@@ -2071,8 +2099,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
 
       if (hasShiftEnded) {
-        status = 9; // INCOMPLETE
-        autoAbsentReason = "Incomplete: Mandatory punch-out missing";
+        status = 10; // NOT MARKED
+        autoAbsentReason = "Not Marked: Mandatory punch-out missing";
       } else {
         status = 0; // PRESENT (Currently Working)
       }
@@ -2170,10 +2198,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (status === 0 || status === 1) { // 0: Present, 1: Half Day
       const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
       const minHalfDay = shift ? (shift.min_half_day_minutes || 240) : 240;
+      
+      const requiresOut = template ? template.require_punch_out : true;
+
       if (status === 0) {
-        finalWorkedMinutes = Math.max(finalWorkedMinutes, minFullDay);
+        finalWorkedMinutes = (!lastOut) ? 0 : Math.max(finalWorkedMinutes, minFullDay);
       } else if (status === 1) {
-        finalWorkedMinutes = Math.max(finalWorkedMinutes, minHalfDay);
+        finalWorkedMinutes = (!lastOut) ? 0 : Math.max(finalWorkedMinutes, minHalfDay);
       }
     }
   }
@@ -2234,7 +2265,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shift_id: meta.forceShiftIdNull ? null : (shift ? shift.id : null),
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
     last_out: lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null,
-    worked_minutes: Math.floor(Math.max(finalWorkedMinutes, totalOtMins)),
+    worked_minutes: (template?.require_punch_out !== false && !lastOut) ? 0 : Math.floor(Math.max(finalWorkedMinutes, totalOtMins)),
     fine_minutes: (fineData.late_entry?.minutes || 0) + (fineData.early_exit?.minutes || 0) + (fineData.excess_breaks?.minutes || 0),
     total_break_minutes: totalBreakMinutes,
     overtime_minutes: totalOtMins,

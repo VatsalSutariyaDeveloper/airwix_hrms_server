@@ -175,6 +175,17 @@ const sanitizeTemplateFields = (body) => {
     });
 };
 
+// Helper: Auto set status to Exited if exit_date has passed
+const autoSetExitedStatus = (body) => {
+    if (body.exit_date) {
+        const exitDate = dayjs(body.exit_date);
+        const today = dayjs().startOf('day');
+        if (exitDate.isValid() && !exitDate.isAfter(today)) {
+            body.status = 4; // Exited
+        }
+    }
+};
+
 const handleExperienceAttachments = async (req, res, experienceDetails = [], allFiles = [], folder, transaction, existingEmployee = null) => {
     if (!Array.isArray(experienceDetails) || experienceDetails.length === 0) return experienceDetails;
 
@@ -231,6 +242,7 @@ exports.create = async (req, res) => {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
         sanitizeDateFields(req.body);
+        autoSetExitedStatus(req.body);
 
         const POST = req.body;
 
@@ -384,6 +396,7 @@ exports.update = async (req, res) => {
         parseJsonFields(req.body);
         sanitizeTemplateFields(req.body);
         sanitizeDateFields(req.body);
+        autoSetExitedStatus(req.body);
 
         const { id } = req.params;
         const POST = req.body;
@@ -2859,7 +2872,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: LeaveRequest,
                     as: 'leaveRequests',
-                    attributes: ['id', 'start_date', 'end_date', 'approval_status'],
+                    attributes: ['id', 'start_date', 'end_date', 'start_session', 'end_session', 'approval_status'],
                     where: { approval_status: 3 }, // 3: APPROVED
                     required: false,
                     separate: true

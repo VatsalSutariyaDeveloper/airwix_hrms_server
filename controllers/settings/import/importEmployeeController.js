@@ -5,7 +5,8 @@ const fsPromises = fs.promises;
 const readline = require('readline');
 const crypto = require('crypto');
 const ExcelJS = require('exceljs');
-const { validateRequest, handleError, constants } = require("../../../helpers");
+const { validateRequest, handleError, constants, commonQuery, sequelize, Op } = require("../../../helpers");
+const { Employee, LeaveTemplateCategory, EmployeeLeaveBalance } = require("../../../models");
 
 /**
  * Controller: Import Data
@@ -161,6 +162,112 @@ exports.importData = async (req, res) => {
     } catch (err) {
       console.error("Import Controller Error:", err);
       if (req.file && req.file.path) fs.unlinkSync(req.file.path);
+      return handleError(err, res, req);
+    }
+  };
+
+  /**
+   * Controller: Download Leave Sample Excel
+   * Generates a template with active employees and their current leave balances.
+   */
+  exports.downloadLeaveSample = async (req, res) => {
+    try {
+      const company_id = req.user.company_id;
+      const currentYear = new Date().getFullYear();
+
+      // 1. Fetch all active employees
+      const employees = await Employee.findAll({
+        where: {
+          company_id,
+          status: 0 // Active
+        },
+        attributes: ['id', 'employee_code', 'first_name'],
+        order: [['first_name', 'ASC']]
+      });
+
+      // 2. Fetch all unique leave categories for this company
+      const categories = await LeaveTemplateCategory.findAll({
+        where: { 
+          company_id, 
+          status: 0,
+          is_paid: true 
+        },
+        attributes: [
+          [sequelize.fn('DISTINCT', sequelize.col('leave_category_name')), 'leave_category_name']
+        ],
+        order: [['leave_category_name', 'ASC']],
+        raw: true
+      });
+
+      // 3. Fetch current balances for these employees and categories
+      const balances = await EmployeeLeaveBalance.findAll({
+        where: {
+          company_id,
+          year: currentYear,
+          employee_id: { [Op.in]: employees.map(e => e.id) }
+        },
+        attributes: ['employee_id', 'leave_category_name', 'total_allocated'],
+        raw: true
+      });
+
+      // Organize balances by employee_id and category_name
+      const balanceMap = {};
+      balances.forEach(b => {
+        if (!balanceMap[b.employee_id]) balanceMap[b.employee_id] = {};
+        balanceMap[b.employee_id][b.leave_category_name] = b.total_allocated;
+      });
+
+      // 4. Create Workbook
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Leave Import Sample");
+
+      // Define Columns
+      const columns = [
+        { header: "Employee Code", key: "employee_code", width: 15 },
+        { header: "Employee Name", key: "employee_name", width: 25 },
+      ];
+
+      categories.forEach(cat => {
+        columns.push({ header: cat.leave_category_name, key: cat.leave_category_name, width: 20 });
+      });
+
+      worksheet.columns = columns;
+
+      // Add Rows
+      employees.forEach(emp => {
+        const row = {
+          employee_code: emp.employee_code,
+          employee_name: emp.first_name
+        };
+
+        categories.forEach(cat => {
+          // If no balance record exists for this category/employee, show '-' to indicate it's not applicable
+          // This allows the import logic to skip these categories as requested earlier.
+          row[cat.leave_category_name] = balanceMap[emp.id]?.hasOwnProperty(cat.leave_category_name) 
+            ? balanceMap[emp.id][cat.leave_category_name] 
+            : '-';
+        });
+
+        worksheet.addRow(row);
+      });
+
+      // Styling
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE6E6E6' }
+      };
+
+      // 5. Send Response
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="leave_import_sample.xlsx"');
+
+      await workbook.xlsx.write(res);
+      res.end();
+
+    } catch (err) {
+      console.error("Download Leave Sample Error:", err);
       return handleError(err, res, req);
     }
   };

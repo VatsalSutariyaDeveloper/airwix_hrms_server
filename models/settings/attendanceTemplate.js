@@ -53,8 +53,8 @@ module.exports = (sequelize, DataTypes) => {
     },
     enble_out_duty: { type: DataTypes.BOOLEAN, defaultValue: false },
 
-    comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
-    comp_off_max_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+    comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Min working mins for half comp-off on holiday/weekly off' },
+    comp_off_max_working_mins: { type: DataTypes.INTEGER, defaultValue: 0, comment: 'Min working mins for full comp-off on holiday/weekly off' },
 
     status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },

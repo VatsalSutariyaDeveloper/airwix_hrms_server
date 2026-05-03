@@ -43,8 +43,7 @@ async function authMiddleware(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Verify User, Company, and Branch status
-    const userRole = decoded.role_id;
-    if (userRole) {
+    if (decoded.id && !decoded.device_id) {
       const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
       if (!user) return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
     }

@@ -71,6 +71,11 @@ exports.create = async (req, res) => {
             
             total_days = Math.round(total_days * 10) / 10;
 
+            if (total_days <= 0) {
+                await transaction.rollback();
+                return res.error("INVALID_TOTAL_DAYS", { message: "Calculated leave days must be greater than 0. Selected dates might be holidays or weekly-offs." });
+            }
+
             // Check for Overlapping Leaves (Only for regular leaves)
             const overlap = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id,
@@ -358,6 +363,11 @@ exports.update = async (req, res) => {
                 total_days = Math.max(0, workingDays - sessionReduction);
             }
             total_days = Math.round(total_days * 10) / 10;
+
+            if (total_days <= 0) {
+                await transaction.rollback();
+                return res.error("INVALID_TOTAL_DAYS", { message: "Calculated leave days must be greater than 0. Selected dates might be holidays or weekly-offs." });
+            }
 
             const overlap = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id,
