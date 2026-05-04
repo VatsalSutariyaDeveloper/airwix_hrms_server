@@ -1,5 +1,6 @@
 const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper } = require("../../helpers");
+const { validatePhone } = require("../../helpers/phoneValidation");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -30,10 +31,10 @@ exports.sendLoginOtp = async (req, res) => {
     const { mobile_no } = req.body;
     
     // 1. Validate Mobile Format
-    const indianMobileRegex = /^[6-9]\d{9}$/;
-    if (!mobile_no || !indianMobileRegex.test(mobile_no)) {
+    const phoneValidation = validatePhone(mobile_no);
+    if (!phoneValidation.isValid) {
       await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+      return res.error(constants.VALIDATION_ERROR, { errors: [phoneValidation.error] });
     }
 
     const user = await User.findOne({ 

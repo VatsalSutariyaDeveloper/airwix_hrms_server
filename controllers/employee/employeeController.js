@@ -54,6 +54,7 @@ const {
 
 // helper for dealing with image uploads inside custom field arrays
 const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../../helpers/customFieldImageHandler");
+const { validatePhone } = require("../../helpers/phoneValidation");
 
 const {
     calculateWorkingAndOffDays,
@@ -2403,6 +2404,13 @@ exports.inviteUser = async (req, res) => {
         if (!employee.mobile_no) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { mobile_no: "Mobile number is required to invite this employee." });
+        }
+
+        // Validate mobile number format
+        const phoneValidation = validatePhone(employee.mobile_no);
+        if (!phoneValidation.isValid) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { mobile_no: phoneValidation.error });
         }
 
         // Check if user already exists

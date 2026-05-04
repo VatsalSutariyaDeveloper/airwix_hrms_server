@@ -13,6 +13,8 @@ module.exports = (sequelize, DataTypes) => {
     email: { type: DataTypes.STRING(100), allowNull: true },
     tax_no: { type: DataTypes.STRING(30), allowNull: true },
     pan_no: { type: DataTypes.STRING(30), allowNull: true },
+    pf_number: { type: DataTypes.STRING(25), allowNull: true },
+    esi_number: { type: DataTypes.STRING(17), allowNull: true },
     currency_id: { type: DataTypes.INTEGER, allowNull: true },
     business_type_id: { type: DataTypes.INTEGER, allowNull: true },
     website_url: { type: DataTypes.STRING(255), allowNull: true },

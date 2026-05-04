@@ -1,5 +1,6 @@
 const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
 const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings, initializeCompanyRoles } = require("../../helpers");
+const { validatePhone } = require("../../helpers/phoneValidation");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
@@ -29,10 +30,10 @@ exports.sendOtp = async (req, res) => {
 
     // Handle Mobile OTP
     if (mobile_no) {
-      const indianMobileRegex = /^[6-9]\d{9}$/;
-      if (!indianMobileRegex.test(mobile_no)) {
+      const phoneValidation = validatePhone(mobile_no);
+      if (!phoneValidation.isValid) {
         await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+        return res.error(constants.VALIDATION_ERROR, { errors: [phoneValidation.error] });
       }
 
       // Check if mobile number already exists across User, Employee, and DeviceMaster
