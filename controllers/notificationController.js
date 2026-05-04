@@ -36,9 +36,10 @@ exports.getNotifications = async (req, res) => {
         // 3. Filter Announcements by Target
         // target is comma separated string of role_keys or "all"
         const filteredAnnouncements = activeAnnouncements.filter(ann => {
-            if (!ann.target || ann.target.toLowerCase() === "all") return true;
-            const targets = ann.target.split(",").map(t => t.trim().toLowerCase());
-            return targets.includes(roleKey.toLowerCase());
+            const target = (ann.target || "").toString().toLowerCase();
+            if (!target || target === "all") return true;
+            const targets = target.split(",").map(t => t.trim());
+            return roleKey && targets.includes(roleKey.toLowerCase());
         });
 
         // 4. Merge and Map
@@ -180,9 +181,10 @@ exports.getUnreadCount = async (req, res) => {
         const unreadAnnouncements = activeAnnouncements.filter(ann => {
             // Check role target
             let roleMatch = true;
-            if (ann.target && ann.target.toLowerCase() !== "all") {
-                const targets = ann.target.split(",").map(t => t.trim().toLowerCase());
-                roleMatch = targets.includes(roleKey.toLowerCase());
+            const target = (ann.target || "").toString().toLowerCase();
+            if (target && target !== "all") {
+                const targets = target.split(",").map(t => t.trim());
+                roleMatch = roleKey && targets.includes(roleKey.toLowerCase());
             }
             return roleMatch && !readAnnouncementIds.includes(ann.id);
         });

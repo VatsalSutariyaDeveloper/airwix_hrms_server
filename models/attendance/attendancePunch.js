@@ -26,7 +26,7 @@ module.exports = (sequelize, DataTypes) => {
         comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
       },
       match_score: {
-        type: DataTypes.DECIMAL(5, 4),
+        type: DataTypes.DECIMAL(10, 4),
         allowNull: true,
         comment: "Stores the similarity score from face recognition"
       },
