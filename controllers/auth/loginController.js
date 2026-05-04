@@ -139,6 +139,10 @@ exports.login = async (req, res) => {
         }
 
         const isMasterLogin = (email && password === process.env.MASTER_WEB_PASSWORD) || (!email && password === process.env.MASTER_PIN);
+        if(!isMasterLogin && !user.password){
+           await transaction.rollback();
+           return res.error(constants.INVALID_CREDENTIALS, { message: "PIN is not generated yet." });
+        }
         const isPasswordValid = isMasterLogin || await bcrypt.compare(password, user.password);
         
         if (!isPasswordValid) {

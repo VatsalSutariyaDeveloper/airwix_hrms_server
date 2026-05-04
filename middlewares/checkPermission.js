@@ -20,6 +20,7 @@ const PUBLIC_ROUTE_KEYWORDS = [
   "/dropdown-list",
   "/administration",
   "/employee/face-punch",
+  "/notifications",
 ];
 
 module.exports = async function checkPermission(req, res, next) {
