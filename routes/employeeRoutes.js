@@ -50,7 +50,7 @@ router.put("/weekly-off/:employeeId", employeeAttendanceController.updateWeeklyO
 router.get("/attendance-setting/:employeeId", employeeAttendanceController.getAttendanceTemplate);
 router.put("/attendance-setting/:employeeId", employeeAttendanceController.updateAttendanceTemplate);
 
-router.get("/employee-holidays-by-id/:id", employeeController.getEmployeeHolidays);
+router.get("/employee-holidays-by-id/:employeeId", employeeController.getEmployeeHolidays);
 
 
 module.exports = router;

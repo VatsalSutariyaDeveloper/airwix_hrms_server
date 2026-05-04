@@ -1,13 +1,15 @@
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const dayjs = require('dayjs');
 const { archiveAndCleanupLogs } = require('../helpers');
 const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
 const DeviceHealthService = require("../services/deviceHealthService");
 const { CronJobRun, Logs, sequelize } = require("../models");
-const { commonQuery } = require("../helpers");
+const { commonQuery, Op } = require("../helpers");
+const hrDashboardController = require("../controllers/employee/hrDashboardController");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Named job handlers (reusable for both cron schedule & on-demand execution)
@@ -146,6 +148,11 @@ const jobDeviceHealthCheck = async (asOf = null, batch_id = null) => {
     await DeviceHealthService.checkDeviceHealth();
 };
 
+const jobHolidayAndBirthdayNotifications = async (asOf = null, batch_id = null) => {
+    console.log('⏰ Running holiday and birthday notification task...');
+    await hrDashboardController.sendHolidayAndBirthdayNotifications(asOf);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // All jobs registry (used by runAllNow)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,6 +167,7 @@ const ALL_JOBS = [
     { name: 'Payslip PDF Cleanup',      fn: jobPayslipCleanup },
     { name: 'Announcement Expiry',      fn: jobAnnouncementExpiry },
     { name: 'Device Health Check',      fn: jobDeviceHealthCheck },
+    { name: 'Holiday & Birthday Notifications', fn: jobHolidayAndBirthdayNotifications },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +364,8 @@ module.exports = {
     jobAttendanceRebuild,
     jobPayslipCleanup,
     jobAnnouncementExpiry,
+    jobDeviceHealthCheck,
+    jobHolidayAndBirthdayNotifications,
     revertCronJobRun,
 };
 

@@ -12,11 +12,13 @@ const {
     AttendanceRegularization,
     EmployeeResignation,
     Announcement,
-    Notification
+    Notification,
+    User
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
+const { createNotification } = require("../../services/notificationService");
 
 exports.getCounts = async (req, res) => {
     try {
@@ -377,6 +379,145 @@ exports.getPayrollOverview = async (req, res) => {
         });
     } catch (err) {
         return handleError(err, res, req);
+    }
+};
+
+exports.getBirthdayList = async (req, res) => {
+    try {
+        const today = dayjs();
+        const todayMonth = today.format('MM');
+        const todayDay = today.format('DD');
+
+        // Use TO_CHAR for PostgreSQL date formatting
+        const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            [Op.and]: [
+                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'MM')`), todayMonth)
+            ]
+        }, {
+            attributes: ['id', 'first_name', 'employee_code', 'dob', 'profile_image', 'department_id', 'designation_id'],
+            include: [
+                {
+                    model: Department,
+                    as: 'department',
+                    attributes: ['name'],
+                    required: false
+                }
+            ],
+            order: [
+                [sequelize.literal(`TO_CHAR("dob", 'DD')::int`), 'ASC']
+            ]
+        });
+
+        // Add is_today flag to mark birthdays that are today and profile_image_url
+        const birthdayList = birthdayEmployees.map(emp => {
+            const empDay = dayjs(emp.dob).format('DD');
+            const plainEmp = emp.toJSON();
+            return {
+                ...plainEmp,
+                is_today: empDay === todayDay,
+                profile_image_url: plainEmp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}` : null
+            };
+        });
+
+        return res.ok(birthdayList);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
+    try {
+        const today = asOf ? dayjs(asOf) : dayjs();
+        const todayDate = today.format('YYYY-MM-DD');
+        const todayMonth = today.format('MM');
+        const todayDay = today.format('DD');
+
+        // 1. Holiday Notifications (General - for all employees)
+        const holidays = await commonQuery.findAllRecords(Holiday, {
+            date: todayDate,
+            status: 0
+        }, {
+            attributes: ['id', 'name', 'date', 'company_id', 'branch_id']
+        });
+
+        if (holidays.length > 0) {
+            for (const holiday of holidays) {
+                // Get all active employees for this company/branch
+                const employees = await commonQuery.findAllRecords(Employee, {
+                    company_id: holiday.company_id,
+                    status: 0,
+                    ...(holiday.branch_id ? { branch_id: holiday.branch_id } : {})
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                // Get users for these employees
+                const employeeIds = employees.map(e => e.id);
+                const users = await commonQuery.findAllRecords(User, {
+                    employee_id: { [Op.in]: employeeIds },
+                    status: 0
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                // Create notification for each user
+                for (const user of users) {
+                    await createNotification({
+                        user_id: user.id,
+                        title: 'Holiday Tomorrow',
+                        message: `Tomorrow is ${holiday.name}. Enjoy your holiday!`,
+                        type: 'HOLIDAY',
+                        reference_id: holiday.id,
+                        company_id: user.company_id,
+                        branch_id: user.branch_id
+                    });
+                }
+                console.log(`✅ Holiday notification created for ${holiday.name} - ${users.length} users notified`);
+            }
+        }
+
+        // 2. Birthday Notifications (Individual - only for the employee whose birthday it is)
+        const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            [Op.and]: [
+                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'MM')`), todayMonth),
+                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'DD')`), todayDay)
+            ]
+        }, {
+            attributes: ['id', 'first_name', 'company_id', 'branch_id', 'dob']
+        });
+
+        if (birthdayEmployees.length > 0) {
+            for (const employee of birthdayEmployees) {
+                // Get user for this employee
+                const user = await commonQuery.findOneRecord(User, {
+                    employee_id: employee.id,
+                    status: 0
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                if (user) {
+                    await createNotification({
+                        user_id: user.id,
+                        title: 'Happy Birthday!',
+                        message: `Happy Birthday, ${employee.first_name}! 🎉`,
+                        type: 'BIRTHDAY',
+                        reference_id: employee.id,
+                        company_id: user.company_id,
+                        branch_id: user.branch_id
+                    });
+                    console.log(`✅ Birthday notification created for ${employee.first_name}`);
+                }
+            }
+        }
+
+        console.log('✅ Holiday and birthday notifications completed.');
+        return { success: true, holidayCount: holidays.length, birthdayCount: birthdayEmployees.length };
+    } catch (err) {
+        console.error('❌ Holiday and birthday notifications failed:', err.message);
+        throw err;
     }
 };
 

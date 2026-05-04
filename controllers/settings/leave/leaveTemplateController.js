@@ -356,3 +356,34 @@ exports.getAssignedLeavesByEmployee = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+// Get Leave Template Summary for an Employee
+exports.getEmployeeLeaveTemplate = async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [
+                {
+                    model: LeaveTemplate,
+                    as: "leaveTemplate",
+                    include: [
+                        {
+                            model: LeaveTemplateCategory,
+                            as: "categories",
+                            where: { status: 0 }
+                        }
+                    ]
+                }
+            ],
+            attributes: ["id", "first_name", "employee_code", "leave_template"]
+        });
+
+        if (!employee) return res.error(constants.NOT_FOUND);
+        if (!employee.leaveTemplate) return res.error("NO_POLICY_ASSIGNED", { message: "No leave template assigned to this employee" });
+
+        return res.ok(employee.leaveTemplate);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

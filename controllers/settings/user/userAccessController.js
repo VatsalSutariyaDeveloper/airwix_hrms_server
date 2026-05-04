@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings } = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -519,6 +519,8 @@ exports.switchBranch = async (req, res) => {
 
 exports.getCompanySettingsData = async (req, res) => {
   try {
+    const user = req.user
+    
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
@@ -528,8 +530,35 @@ exports.getCompanySettingsData = async (req, res) => {
     }, {
       attributes: ['settings_name', 'settings_value']
     });
+
+    let enableOutDuty = false;
+    let finesAllowed = true;
+    let overtimeAllowed = true;
+
+    // If user has employee_id, fetch enble_out_duty from EmployeeAttendanceTemplate
+    if (user.employee_id) {
+      const employeeAttendanceTemplate = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, {
+        employee_id: user.employee_id,
+        status: 0
+      }, {
+        attributes: ['enble_out_duty', 'fines_allowed', 'overtime_allowed']
+      });
+
+      if (employeeAttendanceTemplate) {
+        enableOutDuty = employeeAttendanceTemplate.enble_out_duty;
+        finesAllowed = employeeAttendanceTemplate.fines_allowed;
+        overtimeAllowed = employeeAttendanceTemplate.overtime_allowed;
+      }
+    }
+
+    const response = {
+      settings: settings,
+      enble_out_duty: enableOutDuty,
+      fines_allowed: finesAllowed,
+      overtime_allowed: overtimeAllowed
+    };
     
-    return res.ok(settings);
+    return res.ok(response);
 
   } catch (err) {
     return handleError(err, res, req);

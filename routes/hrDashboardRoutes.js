@@ -9,5 +9,6 @@ router.post("/holidays", controller.getUpcomingHolidays);
 router.post("/department_stats", controller.getDepartmentStats);
 router.post("/recent_leaves", controller.getRecentLeaves);
 router.post("/payroll_overview", controller.getPayrollOverview);
+router.get("/birthday-list", controller.getBirthdayList);
 
 module.exports = router;
