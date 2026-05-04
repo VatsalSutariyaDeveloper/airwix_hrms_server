@@ -264,68 +264,71 @@ exports.login = async (req, res) => {
 
     const isAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
 
-    const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
-    if (!isAdmin && companyAccessList.length === 0) {
-      await transaction.rollback();
-      return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
-    }
-
-    let whereCompany = {};
-    if (isAdmin){
-      whereCompany = {
-        [Op.or]: [{ id: companyId }, { company_id: companyId }],
-        status: { [Op.ne]: 2 }
-      };
-    } else {
-      whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
-    }
-  
-    // Use Sequelize findAll directly
-    const companyList = await CompanyMaster.findAll({
-        where: whereCompany,
-        attributes: ['id', 'is_default', 'branch_id'],
-        raw: true,
-        transaction
-    });
-    
-    
-    const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
-    // Validate if user.company_id exists in user's company_access
-    let finalCompanyId = defaultCompanyId;
-    if (companyAccessList.length > 0) {
-      if (!companyAccessList.includes(String(defaultCompanyId))) {
-        finalCompanyId = user.company_id;
+    let finalCompanyId = user.company_id;
+    if (!isEmployee) {
+      const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+      if (!isAdmin && companyAccessList.length === 0) {
+        await transaction.rollback();
+        return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
       }
-    }
 
-    // Adjust branch_id based on the selected finalCompanyId
-    const branchAccessList = normalizeCompanyAccess(user.branch_access || "");
-    const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
-    const currentBranchValid = await BranchMaster.findOne({
-      where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
-      attributes: ['id'],
-      raw: true,
-      transaction
-    });
-    user.branch_id = finalBranch;
-
-    if (!currentBranchValid) {
-        // Find a branch that user has access to in that company, or just first active branch
-        const fallbackBranch = await BranchMaster.findOne({
-          where: { 
-            company_id: finalCompanyId, 
-            status: 0,
-            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
+      let whereCompany = {};
+      if (isAdmin){
+        whereCompany = {
+          [Op.or]: [{ id: companyId }, { company_id: companyId }],
+          status: { [Op.ne]: 2 }
+        };
+      } else {
+        whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
+      }
+    
+      // Use Sequelize findAll directly
+      const companyList = await CompanyMaster.findAll({
+          where: whereCompany,
+          attributes: ['id', 'is_default', 'branch_id'],
           raw: true,
           transaction
-        });
-        
-        if (fallbackBranch) {
-          user.branch_id = fallbackBranch.id;
+      });
+      
+      
+      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
+      // Validate if user.company_id exists in user's company_access
+      finalCompanyId = defaultCompanyId;
+      if (companyAccessList.length > 0) {
+        if (!companyAccessList.includes(String(defaultCompanyId))) {
+          finalCompanyId = user.company_id;
         }
+      }
+
+      // Adjust branch_id based on the selected finalCompanyId
+      const branchAccessList = normalizeCompanyAccess(user.branch_access || "");
+      const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
+      const currentBranchValid = await BranchMaster.findOne({
+        where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
+        attributes: ['id'],
+        raw: true,
+        transaction
+      });
+      user.branch_id = finalBranch;
+
+      if (!currentBranchValid) {
+          // Find a branch that user has access to in that company, or just first active branch
+          const fallbackBranch = await BranchMaster.findOne({
+            where: { 
+              company_id: finalCompanyId, 
+              status: 0,
+              ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+            },
+            attributes: ['id'],
+            order: [['id', 'ASC']],
+            raw: true,
+            transaction
+          });
+          
+          if (fallbackBranch) {
+            user.branch_id = fallbackBranch.id;
+          }
+      }
     }
 
     if(!isAdmin){
@@ -372,7 +375,7 @@ exports.login = async (req, res) => {
       attributes: ["role_name", "permissions", "role_key"],
       transaction 
     });
-console.log("userPermission",userPermission)
+console.log("user_branch_id",user.branch_id)
     // Prepare User Data Response
     const userData = {
       id: user.id,
