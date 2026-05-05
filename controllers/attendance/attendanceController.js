@@ -304,7 +304,9 @@ exports.getAttendanceSummary = async (req, res) => {
                     attributes: ["id", "branch_name"]
                   }
                 ],
-                required: false
+                required: false,
+                separate: true,
+                order: [["punch_time", "ASC"]]
               },
               {
                 model: LeaveTemplateCategory,

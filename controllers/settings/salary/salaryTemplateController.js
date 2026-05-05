@@ -3,6 +3,16 @@ const EmployeeTemplateService = require("../../../services/employeeTemplateServi
 const { validateRequest, commonQuery, handleError } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 
+const formatIndianCurrency = (value) => {
+  if (value === null || value === undefined || value === "") return "";
+  const num = parseFloat(value);
+  if (isNaN(num)) return "";
+  return num.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+};
+
 const STAFF_TYPE = {
   REGULAR: "Regular",
   TRAINEE: "Trainee",
@@ -191,7 +201,32 @@ exports.getById = async (req, res) => {
       ]
     });
     if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
-    return res.ok(record);
+
+    // Add formatted currency fields to main template
+    const recordData = record.toJSON();
+    recordData.formated_ctc_monthly = formatIndianCurrency(recordData.ctc_monthly);
+    recordData.formated_ctc_yearly = formatIndianCurrency(recordData.ctc_yearly);
+    recordData.formated_daily_rate = formatIndianCurrency(recordData.daily_rate);
+    recordData.formated_hourly_rate = formatIndianCurrency(recordData.hourly_rate);
+
+    // Format statutory config amounts
+    if (recordData.statutory_config) {
+      for (const key in recordData.statutory_config) {
+        if (recordData.statutory_config[key] && recordData.statutory_config[key].amount !== undefined) {
+          recordData.statutory_config[key].formated_amount = formatIndianCurrency(recordData.statutory_config[key].amount);
+        }
+      }
+    }
+
+    // Format salary template transactions amounts
+    if (recordData.salaryTemplateTransactions && Array.isArray(recordData.salaryTemplateTransactions)) {
+      recordData.salaryTemplateTransactions.forEach(transaction => {
+        transaction.formated_monthly_amount = formatIndianCurrency(transaction.monthly_amount);
+        transaction.formated_yearly_amount = formatIndianCurrency(transaction.yearly_amount);
+      });
+    }
+
+    return res.ok(recordData);
   } catch (err) {
     return handleError(err, res, req);
   }

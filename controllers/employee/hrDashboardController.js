@@ -4,6 +4,7 @@ const {
     LeaveRequest,
     Holiday,
     Department,
+    DesignationMaster,
     ShiftTemplate,
     Payslip,
     CanteenAttendance,
@@ -384,15 +385,18 @@ exports.getPayrollOverview = async (req, res) => {
 
 exports.getBirthdayList = async (req, res) => {
     try {
-        const today = dayjs();
-        const todayMonth = today.format('MM');
-        const todayDay = today.format('DD');
+        const today = dayjs().format('YYYY-MM-DD');
+        const thirtyDaysLater = dayjs().add(30, 'days').format('YYYY-MM-DD');
 
-        // Use TO_CHAR for PostgreSQL date formatting
         const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
             status: 0,
             [Op.and]: [
-                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'MM')`), todayMonth)
+                sequelize.where(
+                    sequelize.literal(`make_date(extract(year from date '${today}')::int, extract(month from "dob")::int, extract(day from "dob")::int)`),
+                    {
+                        [Op.between]: [today, thirtyDaysLater]
+                    }
+                )
             ]
         }, {
             attributes: ['id', 'first_name', 'employee_code', 'dob', 'profile_image', 'department_id', 'designation_id'],
@@ -402,21 +406,31 @@ exports.getBirthdayList = async (req, res) => {
                     as: 'department',
                     attributes: ['name'],
                     required: false
+                },
+                {
+                    model: DesignationMaster,
+                    as: 'designation',
+                    attributes: ['designation_name'],
+                    required: false
                 }
             ],
             order: [
-                [sequelize.literal(`TO_CHAR("dob", 'DD')::int`), 'ASC']
+                [sequelize.literal(`EXTRACT(MONTH FROM "dob")`), 'ASC'],
+                [sequelize.literal(`EXTRACT(DAY FROM "dob")`), 'ASC']
             ]
         });
 
-        // Add is_today flag to mark birthdays that are today and profile_image_url
         const birthdayList = birthdayEmployees.map(emp => {
-            const empDay = dayjs(emp.dob).format('DD');
-            const plainEmp = emp.toJSON();
+            const empDayjs = dayjs(emp.dob);
+            const isToday = empDayjs.format('MM-DD') === dayjs().format('MM-DD');
+            const plainEmp = emp.get({ plain: true });
+            
             return {
                 ...plainEmp,
-                is_today: empDay === todayDay,
-                profile_image_url: plainEmp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}` : null
+                is_today: isToday,
+                profile_image_url: plainEmp.profile_image 
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}` 
+                    : null
             };
         });
 

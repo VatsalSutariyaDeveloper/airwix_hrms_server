@@ -524,7 +524,7 @@ exports.getCompanySettingsData = async (req, res) => {
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['offline_data_sync', 'punch_cooldown_seconds', 'leave_past_datelimit']
+        [Op.in]: ['show_accuracy','punch_cooldown_seconds', 'leave_past_datelimit']
       },
       status: 0
     }, {

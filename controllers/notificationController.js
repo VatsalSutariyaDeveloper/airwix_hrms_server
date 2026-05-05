@@ -17,13 +17,21 @@ exports.getNotifications = async (req, res) => {
         }, {
             order: [['created_at', 'DESC']],
             limit: 50
-        }, null);        
+        }, null);
+
+        // 1.5. Fetch cleared announcement IDs (status: 2, type: 'ANNOUNCEMENT')
+        const clearedAnnouncementRecords = await commonQuery.findAllRecords(Notification, {
+            user_id: userId,
+            type: 'ANNOUNCEMENT',
+            status: 2 // Deleted/cleared
+        }, {}, null);
+        const clearedAnnouncementIds = clearedAnnouncementRecords.map(n => parseInt(n.reference_id));
 
         // 2. Fetch Active Announcements
         // Active if: current date is between announcement_date and expiry_date (if exists)
         const today = dayjs().format("YYYY-MM-DD");
         const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
-        
+
         const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
             status: 0, // Active
             announcement_date: { [Op.lte]: todayEnd },
@@ -33,13 +41,26 @@ exports.getNotifications = async (req, res) => {
             ]
         }, {}, null);
 
-        // 3. Filter Announcements by Target
-        // target is comma separated string of role_keys or "all"
+        // 3. Filter Announcements by Target and exclude cleared ones
+        // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
         const filteredAnnouncements = activeAnnouncements.filter(ann => {
-            const target = (ann.target || "").toString().toLowerCase();
-            if (!target || target === "all") return true;
-            const targets = target.split(",").map(t => t.trim());
-            return roleKey && targets.includes(roleKey.toLowerCase());
+            // Exclude if user has cleared this announcement
+            if (clearedAnnouncementIds.includes(ann.id)) return false;
+
+            // Filter by target_type
+            if (ann.target_type === 0) return true; // All users
+            if (ann.target_type === 1) return true; // All employees
+            if (ann.target_type === 2) {
+                // Specific roles - target contains role_ids like "79,80,83"
+                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetRoleIds.includes(req.user.role_id);
+            }
+            if (ann.target_type === 3) {
+                // Specific users - target contains user_ids
+                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetUserIds.includes(userId);
+            }
+            return false;
         });
 
         // 4. Merge and Map
@@ -116,6 +137,71 @@ exports.markAsRead = async (req, res) => {
                 await commonQuery.updateRecordById(Notification, notification.id, { is_read: 1 }, null);
             }
         }
+
+        return res.ok({ success: true });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Clear all notifications (mark as deleted)
+ */
+exports.clearAll = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const roleKey = req.user.role_key;
+
+        // 1. Create notification records for active announcements if they don't exist
+        const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
+
+        const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
+            status: 0,
+            announcement_date: { [Op.lte]: todayEnd },
+            [Op.or]: [
+                { expiry_date: null },
+                { expiry_date: { [Op.gte]: today } }
+            ]
+        }, {}, null);
+
+        const filteredAnnouncements = activeAnnouncements.filter(ann => {
+            // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
+            if (ann.target_type === 0) return true; // All users
+            if (ann.target_type === 1) return true; // All employees (assuming current user is employee)
+            if (ann.target_type === 2) {
+                // Specific roles - target contains role_ids like "79,80,83"
+                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetRoleIds.includes(req.user.role_id);
+            }
+            if (ann.target_type === 3) {
+                // Specific users - target contains user_ids
+                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetUserIds.includes(userId);
+            }
+            return false;
+        });
+
+        for (const ann of filteredAnnouncements) {
+            const existing = await commonQuery.findOneRecord(Notification, {
+                user_id: userId,
+                type: 'ANNOUNCEMENT',
+                reference_id: ann.id,
+            }, {}, null);
+
+            if (!existing) {
+                await commonQuery.createRecord(Notification, {
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                    title: ann.title,
+                    message: ann.content,
+                    status: 0,
+                    is_read: 1
+                }, null);
+            }
+        }
+
+        await commonQuery.updateRecordById(Notification,{user_id: userId}, { status: 2,is_read:1 }, null);
 
         return res.ok({ success: true });
     } catch (err) {

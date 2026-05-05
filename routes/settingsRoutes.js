@@ -221,7 +221,6 @@ router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateControlle
 // ==========================
 router.get("/employee-attendance-template/:employeeId", employeeAttendanceController.getAttendanceTemplate);
 router.get("/employee-shift-template/:employeeId", employeeAttendanceController.getShiftSetting);
-router.get("/employee-weekly-off/:employeeId", employeeAttendanceController.getWeeklyOffs);
 router.get("/employee-salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
 router.get("/employee-holidays/:employeeId", employeeController.getEmployeeHolidays);
 router.get("/employee-leave-template/:employeeId", leaveTemplateController.getEmployeeLeaveTemplate);
