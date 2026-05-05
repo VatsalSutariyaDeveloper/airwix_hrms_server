@@ -23,12 +23,6 @@ exports.create = async (req, res) => {
                     fields: ["device_name"],
                 },
                 {
-                    model: DeviceMaster,
-                    fields: ["mobile_no"],
-                    excludeCompany: true,
-                    excludeBranch: true
-                },
-                {
                     model: Employee,
                     fields: ["mobile_no"],
                     excludeCompany: true,
@@ -115,13 +109,7 @@ exports.update = async (req, res) => {
                         fields: ["device_name"],
                         excludeId: req.params.id,
                     },
-                    {
-                        model: DeviceMaster,
-                        fields: ["mobile_no"],
-                        excludeId: req.params.id,
-                        excludeCompany: true,
-                        excludeBranch: true
-                    },
+                   
                     {
                         model: Employee,
                         fields: ["mobile_no"],

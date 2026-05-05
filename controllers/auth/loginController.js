@@ -11,6 +11,7 @@ const { clearUserCache } = require("../../helpers/permissionCache");
 const { addToBlacklist } = require("../../middlewares/authMiddleware");
 const { generateToken } = require("../../helpers/tokenHelper");
 const nodemailer = require("nodemailer");
+const { generateEmailTemplate } = require("../../helpers/emailTemplate");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -1425,45 +1426,14 @@ async function sendPinResetEmail(user, setupLink, req) {
       },
     });
 
-    const html = `
-      <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:40px 20px;">
-        <table align="center" cellpadding="0" cellspacing="0" width="100%" 
-          style="max-width:600px; background:#ffffff; border-radius:4px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-          <tr>
-            <td style="padding:30px; text-align:center; background:#2563eb; color:#ffffff;">
-              <h1 style="margin:0; font-size:24px; font-weight:600;">
-                ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}
-              </h1>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:30px; font-size:14px; color:#333;">
-              <p>Hello <strong>${user.user_name || "User"}</strong>,</p>
-              <p style="margin:0 0 25px;">We received a request to reset your PIN. Click below to proceed.</p>
-              <div style="text-align:center; margin:30px 0;">
-                <a href="${setupLink}" 
-                  style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 30px; border-radius:4px; font-weight:600; display:inline-block; font-size:14px;">
-                  Reset PIN
-                </a>
-              </div>
-              <p style="margin:25px 0 10px; font-size:13px; color:#666;">Or copy & paste this link into your browser:</p>
-              <p style="word-break:break-all; color:#2563eb; font-size:13px; margin:0;">${setupLink}</p>
-              <p style="margin-top:30px; color:#888; font-size:12px;">
-                If you didn't request this, please ignore this email. <br/>
-                This link is valid for <strong>1 hour</strong>.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:20px; text-align:center; background:#f9f9f9; border-top:1px solid #e0e0e0;">
-              <p style="margin:0; font-size:12px; color:#888;">
-                © ${new Date().getFullYear()} ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}. All rights reserved.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </div>
-    `;
+    const html = generateEmailTemplate({
+      title: "Reset Your PIN",
+      subject: "Reset your PIN",
+      userName: user.user_name || user.name || "User",
+      message: "We received a request to reset your PIN. Click below to proceed.",
+      buttonText: "Reset PIN",
+      actionUrl: setupLink
+    });
 
     await transporter.sendMail({
       from: `"${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}" <${process.env.EMAIL_USER}>`,
