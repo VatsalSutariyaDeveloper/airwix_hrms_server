@@ -451,6 +451,7 @@ const constants = {
     { settings_name: "round_off_salary", settings_value: 1 },
     { settings_name: "reimbursement_approval_level", settings_value: 1 },
     { settings_name: "reimbursement_approval_config", settings_value: [] },
+    { settings_name: "probation_period_days", settings_value: null },
   ],
   /* =======================
    * DEVICE STATUS
