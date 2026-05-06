@@ -8,7 +8,8 @@ const {
     ResignationReason,
     BranchMaster,
     DesignationMaster,
-    Department
+    Department,
+    RolePermission
 } = require("../../models");
 
 const {
@@ -36,7 +37,7 @@ const notificationService = require("../../services/notificationService");
 /**
  * Submit Resignation (Employee Portal)
  */
-exports.submitResignation = async (req, res) => {
+exports.submitResignation = async (req, res) => {    
     const transaction = await sequelize.transaction();
     try {
         const employeeId = req.user.employee_id || req.body.employee_id;
@@ -60,11 +61,11 @@ exports.submitResignation = async (req, res) => {
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [
                 { model: ResignationTemplate, as: 'resignationTemplate' },
-                { model: Employee, as: 'manager', attributes: ['email'] },
-                { model: Employee, as: 'supervisor', attributes: ['email'] }
+                { model: User, as: 'manager', attributes: ['email'] },
+                { model: User, as: 'supervisor', attributes: ['email'] }
             ]
-        }, transaction);
-
+        }, transaction);    
+        
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
@@ -225,7 +226,7 @@ exports.handleAction = async (req, res) => {
                 // Update employee status
                 await commonQuery.updateRecordById(Employee, resignation.employee_id, {
                     exit_date: updateData.approved_lwd,
-                    status: 1,
+                    status: constants.STATUS_EMPLOYEE_EXIT,
                     resignation_status: 2
                 }, transaction);
             } else {

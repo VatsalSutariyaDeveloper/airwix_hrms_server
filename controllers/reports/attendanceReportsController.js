@@ -470,6 +470,164 @@ exports.getLateEntryReport = async (req, res) => {
 };
 
 /**
+ * GET MISS PUNCH OUT REPORT
+ */
+exports.getMissPunchOutReport = async (req, res) => {
+  try {
+    const { month, year, branch_id, department_id } = req.body;
+
+    if (!month || !year) {
+      return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+    }
+
+    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+
+    // Cap the endDate to today's date if the selected month is the current month or in the future
+    if (dayjs(endDate).isAfter(dayjs(), 'day')) {
+        endDate = dayjs().format('YYYY-MM-DD');
+    }
+
+    let employeeWhere = { 
+      company_id: req.user.company_id,
+      status: [0, 1],
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { joining_date: null },
+            { joining_date: { [Op.lte]: endDate } }
+          ]
+        },
+        {
+          [Op.or]: [
+            { exit_date: null },
+            { exit_date: { [Op.gte]: startDate } }
+          ]
+        }
+      ]
+    };
+
+    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
+      employeeWhere.branch_id = branch_id;
+    }
+    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+
+    const fieldConfig = [
+      ["first_name", true, true],
+      ["employee_code", true, true],
+    ];
+
+    const employees = await commonQuery.fetchPaginatedData(
+      Employee,
+      { ...employeeWhere, ...req.body },
+      fieldConfig,
+      {
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        distinct: true,
+        include: [
+          { model: Department, as: 'department', attributes: ['name'] },
+          { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+          {
+            model: AttendanceDay,
+            as: 'attendanceDays',
+            required: true,
+            where: {
+              attendance_date: { [Op.between]: [startDate, endDate] },
+              last_out: null,
+              first_in: { [Op.ne]: null },
+              status: { [Op.ne]: 2 }
+            }
+          }
+        ]
+      },
+      { company_id: true, branch_id: true },
+      'created_at'
+    );
+
+    if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
+
+    // Extract attendance records from the joined data
+    const attendanceRecords = [];
+    employees.items.forEach(emp => {
+      if (emp.attendanceDays && emp.attendanceDays.length > 0) {
+        emp.attendanceDays.forEach(ad => {
+          attendanceRecords.push(ad);
+        });
+      }
+    });
+
+    // Group miss punch out records by employee
+    const missPunchOutDataMap = {};
+    attendanceRecords.forEach(record => {
+      if (!missPunchOutDataMap[record.employee_id]) {
+         missPunchOutDataMap[record.employee_id] = { days: {}, totalCount: 0 };
+      }
+      
+      missPunchOutDataMap[record.employee_id].days[record.attendance_date] = { 
+        punchIn: record.first_in,
+        punchOut: record.last_out
+      };
+      missPunchOutDataMap[record.employee_id].totalCount += 1;
+    });
+
+    const reportData = [];
+
+    // Construct dynamically the full array of dates in the month to use as dynamic columns optionally
+    let curDate = dayjs(startDate);
+    const end = dayjs(endDate);
+    const daysArray = [];
+    while (curDate.isBefore(end) || curDate.isSame(end, 'day')) {
+      daysArray.push(curDate.format('D-MMM-YY'));
+      curDate = curDate.add(1, 'day');
+    }
+
+    employees.items.forEach(emp => {
+      const pInfo = missPunchOutDataMap[emp.id] || { days: {}, totalCount: 0 };
+      
+      let row = {
+        employee_name: emp.first_name || '-',
+        employee_code: emp.employee_code || '-',
+        phone_number: emp.mobile_no || '-',
+        department: emp.department?.name || '-',
+        designation: emp.designation?.designation_name || '-',
+        employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
+        worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
+        miss_punch_out_count: pInfo.totalCount,
+        days: {} 
+      };
+
+      Object.keys(pInfo.days).forEach(dateStr => {
+         const day = pInfo.days[dateStr];
+         const formattedDate = dayjs(dateStr).format('D-MMM-YY');
+         
+         row.days[formattedDate] = {
+            punch_in: day.punchIn,
+            punch_out: day.punchOut
+         };
+      });
+
+      reportData.push(row);
+    });
+
+    return res.ok({
+      daysArray: daysArray,
+      items: reportData,
+      total: employees.total,
+      totals: employees.totals,
+      currentPage: employees.currentPage,
+      pageSize: employees.pageSize,
+      totalPages: employees.totalPages,
+      hasNextPage: employees.hasNextPage,
+      hasPreviousPage: employees.hasPreviousPage,
+      appliedFilters: employees.appliedFilters
+    });
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
  * GET OVERTIME REPORT
  */
 exports.getOvertimeReport = async (req, res) => {

@@ -192,8 +192,8 @@ module.exports = (sequelize, DataTypes) => {
         Employee.hasMany(models.AttendanceDay, { foreignKey: "employee_id", as: "attendanceDays" });
 
         // Reporting Hierarchy
-        Employee.belongsTo(models.Employee, { foreignKey: "reporting_manager", as: "manager" });
-        Employee.belongsTo(models.Employee, { foreignKey: "attendance_supervisor", as: "supervisor" });
+        Employee.belongsTo(models.User, { foreignKey: "reporting_manager", as: "manager" });
+        Employee.belongsTo(models.User, { foreignKey: "attendance_supervisor", as: "supervisor" });
 
         // Templates - Assignments (Phase 3 Mapping)
         Employee.belongsTo(models.LeaveTemplate, { foreignKey: "leave_template", as: "leaveTemplate" });

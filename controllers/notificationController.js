@@ -1,5 +1,6 @@
 const { Notification, Announcement, Employee, sequelize, RolePermission } = require("../models");
 const { handleError, constants, commonQuery, Op } = require("../helpers");
+const { getFilteredAnnouncements } = require("../helpers/functions/commonFunctions");
 const dayjs = require("dayjs");
 
 /**
@@ -8,8 +9,6 @@ const dayjs = require("dayjs");
 exports.getNotifications = async (req, res) => {
     try {
         const userId = req.user.id;
-        const roleKey = req.user.role_key;
-
         // 1. Fetch Personal Notifications
         const personalNotifications = await commonQuery.findAllRecords(Notification, {
             user_id: userId,
@@ -19,54 +18,13 @@ exports.getNotifications = async (req, res) => {
             limit: 50
         }, null);
 
-        // 1.5. Fetch cleared announcement IDs (status: 2, type: 'ANNOUNCEMENT')
-        const clearedAnnouncementRecords = await commonQuery.findAllRecords(Notification, {
-            user_id: userId,
-            type: 'ANNOUNCEMENT',
-            status: 2 // Deleted/cleared
-        }, {}, null);
-        const clearedAnnouncementIds = clearedAnnouncementRecords.map(n => parseInt(n.reference_id));
+        // 2. Get filtered announcements using reusable function
+        const filteredAnnouncements = await getFilteredAnnouncements(userId, req.user.role_id, { Announcement, Notification }, false);
 
-        // 2. Fetch Active Announcements
-        // Active if: current date is between announcement_date and expiry_date (if exists)
-        const today = dayjs().format("YYYY-MM-DD");
-        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
-
-        const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
-            status: 0, // Active
-            announcement_date: { [Op.lte]: todayEnd },
-            [Op.or]: [
-                { expiry_date: null },
-                { expiry_date: { [Op.gte]: today } }
-            ]
-        }, {}, null);
-
-        // 3. Filter Announcements by Target and exclude cleared ones
-        // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
-        const filteredAnnouncements = activeAnnouncements.filter(ann => {
-            // Exclude if user has cleared this announcement
-            if (clearedAnnouncementIds.includes(ann.id)) return false;
-
-            // Filter by target_type
-            if (ann.target_type === 0) return true; // All users
-            if (ann.target_type === 1) return true; // All employees
-            if (ann.target_type === 2) {
-                // Specific roles - target contains role_ids like "79,80,83"
-                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
-                return targetRoleIds.includes(req.user.role_id);
-            }
-            if (ann.target_type === 3) {
-                // Specific users - target contains user_ids
-                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
-                return targetUserIds.includes(userId);
-            }
-            return false;
-        });
-
-        // 4. Merge and Map
-        // We need to check which announcements have already been marked as "read" 
+        // 3. Merge and Map
+        // We need to check which announcements have already been marked as "read"
         // (which means a Notification record exists for it with type='ANNOUNCEMENT' and ref_id=announcement.id)
-        
+
         const announcementReadRecords = personalNotifications.filter(n => n.type === 'ANNOUNCEMENT');
         const readAnnouncementMap = {};
         announcementReadRecords.forEach(r => {
@@ -88,7 +46,7 @@ exports.getNotifications = async (req, res) => {
                 is_announcement: false
             }));
 
-        const unifiedList = [...mappedAnnouncements, ...mappedNotifications].sort((a, b) => 
+        const unifiedList = [...mappedAnnouncements, ...mappedNotifications].sort((a, b) =>
             dayjs(b.created_at).valueOf() - dayjs(a.created_at).valueOf()
         );
 

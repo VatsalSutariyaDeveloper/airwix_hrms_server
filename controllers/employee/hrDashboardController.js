@@ -17,6 +17,7 @@ const {
     User
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
+const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const { createNotification } = require("../../services/notificationService");
@@ -216,59 +217,12 @@ exports.getPendingCount = async (req, res) => {
 
 exports.getPendingAnnouncementCount = async (req, res) => {
     try {
-        const today = dayjs().format("YYYY-MM-DD");
-        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
-        const whereClause = {
-            status: 0,
-            announcement_date: { [Op.lte]: todayEnd },
-            [Op.and]: [
-                {
-                    [Op.or]: [
-                        { expiry_date: null },
-                        { expiry_date: { [Op.gte]: today } }
-                    ]
-                }
-            ]
-        };
+        const userId = req.user.id;
+        const roleId = req.user.role_id;
 
-        const announcements = await commonQuery.findAllRecords(Announcement, whereClause, {
-            attributes: ["id", "target_type", "target"]
-        }, null, false);
+        // Use reusable function to get unread announcement count (exclude read announcements)
+        const announcementCount = await getFilteredAnnouncements(userId, roleId, { Announcement, Notification }, true, true);
 
-        // Get read announcement IDs for this user
-        const readNotifications = await commonQuery.findAllRecords(Notification, {
-            user_id: req.user.id,
-            type: 'ANNOUNCEMENT'
-        }, {
-            attributes: ['reference_id']
-        }, null, false);
-        const readAnnouncementIds = readNotifications.map(n => parseInt(n.reference_id));
-
-        let filteredAnnouncements = announcements;
-        if (!req.user.is_super_admin && !req.user.is_admin) {
-            filteredAnnouncements = announcements.filter(announcement => {
-                const { target_type, target } = announcement;
-                const userId = req.user.id?.toString();
-                const roleKey = req.user.role_key;
-
-                const containsExactMatch = (targetStr, value) => {
-                    if (!targetStr || !value) return false;
-                    const parts = targetStr.split(',');
-                    return parts.some(part => part.trim() === value);
-                };
-
-                if (target_type === 0) return true; // Show to all
-                if (target_type === 1 && roleKey === constants.ROLE_KEYS.EMPLOYEE) return true; // Employee role
-                if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
-                if (target_type === 2 && containsExactMatch(target, req.user.role_id?.toString())) return true; // Specific role
-                return false;
-            });
-        }
-
-        // Filter out read announcements
-        const unreadAnnouncements = filteredAnnouncements.filter(ann => !readAnnouncementIds.includes(ann.id));
-
-        const announcementCount = unreadAnnouncements.length;
         return res.ok({ announcementCount });
     } catch (err) {
         return handleError(err, res, req);

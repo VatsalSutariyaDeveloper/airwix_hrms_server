@@ -182,7 +182,8 @@ const autoSetExitedStatus = (body) => {
         const exitDate = dayjs(body.exit_date);
         const today = dayjs().startOf('day');
         if (exitDate.isValid() && !exitDate.isAfter(today)) {
-            body.status = 4; // Exited
+            body.status = constants.STATUS_EMPLOYEE_EXIT;
+            body.resignation_status = 2;
         }
     }
 };
@@ -1024,11 +1025,51 @@ exports.checkEmployeeCode = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { employee_code } = req.body;
+        
+        // Extract prefix and number from employee_code (e.g., "EMP14" -> prefix="EMP", number=14)
+        const match = employee_code.match(/^([A-Za-z]+)(\d+)$/);
+        if (!match) {
+            await transaction.commit();
+            return res.ok({ exists: false, next_available_code: employee_code });
+        }
+        
+        const prefix = match[1];
+        let currentNumber = parseInt(match[2], 10);
+        
+        // First check if the given code exists
         const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
             employee_code: employee_code,
         }, {}, transaction);
+        
+        // If it doesn't exist, return it immediately
+        if (!employeeCodeExists) {
+            await transaction.commit();
+            return res.ok({ exists: false, next_available_code: employee_code });
+        }
+        
+        // If it exists, start incrementing until we find a non-existent code
+        currentNumber++;
+        let nextAvailableCode;
+        
+        while (true) {
+            const codeToCheck = `${prefix}${currentNumber}`;
+            const codeExists = await commonQuery.findOneRecord(Employee, {
+                employee_code: codeToCheck,
+            }, {}, transaction);
+            
+            if (!codeExists) {
+                nextAvailableCode = codeToCheck;
+                break;
+            }
+            
+            currentNumber++;
+        }
+        
         await transaction.commit();
-        return res.ok({ exists: !!employeeCodeExists });
+        return res.ok({ 
+            exists: true, 
+            next_available_code: nextAvailableCode 
+        });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
