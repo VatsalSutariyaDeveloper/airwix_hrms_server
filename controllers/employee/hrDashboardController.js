@@ -16,11 +16,50 @@ const {
     Notification,
     User
 } = require("../../models");
-const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
-const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
+const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const { createNotification } = require("../../services/notificationService");
+
+const getProbationCompletionData = async (companyId) => {
+    const today = dayjs().format("YYYY-MM-DD");
+    const companySettings = await getCompanySetting(companyId);
+    const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
+
+    let completedProbationEmployees = [];
+
+    if (probationPeriodDays > 0) {
+        const probationEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            employment_type: 4,
+            joining_date: { [Op.ne]: null }
+        }, {
+            attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'employment_type']
+        }, null, false);
+
+        completedProbationEmployees = probationEmployees
+            .map(employee => {
+                const probationEndDate = dayjs(employee.joining_date).add(probationPeriodDays, 'day');
+
+                return {
+                    id: employee.id,
+                    first_name: employee.first_name,
+                    employee_code: employee.employee_code,
+                    joining_date: employee.joining_date,
+                    employment_type: employee.employment_type,
+                    probation_end_date: probationEndDate.format("YYYY-MM-DD")
+                };
+            })
+            .filter(employee => dayjs(employee.probation_end_date).isSame(dayjs(today), 'day') || dayjs(employee.probation_end_date).isBefore(dayjs(today), 'day'));
+    }
+
+    return {
+        show_alert: completedProbationEmployees.length > 0,
+        count: completedProbationEmployees.length,
+        probation_period_days: probationPeriodDays,
+        completedProbationEmployees,
+    };
+};
 
 exports.getCounts = async (req, res) => {
     try {
@@ -97,6 +136,15 @@ exports.getCounts = async (req, res) => {
             canteenAbsentToday,
             guestCount
         });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getProbationCompletionAlert = async (req, res) => {
+    try {
+        const response = await getProbationCompletionData(req.user.company_id);
+        return res.ok(response);
     } catch (err) {
         return handleError(err, res, req);
     }

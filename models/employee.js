@@ -19,9 +19,41 @@ module.exports = (sequelize, DataTypes) => {
 
         // GENERAL INFORMATION
         employment_type: {
-            type: DataTypes.ENUM("Full Time", "Permanent", "Part Time", "Probation", "Intern", "Temporary"),
+            type: DataTypes.INTEGER,
             allowNull: true,
-            comment: "Employment type: Full Time, Permanent, Part Time, Probation, Intern, Temporary"
+            comment: "Employment type: 1=Full Time, 2=Permanent, 3=Part Time, 4=Probation, 5=Intern, 6=Temporary",
+            
+            set(value) {
+                const mapping = {
+                    "Full Time": 1,
+                    "Permanent": 2,
+                    "Part Time": 3,
+                    "Probation": 4,
+                    "Intern": 5,
+                    "Temporary": 6,
+                    "full_time": 1,
+                    "permanent": 2,
+                    "part_time": 3,
+                    "probation": 4,
+                    "intern": 5,
+                    "temporary": 6,
+                };
+
+                this.setDataValue("employment_type", mapping[value] || null);
+            },
+
+            get() {
+                const reverseMapping = {
+                    1: "Full Time",
+                    2: "Permanent",
+                    3: "Part Time",
+                    4: "Probation",
+                    5: "Intern",
+                    6: "Temporary",
+                };
+
+                return reverseMapping[this.getDataValue("employment_type")] || null;
+            }
         },
         salary_cycle: { type: DataTypes.INTEGER, defaultValue: 0 },
         weekly_off_template: { type: DataTypes.INTEGER, defaultValue: 0 },
