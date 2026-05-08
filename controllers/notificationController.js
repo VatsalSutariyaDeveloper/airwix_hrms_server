@@ -178,12 +178,77 @@ exports.markAllAsRead = async (req, res) => {
         // 1. Update all existing notifications to is_read 1
         await Notification.update({ is_read: 1 }, { where: { user_id: userId, is_read: 0 } });
 
-        // 2. We should ideally also mark all active announcements as read by creating records for them
-        // But for performance, we might skip this unless explicitly requested. 
-        // For now, let's just do existing ones.
+        // 2. Mark all active announcements as read by creating notification records for them
+        const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
+        
+        const activeAnnouncements = await Announcement.findAll({
+            where: {
+                company_id: companyId,
+                status: 0,
+                announcement_date: { [Op.lte]: todayEnd },
+                [Op.or]: [
+                    { expiry_date: null },
+                    { expiry_date: { [Op.gte]: today } }
+                ]
+            }
+        });
+
+        // Filter announcements that target this user
+        const filteredAnnouncements = activeAnnouncements.filter(ann => {
+            if (!ann.target_type) return false; // Skip if target_type is null
+            
+            if (ann.target_type === 0) return true; // All users
+            if (ann.target_type === 1) return true; // All employees
+            if (ann.target_type === 2) {
+                // Specific roles
+                if (!ann.target || !req.user.role_id) return false;
+                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetRoleIds.includes(req.user.role_id);
+            }
+            if (ann.target_type === 3) {
+                // Specific users
+                if (!ann.target || !userId) return false;
+                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetUserIds.includes(userId);
+            }
+            return false;
+        });
+
+        // Create notification records for unread announcements
+        for (const ann of filteredAnnouncements) {
+            // Safety checks
+            if (!ann.id || !userId || !companyId) continue;
+            
+            const existing = await Notification.findOne({
+                where: {
+                    user_id: userId,
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                }
+            });
+
+            if (!existing) {
+                await Notification.create({
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                    title: ann.title || 'Announcement',
+                    message: ann.content || '',
+                    status: 0,
+                    is_read: 1, // Mark as read immediately
+                    company_id: companyId,
+                    branch_id: req.user.branch_id || null
+                });
+            } else if (existing.is_read === 0) {
+                await Notification.update({ is_read: 1 }, {
+                    where: { id: existing.id }
+                });
+            }
+        }
 
         return res.ok({ success: true });
     } catch (err) {
+        console.error('markAllAsRead error:', err);
         return handleError(err, res, req);
     }
 };

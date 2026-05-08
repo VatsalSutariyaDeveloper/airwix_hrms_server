@@ -1,12 +1,432 @@
 const { commonQuery, handleError} = require("../../helpers");
+const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster, CanteenAttendance } = require("../../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 dayjs.extend(customParseFormat);
 dayjs.extend(isSameOrBefore);
+
+const hasSelectedValue = (value) => (
+  value !== undefined &&
+  value !== null &&
+  value !== "" &&
+  value !== "All" &&
+  value !== "all" &&
+  value !== 0 &&
+  value !== "0"
+);
+
+const buildEmploymentRangeWhere = (startDate, endDate) => ({
+  [Op.and]: [
+    {
+      [Op.or]: [
+        { joining_date: null },
+        { joining_date: { [Op.lte]: endDate } }
+      ]
+    },
+    {
+      [Op.or]: [
+        { exit_date: null },
+        { exit_date: { [Op.gte]: startDate } }
+      ]
+    }
+  ]
+});
+
+const buildEmployeePaginationBody = (reqBody, companyId, extraFilter = {}, status = [0, 1]) => ({
+  ...reqBody,
+  company_id: companyId,
+  status,
+  filter: {
+    ...(reqBody?.filter || {}),
+    ...extraFilter
+  }
+});
+
+/**
+ * GET CANTEEN ATTENDANCE REPORT
+ */
+exports.getCanteenAttendanceReport = async (req, res) => {
+  try {
+    const {
+      report_type,
+      date,
+      month_year,
+      include_guest,
+      staff_type,
+      branch_id,
+      department_id
+    } = req.body;
+
+    if (!report_type || !['daily', 'monthly'].includes(report_type)) {
+      return res.error(
+        constants.VALIDATION_ERROR,
+        "report_type must be either 'daily' or 'monthly'"
+      );
+    }
+
+    let startDate, endDate;
+
+    // Date handling
+    if (report_type === 'daily') {
+      if (!date) {
+        return res.error(
+          constants.VALIDATION_ERROR,
+          "date is required for daily report"
+        );
+      }
+
+      startDate = date;
+      endDate = date;
+    } else {
+      if (!month_year) {
+        return res.error(
+          constants.VALIDATION_ERROR,
+          "month_year is required for monthly report"
+        );
+      }
+
+      const parsedDate = dayjs(
+        month_year.trim(),
+        ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]
+      );
+
+      if (!parsedDate.isValid()) {
+        return res.error(
+          constants.VALIDATION_ERROR,
+          "Invalid month and year format"
+        );
+      }
+
+      startDate = parsedDate.startOf('month').format('YYYY-MM-DD');
+      endDate = parsedDate.endOf('month').format('YYYY-MM-DD');
+    }
+
+    const employeeFilter = {};
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
+
+    const requestedPage = Math.max(parseInt(req.body?.page) || 1, 1);
+    const isFetchAll = req.body?.limit === "all" || req.body?.limit === "All";
+    const requestedLimit = isFetchAll ? null : Math.max(parseInt(req.body?.limit) || 10, 1);
+    const combinedOffset = isFetchAll ? 0 : (requestedPage - 1) * requestedLimit;
+
+    const guestWhere = {
+      company_id: req.user.company_id,
+      is_guest: true,
+      status: 0,
+      date: {
+        [Op.between]: [startDate, endDate]
+      }
+    };
+
+    const guestCount = include_guest
+      ? await CanteenAttendance.count({
+          where: guestWhere,
+          distinct: true,
+          col: 'guest_name'
+        })
+      : 0;
+
+    console.log('=== DEBUG INFO ===');
+    console.log('include_guest:', include_guest);
+    console.log('startDate:', startDate);
+    console.log('endDate:', endDate);
+    console.log('guestWhere:', JSON.stringify(guestWhere, null, 2));
+    console.log('guestCount:', guestCount);
+    console.log('================');
+
+    /**
+     * FETCH EMPLOYEES WITH CANTEEN ATTENDANCE
+     */
+    const employees = await commonQuery.fetchPaginatedData(
+      Employee,
+      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+      [
+        ["first_name", true, true],
+        ["employee_code", true, true]
+      ],
+      {
+        attributes: [
+          'id',
+          'first_name',
+          'employee_code',
+          'employee_type'
+        ],
+
+        include: [
+          {
+            model: CanteenAttendance,
+            as: "canteenAttendances",
+            required: false,
+
+            attributes: [
+              'id',
+              'employee_id',
+              'date',
+              'created_at'
+            ],
+
+            where: {
+              status: 0,
+
+              date: {
+                [Op.between]: [startDate, endDate]
+              }
+            }
+          }
+        ],
+
+        order: [['first_name', 'ASC']]
+      },
+      { company_id: true, branch_id: true },
+      'created_at',
+      buildEmploymentRangeWhere(startDate, endDate)
+    );
+
+    const totalRecords = employees.total + guestCount;
+
+    if (totalRecords === 0) {
+      return res.ok({
+        items: [],
+        total: 0,
+        currentPage: 1,
+        pageSize: 10,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPreviousPage: false
+      });
+    }
+
+    /**
+     * GENERATE DATE ARRAY
+     */
+    const daysArray = [];
+
+    let current = dayjs(startDate);
+
+    while (
+      current.isBefore(dayjs(endDate)) ||
+      current.isSame(dayjs(endDate), 'day')
+    ) {
+      daysArray.push(current.format('YYYY-MM-DD'));
+      current = current.add(1, 'day');
+    }
+
+    const reportData = [];
+
+    /**
+     * EMPLOYEE REPORT
+     */
+    for (const emp of employees.items) {
+
+      const attendanceMap = new Map();
+
+      (emp.canteenAttendances || []).forEach(record => {
+        attendanceMap.set(record.date, {
+          present_time: dayjs(record.created_at).format('HH:mm')
+        });
+      });
+
+      const employeeData = {
+        employee_id: emp.id,
+        employee_name: emp.first_name?.trim() || '',
+        employee_code: emp.employee_code,
+        employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || (emp.is_guest ? 'Guest' : 'N/A'),
+        is_guest: false,
+
+        days: {},
+
+        summary: {
+          present: 0,
+          absent: 0,
+          totalVisits: 0
+        }
+      };
+
+      daysArray.forEach(day => {
+
+        const attendance = attendanceMap.get(day);
+
+        let status = "ABSENT";
+        let present_time = "-";
+
+        if (attendance) {
+          status = "PRESENT";
+          present_time = attendance.present_time;
+
+          employeeData.summary.present++;
+          employeeData.summary.totalVisits++;
+        } else if (
+          dayjs(day).isSame(dayjs(), 'day') ||
+          dayjs(day).isAfter(dayjs(), 'day')
+        ) {
+          status = "PENDING";
+        } else {
+          employeeData.summary.absent++;
+        }
+
+        employeeData.days[day] = {
+          status,
+          present_time
+        };
+      });
+
+      reportData.push(employeeData);
+    }
+
+    /**
+     * GUEST REPORT
+     */
+    if (include_guest) {
+      let guestNames = [];
+
+      if (isFetchAll) {
+        guestNames = await CanteenAttendance.findAll({
+          where: guestWhere,
+          attributes: ['guest_name'],
+          group: ['guest_name'],
+          order: [['guest_name', 'ASC']],
+          raw: true
+        });
+      } else {
+        // Calculate how many employees should be on this page
+        const employeesPerPage = Math.min(requestedLimit, employees.total);
+        const remainingSpace = Math.max(0, requestedLimit - employeesPerPage);
+        
+        // Guests start after all employees are exhausted
+        const guestStartIndex = Math.max(0, combinedOffset - employees.total);
+        const guestEndIndex = guestStartIndex + remainingSpace;
+        const guestLimit = remainingSpace;
+
+        if (guestLimit > 0) {
+          guestNames = await CanteenAttendance.findAll({
+            where: guestWhere,
+            attributes: ['guest_name'],
+            group: ['guest_name'],
+            order: [['guest_name', 'ASC']],
+            offset: guestStartIndex,
+            limit: guestLimit,
+            raw: true
+          });
+        }
+      }
+
+      const paginatedGuestNames = guestNames
+        .map(record => record.guest_name)
+        .filter(Boolean);
+
+      if (paginatedGuestNames.length > 0) {
+        const guestRecords = await commonQuery.findAllRecords(
+          CanteenAttendance,
+          {
+            ...guestWhere,
+            guest_name: {
+              [Op.in]: paginatedGuestNames
+            }
+          },
+          {
+            order: [['guest_name', 'ASC']]
+          }
+        );
+
+        const guestMap = new Map();
+
+        guestRecords.forEach(record => {
+          if (!guestMap.has(record.guest_name)) {
+            guestMap.set(record.guest_name, []);
+          }
+
+          guestMap.get(record.guest_name).push(record);
+        });
+
+        paginatedGuestNames.forEach(guestName => {
+          const records = guestMap.get(guestName) || [];
+
+          const attendanceMap = new Map();
+
+          records.forEach(record => {
+            attendanceMap.set(record.date, {
+              present_time: dayjs(record.created_at).format('HH:mm')
+            });
+          });
+
+          const guestData = {
+            employee_id: null,
+            employee_name: guestName,
+            employee_code: null,
+            employee_type: 'Guest',
+            is_guest: true,
+
+            days: {},
+
+            summary: {
+              present: 0,
+              absent: 0,
+              totalVisits: 0
+            }
+          };
+
+          daysArray.forEach(day => {
+
+            const attendance = attendanceMap.get(day);
+
+            let status = "ABSENT";
+            let present_time = "-";
+
+            if (attendance) {
+              status = "PRESENT";
+              present_time = attendance.present_time;
+
+              guestData.summary.present++;
+              guestData.summary.totalVisits++;
+            } else if (
+              dayjs(day).isSame(dayjs(), 'day') ||
+              dayjs(day).isAfter(dayjs(), 'day')
+            ) {
+              status = "PENDING";
+            } else {
+              guestData.summary.absent++;
+            }
+
+            guestData.days[day] = {
+              status,
+              present_time
+            };
+          });
+
+          reportData.push(guestData);
+        });
+      }
+    }
+
+    return res.ok({
+      report_type,
+      start_date: startDate,
+      end_date: endDate,
+
+      items: reportData,
+
+      total: totalRecords,
+      employee_total: employees.total,
+      guest_total: guestCount,
+
+      currentPage: isFetchAll ? 1 : requestedPage,
+      pageSize: isFetchAll ? totalRecords : requestedLimit,
+      totalPages: isFetchAll ? 1 : Math.ceil(totalRecords / requestedLimit),
+
+      hasNextPage: isFetchAll ? false : (requestedPage * requestedLimit) < totalRecords,
+      hasPreviousPage: isFetchAll ? false : requestedPage > 1
+    });
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
 
 /**
  * GET ATTENDANCE REPORT (Daily or Monthly)
@@ -35,27 +455,10 @@ exports.getAttendanceReport = async (req, res) => {
       endDate = parsedDate.endOf('month').format('YYYY-MM-DD');
     }
 
-    const employeeWhere = { 
-      company_id: req.user.company_id,
-      status: [0, 1],
-      [Op.and]: [
-        {
-          [Op.or]: [
-            { joining_date: null },
-            { joining_date: { [Op.lte]: endDate } }
-          ]
-        },
-        {
-          [Op.or]: [
-            { exit_date: null },
-            { exit_date: { [Op.gte]: startDate } }
-          ]
-        }
-      ]
-    };
-    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
-    if (staff_type) employeeWhere.employee_type = staff_type;
-    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+    const employeeFilter = {};
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     // 1. Fetch All Active Employees
     const fieldConfig = [
@@ -65,7 +468,7 @@ exports.getAttendanceReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      { ...employeeWhere, ...req.body },
+      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id'],
@@ -77,7 +480,8 @@ exports.getAttendanceReport = async (req, res) => {
         order: [['first_name', 'ASC']]
       },
       { company_id: true, branch_id: true },
-      'created_at'
+      'created_at',
+      buildEmploymentRangeWhere(startDate, endDate)
     );
 
     if (employees.items.length === 0) return res.ok({ items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -94,6 +498,17 @@ exports.getAttendanceReport = async (req, res) => {
         { model: LeaveTemplateCategory, as: "leaveCategory", attributes: ["id", "leave_category_name"] }
       ],
       order: [['attendance_date', 'ASC']]
+    }, null, { company_id: true });
+
+    // 2.1. Fetch Punch Records for detailed attendance data
+    let punchRecords = await commonQuery.findAllRecords(AttendancePunch, {
+      employee_id: { [Op.in]: employeeIds },
+      status: 0,
+      [Op.and]: [
+        sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
+      ]
+    }, {
+      order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
     }, null, { company_id: true });
 
     // 3. Pre-fetch Holidays & Week Offs & Out Duty
@@ -124,6 +539,21 @@ exports.getAttendanceReport = async (req, res) => {
          outDutyMap.set(`${od.employee_id}_${currDate.format('YYYY-MM-DD')}`, true);
          currDate = currDate.add(1, 'day');
       }
+    });
+
+    // Group punch records by employee and date
+    const punchesByEmployeeDate = new Map();
+    punchRecords.forEach(punch => {
+      const date = dayjs(punch.punch_time).format('YYYY-MM-DD');
+      const key = `${punch.employee_id}_${date}`;
+      if (!punchesByEmployeeDate.has(key)) {
+        punchesByEmployeeDate.set(key, []);
+      }
+      punchesByEmployeeDate.get(key).push({
+        punch_time: punch.punch_time,
+        punch_type: punch.punch_type,
+        formatted_time: dayjs(punch.punch_time).format('HH:mm')
+      });
     });
 
     // Generate date range
@@ -222,24 +652,49 @@ exports.getAttendanceReport = async (req, res) => {
                empData.summary.absent += 1;
            }
         }
-
         empData.summary.totalWorkedMinutes += workedMins;
         empData.summary.totalLateMinutes += lateMins;
         empData.summary.totalOvertimeMinutes += otMins;
 
+        // Get punch data for this employee and date
+        const punchKey = `${emp.id}_${d}`;
+        const punches = punchesByEmployeeDate.get(punchKey) || [];
+        
+        // Group punches into IN-OUT pairs
+        const punchPairs = [];
+        let currentPair = null;
+        
+        punches.forEach(punch => {
+          if (punch.punch_type === 'IN') {
+            if (currentPair && currentPair.in) {
+              // Start new pair if previous IN didn't have OUT
+              punchPairs.push(currentPair);
+            }
+            currentPair = { in: punch.formatted_time, out: null };
+          } else if (punch.punch_type === 'OUT' && currentPair && currentPair.in) {
+            currentPair.out = punch.formatted_time;
+            punchPairs.push(currentPair);
+            currentPair = null;
+          }
+        });
+        
+        // Add the last pair if it has IN but no OUT
+        if (currentPair && currentPair.in) {
+          punchPairs.push(currentPair);
+        }
+
         empData.days[d] = {
-           status,
-           inTime,
-           outTime,
-           workedMins: Math.floor(workedMins / 60) + 'h ' + (workedMins % 60) + 'm',
-           otMins: Math.floor(otMins / 60) + 'h ' + (otMins % 60) + 'm',
-           lateMins: Math.floor(lateMins / 60) + 'h ' + (lateMins % 60) + 'm',
+          status,
+          inTime,
+          outTime,
+          workedMins: Math.floor(workedMins / 60) + 'h ' + (workedMins % 60) + 'm',
+          otMins: Math.floor(otMins / 60) + 'h ' + (otMins % 60) + 'm',
+          lateMins: Math.floor(lateMins / 60) + 'h ' + (lateMins % 60) + 'm',
+          punch_pairs: punchPairs.length > 0 ? punchPairs : [{ in: '-', out: '-' }]
         };
       }
-
       reportData.push(empData);
     }
-
     return res.ok({
       report_type,
       start_date: startDate,
@@ -278,29 +733,9 @@ exports.getLateEntryReport = async (req, res) => {
         endDate = dayjs().format('YYYY-MM-DD');
     }
 
-    let employeeWhere = { 
-      company_id: req.user.company_id,
-      status: [0, 1],
-      [Op.and]: [
-        {
-          [Op.or]: [
-            { joining_date: null },
-            { joining_date: { [Op.lte]: endDate } }
-          ]
-        },
-        {
-          [Op.or]: [
-            { exit_date: null },
-            { exit_date: { [Op.gte]: startDate } }
-          ]
-        }
-      ]
-    };
-
-    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-      employeeWhere.branch_id = branch_id;
-    }
-    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+    const employeeFilter = {};
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
       ["first_name", true, true],
@@ -309,7 +744,7 @@ exports.getLateEntryReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      { ...employeeWhere, ...req.body },
+      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -333,7 +768,8 @@ exports.getLateEntryReport = async (req, res) => {
         ]
       },
       { company_id: true, branch_id: true },
-      'created_at'
+      'created_at',
+      buildEmploymentRangeWhere(startDate, endDate)
     );
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -488,29 +924,9 @@ exports.getMissPunchOutReport = async (req, res) => {
         endDate = dayjs().format('YYYY-MM-DD');
     }
 
-    let employeeWhere = { 
-      company_id: req.user.company_id,
-      status: [0, 1],
-      [Op.and]: [
-        {
-          [Op.or]: [
-            { joining_date: null },
-            { joining_date: { [Op.lte]: endDate } }
-          ]
-        },
-        {
-          [Op.or]: [
-            { exit_date: null },
-            { exit_date: { [Op.gte]: startDate } }
-          ]
-        }
-      ]
-    };
-
-    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-      employeeWhere.branch_id = branch_id;
-    }
-    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+    const employeeFilter = {};
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
       ["first_name", true, true],
@@ -519,7 +935,7 @@ exports.getMissPunchOutReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      { ...employeeWhere, ...req.body },
+      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -541,7 +957,8 @@ exports.getMissPunchOutReport = async (req, res) => {
         ]
       },
       { company_id: true, branch_id: true },
-      'created_at'
+      'created_at',
+      buildEmploymentRangeWhere(startDate, endDate)
     );
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -646,28 +1063,9 @@ exports.getOvertimeReport = async (req, res) => {
         endDate = dayjs().format('YYYY-MM-DD');
     }
 
-    let employeeWhere = { 
-      company_id: req.user.company_id,
-      status: [0, 1],
-      [Op.and]: [
-        {
-          [Op.or]: [
-            { joining_date: null },
-            { joining_date: { [Op.lte]: endDate } }
-          ]
-        },
-        {
-          [Op.or]: [
-            { exit_date: null },
-            { exit_date: { [Op.gte]: startDate } }
-          ]
-        }
-      ]
-    };
-    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-      employeeWhere.branch_id = branch_id;
-    }
-    if (department_id && department_id !== 'All') employeeWhere.department_id = department_id;
+    const employeeFilter = {};
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
       ["first_name", true, true],
@@ -676,7 +1074,7 @@ exports.getOvertimeReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      { ...employeeWhere, ...req.body },
+      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -686,7 +1084,8 @@ exports.getOvertimeReport = async (req, res) => {
         ]
       },
       { company_id: true, branch_id: true },
-      'created_at'
+      'created_at',
+      buildEmploymentRangeWhere(startDate, endDate)
     );
 
     if (employees.items.length === 0) return res.ok({ daysArray: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
@@ -782,6 +1181,7 @@ exports.getOvertimeReport = async (req, res) => {
   }
 };
 
+
 exports.getLeaveReport = async (req, res) => {
     try {
         const { year, staff_type, branch_id } = req.body;
@@ -796,9 +1196,9 @@ exports.getLeaveReport = async (req, res) => {
         const endDate = dayjs(endDateStr);
 
         // Fetch Employees
-        const employeeWhere = { status: 0, company_id: req.user.company_id };
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
-        if (staff_type) employeeWhere.employee_type = staff_type;
+        const employeeFilter = {};
+        if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+        if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
 
         // Fetch all branches for mapping since it's not directly included via model sometimes
         const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id });
@@ -812,7 +1212,7 @@ exports.getLeaveReport = async (req, res) => {
 
         const employees = await commonQuery.fetchPaginatedData(
             Employee,
-            { ...employeeWhere, ...req.body },
+            buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter, 0),
             fieldConfig,
             {
                 attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id'],

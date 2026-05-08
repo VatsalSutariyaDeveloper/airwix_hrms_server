@@ -48,9 +48,10 @@ function generateEmailTemplate(options) {
           <h1>${title}</h1>
           <p>Hello <strong>${userName}</strong>,</p>
           <p>${message}</p>
+          ${buttonText ? `
           <div style="text-align: center;">
             <a href="${actionUrl}" class="button">${buttonText}</a>
-          </div>
+          </div>` : ''}
         </div>
         <div class="footer">
           <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}. All rights reserved.</p>
