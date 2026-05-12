@@ -196,7 +196,7 @@ exports.markAllAsRead = async (req, res) => {
 
         // Filter announcements that target this user
         const filteredAnnouncements = activeAnnouncements.filter(ann => {
-            if (!ann.target_type) return false; // Skip if target_type is null
+            if (ann.target_type === null || ann.target_type === undefined) return false; // Skip if target_type is null/undefined (0 = All users is valid)
             
             if (ann.target_type === 0) return true; // All users
             if (ann.target_type === 1) return true; // All employees
@@ -230,6 +230,7 @@ exports.markAllAsRead = async (req, res) => {
 
             if (!existing) {
                 await Notification.create({
+                    user_id: userId, // Required: link to the current user
                     type: 'ANNOUNCEMENT',
                     reference_id: ann.id,
                     title: ann.title || 'Announcement',

@@ -19,7 +19,6 @@ router.post("/get-overtime-report", attendanceReportsController.getOvertimeRepor
 router.post("/attendance-report", attendanceReportsController.getAttendanceReport);
 router.post("/canteen-attendance-report", attendanceReportsController.getCanteenAttendanceReport);
 router.post("/leave-request/report", attendanceReportsController.getLeaveReport);
-router.post("/get-in-out-report", attendanceReportsController.getInOutReport);
 
 // Employee Report Routes
 router.post("/get-employee-exit-report", employeeReportsController.getEmployeeExitReport);
