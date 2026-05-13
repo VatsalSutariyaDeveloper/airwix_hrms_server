@@ -847,13 +847,15 @@ exports.getFilteredAnnouncements = async (userId, roleId, models, returnCountOnl
         if (ann.target_type === 0) return true; // All users
         if (ann.target_type === 1) return true; // All employees
         if (ann.target_type === 2) {
-            // Specific roles - target contains role_ids like "79,80,83"
-            const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+            // Specific roles - target contains role_ids like "79,80,83" or [79, 80]
+            let targetArray = Array.isArray(ann.target) ? ann.target : String(ann.target || "").split(",");
+            const targetRoleIds = targetArray.map(t => parseInt(String(t).trim()));
             return targetRoleIds.includes(roleId);
         }
         if (ann.target_type === 3) {
             // Specific users - target contains user_ids
-            const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+            let targetArray = Array.isArray(ann.target) ? ann.target : String(ann.target || "").split(",");
+            const targetUserIds = targetArray.map(t => parseInt(String(t).trim()));
             return targetUserIds.includes(userId);
         }
         return false;
