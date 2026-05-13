@@ -4,6 +4,7 @@ const {
     LeaveRequest,
     Holiday,
     Department,
+    DesignationMaster,
     ShiftTemplate,
     Payslip,
     CanteenAttendance,
@@ -12,11 +13,54 @@ const {
     AttendanceRegularization,
     EmployeeResignation,
     Announcement,
-    Notification
+    Notification,
+    User
 } = require("../../models");
-const { commonQuery, handleError, constants, sequelize, formatDateTime } = require("../../helpers");
+const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting } = require("../../helpers");
+const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
+const { createNotification } = require("../../services/notificationService");
+
+const getProbationCompletionData = async (companyId) => {
+    const today = dayjs().format("YYYY-MM-DD");
+    const companySettings = await getCompanySetting(companyId);
+    const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
+
+    let completedProbationEmployees = [];
+
+    if (probationPeriodDays > 0) {
+        const probationEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            employment_type: 4,
+            joining_date: { [Op.ne]: null }
+        }, {
+            attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'employment_type']
+        }, null, false);
+
+        completedProbationEmployees = probationEmployees
+            .map(employee => {
+                const probationEndDate = dayjs(employee.joining_date).add(probationPeriodDays, 'day');
+
+                return {
+                    id: employee.id,
+                    first_name: employee.first_name,
+                    employee_code: employee.employee_code,
+                    joining_date: employee.joining_date,
+                    employment_type: employee.employment_type,
+                    probation_end_date: probationEndDate.format("YYYY-MM-DD")
+                };
+            })
+            .filter(employee => dayjs(employee.probation_end_date).isSame(dayjs(today), 'day') || dayjs(employee.probation_end_date).isBefore(dayjs(today), 'day'));
+    }
+
+    return {
+        show_alert: completedProbationEmployees.length > 0,
+        count: completedProbationEmployees.length,
+        probation_period_days: probationPeriodDays,
+        completedProbationEmployees,
+    };
+};
 
 exports.getCounts = async (req, res) => {
     try {
@@ -26,22 +70,26 @@ exports.getCounts = async (req, res) => {
 
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: { [Op.in]: [0, 1] }
+            status: { [Op.in]: [0, 1] },
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 5
+            status: 5,
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 6
+            status: 6,
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
         
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {
-                attendance_date: today
+                attendance_date: today,
+                // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
             },
             {
                 include: [{
@@ -93,6 +141,15 @@ exports.getCounts = async (req, res) => {
             canteenAbsentToday,
             guestCount
         });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getProbationCompletionAlert = async (req, res) => {
+    try {
+        const response = await getProbationCompletionData(req.user.company_id);
+        return res.ok(response);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -213,59 +270,12 @@ exports.getPendingCount = async (req, res) => {
 
 exports.getPendingAnnouncementCount = async (req, res) => {
     try {
-        const today = dayjs().format("YYYY-MM-DD");
-        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
-        const whereClause = {
-            status: 0,
-            announcement_date: { [Op.lte]: todayEnd },
-            [Op.and]: [
-                {
-                    [Op.or]: [
-                        { expiry_date: null },
-                        { expiry_date: { [Op.gte]: today } }
-                    ]
-                }
-            ]
-        };
+        const userId = req.user.id;
+        const roleId = req.user.role_id;
 
-        const announcements = await commonQuery.findAllRecords(Announcement, whereClause, {
-            attributes: ["id", "target_type", "target"]
-        }, null, false);
+        // Use reusable function to get unread announcement count (exclude read announcements)
+        const announcementCount = await getFilteredAnnouncements(userId, roleId, { Announcement, Notification }, true, true);
 
-        // Get read announcement IDs for this user
-        const readNotifications = await commonQuery.findAllRecords(Notification, {
-            user_id: req.user.id,
-            type: 'ANNOUNCEMENT'
-        }, {
-            attributes: ['reference_id']
-        }, null, false);
-        const readAnnouncementIds = readNotifications.map(n => parseInt(n.reference_id));
-
-        let filteredAnnouncements = announcements;
-        if (!req.user.is_super_admin && !req.user.is_admin) {
-            filteredAnnouncements = announcements.filter(announcement => {
-                const { target_type, target } = announcement;
-                const userId = req.user.id?.toString();
-                const roleKey = req.user.role_key;
-
-                const containsExactMatch = (targetStr, value) => {
-                    if (!targetStr || !value) return false;
-                    const parts = targetStr.split(',');
-                    return parts.some(part => part.trim() === value);
-                };
-
-                if (target_type === 0) return true; // Show to all
-                if (target_type === 1 && roleKey === constants.ROLE_KEYS.EMPLOYEE) return true; // Employee role
-                if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
-                if (target_type === 2 && containsExactMatch(target, req.user.role_id?.toString())) return true; // Specific role
-                return false;
-            });
-        }
-
-        // Filter out read announcements
-        const unreadAnnouncements = filteredAnnouncements.filter(ann => !readAnnouncementIds.includes(ann.id));
-
-        const announcementCount = unreadAnnouncements.length;
         return res.ok({ announcementCount });
     } catch (err) {
         return handleError(err, res, req);
@@ -377,6 +387,158 @@ exports.getPayrollOverview = async (req, res) => {
         });
     } catch (err) {
         return handleError(err, res, req);
+    }
+};
+
+exports.getBirthdayList = async (req, res) => {
+    try {
+        const today = dayjs().format('YYYY-MM-DD');
+        const thirtyDaysLater = dayjs().add(30, 'days').format('YYYY-MM-DD');
+
+        const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            [Op.and]: [
+                sequelize.where(
+                    sequelize.literal(`make_date(extract(year from date '${today}')::int, extract(month from "dob")::int, extract(day from "dob")::int)`),
+                    {
+                        [Op.between]: [today, thirtyDaysLater]
+                    }
+                )
+            ]
+        }, {
+            attributes: ['id', 'first_name', 'employee_code', 'dob', 'profile_image', 'department_id', 'designation_id'],
+            include: [
+                {
+                    model: Department,
+                    as: 'department',
+                    attributes: ['name'],
+                    required: false
+                },
+                {
+                    model: DesignationMaster,
+                    as: 'designation',
+                    attributes: ['designation_name'],
+                    required: false
+                }
+            ],
+            order: [
+                [sequelize.literal(`EXTRACT(MONTH FROM "dob")`), 'ASC'],
+                [sequelize.literal(`EXTRACT(DAY FROM "dob")`), 'ASC']
+            ]
+        });
+
+        const birthdayList = birthdayEmployees.map(emp => {
+            const empDayjs = dayjs(emp.dob);
+            const isToday = empDayjs.format('MM-DD') === dayjs().format('MM-DD');
+            const plainEmp = emp.get({ plain: true });
+            
+            return {
+                ...plainEmp,
+                is_today: isToday,
+                profile_image_url: plainEmp.profile_image 
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}` 
+                    : null
+            };
+        });
+
+        return res.ok(birthdayList);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
+    try {
+        const today = asOf ? dayjs(asOf) : dayjs();
+        const todayDate = today.format('YYYY-MM-DD');
+        const todayMonth = today.format('MM');
+        const todayDay = today.format('DD');
+
+        // 1. Holiday Notifications (General - for all employees)
+        const holidays = await commonQuery.findAllRecords(Holiday, {
+            date: todayDate,
+            status: 0
+        }, {
+            attributes: ['id', 'name', 'date', 'company_id', 'branch_id']
+        });
+
+        if (holidays.length > 0) {
+            for (const holiday of holidays) {
+                // Get all active employees for this company/branch
+                const employees = await commonQuery.findAllRecords(Employee, {
+                    company_id: holiday.company_id,
+                    status: 0,
+                    ...(holiday.branch_id ? { branch_id: holiday.branch_id } : {})
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                // Get users for these employees
+                const employeeIds = employees.map(e => e.id);
+                const users = await commonQuery.findAllRecords(User, {
+                    employee_id: { [Op.in]: employeeIds },
+                    status: 0
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                // Create notification for each user
+                for (const user of users) {
+                    await createNotification({
+                        user_id: user.id,
+                        title: 'Holiday Tomorrow',
+                        message: `Tomorrow is ${holiday.name}. Enjoy your holiday!`,
+                        type: 'HOLIDAY',
+                        reference_id: holiday.id,
+                        company_id: user.company_id,
+                        branch_id: user.branch_id
+                    });
+                }
+                console.log(`✅ Holiday notification created for ${holiday.name} - ${users.length} users notified`);
+            }
+        }
+
+        // 2. Birthday Notifications (Individual - only for the employee whose birthday it is)
+        const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
+            status: 0,
+            [Op.and]: [
+                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'MM')`), todayMonth),
+                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'DD')`), todayDay)
+            ]
+        }, {
+            attributes: ['id', 'first_name', 'company_id', 'branch_id', 'dob']
+        });
+
+        if (birthdayEmployees.length > 0) {
+            for (const employee of birthdayEmployees) {
+                // Get user for this employee
+                const user = await commonQuery.findOneRecord(User, {
+                    employee_id: employee.id,
+                    status: 0
+                }, {
+                    attributes: ['id', 'company_id', 'branch_id']
+                });
+
+                if (user) {
+                    await createNotification({
+                        user_id: user.id,
+                        title: 'Happy Birthday!',
+                        message: `Happy Birthday, ${employee.first_name}! 🎉`,
+                        type: 'BIRTHDAY',
+                        reference_id: employee.id,
+                        company_id: user.company_id,
+                        branch_id: user.branch_id
+                    });
+                    console.log(`✅ Birthday notification created for ${employee.first_name}`);
+                }
+            }
+        }
+
+        console.log('✅ Holiday and birthday notifications completed.');
+        return { success: true, holidayCount: holidays.length, birthdayCount: birthdayEmployees.length };
+    } catch (err) {
+        console.error('❌ Holiday and birthday notifications failed:', err.message);
+        throw err;
     }
 };
 

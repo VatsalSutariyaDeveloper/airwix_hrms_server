@@ -24,11 +24,14 @@ router.post("/register/verify-otp", authController.verifyOtp);
 router.post("/login/send-otp", loginController.sendLoginOtp);
 router.post("/verify-mobile", loginController.verifyMobileNo);
 router.post("/verify-pin", loginController.verifyPin);
-router.post("/verify-otp-pin", loginController.verifyOtpPin);
+router.post("/login/verify-otp", loginController.verifyOtp);
 router.post("/generate-pin", loginController.generatePin);
 router.post("/forgot-pin", loginController.forgotPin);
 router.post("/forgot-password", userController.forgotPassword);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
+
+// App Store Redirects (Publicly accessible endpoints)
+router.get("/AWXTEC-PY", authController.redirectToStore);
 
 router.post("/state/dropdown-list", stateMasterController.dropdownList);
 router.post("/country/dropdown-list", countryMasterController.dropdownList);
@@ -51,6 +54,8 @@ router.post("/logout", loginController.logout);
 // OTP Rate Limit (Protected)
 router.get("/otp-limit/blocked-numbers", loginController.getAllBlockedNumbers);
 router.delete("/otp-limit/reset/:mobile_no", loginController.resetOtpLimit);
+router.get("/otp-verifications", loginController.getOtpVerifications);
+router.delete("/otp-verifications/:id", loginController.deleteOtpVerification);
 
 // LOGIN HISTORY ROUTES (Protected)
 router.post("/login-history/", loginHistoryController.create);

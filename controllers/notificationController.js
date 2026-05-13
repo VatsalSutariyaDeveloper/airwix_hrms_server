@@ -1,5 +1,6 @@
 const { Notification, Announcement, Employee, sequelize, RolePermission } = require("../models");
 const { handleError, constants, commonQuery, Op } = require("../helpers");
+const { getFilteredAnnouncements } = require("../helpers/functions/commonFunctions");
 const dayjs = require("dayjs");
 
 /**
@@ -8,8 +9,6 @@ const dayjs = require("dayjs");
 exports.getNotifications = async (req, res) => {
     try {
         const userId = req.user.id;
-        const roleKey = req.user.role_key;
-
         // 1. Fetch Personal Notifications
         const personalNotifications = await commonQuery.findAllRecords(Notification, {
             user_id: userId,
@@ -17,35 +16,15 @@ exports.getNotifications = async (req, res) => {
         }, {
             order: [['created_at', 'DESC']],
             limit: 50
-        }, null);        
+        }, null);
 
-        // 2. Fetch Active Announcements
-        // Active if: current date is between announcement_date and expiry_date (if exists)
-        const today = dayjs().format("YYYY-MM-DD");
-        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
-        
-        const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
-            status: 0, // Active
-            announcement_date: { [Op.lte]: todayEnd },
-            [Op.or]: [
-                { expiry_date: null },
-                { expiry_date: { [Op.gte]: today } }
-            ]
-        }, {}, null);
+        // 2. Get filtered announcements using reusable function
+        const filteredAnnouncements = await getFilteredAnnouncements(userId, req.user.role_id, { Announcement, Notification }, false);
 
-        // 3. Filter Announcements by Target
-        // target is comma separated string of role_keys or "all"
-        const filteredAnnouncements = activeAnnouncements.filter(ann => {
-            const target = (ann.target || "").toString().toLowerCase();
-            if (!target || target === "all") return true;
-            const targets = target.split(",").map(t => t.trim());
-            return roleKey && targets.includes(roleKey.toLowerCase());
-        });
-
-        // 4. Merge and Map
-        // We need to check which announcements have already been marked as "read" 
+        // 3. Merge and Map
+        // We need to check which announcements have already been marked as "read"
         // (which means a Notification record exists for it with type='ANNOUNCEMENT' and ref_id=announcement.id)
-        
+
         const announcementReadRecords = personalNotifications.filter(n => n.type === 'ANNOUNCEMENT');
         const readAnnouncementMap = {};
         announcementReadRecords.forEach(r => {
@@ -67,7 +46,7 @@ exports.getNotifications = async (req, res) => {
                 is_announcement: false
             }));
 
-        const unifiedList = [...mappedAnnouncements, ...mappedNotifications].sort((a, b) => 
+        const unifiedList = [...mappedAnnouncements, ...mappedNotifications].sort((a, b) =>
             dayjs(b.created_at).valueOf() - dayjs(a.created_at).valueOf()
         );
 
@@ -124,6 +103,71 @@ exports.markAsRead = async (req, res) => {
 };
 
 /**
+ * Clear all notifications (mark as deleted)
+ */
+exports.clearAll = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const roleKey = req.user.role_key;
+
+        // 1. Create notification records for active announcements if they don't exist
+        const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
+
+        const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
+            status: 0,
+            announcement_date: { [Op.lte]: todayEnd },
+            [Op.or]: [
+                { expiry_date: null },
+                { expiry_date: { [Op.gte]: today } }
+            ]
+        }, {}, null);
+
+        const filteredAnnouncements = activeAnnouncements.filter(ann => {
+            // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
+            if (ann.target_type === 0) return true; // All users
+            if (ann.target_type === 1) return true; // All employees (assuming current user is employee)
+            if (ann.target_type === 2) {
+                // Specific roles - target contains role_ids like "79,80,83"
+                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetRoleIds.includes(req.user.role_id);
+            }
+            if (ann.target_type === 3) {
+                // Specific users - target contains user_ids
+                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetUserIds.includes(userId);
+            }
+            return false;
+        });
+
+        for (const ann of filteredAnnouncements) {
+            const existing = await commonQuery.findOneRecord(Notification, {
+                user_id: userId,
+                type: 'ANNOUNCEMENT',
+                reference_id: ann.id,
+            }, {}, null);
+
+            if (!existing) {
+                await commonQuery.createRecord(Notification, {
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                    title: ann.title,
+                    message: ann.content,
+                    status: 0,
+                    is_read: 1
+                }, null);
+            }
+        }
+
+        await commonQuery.updateRecordById(Notification,{user_id: userId}, { status: 2,is_read:1 }, null);
+
+        return res.ok({ success: true });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
  * Mark all notifications and announcements as read
  */
 exports.markAllAsRead = async (req, res) => {
@@ -134,12 +178,78 @@ exports.markAllAsRead = async (req, res) => {
         // 1. Update all existing notifications to is_read 1
         await Notification.update({ is_read: 1 }, { where: { user_id: userId, is_read: 0 } });
 
-        // 2. We should ideally also mark all active announcements as read by creating records for them
-        // But for performance, we might skip this unless explicitly requested. 
-        // For now, let's just do existing ones.
+        // 2. Mark all active announcements as read by creating notification records for them
+        const today = dayjs().format("YYYY-MM-DD");
+        const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
+        
+        const activeAnnouncements = await Announcement.findAll({
+            where: {
+                company_id: companyId,
+                status: 0,
+                announcement_date: { [Op.lte]: todayEnd },
+                [Op.or]: [
+                    { expiry_date: null },
+                    { expiry_date: { [Op.gte]: today } }
+                ]
+            }
+        });
+
+        // Filter announcements that target this user
+        const filteredAnnouncements = activeAnnouncements.filter(ann => {
+            if (ann.target_type === null || ann.target_type === undefined) return false; // Skip if target_type is null/undefined (0 = All users is valid)
+            
+            if (ann.target_type === 0) return true; // All users
+            if (ann.target_type === 1) return true; // All employees
+            if (ann.target_type === 2) {
+                // Specific roles
+                if (!ann.target || !req.user.role_id) return false;
+                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetRoleIds.includes(req.user.role_id);
+            }
+            if (ann.target_type === 3) {
+                // Specific users
+                if (!ann.target || !userId) return false;
+                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                return targetUserIds.includes(userId);
+            }
+            return false;
+        });
+
+        // Create notification records for unread announcements
+        for (const ann of filteredAnnouncements) {
+            // Safety checks
+            if (!ann.id || !userId || !companyId) continue;
+            
+            const existing = await Notification.findOne({
+                where: {
+                    user_id: userId,
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                }
+            });
+
+            if (!existing) {
+                await Notification.create({
+                    user_id: userId, // Required: link to the current user
+                    type: 'ANNOUNCEMENT',
+                    reference_id: ann.id,
+                    title: ann.title || 'Announcement',
+                    message: ann.content || '',
+                    status: 0,
+                    is_read: 1, // Mark as read immediately
+                    company_id: companyId,
+                    branch_id: req.user.branch_id || null
+                });
+            } else if (existing.is_read === 0) {
+                await Notification.update({ is_read: 1 }, {
+                    where: { id: existing.id }
+                });
+            }
+        }
 
         return res.ok({ success: true });
     } catch (err) {
+        console.error('markAllAsRead error:', err);
         return handleError(err, res, req);
     }
 };

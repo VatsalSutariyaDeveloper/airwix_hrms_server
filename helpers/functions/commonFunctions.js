@@ -798,3 +798,66 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
     console.log('where', where);
     return where;
 }
+
+exports.getFilteredAnnouncements = async (userId, roleId, models, returnCountOnly = true, excludeRead = false) => {
+    const { Announcement, Notification } = models;
+    const today = dayjs().format("YYYY-MM-DD");
+    const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
+
+    // Fetch active announcements
+    const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
+        status: 0,
+        announcement_date: { [Op.lte]: todayEnd },
+        [Op.or]: [
+            { expiry_date: null },
+            { expiry_date: { [Op.gte]: today } }
+        ]
+    }, {}, null);
+
+    // Fetch CLEARED announcement IDs (status: 2, type: 'ANNOUNCEMENT') - matching getNotifications logic
+    const clearedAnnouncementRecords = await commonQuery.findAllRecords(Notification, {
+        user_id: userId,
+        type: 'ANNOUNCEMENT',
+        status: 2 // Deleted/cleared
+    }, {}, null);
+    const clearedAnnouncementIds = clearedAnnouncementRecords.map(n => parseInt(n.reference_id));
+
+    // Fetch READ announcement IDs (is_read: 1, type: 'ANNOUNCEMENT') - for count only
+    let readAnnouncementIds = [];
+    if (excludeRead) {
+        const readAnnouncementRecords = await commonQuery.findAllRecords(Notification, {
+            user_id: userId,
+            type: 'ANNOUNCEMENT',
+            is_read: 1
+        }, {
+            attributes: ['reference_id']
+        }, null, false);
+        readAnnouncementIds = readAnnouncementRecords.map(n => parseInt(n.reference_id));
+    }
+
+    // Filter announcements by target (matching getNotifications logic)
+    const filteredAnnouncements = activeAnnouncements.filter(ann => {
+        // Exclude if user has CLEARED this announcement (status 2)
+        if (clearedAnnouncementIds.includes(ann.id)) return false;
+
+        // Exclude if user has READ this announcement (is_read: 1) - for count only
+        if (excludeRead && readAnnouncementIds.includes(ann.id)) return false;
+
+        // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
+        if (ann.target_type === 0) return true; // All users
+        if (ann.target_type === 1) return true; // All employees
+        if (ann.target_type === 2) {
+            // Specific roles - target contains role_ids like "79,80,83"
+            const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+            return targetRoleIds.includes(roleId);
+        }
+        if (ann.target_type === 3) {
+            // Specific users - target contains user_ids
+            const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+            return targetUserIds.includes(userId);
+        }
+        return false;
+    });
+
+    return returnCountOnly ? filteredAnnouncements.length : filteredAnnouncements;
+}

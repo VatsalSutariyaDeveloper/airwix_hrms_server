@@ -152,7 +152,7 @@ exports.getSummary = async (req, res) => {
                         required: false
                     }
                 ],
-                attributes: ["id", "first_name", "employee_code", "employee_type", "worker_type"],
+                attributes: ["id", "first_name", "employee_code", "employee_type", "worker_type", "profile_image"],
             }
       );
 
@@ -160,15 +160,26 @@ exports.getSummary = async (req, res) => {
     const absentEmployees = [];
 
     allEmployees.items.forEach(employee => {
+        // Get plain employee data to avoid circular references
+        const plainEmployee = employee.get ? employee.get({ plain: true }) : employee;
+        
+        // Transform employee to include profile_image_url
+        const transformedEmployee = {
+            ...plainEmployee,
+            profile_image_url: plainEmployee.profile_image 
+                ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}` 
+                : null
+        };
+
         if (employee.canteenAttendances && employee.canteenAttendances.length > 0) {
             const hasPresentStatus = employee.canteenAttendances.some(att => att.status === 0);
             if (hasPresentStatus) {
-                presentEmployees.push(employee);
+                presentEmployees.push(transformedEmployee);
             } else {
-                absentEmployees.push(employee);
+                absentEmployees.push(transformedEmployee);
             }
         } else {
-            absentEmployees.push(employee);
+            absentEmployees.push(transformedEmployee);
         }
     });
 
@@ -186,7 +197,8 @@ exports.getSummary = async (req, res) => {
             employee_type: "GUEST",
             worker_type: "GUEST",
             is_guest: true,
-            created_at: att.created_at
+            created_at: att.created_at,
+            profile_image_url: null
         });
     });
 

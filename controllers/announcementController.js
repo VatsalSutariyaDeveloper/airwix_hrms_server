@@ -240,5 +240,3 @@ exports.getActiveAnnouncements = async (req, res) => {
     return handleError(err, res, req);
   }
 };
-
-

@@ -286,7 +286,7 @@ async function punch(employeeId, meta, transaction = null) {
               if (dayjs(now).isBefore(otCutoff)) {
                 cutoffTime = otCutoff;
               } else {
-                cutoffTime = dayjs(startTime).add(24, "hour");
+                cutoffTime = dayjs(startTime).add(16, "hour");
               }
             }
           }
@@ -840,6 +840,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     is_encashment: false,
     status: 0
   }, {}, transaction, false, {});
+  console.log(approvedLeave, 'approvedLeave');
 
   const approvedOutDuty = (meta.preFetchedOutDuty !== undefined) ? meta.preFetchedOutDuty : await commonQuery.findOneRecord(OutDutyRequest, {
     employee_id: employeeId,
@@ -1700,9 +1701,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
            const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
            fineAmount += res.amount;
-        }
+         }
+      }
 
-        rule = null;
+      rule = null;
         // Early Exit Fine
         if (earlyOutMinutes > 0) {
           fineData.early_exit.minutes = earlyOutMinutes;
@@ -1874,7 +1876,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
             fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
             fineAmount += res.amount;
           }
-        }
+
           // Shortage Fine (Work hours less than shift hours)
           // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
           //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;
@@ -2418,50 +2420,67 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   // Support for Multiple Punches
   if (meta.punches && Array.isArray(meta.punches)) {
-    // Clear all existing and unassigned punches for this employee on this date to ensure a clean state
-    await commonQuery.hardDeleteRecords(AttendancePunch, { 
-      [Op.or]: [
-        { day_id: dayId },
-        {
-          day_id: null,
-          employee_id: employeeId,
-          punch_time: {
-            [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
-          }
-        }
-      ],
-      status: 0 
+    // Fetch all existing punches for this day
+    const existingPunches = await commonQuery.findAllRecords(AttendancePunch, {
+      day_id: dayId,
+      status: 0
+    }, {
+      order: [["punch_time", "ASC"]]
     }, transaction, { company_id: true });
 
-    // Create new punches from array
+    const existingPunchIds = new Set(existingPunches.map(p => p.id));
+    const incomingPunchIds = new Set();
+
+    // Process incoming punches
     for (const p of meta.punches) {
       if (!p.punch_time) continue;
-      await commonQuery.createRecord(AttendancePunch, {
-        employee_id: employeeId,
-        day_id: dayId,
-        punch_type: p.punch_type,
-        punch_time: parseDateTime(p.punch_time, date),
-        ...commonMeta
+      const punchTime = parseDateTime(p.punch_time, date);
+
+      if (p.id) {
+        // Update existing punch by ID
+        incomingPunchIds.add(p.id);
+        await commonQuery.updateRecordById(AttendancePunch, { id: p.id }, {
+          punch_time: punchTime,
+          punch_type: p.punch_type,
+          ...commonMeta
+        }, transaction, false, { company_id: true });
+      } else {
+        // Create new punch
+        await commonQuery.createRecord(AttendancePunch, {
+          employee_id: employeeId,
+          day_id: dayId,
+          punch_type: p.punch_type,
+          punch_time: punchTime,
+          ...commonMeta
+        }, transaction, { company_id: true });
+      }
+    }
+
+    // Delete existing punches that weren't in the incoming array
+    const punchesToDelete = [...existingPunchIds].filter(id => !incomingPunchIds.has(id));
+    if (punchesToDelete.length > 0) {
+      await commonQuery.hardDeleteRecords(AttendancePunch, {
+        id: { [Op.in]: punchesToDelete }
       }, transaction, { company_id: true });
     }
   } else {
     // [NEW] Clear existing punches if new times are provided, to ensure a clean state
-    if (inTime !== undefined || outTime !== undefined) {
-      console.log(`[manualPunch] Clearing all existing and unassigned punches for day ID ${dayId} / Date ${date} before creating new times.`);
-      await commonQuery.hardDeleteRecords(AttendancePunch, { 
-        [Op.or]: [
-          { day_id: dayId },
-          {
-            day_id: null,
-            employee_id: employeeId,
-            punch_time: {
-              [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
-            }
-          }
-        ],
-        status: 0 
-      }, transaction, { company_id: true });
-    }
+    // if (inTime !== undefined || outTime !== undefined) {
+    //   console.log(`[manualPunch] Clearing all existing and unassigned punches for day ID ${dayId} / Date ${date} before creating new times.`);
+    //   await commonQuery.hardDeleteRecords(AttendancePunch, { 
+    //     [Op.or]: [
+    //       { day_id: dayId },
+    //       {
+    //         day_id: null,
+    //         employee_id: employeeId,
+    //         punch_time: {
+    //           [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
+    //         }
+    //       }
+    //     ],
+    //     status: 0 
+    //   }, transaction, { company_id: true });
+    // }
 
     if (inTime && outTime) {
       const inDateObj = parseDateTime(inTime, date);

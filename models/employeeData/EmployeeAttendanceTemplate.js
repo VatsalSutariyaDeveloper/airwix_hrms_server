@@ -71,7 +71,7 @@ module.exports = (sequelize, DataTypes) => {
 
   EmployeeAttendanceTemplate.associate = (models) => {
     EmployeeAttendanceTemplate.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
-    EmployeeAttendanceTemplate.belongsTo(models.AttendanceTemplate, { foreignKey: "template_id" });
+    EmployeeAttendanceTemplate.belongsTo(models.AttendanceTemplate, { foreignKey: "template_id", as: "attendanceTemplate" });
   };
 
   return EmployeeAttendanceTemplate;

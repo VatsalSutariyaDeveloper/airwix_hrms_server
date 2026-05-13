@@ -1,5 +1,6 @@
 const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
 const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings, initializeCompanyRoles } = require("../../helpers");
+const { validatePhone } = require("../../helpers/phoneValidation");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const otpRateLimit = require("../../helpers/otpRateLimit");
@@ -29,10 +30,10 @@ exports.sendOtp = async (req, res) => {
 
     // Handle Mobile OTP
     if (mobile_no) {
-      const indianMobileRegex = /^[6-9]\d{9}$/;
-      if (!indianMobileRegex.test(mobile_no)) {
+      const phoneValidation = validatePhone(mobile_no);
+      if (!phoneValidation.isValid) {
         await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+        return res.error(constants.VALIDATION_ERROR, { errors: [phoneValidation.error] });
       }
 
       // Check if mobile number already exists across User, Employee, and DeviceMaster
@@ -69,31 +70,26 @@ exports.sendOtp = async (req, res) => {
       identifier = email;
     }
 
-    // Check OTP Rate Limit
-    const limitCheck = await otpRateLimit.checkRateLimit(identifier);
-    if (!limitCheck.allowed) {
-      const mins = Math.ceil(limitCheck.remaining_seconds / 60);
-      await transaction.rollback();
-      return res.status(400).json({
-        code: 400,
-        status: "TOO_MANY_REQUESTS",
-        message: `Too many OTP attempts. Try again in ${mins} minutes.`,
-        remaining_seconds: limitCheck.remaining_seconds
-      });
-    }
-
-    // Increase attempt count
-    await otpRateLimit.increaseAttempt(identifier);
-
-    // Use common OTP Service to send OTP (handles both mobile and email)
+    // Use common OTP Service to send OTP (handles both mobile and email, format checks, and rate limiting)
     await otpService.sendOtp(identifier, transaction);
 
     await transaction.commit();
     return res.ok();
 
   } catch (err) {
-    console.error("Error in sendOtp:", err);
     if (!transaction.finished) await transaction.rollback();
+    if (err.status === "TOO_MANY_REQUESTS") {
+      const mins = Math.ceil(err.remaining_seconds / 60);
+      return res.status(400).json({
+        code: 400,
+        status: "TOO_MANY_REQUESTS",
+        message: `Too many OTP attempts. Try again in ${mins} minutes.`,
+        remaining_seconds: err.remaining_seconds
+      });
+    }
+    if (err.status && err.message) {
+      return res.error(err.status, { message: err.message });
+    }
     return handleError(err, res, req);
   }
 };
@@ -550,6 +546,37 @@ exports.requestActivation = async (req, res) => {
 
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Redirects user to the appropriate App Store (Google Play or Apple App Store) based on mobile OS.
+ */
+exports.redirectToStore = async (req, res) => {
+  try {
+    const userAgent = req.headers["user-agent"] || "";
+
+    // URLs with environment variable support and high-quality defaults
+    const playStoreUrl = process.env.PLAY_STORE_URL || "https://play.google.com/store/apps/details?id=com.app.airwixpayroll";
+    const appStoreUrl = process.env.APP_STORE_URL || "https://hrms.airwix.in";
+    const fallbackUrl = process.env.FRONTEND_URL || "https://hrms.airwix.in";
+
+    const isAndroid = /android/i.test(userAgent);
+    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+
+    if (isAndroid) {
+      console.log(`[STORE-REDIRECT] Redirecting Android device to Google Play: ${playStoreUrl}`);
+      return res.redirect(302, playStoreUrl);
+    } else if (isIOS) {
+      console.log(`[STORE-REDIRECT] Redirecting iOS device to Apple App Store: ${appStoreUrl}`);
+      return res.redirect(302, appStoreUrl);
+    } else {
+      console.log(`[STORE-REDIRECT] Redirecting Desktop/Other device to Web Fallback: ${fallbackUrl}`);
+      return res.redirect(302, fallbackUrl);
+    }
+  } catch (err) {
+    console.error("[STORE-REDIRECT] Error during store redirection:", err.message);
     return handleError(err, res, req);
   }
 };

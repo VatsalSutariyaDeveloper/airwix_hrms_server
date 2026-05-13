@@ -1,5 +1,40 @@
 const { CustomField } = require("../models");
 const { getContext } = require("../utils/requestContext");
+const { validatePhone } = require("./phoneValidation");
+
+/**
+ * Validates PF Number format
+ * Expected format: GJ/12345/000 (state code/number/suffix)
+ */
+function validatePFNumber(pfNumber) {
+  if (!pfNumber || typeof pfNumber !== 'string') return { isValid: false, error: 'Invalid PF number format' };
+  
+  const trimmed = pfNumber.trim().toUpperCase();
+  const pfRegex = /^[A-Z]{2}\/\d{5,6}\/\d{3}$/;
+  
+  if (!pfRegex.test(trimmed)) {
+    return { isValid: false, error: 'Invalid PF number format (e.g. GJ/12345/000)' };
+  }
+  
+  return { isValid: true, value: trimmed };
+}
+
+/**
+ * Validates ESI Number format
+ * Expected format: 17 digits only
+ */
+function validateESINumber(esiNumber) {
+  if (!esiNumber || typeof esiNumber !== 'string') return { isValid: false, error: 'Invalid ESI number format' };
+  
+  const trimmed = esiNumber.trim();
+  const esiRegex = /^\d{17}$/;
+  
+  if (!esiRegex.test(trimmed)) {
+    return { isValid: false, error: 'ESI number must be exactly 17 digits (numbers only)' };
+  }
+  
+  return { isValid: true, value: trimmed };
+}
 /**
  * Validates required fields, types, and uniqueness.
  * Returns FIELD → ERROR CODE mapping
@@ -79,6 +114,45 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
     if (expectedType === "string" && typeof value !== "string") {
       errors[field] = "INVALID_STRING";
     }
+
+    // Auto-detect phone fields by name pattern if not explicitly typed
+    const isPhoneField = expectedType === "phone" || 
+                        (field.toLowerCase().includes('phone') || 
+                         field.toLowerCase().includes('mobile') || 
+                         field.toLowerCase().includes('contact') ||
+                         field.toLowerCase().startsWith('mob') ||
+                         field.toLowerCase() === 'mobile_no' ||
+                         field.toLowerCase() === 'mobile number' ||
+                         field.toLowerCase() === 'phone number' ||
+                         field.toLowerCase().replace(/[^a-z]/g, '') === 'monumber' ||
+                         field.toLowerCase().replace(/[^a-z]/g, '') === 'mono');
+    
+    if (isPhoneField && typeof value === 'string') {
+      const phoneValidation = validatePhone(value, fieldsWithLabels[field] || field);
+      if (!phoneValidation.isValid) {
+        errors[field] = "INVALID_PHONE";
+      }
+    }
+
+    // PF Number validation
+    if (field.toLowerCase() === 'pf_number' && typeof value === 'string' && value.trim() !== '') {
+      const pfValidation = validatePFNumber(value);
+      if (!pfValidation.isValid) {
+        errors[field] = "INVALID_PF_NUMBER";
+      } else {
+        body[field] = pfValidation.value;
+      }
+    }
+
+    // ESI Number validation
+    if (field.toLowerCase() === 'esi_number' && typeof value === 'string' && value.trim() !== '') {
+      const esiValidation = validateESINumber(value);
+      if (!esiValidation.isValid) {
+        errors[field] = "INVALID_ESI_NUMBER";
+      } else {
+        body[field] = esiValidation.value;
+      }
+    }
   }
 
   /* =========================
@@ -105,6 +179,45 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
         errors[field] = "INVALID_NUMBER";
       } else {
         body[field] = num;
+      }
+    }
+
+    // Auto-detect phone fields by name pattern if not explicitly typed
+    const isPhoneField = fieldTypes[field] === "phone" || 
+                        (field.toLowerCase().includes('phone') || 
+                         field.toLowerCase().includes('mobile') || 
+                         field.toLowerCase().includes('contact') ||
+                         field.toLowerCase().startsWith('mob') ||
+                         field.toLowerCase() === 'mobile_no' ||
+                         field.toLowerCase() === 'mobile number' ||
+                         field.toLowerCase() === 'phone number' ||
+                         field.toLowerCase().replace(/[^a-z]/g, '') === 'monumber' ||
+                         field.toLowerCase().replace(/[^a-z]/g, '') === 'mono');
+    
+    if (isPhoneField && typeof value === 'string') {
+      const phoneValidation = validatePhone(value, fieldsWithLabels[field] || field);
+      if (!phoneValidation.isValid) {
+        errors[field] = "INVALID_PHONE";
+      }
+    }
+
+    // PF Number validation
+    if (field.toLowerCase() === 'pf_number' && typeof value === 'string' && value.trim() !== '') {
+      const pfValidation = validatePFNumber(value);
+      if (!pfValidation.isValid) {
+        errors[field] = "INVALID_PF_NUMBER";
+      } else {
+        body[field] = pfValidation.value;
+      }
+    }
+
+    // ESI Number validation
+    if (field.toLowerCase() === 'esi_number' && typeof value === 'string' && value.trim() !== '') {
+      const esiValidation = validateESINumber(value);
+      if (!esiValidation.isValid) {
+        errors[field] = "INVALID_ESI_NUMBER";
+      } else {
+        body[field] = esiValidation.value;
       }
     }
   }

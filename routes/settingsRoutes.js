@@ -32,6 +32,9 @@ const outDutyRequestController = require("../controllers/settings/outDutyRequest
 const attendanceRegularizationController = require("../controllers/attendance/attendanceRegularizationController");
 const systemLogController = require("../controllers/systemLogController");
 const expenseTypeController = require("../controllers/settings/expenseTypeController");
+const employeeAttendanceController = require("../controllers/employee/employeeAttendanceController");
+const employeeSalaryTemplateController = require("../controllers/employee/employeeSalaryTemplateController");
+const employeeController = require("../controllers/employee/employeeController");
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
@@ -212,6 +215,15 @@ router.delete("/leave-template", leaveTemplateController.delete);
 router.patch("/leave-template/status", leaveTemplateController.updateStatus);
 router.post("/leave-template/dropdown-list", leaveTemplateController.dropdownList);
 router.get("/leave-template/assigned-leaves/:employeeId", leaveTemplateController.getAssignedLeavesByEmployee);
+
+// ==========================
+// 30. EMPLOYEE ATTENDANCE TEMPLATE ROUTES
+// ==========================
+router.get("/employee-attendance-template/:employeeId", employeeAttendanceController.getAttendanceTemplate);
+router.get("/employee-shift-template/:employeeId", employeeAttendanceController.getShiftSetting);
+router.get("/employee-salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
+router.get("/employee-holidays/:employeeId", employeeController.getEmployeeHolidays);
+router.get("/employee-leave-template/:employeeId", leaveTemplateController.getEmployeeLeaveTemplate);
 router.get("/leave/download-sample", importEmployeeController.downloadLeaveSample);
 router.post("/leave/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);
 router.post("/attendance/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);

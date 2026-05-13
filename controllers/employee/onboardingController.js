@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { Employee, DesignationMaster, Department, sequelize, CompanyMaster, CustomField, StateMaster, CountryMaster } = require("../../models");
 const { constants, handleError, commonQuery, Op, v4: uuidv4, whatsappService, uploadFile, writeLogToFile } = require("../../helpers");
+const { validatePhone } = require("../../helpers/phoneValidation");
 const { generateCustomFieldImageUrls, handleCustomFieldImages, handleDetailAttachments } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const emailService = require("../../services/emailService");
@@ -41,6 +42,13 @@ exports.initiate = async (req, res) => {
         if (!first_name || !email || !mobile_no) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Required fields missing" });
+        }
+
+        // Validate mobile number format
+        const phoneValidation = validatePhone(mobile_no);
+        if (!phoneValidation.isValid) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { mobile_no: phoneValidation.error });
         }
 
         // Check if email or mobile already exists

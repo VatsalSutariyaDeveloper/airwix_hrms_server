@@ -1,20 +1,21 @@
-const { 
-    Employee, 
-    User, 
-    EmployeeResignation, 
-    ResignationTemplate, 
-    EmployeeLeaveBalance, 
+const {
+    Employee,
+    User,
+    EmployeeResignation,
+    ResignationTemplate,
+    EmployeeLeaveBalance,
     EmployeeAdvance,
     ResignationReason,
     BranchMaster,
     DesignationMaster,
-    Department
+    Department,
+    RolePermission
 } = require("../../models");
 
-const { 
-    validateRequest, 
-    commonQuery, 
-    handleError, 
+const {
+    validateRequest,
+    commonQuery,
+    handleError,
     constants,
     sequelize,
     Op,
@@ -28,112 +29,15 @@ const notificationService = require("../../services/notificationService");
  * Controller for Managing Employee Resignations & Exit Lifecycle
  */
 
-// =========================================================================
-// 1. RESIGNATION TEMPLATES (CRUD)
-// =========================================================================
-
-exports.create = async (req, res) => {
-    try {
-        const requiredFields = { 
-            template_name: "Template Name",
-            approval_levels: "Approval Levels"
-        };
-        const errors = await validateRequest(req.body, requiredFields);
-        if (errors) return res.error(constants.VALIDATION_ERROR, errors);
-
-        if (req.body.approval_levels > 0 && (!req.body.approval_config || !req.body.approval_config.length)) {
-            return res.error(constants.VALIDATION_ERROR, { message: "Approval configuration is required for multi-level approval." });
-        }
-
-        const record = await commonQuery.createRecord(ResignationTemplate, req.body);
-        return res.success(constants.CREATED, record);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.getAll = async (req, res) => {
-    try {
-        const fieldConfig = [
-            ["template_name", true, true],
-            ["notice_period_days", true, false],
-        ];
-    
-        const data = await commonQuery.fetchPaginatedData(
-            ResignationTemplate,
-            { ...req.body, status: 0 },
-            fieldConfig
-        );
-
-        return res.ok(data);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.getById = async (req, res) => {
-    try {
-        const record = await commonQuery.findOneRecord(ResignationTemplate, req.params.id);
-        if (!record) return res.error(constants.NOT_FOUND);
-        return res.ok(record);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.update = async (req, res) => {
-    try {
-        if (req.body.approval_levels > 0 && (!req.body.approval_config || !req.body.approval_config.length)) {
-            return res.error(constants.VALIDATION_ERROR, { message: "Approval configuration is required for multi-level approval." });
-        }
-        const record = await commonQuery.updateRecordById(ResignationTemplate, req.params.id, req.body);
-        return res.success(constants.UPDATED, record);
-    } catch (err) {
-        return handleError(err, res, req);
-    }
-};
-
-exports.delete = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const requiredFields = {
-            ids: "Select Data"
-        };
-
-        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
-        if (errors) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, errors);
-        }
-        let { ids } = req.body; // Accept array of ids
-
-        // Validate that ids is an array and not empty
-        if (!Array.isArray(ids) || ids.length === 0) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_ID);
-        }
-
-        const deleted = await commonQuery.hardDeleteRecords(EmployeeResignation, ids, transaction);
-        if (!deleted) {
-            await transaction.rollback();
-            return res.error(constants.ALREADY_DELETED);
-        }
-        await transaction.commit();
-        return res.success(constants.DELETED);
-    } catch (err) {
-        await transaction.rollback();
-        return handleError(err, res, req);
-    }
-};
 
 // =========================================================================
-// 2. EMPLOYEE RESIGNATIONS
+// 1. EMPLOYEE RESIGNATIONS
 // =========================================================================
 
 /**
  * Submit Resignation (Employee Portal)
  */
-exports.submitResignation = async (req, res) => {
+exports.submitResignation = async (req, res) => {    
     const transaction = await sequelize.transaction();
     try {
         const employeeId = req.user.employee_id || req.body.employee_id;
@@ -157,10 +61,10 @@ exports.submitResignation = async (req, res) => {
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [
                 { model: ResignationTemplate, as: 'resignationTemplate' },
-                { model: Employee, as: 'manager', attributes: ['email'] },
-                { model: Employee, as: 'supervisor', attributes: ['email'] }
+                { model: User, as: 'manager', attributes: ['email'] },
+                { model: User, as: 'supervisor', attributes: ['email'] }
             ]
-        }, transaction);
+        }, transaction);    
         
         if (!employee) {
             await transaction.rollback();
@@ -178,7 +82,7 @@ exports.submitResignation = async (req, res) => {
         // 2. Calculate notice period (Employee's manual days takes precedence over Policy days)
         const resignationDate = req.body.resignation_date || dayjs().format('YYYY-MM-DD');
         const noticeDays = (employee.notice_period_days > 0) ? employee.notice_period_days : (template ? template.notice_period_days : 0);
-        
+
         const defaultLWD = dayjs(resignationDate).add(noticeDays, 'day').format('YYYY-MM-DD');
 
         const POST = {
@@ -193,11 +97,11 @@ exports.submitResignation = async (req, res) => {
         };
 
         const result = await commonQuery.createRecord(EmployeeResignation, POST, transaction);
-        
+
         // 3. Mark Employee as On Notice
-        await commonQuery.updateRecordById(Employee, employeeId, { 
+        await commonQuery.updateRecordById(Employee, employeeId, {
             is_on_notice: true,
-            resignation_status: 1 
+            resignation_status: 1
         }, transaction);
 
         // 4. Send Email Notification
@@ -228,7 +132,7 @@ exports.submitResignation = async (req, res) => {
             const recipients = [];
             if (employee.supervisor?.email) recipients.push(employee.supervisor.email);
             if (employee.manager?.email) recipients.push(employee.manager.email);
-            
+
             admins.forEach(admin => {
                 if (admin.email) recipients.push(admin.email);
             });
@@ -270,8 +174,8 @@ exports.handleAction = async (req, res) => {
         const { approval_status, remarks, approved_lwd } = req.body;
 
         const resignation = await commonQuery.findOneRecord(EmployeeResignation, id, {
-            include: [{ 
-                model: Employee, 
+            include: [{
+                model: Employee,
                 as: 'employee',
                 attributes: ['id', 'first_name', 'employee_code', 'reporting_manager', 'attendance_supervisor', 'resignation_template_id', 'email', 'company_id'],
                 include: [{ model: ResignationTemplate, as: 'resignationTemplate' }]
@@ -286,7 +190,7 @@ exports.handleAction = async (req, res) => {
         // 1. Authorization Check
         const currentLevel = resignation.current_level;
         const employee = resignation.employee;
-        const template = employee?.resignationTemplate; 
+        const template = employee?.resignationTemplate;
         const config = template?.approval_config || [];
         const totalLevels = template?.approval_levels || 1;
         const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
@@ -299,7 +203,7 @@ exports.handleAction = async (req, res) => {
         // 2. Process Action
         const history = resignation.approval_history || [];
         const actionType = approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED ? "APPROVED" : "REJECTED";
-        
+
         history.push({
             level: currentLevel,
             action: actionType,
@@ -316,14 +220,14 @@ exports.handleAction = async (req, res) => {
             if (isSuperAdmin || currentLevel >= totalLevels) {
                 // Final Approval (Super Admin override or last level reached)
                 updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
-                updateData.current_level = totalLevels; 
+                updateData.current_level = totalLevels;
                 updateData.approved_lwd = approved_lwd || resignation.preferred_lwd;
-                
+
                 // Update employee status
                 await commonQuery.updateRecordById(Employee, resignation.employee_id, {
                     exit_date: updateData.approved_lwd,
-                    status: 1, 
-                    resignation_status: 2 
+                    status: constants.STATUS_EMPLOYEE_EXIT,
+                    resignation_status: 2
                 }, transaction);
             } else {
                 // Move to next level
@@ -341,7 +245,7 @@ exports.handleAction = async (req, res) => {
                 // Get recipients for current and next stage stakeholders
                 const currentRecipients = await getResignationStakeholderEmails(resignation.employee, currentStage, transaction);
                 const nextRecipients = nextLevel <= totalLevels ? await getResignationStakeholderEmails(resignation.employee, nextStage, transaction) : [];
-                
+
                 const uniqueRecipients = [...new Set([...currentRecipients, ...nextRecipients])].filter(email => email && email !== resignation.employee.email);
 
                 await emailService.sendResignationActionNotification({
@@ -368,8 +272,8 @@ exports.handleAction = async (req, res) => {
                 await notificationService.createNotification({
                     user_id: user.id,
                     title: updateData.approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED ? "Resignation Approved" : "Resignation Partially Approved",
-                    message: updateData.approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED 
-                        ? `Your resignation has been approved. Your Last Working Day is ${formatDateTime(updateData.approved_lwd)}.` 
+                    message: updateData.approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED
+                        ? `Your resignation has been approved. Your Last Working Day is ${formatDateTime(updateData.approved_lwd)}.`
                         : `Your resignation request has been moved to the next approval level (Stage ${updateData.current_level}).`,
                     type: "RESIGNATION",
                     reference_id: id,
@@ -451,7 +355,7 @@ exports.getPendingApprovals = async (req, res) => {
             ["approved_lwd", true, true],
             ["created_at", false, true],
         ];
-        
+
         const result = await commonQuery.fetchPaginatedData(EmployeeResignation, req.body, fieldConfig, {
             include: [
                 {
@@ -479,7 +383,7 @@ exports.getPendingApprovals = async (req, res) => {
             const currentLevel = request.current_level;
             const config = template?.approval_config || [];
             const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
-            
+
             if (isUserAuthorizedForResignation(req.user, employee, currentStage)) {
                 const raw = request.get({ plain: true });
                 const total = template ? template.approval_levels : 1;
@@ -508,7 +412,7 @@ exports.calculateFF = async (req, res) => {
 
         const employee = resignation.employee;
         const lwd = resignation.approved_lwd || resignation.preferred_lwd;
-        
+
         // 1. Leave Encashment Preview
         const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
             employee_id: employee.id,
@@ -586,14 +490,14 @@ exports.getResignationHistory = async (req, res) => {
             ["employee.first_name", true, false],
             ["employee.employee_code", true, false],
         ];
-        
+
         // Add date filtering based on payload
         let whereClause = {};
         const leaveFilter = req.body?.leave_filter;
-        
+
         if (leaveFilter) {
             const today = dayjs().toDate();
-            
+
             switch (leaveFilter) {
                 case 'previous':
                     // Previous: ended before today
@@ -605,7 +509,7 @@ exports.getResignationHistory = async (req, res) => {
                     break;
             }
         }
-        
+
         const data = await commonQuery.fetchPaginatedData(
             EmployeeResignation,
             req.body,
@@ -639,7 +543,7 @@ exports.getResignationHistory = async (req, res) => {
 const isUserAuthorizedForResignation = (user, employee, stage) => {
     const isSuperAdmin = user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && user.is_super_admin;
     if (isSuperAdmin) return true;
-    
+
     const { type } = stage || { type: "ANYONE" };
     const employeeId = user.employee_id;
     const isAdmin = user.role_key === constants.ROLE_KEYS.ADMIN;
@@ -664,7 +568,7 @@ const isUserAuthorizedForResignation = (user, employee, stage) => {
 const getResignationStakeholderEmails = async (employee, stage, transaction) => {
     const emails = [];
     const { type } = stage || { type: "ANYONE" };
-    
+
     if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
         if (employee.reporting_manager) {
             const manager = await commonQuery.findOneRecord(User, { id: employee.reporting_manager }, { attributes: ['email'] }, transaction);
@@ -691,7 +595,7 @@ const getResignationStakeholderEmails = async (employee, stage, transaction) => 
             attributes: ['email'],
             raw: true
         }, transaction);
-        
+
         admins.map(a => a.email).filter(Boolean).forEach(e => emails.push(e));
     }
 
@@ -702,8 +606,8 @@ exports.getResignationById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(EmployeeResignation, req.params.id, {
             include: [
-                { 
-                    model: Employee, 
+                {
+                    model: Employee,
                     as: 'employee',
                     include: [
                         { model: ResignationTemplate, as: 'resignationTemplate' },
@@ -721,7 +625,6 @@ exports.getResignationById = async (req, res) => {
         return handleError(err, res, req);
     }
 };
-
 
 exports.getMyResignation = async (req, res) => {
     try {
@@ -743,17 +646,35 @@ exports.getMyResignation = async (req, res) => {
     }
 };
 
-exports.dropdownList = async (req, res) => {
+/**
+ * Delete Resignation Request(s)
+ */
+exports.delete = async (req, res) => {
+    const transaction = await sequelize.transaction();
     try {
-        const companyId = req.user.company_id;
-        const data = await commonQuery.findAllRecords(ResignationTemplate, { 
-            status: 0,
-            company_id: companyId 
-        }, {
-            attributes: ['id', 'template_name']
-        });
-        return res.ok(data);
+        const requiredFields = {
+            ids: "Select Data"
+        };
+        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        if (errors) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, errors);
+        }
+        let { ids } = req.body;
+        if (!Array.isArray(ids) || ids.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.INVALID_ID);
+        }
+        const deleted = await commonQuery.softDeleteById(EmployeeResignation, { id: { [Op.in]: ids } }, transaction);
+        if (!deleted) {
+            await transaction.rollback();
+            return res.error(constants.ALREADY_DELETED);
+        }
+        await transaction.commit();
+        return res.success(constants.DELETED);
     } catch (err) {
+        await transaction.rollback();
         return handleError(err, res, req);
     }
 };
+

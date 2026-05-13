@@ -2,16 +2,17 @@ const express = require("express");
 const router = express.Router();
 const resignationController = require("../controllers/employee/resignationController");
 const reasonController = require("../controllers/settings/resignationReasonController");
+const resignationTemplateController = require("../controllers/settings/resignationTemplateController");
 
 // Resignation Template Routes
-router.post("/template", resignationController.create);
-router.get("/template", resignationController.getAll);
-router.post("/template/get-transactions", resignationController.getAll);
-router.get("/template/dropdown-list", resignationController.dropdownList);
-router.get("/template/:id", resignationController.getById);
-router.put("/template/:id", resignationController.update);
-router.delete("/template/delete", resignationController.delete);
- 
+router.post("/template", resignationTemplateController.create);
+router.get("/template", resignationTemplateController.getAll);
+router.post("/template/get-transactions", resignationTemplateController.getAll);
+router.get("/template/dropdown-list", resignationTemplateController.dropdownList);
+router.get("/template/:id", resignationTemplateController.getById);
+router.put("/template/:id", resignationTemplateController.update);
+router.delete("/template/delete", resignationTemplateController.delete);
+
 // Resignation Reason Routes
 router.post("/reason", reasonController.create);
 router.get("/reason", reasonController.getAll);
@@ -19,7 +20,7 @@ router.post("/reason/get-transactions", reasonController.getAll);
 router.get("/reason/dropdown-list", reasonController.dropdownList);
 router.get("/reason/:id", reasonController.getById);
 router.put("/reason/:id", reasonController.update);
-router.delete("/reason/:id", reasonController.delete);
+router.delete("/reason", reasonController.delete);
 
 // Employee Resignation Routes
 router.post("/submit", resignationController.submitResignation);

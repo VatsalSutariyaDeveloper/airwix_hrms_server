@@ -30,6 +30,7 @@ const constants = {
   SIGNATURE_FOLDER: "signature/",
   ATTENDANCE_FOLDER: "employee/attendance/",
   ATTENDANCE_LOG_FOLDER: "employee/attendance_log/",
+  FACE_ERROR_FOLDER: "employee/face_errors/",
   EMPLOYEE_DOC_FOLDER: "employee/docs/",
   EMPLOYEE_IMG_FOLDER: "employee/images/",
   PUNCH_IMAGE_FOLDER: "punch_images/",
@@ -398,6 +399,8 @@ const constants = {
     CANCELLED: 5
   },
 
+  STATUS_EMPLOYEE_EXIT: 4,
+  
   REIMBURSEMENT_APPROVAL_STATUS: {
     PENDING: 0,
     PARTIALLY_APPROVED: 1,
@@ -451,6 +454,7 @@ const constants = {
     { settings_name: "round_off_salary", settings_value: 1 },
     { settings_name: "reimbursement_approval_level", settings_value: 1 },
     { settings_name: "reimbursement_approval_config", settings_value: [] },
+    { settings_name: "probation_period_days", settings_value: null },
   ],
   /* =======================
    * DEVICE STATUS

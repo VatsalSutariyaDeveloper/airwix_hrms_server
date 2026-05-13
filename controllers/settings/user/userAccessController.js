@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings } = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -44,7 +44,7 @@ exports.sessionData = async (req, res) => {
       include: [{ 
           model: RolePermission, 
           as: "RolePermission", 
-          attributes: ["permissions", "role_key", "role_name"],
+          attributes: ["role_key", "role_name"],
           required: false 
       }],
       transaction
@@ -53,6 +53,22 @@ exports.sessionData = async (req, res) => {
     if (!userData) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);
+    }
+
+    const permissions = await commonQuery.findOneRecord(
+      RolePermission,
+      { role_key: userData.RolePermission.role_key, status: 0 },
+      {
+        attributes: ["permissions", "role_name"],
+      },
+      null,
+      false,
+      { company_id: true }
+    );
+
+    if (!permissions) {
+        await transaction.rollback();
+        return res.error(constants.NOT_FOUND, { message: `Your role (${userData.RolePermission.role_name}) not exist in this company. Please Contact Admin.` });
     }
 
     // Fetch employee data if employee_id exists
@@ -211,10 +227,12 @@ exports.sessionData = async (req, res) => {
     const userJson = userData.toJSON();
     const enrichedUserData = {
         ...userJson,
-        permission: userData.RolePermission?.permissions ?? null,
+        permission: permissions?.permissions ?? null,
         branch_access: userData.branch_access || "",
         profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
-        role_name : userData.RolePermission.role_name
+        is_attendance_supervisor : userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR? true : false,
+        is_reporting_manager : userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER? true : false,
+        role_name : permissions?.role_name
     };
 
     delete enrichedUserData.RolePermission;
@@ -519,17 +537,46 @@ exports.switchBranch = async (req, res) => {
 
 exports.getCompanySettingsData = async (req, res) => {
   try {
+    const user = req.user
+    
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['offline_data_sync', 'punch_cooldown_seconds', 'leave_past_datelimit']
+        [Op.in]: ['show_accuracy','punch_cooldown_seconds', 'leave_past_datelimit']
       },
       status: 0
     }, {
       attributes: ['settings_name', 'settings_value']
     });
+
+    let enableOutDuty = false;
+    let finesAllowed = true;
+    let overtimeAllowed = true;
+
+    // If user has employee_id, fetch enble_out_duty from EmployeeAttendanceTemplate
+    if (user.employee_id) {
+      const employeeAttendanceTemplate = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, {
+        employee_id: user.employee_id,
+        status: 0
+      }, {
+        attributes: ['enble_out_duty', 'fines_allowed', 'overtime_allowed']
+      });
+
+      if (employeeAttendanceTemplate) {
+        enableOutDuty = employeeAttendanceTemplate.enble_out_duty;
+        finesAllowed = employeeAttendanceTemplate.fines_allowed;
+        overtimeAllowed = employeeAttendanceTemplate.overtime_allowed;
+      }
+    }
+
+    const response = {
+      settings: settings,
+      enble_out_duty: enableOutDuty,
+      fines_allowed: finesAllowed,
+      overtime_allowed: overtimeAllowed
+    };
     
-    return res.ok(settings);
+    return res.ok(response);
 
   } catch (err) {
     return handleError(err, res, req);

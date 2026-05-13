@@ -1,7 +1,7 @@
 class PFService {
     static calculatePF(basicAmount, config = {}) {
         const { 
-            pf_calculation_type = 'PERCENTAGE', // PERCENTAGE, CAPPED, MANUAL
+            pf_calculation_type = 'PERCENTAGE', // PERCENTAGE, CAPPED, MANUAL, FIXED_1800
             pf_manual_amount = 0,
             restrict_to_ceiling = true 
         } = config;
@@ -14,11 +14,28 @@ class PFService {
         let employeePF = 0;
         let pfWages = basicAmount;
 
-        if (pf_calculation_type === 'MANUAL') {
+        const typeStr = (pf_calculation_type || '').toString().trim().toUpperCase();
+        let normalizedType = 'PERCENTAGE';
+
+        if (typeStr === 'MANUAL' || typeStr.includes('MANUAL')) {
+            normalizedType = 'MANUAL';
+        } else if (typeStr === 'FIXED_1800' || typeStr.includes('1800 FIXED') || typeStr.includes('1800 FIX') || typeStr.includes('FIXED 1800') || typeStr.includes('1,800 FIXED')) {
+            normalizedType = 'FIXED_1800';
+        } else if (typeStr === 'CAPPED' || typeStr.includes('CAPPED') || typeStr.includes('LIMIT')) {
+            normalizedType = 'CAPPED';
+        } else if (typeStr === 'PERCENTAGE' || typeStr.includes('PERCENTAGE') || typeStr.includes('BASIC')) {
+            normalizedType = 'PERCENTAGE';
+        }
+
+        if (normalizedType === 'MANUAL') {
             employeePF = parseFloat(pf_manual_amount) || 0;
             // For manual, we still need pfWages for employer distribution if not restricted
             pfWages = basicAmount;
-        } else if (pf_calculation_type === 'CAPPED') {
+        } else if (normalizedType === 'FIXED_1800') {
+            // 1800 Fixed
+            employeePF = PF_FIXED_LIMIT;
+            pfWages = PF_WAGE_CEILING; // 15000
+        } else if (normalizedType === 'CAPPED') {
             // 12% of Basic, max 1800
             employeePF = Math.min(Math.round(basicAmount * employeeRate), PF_FIXED_LIMIT);
             pfWages = employeePF / employeeRate; // Back-calculate wages for EPS/EPF split

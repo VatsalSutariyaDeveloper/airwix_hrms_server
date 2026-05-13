@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, ActivityLog } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, ActivityLog, FaceRecognitionError } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -105,6 +105,7 @@ exports.syncPunches = async (req, res) => {
 
     const results = [];
     for (const punchData of sortedPunches) {
+      delete punchData.punch_type;
       console.log(`\n--- [Sync] Processing Punch: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
       console.log(`\n--- [Sync] Processing Punch:`,punchData);
       
@@ -304,7 +305,9 @@ exports.getAttendanceSummary = async (req, res) => {
                     attributes: ["id", "branch_name"]
                   }
                 ],
-                required: false
+                required: false,
+                separate: true,
+                order: [["punch_time", "ASC"]]
               },
               {
                 model: LeaveTemplateCategory,
@@ -1715,8 +1718,8 @@ exports.getMonthlyAttendance = async (req, res) => {
         shift_name: "N/A",
         shift_time: "0:00 Hrs",
         time_range: "0:00 Hrs",
-        day_status: 10, // Default Not Marked
-        status: "Not Marked",
+        day_status: null, // Default Not Marked
+        status: "",
         note: null,
         is_out_duty_approved: !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
         punches: []
@@ -2080,3 +2083,181 @@ exports.updateAttendanceNote = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+/**
+ * Store Face Recognition Error Log
+ */
+exports.storeFaceRecognitionError = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude } = req.body;
+
+    if (!time) {
+      await t.rollback();
+      return res.error(constants.VALIDATION_ERROR, "Time is required");
+    }
+
+    // Determine the company and branch IDs
+    const finalCompanyId = company_id || req.user?.company_id || 0;
+    const finalBranchId = branch_id || req.user?.branch_id || 0;
+
+    let errorImage = null;
+
+    // 1. Check if an image is uploaded as a multipart file
+    if (req.files && (req.files.image || req.files['image'])) {
+      const savedFiles = await uploadFile(
+        req,
+        res,
+        constants.FACE_ERROR_FOLDER || "employee/face_errors/",
+        t
+      );
+      errorImage = savedFiles.image || savedFiles['image'];
+    } 
+    // 2. Check if the image is provided as a base64 string
+    else if (base64Image) {
+      errorImage = await uploadBase64File(
+        base64Image,
+        constants.FACE_ERROR_FOLDER || "employee/face_errors/",
+        t
+      );
+    }
+
+    if (!errorImage) {
+      await t.rollback();
+      return res.error(constants.VALIDATION_ERROR, "An error image (file or base64) is required");
+    }
+
+    // Save to database
+    const faceError = await FaceRecognitionError.create({
+      image: errorImage,
+      accuracy: accuracy ? parseFloat(accuracy) : null,
+      time: dayjs(time).toDate(),
+      company_id: finalCompanyId,
+      branch_id: finalBranchId,
+      latitude: latitude ? parseFloat(latitude) : null,
+      longitude: longitude ? parseFloat(longitude) : null,
+      status: 0 // Active
+    }, { transaction: t });
+
+    await t.commit();
+
+    return res.success(constants.ACTION_SUCCESSFUL, {
+      message: "Face recognition error saved successfully",
+      data: {
+        id: faceError.id,
+        image: faceError.image,
+        image_url: `${process.env.FILE_SERVER_URL}${constants.FACE_ERROR_FOLDER || "employee/face_errors/"}${faceError.image}`,
+        accuracy: faceError.accuracy,
+        time: faceError.time,
+        company_id: faceError.company_id,
+        branch_id: faceError.branch_id,
+        latitude: faceError.latitude,
+        longitude: faceError.longitude
+      }
+    });
+
+  } catch (err) {
+    await t.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Get Face Recognition Error Logs (Paginated & Filtered)
+ */
+exports.getFaceRecognitionErrors = async (req, res) => {
+  try {
+    const { page, limit, startDate, endDate, branch_id } = req.body;
+    const companyId = req.user.company_id;
+
+    const where = { company_id: companyId };
+
+    if (branch_id) {
+      where.branch_id = branch_id;
+    } else if (req.user.branch_id) {
+      where.branch_id = req.user.branch_id;
+    }
+
+    if (startDate && endDate) {
+      where.time = {
+        [Op.between]: [
+          dayjs(startDate).startOf('day').toDate(),
+          dayjs(endDate).endOf('day').toDate()
+        ]
+      };
+    } else if (startDate) {
+      where.time = {
+        [Op.gte]: dayjs(startDate).startOf('day').toDate()
+      };
+    } else if (endDate) {
+      where.time = {
+        [Op.lte]: dayjs(endDate).endOf('day').toDate()
+      };
+    }
+
+    const fieldConfig = [];
+
+    const result = await commonQuery.fetchPaginatedData(
+      FaceRecognitionError,
+      { ...req.body, status: req.body.status !== undefined ? req.body.status : 0 },
+      fieldConfig,
+      {
+        where,
+        include: [
+          {
+            model: BranchMaster,
+            as: "branch",
+            attributes: ["id", "branch_name"]
+          }
+        ],
+        order: [['time', 'DESC']]
+      }
+    );
+
+    // Format URLs for images
+    result.items.forEach(item => {
+      if (item.image) {
+        item.setDataValue('image_url', `${process.env.FILE_SERVER_URL}${constants.FACE_ERROR_FOLDER || "employee/face_errors/"}${item.image}`);
+      } else {
+        item.setDataValue('image_url', null);
+      }
+    });
+
+    return res.ok(result);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Update Face Recognition Error Status (Resolve/Archive)
+ */
+exports.resolveFaceRecognitionError = async (req, res) => {
+  try {
+    const { id, status } = req.body;
+
+    if (!id) {
+      return res.error(constants.VALIDATION_ERROR, "ID is required");
+    }
+
+    const faceError = await commonQuery.findOneRecord(FaceRecognitionError, { id }, {}, null, false, { company_id: true });
+
+    if (!faceError) {
+      return res.error(constants.NOT_FOUND, "Face recognition error log not found");
+    }
+
+    await commonQuery.updateRecordById(
+      FaceRecognitionError,
+      id,
+      { status: status !== undefined ? status : 1 }, // 1 = Resolved
+      null,
+      false,
+      { company_id: true }
+    );
+
+    return res.ok({ message: "Face recognition error status updated successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+

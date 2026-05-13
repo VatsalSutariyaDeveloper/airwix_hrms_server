@@ -20,7 +20,7 @@ router.post("/get-payslipview", payrollController.getPayslipView);
 router.post("/export-payslip", payrollController.exportPayrollView);
 router.post("/get-calculation-history", payrollController.getCalculationHistory);
 router.post("/get-available-months", payrollController.getAvailableMonthsForCalculation);
-router.post("/get-payrollEmployee", payrollController.getEmployeesByMonthYear);
+router.post("/get-payroll-employee", payrollController.getEmployeesByMonthYear);
 router.post("/get-payslip-details", payrollController.getPayslipById);
 router.post("/get-salary-overview", payrollController.getSalaryOverview);
 router.post("/generate-payslip-pdf", payrollController.generatePayslipPdf);

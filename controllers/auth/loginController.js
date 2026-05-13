@@ -1,5 +1,6 @@
-const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper } = require("../../helpers");
+const { validatePhone } = require("../../helpers/phoneValidation");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -10,6 +11,7 @@ const { clearUserCache } = require("../../helpers/permissionCache");
 const { addToBlacklist } = require("../../middlewares/authMiddleware");
 const { generateToken } = require("../../helpers/tokenHelper");
 const nodemailer = require("nodemailer");
+const { generateEmailTemplate } = require("../../helpers/emailTemplate");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
@@ -30,10 +32,10 @@ exports.sendLoginOtp = async (req, res) => {
     const { mobile_no } = req.body;
     
     // 1. Validate Mobile Format
-    const indianMobileRegex = /^[6-9]\d{9}$/;
-    if (!mobile_no || !indianMobileRegex.test(mobile_no)) {
+    const phoneValidation = validatePhone(mobile_no);
+    if (!phoneValidation.isValid) {
       await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, { errors: ["Invalid mobile number."] });
+      return res.error(constants.VALIDATION_ERROR, { errors: [phoneValidation.error] });
     }
 
     const user = await User.findOne({ 
@@ -54,25 +56,7 @@ exports.sendLoginOtp = async (req, res) => {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    // 3. Check OTP Rate Limit
-    const limitCheck = await otpRateLimit.checkRateLimit(mobile_no);
-    
-    if (!limitCheck.allowed) {
-      const mins = Math.ceil(limitCheck.remaining_seconds / 60);
-      await transaction.rollback();
-
-      return res.status(400).json({
-        code: 400,
-        status: "TOO_MANY_REQUESTS",
-        message: `Too many OTP attempts. Try again in ${mins} minutes.`,
-        remaining_seconds: limitCheck.remaining_seconds
-      });
-    }
-
-    // Increase attempt count
-    await otpRateLimit.increaseAttempt(mobile_no);
-
-    // 4. Use OTP Service
+    // 4. Use OTP Service to send OTP (handles rate limiting and format checks internally)
     const otp = await otpService.sendOtp(mobile_no, transaction);
 
     await transaction.commit();
@@ -80,6 +64,18 @@ exports.sendLoginOtp = async (req, res) => {
 
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
+    if (err.status === "TOO_MANY_REQUESTS") {
+      const mins = Math.ceil(err.remaining_seconds / 60);
+      return res.status(400).json({
+        code: 400,
+        status: "TOO_MANY_REQUESTS",
+        message: `Too many OTP attempts. Try again in ${mins} minutes.`,
+        remaining_seconds: err.remaining_seconds
+      });
+    }
+    if (err.status && err.message) {
+      return res.error(err.status, { message: err.message });
+    }
     return handleError(err, res, req);
   }
 };
@@ -375,7 +371,7 @@ exports.login = async (req, res) => {
       attributes: ["role_name", "permissions", "role_key"],
       transaction 
     });
-console.log("user_branch_id",user.branch_id)
+
     // Prepare User Data Response
     const userData = {
       id: user.id,
@@ -563,35 +559,29 @@ exports.verifyMobileNo = async (req, res) => {
     let otp = null;
 
     // Send OTP only if PIN is not set (next_step is SET_PIN)
-    if (!pin_set) {
+    // if (!pin_set) {
       const transaction = await sequelize.transaction();
       try {
-        // Check OTP Rate Limit
-        const limitCheck = await otpRateLimit.checkRateLimit(mobile_no);
-
-        if (!limitCheck.allowed) {
-          const mins = Math.ceil(limitCheck.remaining_seconds / 60);
-          await transaction.rollback();
-
-          return res.status(400).json({
-            code: 400,
-            status: "TOO_MANY_REQUESTS",
-            message: `Too many OTP attempts. Try again in ${mins} minutes.`,
-            remaining_seconds: limitCheck.remaining_seconds
-          });
-        }
-
-        // Increase attempt count
-        await otpRateLimit.increaseAttempt(mobile_no);
-
-        // Use OTP Service
+        // Use OTP Service (handles rate limiting and format checks internally)
         otp = await otpService.sendOtp(mobile_no, transaction);
         await transaction.commit();
       } catch (err) {
         if (!transaction.finished) await transaction.rollback();
+        if (err.status === "TOO_MANY_REQUESTS") {
+          const mins = Math.ceil(err.remaining_seconds / 60);
+          return res.status(400).json({
+            code: 400,
+            status: "TOO_MANY_REQUESTS",
+            message: `Too many OTP attempts. Try again in ${mins} minutes.`,
+            remaining_seconds: err.remaining_seconds
+          });
+        }
+        if (err.status && err.message) {
+          return res.error(err.status, { message: err.message });
+        }
         return handleError(err, res, req);
       }
-    }
+    // }
 
     // return res.success("Mobile verification successful", {
     //   is_registered: true,
@@ -603,15 +593,22 @@ exports.verifyMobileNo = async (req, res) => {
     // });
 
     const responseData = {
-      device_id: (type === "device" && entity.status === constants.DEVICE_STATUS.PAIRING) ? cryptoHelper.encryptId(entity.device_id) : null
+      device_id: (type === "device" && entity.status === constants.DEVICE_STATUS.PAIRING) ? cryptoHelper.encryptId(entity.device_id) : null,
+      user_name: type === "user" ? entity.user_name : entity.device_name,
     };
 
+    if (otp){
+      responseData.pin_set = pin_set;
+      responseData.dev_otp = otp;
+      return res.success("VERIFY OTP", responseData);
+    } else 
     if (!pin_set) {
       return res.success("SET PIN", responseData);
     } else {
       return res.success("ENTER PIN", responseData);
     }
 
+    
 
   } catch (err) {
     return handleError(err, res, req);
@@ -622,17 +619,114 @@ exports.verifyMobileNo = async (req, res) => {
  * 4. Verify OTP
  * - Verifies OTP only, does not set PIN
  */
-exports.verifyOtpPin = async (req, res) => {
+exports.verifyOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { mobile_no, otp } = req.body;
+    let { mobile_no, otp, device_id, device_model, os_version, brand_name, ip_address } = req.body;  
+
+    if (device_id) {
+        device_id = cryptoHelper.decryptId(device_id);
+    }
 
     if (!mobile_no || !otp) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and OTP are required." });
     }
 
-    // Verify OTP
+    // 1. Fetch User details for login
+    const userAttributes = [
+        'id', 'user_name', 'email', 'mobile_no', 'password', 
+        'role_id', 'company_id', 'branch_id', 'employee_id', 
+        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+    ];
+
+    let user = await User.findOne({ 
+      attributes: userAttributes.concat(['status']), 
+      where: { 
+        mobile_no, 
+        status: { [Op.in]: [0, 1] } 
+      }, 
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+      transaction 
+    });
+
+    let entity = user;
+    let isDevice = false;
+
+    if (!user) {
+      // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
+      let device = null;
+      
+      if (device_id) {
+          // 1. Try to find an already paired device
+          device = await DeviceMaster.findOne({
+              where: {
+                  mobile_no,
+                  device_id: device_id,
+                  status: { [Op.in]: [0, 1] }
+              },
+              transaction
+          });
+
+          // 2. If not found, look for a "Pairing" record created by Admin
+          if (!device) {
+              device = await DeviceMaster.findOne({
+                  where: {
+                      mobile_no,
+                      status: constants.DEVICE_STATUS.PAIRING
+                  },
+                  order: [['id', 'ASC']], // Take the oldest pending record
+                  transaction 
+              });
+
+              if (device) {
+                  // Complete the pairing: store hardware ID and activate
+                  await DeviceMaster.update({
+                      device_id: device_id || device.device_id,
+                      status: 0, // ACTIVE
+                      last_login_at: new Date(),
+                      ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+                      device_model,
+                      os_version,
+                      brand_name
+                  }, {
+                      where: { id: device.id },
+                      transaction
+                  });
+
+                  // Re-fetch updated device
+                  device = await DeviceMaster.findOne({ where: { id: device.id }, transaction });
+              } else {
+                  await transaction.rollback();
+                  return res.error(404, { message: "Unable to pair device" });
+              }
+          }
+      } else {
+          // Fallback if no device_id is sent (might be a legacy app)
+          device = await DeviceMaster.findOne({
+              where: {
+                  mobile_no,
+                  status: { [Op.in]: [0, 1] }
+              },
+              transaction
+          });
+      }
+
+      entity = device;
+      isDevice = true;
+    }
+
+    if (!entity) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+    }
+
+    if (entity.status === 1) {
+      await transaction.rollback();
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    // 2. Verify OTP
     try {
       await otpService.verifyOtp(mobile_no, otp);
       await otpService.cleanupOtp(mobile_no, transaction);
@@ -641,8 +735,188 @@ exports.verifyOtpPin = async (req, res) => {
       return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
     }
 
+    // --- AUTO-LOGIN PROCESS ---
+    if (req.body.access_by === "application" && !isDevice) {
+      if (!entity.is_activated) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+      }
+    }
+
+    const access_by = req.body.access_by === "application" ? "application" : "web login";
+
+    // Validate Company
+    if (!entity.company_id) {
+      await transaction.rollback();
+      return res.error(401, "No company linked to your account.");
+    }
+
+    const company = await CompanyMaster.findOne({
+      where: { id: entity.company_id },
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
+      transaction
+    });
+
+    if (!company) {
+      await transaction.rollback();
+      return res.error(401, "Your assigned company account is suspended.");
+    }
+
+    if (!isDevice) entity.organization_id = company.organization_id;
+
+    // Validate Branch
+    if (!entity.branch_id) {
+      await transaction.rollback();
+      return res.error(401, "No branch assigned to your profile.");
+    }
+
+    let companyId = company.company_id || company.id;
+    const isEmployee = !isDevice && entity.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE;
+    const isAdmin = !isDevice && (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN);
+
+    let finalCompanyId = entity.company_id;
+    if (!isDevice && !isEmployee) {
+      const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
+      if (!isAdmin && companyAccessList.length === 0) {
+        await transaction.rollback();
+        return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
+      }
+
+      let whereCompany = {};
+      if (isAdmin) {
+        whereCompany = {
+          [Op.or]: [{ id: companyId }, { company_id: companyId }],
+          status: { [Op.ne]: 2 }
+        };
+      } else {
+        whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
+      }
+    
+      const companyList = await CompanyMaster.findAll({
+        where: whereCompany,
+        attributes: ['id', 'is_default', 'branch_id'],
+        raw: true,
+        transaction
+      });
+      
+      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
+      finalCompanyId = defaultCompanyId;
+      if (companyAccessList.length > 0) {
+        if (!companyAccessList.includes(String(defaultCompanyId))) {
+          finalCompanyId = entity.company_id;
+        }
+      }
+
+      const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
+      const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
+      const currentBranchValid = await BranchMaster.findOne({
+        where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
+        attributes: ['id'],
+        raw: true,
+        transaction
+      });
+      entity.branch_id = finalBranch;
+
+      if (!currentBranchValid) {
+        const fallbackBranch = await BranchMaster.findOne({
+          where: { 
+            company_id: finalCompanyId, 
+            status: 0,
+            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+        
+        if (fallbackBranch) {
+          entity.branch_id = fallbackBranch.id;
+        }
+      }
+    }
+
+    if (!isDevice && !isAdmin) {
+      const employee = await Employee.findOne({
+        where: { id: entity.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
+        transaction
+      });
+
+      if (employee) {
+        entity.is_attendance_supervisor = employee.is_attendance_supervisor;
+        entity.is_reporting_manager = employee.is_reporting_manager;
+        entity.employee_profile_image = employee.profile_image;
+        entity.joining_date = employee.joining_date;
+      }
+    }
+
+    const token = generateToken({
+      ...(isDevice ? (entity.get ? entity.get({ plain: true }) : entity) : entity.get({ plain: true })),
+      role_key: entity.RolePermission?.role_key,
+      organization_id: company.organization_id,
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
+    }, isDevice ? entity.company_id : finalCompanyId, access_by);
+
+    if (!isDevice) {
+      await User.update(
+        { is_login: 1 }, 
+        { where: { id: entity.id }, transaction }
+      );
+    }
+
+    let userPermission = null;
+    if (!isDevice) {
+      userPermission = await RolePermission.findOne({ 
+        where: {
+          id: entity.role_id, 
+          company_id: { [Op.in]: [-1, entity.company_id] }
+        },
+        attributes: ["role_name", "permissions", "role_key"],
+        transaction 
+      });
+    }
+
+    const userData = {
+      id: entity.id,
+      role_id: isDevice ? null : entity.role_id,
+      device_id: isDevice ? cryptoHelper.encryptId(entity.device_id) : null,
+      employee_id: isDevice ? null : entity.employee_id,
+      joining_date: isDevice ? null : entity.joining_date,
+      is_super_admin: isDevice ? false : (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN),
+      is_attendance_supervisor: isDevice ? false : (entity.is_attendance_supervisor || entity.RolePermission?.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR),
+      is_reporting_manager: isDevice ? false : (entity.is_reporting_manager || entity.RolePermission?.role_key === constants.ROLE_KEYS.REPORTING_MANAGER),
+      user_name: isDevice ? entity.device_name : entity.user_name,
+      email: isDevice ? null : entity.email,
+      mobile_no: entity.mobile_no,
+      address: isDevice ? null : entity.address,
+      city_id: isDevice ? null : entity.city_id,
+      state_id: isDevice ? null : entity.state_id,
+      country_id: isDevice ? null : entity.country_id,
+      pincode: isDevice ? null : entity.pincode,
+      user_key: isDevice ? null : entity.user_key,
+      profile_image: (!isDevice && entity.profile_image) 
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
+        : (!isDevice && entity.employee_profile_image) 
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
+          : null,
+      authorized_signature: isDevice ? null : entity.authorized_signature,
+      role_name: userPermission?.role_name || (isDevice ? (entity.device_type === 1 ? "Canteen" : "Attendance Device") : "Employee"),
+      is_employee: isDevice ? false : (userPermission?.role_key !== constants.ROLE_KEYS.BUSINESS_ADMIN && userPermission?.role_key !== constants.ROLE_KEYS.ADMIN),
+      permission: userPermission?.permissions || [],
+      is_login: 1,
+      user_id: isDevice ? null : entity.user_id,
+      branch_id: entity.branch_id,
+      company_id: isDevice ? entity.company_id : finalCompanyId,
+      company_name: company.company_name,
+      organization_id: company.organization_id,
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
+    };
+
+    if (!isDevice) clearUserCache(entity.user_id);
+
     await transaction.commit();
-    return res.success("OTP verified successfully", { message: "OTP has been verified successfully." });
+    return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "OTP" });
 
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();
@@ -959,6 +1233,8 @@ console.log("entity",entity.device_type)
       employee_id: isDevice ? null : entity.employee_id,
       joining_date: isDevice ? null : entity.joining_date,
       is_super_admin: isDevice ? false : (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN),
+      is_attendance_supervisor: isDevice ? false : (entity.is_attendance_supervisor || entity.RolePermission?.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR),
+      is_reporting_manager: isDevice ? false : (entity.is_reporting_manager || entity.RolePermission?.role_key === constants.ROLE_KEYS.REPORTING_MANAGER),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
@@ -1260,6 +1536,8 @@ exports.pinLogin = async (req, res) => {
       employee_id: isDevice ? null : entity.employee_id,
       joining_date: isDevice ? null : entity.joining_date,
       is_super_admin: isDevice ? false : (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN),
+      is_attendance_supervisor: isDevice ? false : (entity.is_attendance_supervisor || entity.RolePermission?.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR),
+      is_reporting_manager: isDevice ? false : (entity.is_reporting_manager || entity.RolePermission?.role_key === constants.ROLE_KEYS.REPORTING_MANAGER),
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
@@ -1338,6 +1616,37 @@ exports.checkOtpRateLimit = async (req, res) => {
         message: `OTP limit reset successfully for ${mobile_no}`
       });
   
+    } catch (err) {
+      return handleError(err, res, req);
+    }
+  };
+
+  /**
+   * Get Otp Verifications (Admin Only)
+   */
+  exports.getOtpVerifications = async (req, res) => {
+    try {
+      const data = await commonQuery.findAllRecords(OtpVerification, {}, {
+        order: [["created_at", "DESC"]],
+        limit: 1000
+      }, null, {});
+      return res.success("OTP_VERIFICATIONS_LIST", data);
+    } catch (err) {
+      return handleError(err, res, req);
+    }
+  };
+
+  /**
+   * Delete Otp Verification Log (Admin Only)
+   */
+  exports.deleteOtpVerification = async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.error(constants.VALIDATION_ERROR, { message: "ID is required" });
+      }
+      await OtpVerification.destroy({ where: { id } });
+      return res.success("OTP_VERIFICATION_DELETED", { message: "OTP verification log deleted successfully" });
     } catch (err) {
       return handleError(err, res, req);
     }
@@ -1424,45 +1733,14 @@ async function sendPinResetEmail(user, setupLink, req) {
       },
     });
 
-    const html = `
-      <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:40px 20px;">
-        <table align="center" cellpadding="0" cellspacing="0" width="100%" 
-          style="max-width:600px; background:#ffffff; border-radius:4px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-          <tr>
-            <td style="padding:30px; text-align:center; background:#2563eb; color:#ffffff;">
-              <h1 style="margin:0; font-size:24px; font-weight:600;">
-                ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}
-              </h1>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:30px; font-size:14px; color:#333;">
-              <p>Hello <strong>${user.user_name || "User"}</strong>,</p>
-              <p style="margin:0 0 25px;">We received a request to reset your PIN. Click below to proceed.</p>
-              <div style="text-align:center; margin:30px 0;">
-                <a href="${setupLink}" 
-                  style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 30px; border-radius:4px; font-weight:600; display:inline-block; font-size:14px;">
-                  Reset PIN
-                </a>
-              </div>
-              <p style="margin:25px 0 10px; font-size:13px; color:#666;">Or copy & paste this link into your browser:</p>
-              <p style="word-break:break-all; color:#2563eb; font-size:13px; margin:0;">${setupLink}</p>
-              <p style="margin-top:30px; color:#888; font-size:12px;">
-                If you didn't request this, please ignore this email. <br/>
-                This link is valid for <strong>1 hour</strong>.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:20px; text-align:center; background:#f9f9f9; border-top:1px solid #e0e0e0;">
-              <p style="margin:0; font-size:12px; color:#888;">
-                © ${new Date().getFullYear()} ${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}. All rights reserved.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </div>
-    `;
+    const html = generateEmailTemplate({
+      title: "Reset Your PIN",
+      subject: "Reset your PIN",
+      userName: user.user_name || user.name || "User",
+      message: "We received a request to reset your PIN. Click below to proceed.",
+      buttonText: "Reset PIN",
+      actionUrl: setupLink
+    });
 
     await transporter.sendMail({
       from: `"${process.env.EMAIL_COMPANY_NAME || 'AIRWIX PAYROLL'}" <${process.env.EMAIL_USER}>`,

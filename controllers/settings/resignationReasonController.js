@@ -15,7 +15,6 @@ exports.getAll = async (req, res) => {
         const fieldConfig = [
             ["reason_name", true, true]
         ];
-    
         const data = await commonQuery.fetchPaginatedData(
             ResignationReason,
             { ...req.body, status: 0 },
@@ -49,7 +48,13 @@ exports.update = async (req, res) => {
 
 exports.delete = async (req, res) => {
     try {
-        await commonQuery.softDeleteById(ResignationReason, req.params.id);
+        const { ids } = req.body;
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.error("ids is required");
+        }
+        for (const id of ids) {
+            await commonQuery.softDeleteById(ResignationReason, id);
+        }
         return res.success(constants.DELETED);
     } catch (err) {
         return handleError(err, res, req);
@@ -59,9 +64,9 @@ exports.delete = async (req, res) => {
 exports.dropdownList = async (req, res) => {
     try {
         const companyId = req.user.company_id;
-        const data = await commonQuery.findAllRecords(ResignationReason, { 
+        const data = await commonQuery.findAllRecords(ResignationReason, {
             status: 0,
-            company_id: companyId 
+            company_id: companyId
         }, {
             attributes: ['id', 'reason_name']
         });

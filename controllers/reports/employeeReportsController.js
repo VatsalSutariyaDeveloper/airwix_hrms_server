@@ -203,19 +203,13 @@ exports.getPerformanceReport = async (req, res) => {
 exports.getEmployeeExitReport = async (req, res) => {
     try {
         const { start_date, end_date, branch_id, department_id } = req.body;
-        
-        let where = { 
+
+        let where = {
             company_id: req.user.company_id,
         };
 
         if (start_date && end_date) {
             where.exit_date = { [Op.between]: [start_date, end_date] };
-        } else {
-            where[Op.or] = [
-                { exit_date: { [Op.ne]: null } },
-                { status: 1 }, 
-                { resignation_status: { [Op.gt]: 0 } }
-            ];
         }
 
         if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
@@ -232,7 +226,7 @@ exports.getEmployeeExitReport = async (req, res) => {
 
         const employees = await commonQuery.fetchPaginatedData(
             Employee,
-            { ...where, ...req.body },
+            { ...req.body },
             fieldConfig,
             {
                 attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'exit_date', 'resignation_status', 'status'],
@@ -251,7 +245,8 @@ exports.getEmployeeExitReport = async (req, res) => {
                 order: [['exit_date', 'DESC']]
             },
             { company_id: true, branch_id: true },
-            'created_at'
+            'created_at',
+            { ...where, resignation_status: 2 }
         );
 
         const reportData = employees.items.map(emp => {
@@ -267,8 +262,7 @@ exports.getEmployeeExitReport = async (req, res) => {
                 resignation_date: latestResignation?.resignation_date || '-',
                 reason: latestResignation?.reason_type?.reason_name || latestResignation?.reason_description || 'N/A',
                 exit_type: latestResignation ? 'Resignation' : (emp.exit_date ? 'Terminated/Other' : 'N/A'),
-                status: emp.resignation_status === 1 ? 'On Notice' : (emp.status === 4 ? 'Exited' : 'Active'),
-                ff_status: latestResignation?.ff_settlement_status === 2 ? 'Settled' : (latestResignation?.ff_settlement_status === 1 ? 'In Progress' : 'Pending')
+                status: emp.resignation_status === 1 ? 'On Notice' : (emp.resignation_status === 2 ? 'Resigned' : 'Pending'),
             };
         });
 
