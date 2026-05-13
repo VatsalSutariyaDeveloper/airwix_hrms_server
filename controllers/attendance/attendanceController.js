@@ -1719,7 +1719,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         shift_time: "0:00 Hrs",
         time_range: "0:00 Hrs",
         day_status: null, // Default Not Marked
-        status: "",
+        status: "Not Marked",
         note: null,
         is_out_duty_approved: !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
         punches: []
