@@ -59,10 +59,21 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       branch_id,
       department_id
     } = req.body;
-
-    // Coerce include_guest to a proper boolean regardless of whether the
-    // client sends a boolean or the string "true" / "false".
-    const include_guest = req.body.include_guest === true || req.body.include_guest === 'true';
+    const employeeTypeLabels = { 1: "Staff", 2: "Worker", 3: "Contractor" };
+    const rawCanteenFilter = (
+      req.body.canteen_filter ??
+      req.body.canteen_type ??
+      req.body.audience_type ??
+      req.body.entry_type ??
+      req.body.filter_type
+    );
+    const canteenFilter =
+      typeof rawCanteenFilter === "string" &&
+      ["all", "employee", "guest"].includes(rawCanteenFilter.trim().toLowerCase())
+        ? rawCanteenFilter.trim().toLowerCase()
+        : (req.body.include_guest === true || req.body.include_guest === "true" ? "all" : "employee");
+    const shouldIncludeEmployees = canteenFilter !== "guest";
+    const shouldIncludeGuests = canteenFilter !== "employee";
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(
@@ -113,10 +124,67 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
+    const daysArray = [];
+    let currentDay = dayjs(startDate);
+    while (currentDay.isBefore(dayjs(endDate)) || currentDay.isSame(dayjs(endDate), 'day')) {
+      daysArray.push(currentDay.format('YYYY-MM-DD'));
+      currentDay = currentDay.add(1, 'day');
+    }
+
     const requestedPage = Math.max(parseInt(req.body?.page) || 1, 1);
     const isFetchAll = req.body?.limit === "all" || req.body?.limit === "All";
     const requestedLimit = isFetchAll ? null : Math.max(parseInt(req.body?.limit) || 10, 1);
     const combinedOffset = isFetchAll ? 0 : (requestedPage - 1) * requestedLimit;
+    const today = dayjs();
+
+    const buildReportRow = ({ rowId, employeeName, employeeCode = null, employeeType, isGuest, records = [] }) => {
+      const attendanceByDate = new Map();
+
+      records.forEach((record) => {
+        if (!attendanceByDate.has(record.date)) {
+          attendanceByDate.set(record.date, dayjs(record.created_at).format('h:mm A'));
+        }
+      });
+
+      const row = {
+        employee_id: rowId,
+        employee_name: employeeName,
+        employee_code: employeeCode,
+        employee_type: employeeType,
+        is_guest: isGuest,
+        Total_count: 0
+      };
+
+      if (report_type === 'daily') {
+        const day = daysArray[0];
+        const presentTime = attendanceByDate.get(day);
+
+        row.status = presentTime
+          ? "PRESENT"
+          : (dayjs(day).isBefore(today, 'day') ? "ABSENT" : "PENDING");
+        row.time = presentTime || "-";
+        row.Total_count = presentTime ? 1 : 0;
+        return row;
+      }
+
+      row.days = {};
+
+      daysArray.forEach((day) => {
+        const presentTime = attendanceByDate.get(day);
+        let status = "ABSENT";
+
+        if (presentTime) {
+          status = "PRESENT";
+          row.Total_count += 1;
+        } else if (dayjs(day).isSame(today, 'day') || dayjs(day).isAfter(today, 'day')) {
+          status = "PENDING";
+        }
+
+        row.days[day] = { status };
+      });
+
+      return row;
+    };
 
     const guestWhere = {
       company_id: req.user.company_id,
@@ -126,64 +194,81 @@ exports.getCanteenAttendanceReport = async (req, res) => {
         [Op.between]: [startDate, endDate]
       }
     };
+    const guestSearchWhere = req.body?.search
+      ? {
+        ...guestWhere,
+        guest_name: {
+          [Op.iLike]: `%${req.body.search}%`
+        }
+      }
+      : guestWhere;
 
     // Count unique guest names (each unique guest_name = one "row" in the report)
-    const guestCount = include_guest
+    const guestCount = shouldIncludeGuests
       ? await CanteenAttendance.count({
-        where: guestWhere,
+        where: guestSearchWhere,
         distinct: true,
         col: 'guest_name'
       })
       : 0;
 
-    /**
-     * FETCH EMPLOYEES WITH CANTEEN ATTENDANCE
-     */
-    const employees = await commonQuery.fetchPaginatedData(
-      Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
-      [
-        ["first_name", true, true],
-        ["employee_code", true, true]
-      ],
-      {
-        attributes: [
-          'id',
-          'first_name',
-          'employee_code',
-          'employee_type'
+    const employees = shouldIncludeEmployees
+      ? await commonQuery.fetchPaginatedData(
+        Employee,
+        buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+        [
+          ["first_name", true, true],
+          ["employee_code", true, true]
         ],
+        {
+          attributes: [
+            'id',
+            'first_name',
+            'employee_code',
+            'employee_type'
+          ],
+          order: [['first_name', 'ASC']]
+        },
+        { company_id: true, branch_id: true },
+        'created_at',
+        buildEmploymentRangeWhere(startDate, endDate)
+      )
+      : {
+        items: [],
+        total: 0
+      };
 
-        include: [
-          {
-            model: CanteenAttendance,
-            as: "canteenAttendances",
-            required: false,
-
-            attributes: [
-              'id',
-              'employee_id',
-              'date',
-              'created_at'
-            ],
-
-            where: {
-              status: 0,
-              is_guest: false,
-
-              date: {
-                [Op.between]: [startDate, endDate]
-              }
-            }
+    const employeeIds = employees.items.map(emp => emp.id);
+    const attendanceRecords = employeeIds.length > 0
+      ? await commonQuery.findAllRecords(
+        CanteenAttendance,
+        {
+          employee_id: { [Op.in]: employeeIds },
+          status: 0,
+          is_guest: false,
+          date: {
+            [Op.between]: [startDate, endDate]
           }
-        ],
+        },
+        {
+          attributes: [
+            'id',
+            'employee_id',
+            'date',
+            'created_at'
+          ],
+          order: [['employee_id', 'ASC'], ['date', 'ASC'], ['created_at', 'ASC']]
+        },
+        null,
+        { company_id: true, branch_id: true }
+      )
+      : [];
 
-        order: [['first_name', 'ASC']]
-      },
-      { company_id: true, branch_id: true },
-      'created_at',
-      buildEmploymentRangeWhere(startDate, endDate)
-    );
+    const attendanceByEmployeeId = attendanceRecords.reduce((acc, record) => {
+      if (!acc.has(record.employee_id)) acc.set(record.employee_id, []);
+      acc.get(record.employee_id).push(record);
+      return acc;
+    }, new Map());
 
     const totalRecords = employees.total + guestCount;
 
@@ -199,92 +284,24 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       });
     }
 
-    /**
-     * GENERATE DATE ARRAY
-     */
-    const daysArray = [];
-
-    let current = dayjs(startDate);
-
-    while (
-      current.isBefore(dayjs(endDate)) ||
-      current.isSame(dayjs(endDate), 'day')
-    ) {
-      daysArray.push(current.format('YYYY-MM-DD'));
-      current = current.add(1, 'day');
-    }
-
     const reportData = [];
+    employees.items.forEach((emp) => {
+      reportData.push(buildReportRow({
+        rowId: emp.id,
+        employeeName: emp.first_name?.replace(/[\r\n]+/g, ' ').trim() || '',
+        employeeCode: emp.employee_code,
+        employeeType: employeeTypeLabels[emp.employee_type] || 'Employee',
+        isGuest: false,
+        records: attendanceByEmployeeId.get(emp.id) || []
+      }));
+    });
 
-    /**
-     * EMPLOYEE REPORT
-     */
-    for (const emp of employees.items) {
-
-      const attendanceMap = new Map();
-
-      (emp.canteenAttendances || []).forEach(record => {
-        attendanceMap.set(record.date, {
-          present_time: dayjs(record.created_at).format('HH:mm')
-        });
-      });
-
-      const employeeData = {
-        employee_id: emp.id,
-        employee_name: emp.first_name?.replace(/[\r\n]+/g, ' ').trim() || '',
-        employee_code: emp.employee_code,
-        employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || (emp.is_guest ? 'Guest' : 'N/A'),
-        is_guest: false,
-
-        days: {},
-
-        summary: {
-          present: 0,
-          absent: 0,
-          totalVisits: 0
-        }
-      };
-
-      daysArray.forEach(day => {
-
-        const attendance = attendanceMap.get(day);
-
-        let status = "ABSENT";
-        let present_time = "-";
-
-        if (attendance) {
-          status = "PRESENT";
-          present_time = attendance.present_time;
-
-          employeeData.summary.present++;
-          employeeData.summary.totalVisits++;
-        } else if (
-          dayjs(day).isSame(dayjs(), 'day') ||
-          dayjs(day).isAfter(dayjs(), 'day')
-        ) {
-          status = "PENDING";
-        } else {
-          employeeData.summary.absent++;
-        }
-
-        employeeData.days[day] = {
-          status,
-          present_time
-        };
-      });
-
-      reportData.push(employeeData);
-    }
-
-    /**
-     * GUEST REPORT
-     */
-    if (include_guest) {
+    if (shouldIncludeGuests) {
       let guestNames = [];
 
       if (isFetchAll) {
         guestNames = await CanteenAttendance.findAll({
-          where: guestWhere,
+          where: guestSearchWhere,
           attributes: ['guest_name'],
           group: ['guest_name'],
           order: [['guest_name', 'ASC']],
@@ -308,7 +325,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
 
         if (remainingSpace > 0) {
           guestNames = await CanteenAttendance.findAll({
-            where: guestWhere,
+            where: guestSearchWhere,
             attributes: ['guest_name'],
             group: ['guest_name'],
             order: [['guest_name', 'ASC']],
@@ -319,9 +336,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
         }
       }
 
-      const paginatedGuestNames = guestNames
-        .map(record => record.guest_name)
-        .filter(Boolean);
+      const paginatedGuestNames = guestNames.map(record => record.guest_name).filter(Boolean);
 
       if (paginatedGuestNames.length > 0) {
         const guestRecords = await commonQuery.findAllRecords(
@@ -338,77 +353,27 @@ exports.getCanteenAttendanceReport = async (req, res) => {
         );
 
         const guestMap = new Map();
-
-        guestRecords.forEach(record => {
-          if (!guestMap.has(record.guest_name)) {
-            guestMap.set(record.guest_name, []);
-          }
-
+        guestRecords.forEach((record) => {
+          if (!guestMap.has(record.guest_name)) guestMap.set(record.guest_name, []);
           guestMap.get(record.guest_name).push(record);
         });
 
-        paginatedGuestNames.forEach(guestName => {
-          const records = guestMap.get(guestName) || [];
-
-          const attendanceMap = new Map();
-
-          records.forEach(record => {
-            attendanceMap.set(record.date, {
-              present_time: dayjs(record.created_at).format('HH:mm')
-            });
-          });
-
-          const guestData = {
-            employee_id: null,
-            employee_name: guestName,
-            employee_code: null,
-            employee_type: 'Guest',
-            is_guest: true,
-
-            days: {},
-
-            summary: {
-              present: 0,
-              absent: 0,
-              totalVisits: 0
-            }
-          };
-
-          daysArray.forEach(day => {
-
-            const attendance = attendanceMap.get(day);
-
-            let status = "ABSENT";
-            let present_time = "-";
-
-            if (attendance) {
-              status = "PRESENT";
-              present_time = attendance.present_time;
-
-              guestData.summary.present++;
-              guestData.summary.totalVisits++;
-            } else if (
-              dayjs(day).isSame(dayjs(), 'day') ||
-              dayjs(day).isAfter(dayjs(), 'day')
-            ) {
-              status = "PENDING";
-            } else {
-              guestData.summary.absent++;
-            }
-
-            guestData.days[day] = {
-              status,
-              present_time
-            };
-          });
-
-          reportData.push(guestData);
+        paginatedGuestNames.forEach((guestName) => {
+          reportData.push(buildReportRow({
+            rowId: null,
+            employeeName: guestName,
+            employeeCode: null,
+            employeeType: 'Guest',
+            isGuest: true,
+            records: guestMap.get(guestName) || []
+          }));
         });
       }
     }
 
     return res.ok({
       report_type,
+      canteen_filter: canteenFilter,
       start_date: startDate,
       end_date: endDate,
 
@@ -1184,234 +1149,6 @@ exports.getOvertimeReport = async (req, res) => {
   }
 };
 
-/**
- * GET IN-OUT REPORT
- */
-/*
-exports.getInOutReport = async (req, res) => {
-  try {
-    const { month, year, branch_id, department_id } = req.body;
-
-    if (!month || !year) {
-      return res.error(constants.VALIDATION_ERROR, "Month and Year are required");
-    }
-
-    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
-    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
-
-    // Cap the endDate to today's date if the selected month is the current month or in the future
-    if (dayjs(endDate).isAfter(dayjs(), 'day')) {
-        endDate = dayjs().format('YYYY-MM-DD');
-    }
-
-    const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
-    if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
-
-    const fieldConfig = [
-      ["first_name", true, true],
-      ["employee_code", true, true],
-    ];
-
-    const employees = await commonQuery.fetchPaginatedData(
-      Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
-      fieldConfig,
-      {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
-        include: [
-          { model: Department, as: 'department', attributes: ['name'] },
-          { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
-        ],
-        order: [['first_name', 'ASC']]
-      },
-      { company_id: true, branch_id: true },
-      'created_at',
-      buildEmploymentRangeWhere(startDate, endDate)
-    );
-
-    if (employees.items.length === 0) return res.ok({ dates: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
-
-    const employeeIds = employees.items.map(e => e.id);
-
-    // Fetch all attendance records for the date range
-    const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
-      employee_id: { [Op.in]: employeeIds },
-      attendance_date: { [Op.between]: [startDate, endDate] },
-      status: { [Op.ne]: 2 }
-    }, {
-      order: [['attendance_date', 'ASC'], ['employee_id', 'ASC']]
-    }, null, { company_id: true });
-
-    // Fetch all punch records for the date range
-    const punchRecords = await commonQuery.findAllRecords(AttendancePunch, {
-      employee_id: { [Op.in]: employeeIds },
-      status: 0,
-      [Op.and]: [
-        sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
-      ]
-    }, {
-      order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
-    }, null, { company_id: true });
-
-    // Group attendance records by date
-    const attendanceByDate = {};
-    attendanceRecords.forEach(record => {
-      const date = record.attendance_date;
-      if (!attendanceByDate[date]) {
-        attendanceByDate[date] = [];
-      }
-      attendanceByDate[date].push(record);
-    });
-
-    // Group punch records by employee and date
-    const punchesByEmployeeDate = {};
-    punchRecords.forEach(punch => {
-      const date = dayjs(punch.punch_time).format('YYYY-MM-DD');
-      const key = `${punch.employee_id}_${date}`;
-      if (!punchesByEmployeeDate[key]) {
-        punchesByEmployeeDate[key] = [];
-      }
-      punchesByEmployeeDate[key].push({
-        punch_time: punch.punch_time,
-        punch_type: punch.punch_type,
-        formatted_time: dayjs(punch.punch_time).format('HH:mm')
-      });
-    });
-
-    // Generate date range array
-    const datesArray = [];
-    let curDate = dayjs(startDate);
-    const end = dayjs(endDate);
-    while (curDate.isBefore(end) || curDate.isSame(end, 'day')) {
-      datesArray.push(curDate.format('YYYY-MM-DD'));
-      curDate = curDate.add(1, 'day');
-    }
-
-    // Structure the report data by date
-    const reportData = datesArray.map(date => {
-      const dayRecords = attendanceByDate[date] || [];
-      const employeesForDate = dayRecords.map(record => {
-        const employee = employees.items.find(emp => emp.id === record.employee_id);
-        if (!employee) return null;
-
-        const punchKey = `${record.employee_id}_${date}`;
-        const punches = punchesByEmployeeDate[punchKey] || [];
-        
-        // Group punches into IN-OUT pairs
-        const punchPairs = [];
-        let currentPair = null;
-        
-        punches.forEach(punch => {
-          if (punch.punch_type === 'IN') {
-            if (currentPair && currentPair.in) {
-              // Start new pair if previous IN didn't have OUT
-              punchPairs.push(currentPair);
-            }
-            currentPair = { in: punch.formatted_time, out: null };
-          } else if (punch.punch_type === 'OUT' && currentPair && currentPair.in) {
-            currentPair.out = punch.formatted_time;
-            punchPairs.push(currentPair);
-            currentPair = null;
-          }
-        });
-        
-        // Add the last pair if it has IN but no OUT
-        if (currentPair && currentPair.in) {
-          punchPairs.push(currentPair);
-        }
-
-        return {
-          employee_id: employee.id,
-          employee_code: employee.employee_code || '-',
-          employee_name: employee.first_name || '-',
-          phone_number: employee.mobile_no || '-',
-          department: employee.department?.name || '-',
-          designation: employee.designation?.designation_name || '-',
-          employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[employee.employee_type] || 'N/A',
-          worker_type: { 1: "On-role", 2: "Off-role" }[employee.worker_type] || 'N/A',
-          status: record.status,
-          status_label: { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "Out Duty", 13: "Half Out Duty" }[record.status] || "Pending",
-          worked_minutes: record.worked_minutes || 0,
-          worked_time: record.worked_minutes ? `${Math.floor(record.worked_minutes / 60)}h ${record.worked_minutes % 60}m` : '-',
-          punch_pairs: punchPairs.length > 0 ? punchPairs : [{ in: '-', out: '-' }]
-        };
-      }).filter(emp => emp !== null);
-
-      // Add employees who have no attendance record for this date
-      const employeesWithNoAttendance = employees.items.filter(emp => 
-        !dayRecords.some(record => record.employee_id === emp.id)
-      ).map(emp => {
-        const punchKey = `${emp.id}_${date}`;
-        const punches = punchesByEmployeeDate[punchKey] || [];
-        
-        // Group punches into IN-OUT pairs for employees without attendance day record
-        const punchPairs = [];
-        let currentPair = null;
-        
-        punches.forEach(punch => {
-          if (punch.punch_type === 'IN') {
-            if (currentPair && currentPair.in) {
-              punchPairs.push(currentPair);
-            }
-            currentPair = { in: punch.formatted_time, out: null };
-          } else if (punch.punch_type === 'OUT' && currentPair && currentPair.in) {
-            currentPair.out = punch.formatted_time;
-            punchPairs.push(currentPair);
-            currentPair = null;
-          }
-        });
-        
-        if (currentPair && currentPair.in) {
-          punchPairs.push(currentPair);
-        }
-
-        return {
-          employee_id: emp.id,
-          employee_code: emp.employee_code || '-',
-          employee_name: emp.first_name || '-',
-          phone_number: emp.mobile_no || '-',
-          department: emp.department?.name || '-',
-          designation: emp.designation?.designation_name || '-',
-          employee_type: { 1: "Staff", 2: "Worker", 3: "Contractor" }[emp.employee_type] || 'N/A',
-          worker_type: { 1: "On-role", 2: "Off-role" }[emp.worker_type] || 'N/A',
-          status: null,
-          status_label: 'No Record',
-          worked_minutes: 0,
-          worked_time: '-',
-          punch_pairs: punchPairs.length > 0 ? punchPairs : [{ in: '-', out: '-' }]
-        };
-      });
-
-      return {
-        date: date,
-        formatted_date: dayjs(date).format('DD/MM/YYYY'),
-        employees: [...employeesForDate, ...employeesWithNoAttendance].sort((a, b) => a.employee_name.localeCompare(b.employee_name))
-      };
-    });
-
-    return res.ok({
-      month: parseInt(month),
-      year: parseInt(year),
-      start_date: startDate,
-      end_date: endDate,
-      dates: datesArray,
-      items: reportData,
-      total: employees.total,
-      totals: employees.totals,
-      currentPage: employees.currentPage,
-      pageSize: employees.pageSize,
-      totalPages: employees.totalPages,
-      hasNextPage: employees.hasNextPage,
-      hasPreviousPage: employees.hasPreviousPage,
-      appliedFilters: employees.appliedFilters
-    });
-
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-*/
 
 exports.getLeaveReport = async (req, res) => {
   try {
