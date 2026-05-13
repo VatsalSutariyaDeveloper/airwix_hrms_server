@@ -472,7 +472,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
     // Step F: Prepare Detailed Breakdown
     const earnings = [], deductions = [], statutory = {}, employer = {};
-    let takeHomeEarnings = 0, totalDeductions = 0;
+    let takeHomeEarnings = 0, totalDeductions = 0, bonusData = null;
 
     // Note: Encashments are tracked separately in encashment_history, not added to earnings
 
@@ -789,20 +789,95 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             addStatRecord("Leave Encashment Provision", amount, true);
         }
 
-        // Statutory Bonus Provision (Employer Side)
+        // Statutory Bonus Provision & Initialization
+        bonusData = null;
         if (sc.bonus?.enabled) {
             const basic = valuesMap.BASIC || 0;
-            const baseAmount = sc.bonus.amount || basic;
-            const calcType = sc.bonus.calculation_type || 'Attendance';
+            const percentage = parseFloat(sc.bonus.percentage);
+            const paymentFrequency = sc.bonus.payment_frequency || 'Yearly';
+            const payoutMonth = parseInt(sc.bonus.payout_month || 11);
 
-            let amount = 0;
-            if (calcType === 'Fixed') {
-                amount = sc.bonus.amount || 0;
-            } else if (calcType === 'Attendance') {
-                // standard 8.33% of Basic or custom base
-                amount = Math.round(baseAmount * 0.0833);
+            // Calculate current month's provision
+            const currentMonthBonus = Math.round(basic * (percentage / 100));
+
+            // Query previous finalized payslips to find accumulated bonus since last payout
+            let pastAccrued = 0;
+            let lastPayoutPayslipId = null;
+
+            const pastPayslips = await commonQuery.findAllRecords(Payslip, {
+                employee_id,
+                status: { [Op.in]: [1, 3] } // Finalized or Paid
+            }, {
+                order: [['year', 'DESC'], ['month', 'DESC']]
+            }, transaction);
+
+            const accruedPayslips = [];
+            for (const ps of pastPayslips) {
+                const earningDetails = ps.earning_details || {};
+                const hasBonusPaid = earningDetails["Statutory Bonus"] || earningDetails["Statutory_Bonus"] || earningDetails["bonus"] || earningDetails["Bonus"];
+                
+                if (hasBonusPaid && parseFloat(hasBonusPaid) > 0) {
+                    lastPayoutPayslipId = ps.id;
+                    break; // Stop going further back as this was the last payout
+                }
+
+                const employerDetails = ps.employer_details || {};
+                const provision = employerDetails["Bonus Provision"] || employerDetails["Bonus_Provision"] || employerDetails["Bonus Accrued"] || 0;
+                pastAccrued += parseFloat(provision);
+                accruedPayslips.push({
+                    payslip_id: ps.id,
+                    month: ps.month,
+                    year: ps.year,
+                    provision: parseFloat(provision)
+                });
             }
-            addStatRecord("Bonus Provision", amount, true);
+
+            let accumulatedBonus = pastAccrued + currentMonthBonus;
+            if (options.bonus_override_amount !== undefined && options.bonus_override_amount !== null && !isNaN(parseFloat(options.bonus_override_amount))) {
+                accumulatedBonus = parseFloat(options.bonus_override_amount);
+            }
+
+            bonusData = {
+                enabled: true,
+                percentage,
+                payment_frequency: paymentFrequency,
+                payout_month: payoutMonth,
+                current_month_bonus: currentMonthBonus,
+                past_accrued: pastAccrued,
+                accumulated_bonus: accumulatedBonus,
+                last_payout_payslip_id: lastPayoutPayslipId,
+                accrued_payslips_count: accruedPayslips.length
+            };
+
+            // Determine if we should pay/initialize the bonus in this payslip
+            const isPayoutMonth = paymentFrequency === 'Yearly' && parseInt(payoutMonth) === parseInt(month);
+            
+            let shouldPayBonus = false;
+            if (options.initialize_bonus !== undefined && options.initialize_bonus !== null) {
+                // Explicit user override (either true or false) takes absolute precedence
+                shouldPayBonus = !!options.initialize_bonus;
+            } else {
+                // Default scheduled behavior
+                shouldPayBonus = (paymentFrequency === 'Monthly') || isPayoutMonth;
+            }
+
+            if (shouldPayBonus) {
+                bonusData.initialized_this_period = true;
+                
+                // Add "Statutory Bonus" to earnings array
+                earnings.push({
+                    name: "Statutory Bonus",
+                    amount: accumulatedBonus.toFixed(2),
+                    actual_amount: accumulatedBonus,
+                    is_bonus: true
+                });
+                takeHomeEarnings += accumulatedBonus;
+            }
+
+            // Always add the monthly provision to employer side (unless skipStatutory is true and we aren't initializing)
+            if (!skipStatutory || shouldPayBonus) {
+                addStatRecord("Bonus Provision", currentMonthBonus, true);
+            }
         }
     }
 
@@ -927,7 +1002,9 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             // advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount,
             tdsPercentage: tdsPercentage.toFixed(2),
-            netPayable: netPayable,
+            netPayable: roundedNetPayable,
+            unroundedNetPayable: netPayable,
+            roundOffAmount: roundOffAmount,
             takeHomeEarnings: takeHomeEarnings,
             totalDeductions: totalDeductions
         },
@@ -984,6 +1061,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             grand_total: (salarySum + advanceSum).toFixed(2)
         },
         employee_incentive_history: (employee.employeeIncentive || []).map(advance => advance.get({ plain: true })),
+        bonus_data: bonusData,
         // tds_calculation_data: tdsCalculationData,
         // tdsDetails: tdsCalculationData,
         leave_balances: Array.from(leaveParamMap.entries()).map(([catId, info]) => {
@@ -1239,12 +1317,12 @@ const fetchSalarySummary = async (employee_id, month, year, options = {}) => {
 
 exports.calculateMonthlySalary = async (req, res) => {
     try {
-        const { employee_id, month, year } = req.body;
+        const { employee_id, month, year, initialize_bonus, bonus_override_amount } = req.body;
         if (!employee_id || !month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summary = await fetchSalarySummary(employee_id, month, year, { skipStatutory: true });
+        const summary = await fetchSalarySummary(employee_id, month, year, { skipStatutory: false, initialize_bonus, bonus_override_amount });
         return res.ok(summary);
     } catch (err) {
         return handleError(err, res, req);
@@ -1260,7 +1338,7 @@ exports.calculateMonthlySalaryBulk = async (req, res) => {
 
         const results = await Promise.all(employee_ids.map(async (id) => {
             try {
-                const data = await fetchSalarySummary(id, month, year, { skipStatutory: true });
+                const data = await fetchSalarySummary(id, month, year, { skipStatutory: false });
                 return {
                     employee_id: id,
                     success: true,
@@ -1289,8 +1367,8 @@ exports.calculateMonthlySalaryBulk = async (req, res) => {
 /**
  * Internal helper to finalize a single employee's payroll
  */
-const internalFinalizePayroll = async (employee_id, month, year, generate_additional = false, transaction, req, advance_ids_to_adjust = [], net_take_home_pay = null, encashment_ids_to_adjust = [], round_off_amount = null) => {
-    const summary = await performSalaryCalculation(employee_id, month, year, transaction);
+const internalFinalizePayroll = async (employee_id, month, year, generate_additional = false, transaction, req, advance_ids_to_adjust = [], net_take_home_pay = null, encashment_ids_to_adjust = [], round_off_amount = null, initialize_bonus = false, bonus_override_amount = null) => {
+    const summary = await performSalaryCalculation(employee_id, month, year, transaction, { initialize_bonus, bonus_override_amount });
 
     // 1. Check if already finalized (Main sequence)
     const existingMain = await commonQuery.findOneRecord(Payslip, {
@@ -1499,13 +1577,13 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
 exports.finalizeMonthlySalary = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        const { employee_id, month, year, generate_additional = false, advance_ids_to_adjust = [], net_take_home_pay = null, encashment_ids_to_adjust = [], round_off_amount = null } = req.body;
+        const { employee_id, month, year, generate_additional = false, advance_ids_to_adjust = [], net_take_home_pay = null, encashment_ids_to_adjust = [], round_off_amount = null, initialize_bonus = false, bonus_override_amount = null } = req.body;
         if (!employee_id || !month || !year) {
             await transaction.rollback();
             return res.error("VALIDATION_ERROR", { message: "Employee, Month, and Year are required" });
         }
 
-        const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req, advance_ids_to_adjust, net_take_home_pay, encashment_ids_to_adjust, round_off_amount);
+        const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req, advance_ids_to_adjust, net_take_home_pay, encashment_ids_to_adjust, round_off_amount, initialize_bonus, bonus_override_amount);
 
         await transaction.commit();
         return res.success("PAYROLL_FINALIZED", {
@@ -1610,7 +1688,7 @@ exports.calculateBatchMonthlySalary = async (req, res) => {
 
         for (const emp of employees) {
             try {
-                const summary = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: true });
+                const summary = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: false });
                 summaries.push(summary);
             } catch (err) {
                 errors.push({ employee_id: emp.id, name: emp.first_name, error: err.message });
@@ -2571,11 +2649,11 @@ exports.getSalaryOverview = async (req, res) => {
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
-                    const summary = await performSalaryCalculation(employee_id, m.month, m.year, null, { skipStatutory: true });
+                    const summary = await performSalaryCalculation(employee_id, m.month, m.year, null, { skipStatutory: false });
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
-                    const netPayable = summary.breakdown.total_earnings - summary.breakdown.total_deductions;
+                    const netPayable = (summary.breakdown.total_earnings - summary.breakdown.total_deductions) + parseFloat(summary.salary.reimbursementAmount || 0);
 
                     // Fetch company settings for rounding configuration
                     const companySettings = await commonQuery.findOneRecord(CompanySettings, {
@@ -2902,6 +2980,8 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                     { model: SalaryTemplate, as: 'salaryTemplate', attributes: ['ctc_monthly'] }
                 ],
                 attributes: ['id', 'first_name', 'employee_code', 'joining_date'],
+                order: [["first_name", "ASC"]]
+
             },
             true,
             "joining_date",
@@ -2935,7 +3015,7 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                 pending_amount = parseFloat(existing.pending_amount || 0);
             } else {
                 try {
-                    const sim = await performSalaryCalculation(emp.id, month, year);
+                    const sim = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: false });
                     if (sim && sim.salary) {
                         ctc = sim.salary.ctc_monthly;
                         net_payable = sim.salary.netPayable;
@@ -3060,7 +3140,7 @@ exports.getMonthlyPayrollListing = async (req, res) => {
             } else {
                 // RUN SIMULATION
                 try {
-                    const sim = await performSalaryCalculation(emp.id, month, year);
+                    const sim = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: false });
                     row.total_salary = parseFloat(sim.salary.netPayable || 0).toFixed(2);
                     row.payable_days = parseFloat(sim.attendance.payableDays || 0).toFixed(1);
                 } catch (e) {

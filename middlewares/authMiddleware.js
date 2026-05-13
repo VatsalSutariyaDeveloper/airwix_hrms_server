@@ -7,7 +7,9 @@ const { constants } = require("../helpers");
 const tokenBlacklist = new Set();
 
 const SKIP_ROUTES = [
-  "/api/administration/permission/constants"
+  "/api/administration/permission/constants",
+  "/api/AWXTEC-PY",
+  "/api/auth/AWXTEC-PY"
 ];
 
 const addToBlacklist = (token) => {

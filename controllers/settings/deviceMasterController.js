@@ -1,4 +1,4 @@
-const { DeviceMaster, Employee, User } = require("../../models");
+const { DeviceMaster, Employee, User, CompanyMaster, BranchMaster } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, cryptoHelper } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { OS } = require("ua-parser-js/enums");
@@ -290,10 +290,27 @@ exports.pairDevice = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Generate a unique device ID (e.g., DEV-6A7F21)
+        const device = await commonQuery.findOneRecord(DeviceMaster, { id }, { attributes: ['company_id', 'branch_id'] }, transaction, false, false);
+        if (!device) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, "Device not found.");
+        }
+
+        const company = device.company_id ? await commonQuery.findOneRecord(CompanyMaster, { id: device.company_id }, { attributes: ['company_name'] }, null, false, {}) : null;
+        const branch = device.branch_id ? await commonQuery.findOneRecord(BranchMaster, { id: device.branch_id }, { attributes: ['branch_name'] }, null, false, {}) : null;
+
+        const normalizeCodePart = (value, length) => {
+            if (!value || typeof value !== "string") return null;
+            const letters = value.replace(/[^A-Za-z]/g, "").toUpperCase();
+            if (!letters) return null;
+            return letters.slice(0, length).padEnd(length, "X");
+        };
+
         const generateDeviceId = () => {
-            const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
-            return `DEV-${Date.now()}${randomStr}`;
+            const companyCode = normalizeCodePart(company?.company_name, 3) || "XXX";
+            const branchCode = normalizeCodePart(branch?.branch_name, 3) || "BRN";
+            const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+            return `DEV-${companyCode}${branchCode}-${randomSuffix}`;
         };
 
         let newDeviceId;
@@ -302,7 +319,7 @@ exports.pairDevice = async (req, res) => {
 
         while (!isUnique && attempts < 10) {
             newDeviceId = generateDeviceId();
-            const existing = await commonQuery.findOneRecord(DeviceMaster, { device_id: newDeviceId }, {}, transaction);
+            const existing = await commonQuery.findOneRecord(DeviceMaster, { device_id: newDeviceId }, {}, transaction, false);
             if (!existing) isUnique = true;
             attempts++;
         }

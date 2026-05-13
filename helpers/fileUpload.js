@@ -122,6 +122,9 @@ const uploadFile = async (
       const name = path.basename(file.originalname, ext).replace(/\s+/g, "_");
       filename = `${Date.now()}_${name}${ext}`;
     }
+
+    // Sanitize filename to prevent invalid characters in filesystems (especially colons on Windows)
+    filename = filename.replace(/[\/:*?"<>|]/g, "_");
     
     const fullPath = path.join(targetFolder, filename);
 
@@ -414,10 +417,8 @@ const uploadExcelToDisk = (fieldName) => {
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      cb(
-        null,
-        file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
-      );
+      const rawFilename = file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname);
+      cb(null, rawFilename.replace(/[\/:*?"<>|]/g, "_"));
     },
   });
 
@@ -508,10 +509,13 @@ const uploadBase64File = async (base64Data, subfolder = "", transaction = null, 
   const targetFolder = path.join(baseDir, cleanSubfolder(subfolder));
   ensureDir(targetFolder);
 
-  const filename = customFilename 
+  let filename = customFilename 
     ? (customFilename.endsWith(extension) ? customFilename : customFilename + extension)
     : `${Date.now()}_sync_${Math.round(Math.random() * 1e9)}${extension}`;
   
+  // Sanitize filename to prevent invalid characters in filesystems (especially colons on Windows)
+  filename = filename.replace(/[\/:*?"<>|]/g, "_");
+
   const fullPath = path.join(targetFolder, filename);
 
   try {

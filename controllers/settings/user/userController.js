@@ -347,8 +347,8 @@ exports.assignRole = async (req, res) => {
         Employee,
         userData.employee_id,
         { 
-          ...(field_name === 'is_attendance_supervisor' && { is_attendance_supervisor: false }),
-          ...(field_name === 'is_reporting_manager' && { is_reporting_manager: false }),  
+          ...(field_name === 'is_attendance_supervisor' && { is_attendance_supervisor: permission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR }),
+          ...(field_name === 'is_reporting_manager' && { is_reporting_manager: permission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER }),  
         },
         transaction,
         true

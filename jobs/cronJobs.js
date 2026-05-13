@@ -48,13 +48,14 @@ const jobAttendanceRebuild = async (asOf = null, batch_id = null) => {
     const { requestContext } = require("../utils/requestContext");
     const dayjs = require('dayjs');
 
-    // If asOf is provided, treat asOf as "today" and rebuild for asOf-1 day (yesterday)
-    // If not provided, rebuild for actual yesterday
+    // If asOf is provided, treat asOf as "today" and rebuild for asOf-1 day (yesterday) and asOf day (today)
+    // If not provided, rebuild for actual yesterday and actual today
     const refDate = asOf ? dayjs(asOf) : dayjs();
-    const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+    const yesterdayDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+    const todayDate = refDate.format('YYYY-MM-DD');
+    const targetDates = [yesterdayDate, todayDate];
 
     await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true }, async () => {
-        console.log(`⏰ Running daily attendance rebuild task for date: ${targetDate}...`);
         const { Employee, AttendanceDay } = require("../models");
         const attendanceHelper = require("../helpers/attendanceHelper");
         const { commonQuery, Op } = require("../helpers");
@@ -62,37 +63,41 @@ const jobAttendanceRebuild = async (asOf = null, batch_id = null) => {
         const employees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ['id', 'company_id', 'branch_id'] }, null, {});
         const employeeIds = employees.map(emp => emp.id);
 
-        const existingAttendance = await commonQuery.findAllRecords(AttendanceDay, {
-            attendance_date: targetDate,
-            status: { [Op.ne]: 2 }
-        }, { attributes: ['employee_id'] }, null, {});
+        for (const targetDate of targetDates) {
+            console.log(`⏰ Running daily attendance rebuild task for date: ${targetDate}...`);
 
-        const existingEmpIds = existingAttendance.map(a => a.employee_id);
+            const existingAttendance = await commonQuery.findAllRecords(AttendanceDay, {
+                attendance_date: targetDate,
+                status: { [Op.ne]: 2 }
+            }, { attributes: ['employee_id'] }, null, {});
 
-        console.log(`[Cron] Rebuilding ${existingEmpIds.length} existing attendance records for ${targetDate}...`);
-        for (const empId of existingEmpIds) {
-            try {
-                const emp = employees.find(e => e.id === empId);
-                await requestContext.run({
-                    userId: 0,
-                    companyId: emp?.company_id || 0,
-                    branchId: emp?.branch_id || 0,
-                    is_super_admin: true
-                }, async () => {
-                    await attendanceHelper.rebuildAttendanceDay(empId, targetDate, {
-                        employee: emp,
-                        user_id: 0,
-                        company_id: emp?.company_id,
-                        branch_id: emp?.branch_id
+            const existingEmpIds = existingAttendance.map(a => a.employee_id);
+
+            console.log(`[Cron] Rebuilding ${existingEmpIds.length} existing attendance records for ${targetDate}...`);
+            for (const empId of existingEmpIds) {
+                try {
+                    const emp = employees.find(e => e.id === empId);
+                    await requestContext.run({
+                        userId: 0,
+                        companyId: emp?.company_id || 0,
+                        branchId: emp?.branch_id || 0,
+                        is_super_admin: true
+                    }, async () => {
+                        await attendanceHelper.rebuildAttendanceDay(empId, targetDate, {
+                            employee: emp,
+                            user_id: 0,
+                            company_id: emp?.company_id,
+                            branch_id: emp?.branch_id
+                        });
                     });
-                });
-            } catch (err) {
-                console.error(`[Cron] Rebuild failed for emp ${empId} on ${targetDate}:`, err.message);
+                } catch (err) {
+                    console.error(`[Cron] Rebuild failed for emp ${empId} on ${targetDate}:`, err.message);
+                }
             }
-        }
 
-        console.log(`[Cron] Syncing missing attendance records for ${targetDate}...`);
-        await attendanceHelper.bulkSyncAttendanceDays(employeeIds, targetDate, { user_id: 0 });
+            console.log(`[Cron] Syncing missing attendance records for ${targetDate}...`);
+            await attendanceHelper.bulkSyncAttendanceDays(employeeIds, targetDate, { user_id: 0 });
+        }
 
         console.log('✅ Daily attendance rebuild completed.');
     });

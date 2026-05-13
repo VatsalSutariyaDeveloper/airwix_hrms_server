@@ -70,22 +70,26 @@ exports.getCounts = async (req, res) => {
 
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: { [Op.in]: [0, 1] }
+            status: { [Op.in]: [0, 1] },
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 5
+            status: 5,
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 6
+            status: 6,
+            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
         
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {
-                attendance_date: today
+                attendance_date: today,
+                // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
             },
             {
                 include: [{

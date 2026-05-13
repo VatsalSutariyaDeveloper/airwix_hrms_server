@@ -768,9 +768,12 @@ exports.updateStatus = async (req, res) => {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
                 const diff = end.diff(start, 'day');
+                const todayStr = dayjs().format('YYYY-MM-DD');
                 for (let i = 0; i <= diff; i++) {
                     const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
-                    await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                    if (targetDate <= todayStr) {
+                        await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                    }
                 }
             }
         }

@@ -750,10 +750,16 @@ exports.getProfile = async (req, res) => {
                 { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                 { model: Department, as: 'department', attributes: ['name'] },
                 { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
+                { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
                 
                 // Joins with Employee-specific Templates/Data
                 { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
-                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate' },
+                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
+                    include: [
+                        { model: AttendanceTemplate, as: 'attendanceTemplate', attributes: ['name'] }
+                    ]    
+                 },
                 
                 // Master Template Joins (kept for names if not in employee-specific tables)
                 { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
@@ -764,7 +770,8 @@ exports.getProfile = async (req, res) => {
                 },
                 { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
                 { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] },
-                { model: EmployeeFamilyMember, as: 'family_members' }
+                { model: EmployeeFamilyMember, as: 'family_members' },
+                { model: ResignationTemplate, as: 'resignationTemplate', attributes: ['notice_period_days'] }
             ]
         });
 
@@ -789,6 +796,26 @@ exports.getProfile = async (req, res) => {
             
             return null;
         };
+
+        let supervisorRecord = [];
+        let reportingManagerRecord = [];
+
+        if (plainRecord.is_attendance_supervisor){
+            supervisorRecord = await commonQuery.findAllRecords(Employee, 
+               { attendance_supervisor: plainRecord.linked_user.id },
+               { attributes: ['id', 'first_name', 'mobile_no', 'email']}
+            );
+        }
+
+        if (plainRecord.is_reporting_manager){
+            reportingManagerRecord = await commonQuery.findAllRecords(Employee, 
+               { reporting_manager: plainRecord.linked_user.id },
+               { attributes: ['id', 'first_name', 'mobile_no', 'email']}
+            );
+        }
+        
+        const companySettings = await getCompanySetting(plainRecord.company_id);
+        const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
 
         const profileData = {
             header: {
@@ -835,15 +862,19 @@ exports.getProfile = async (req, res) => {
                 leave: plainRecord.leaveTemplate?.template_name || 'N/A',
                 shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
                 salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
+                attendance_template: plainRecord.employeeAttendanceTemplate?.attendanceTemplate?.name || 'N/A',
                 lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "DAYS_IN_MONTH" ? "Days in Month" : plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "FIXED_30_DAYS" ? "Fixed 30 Days" : "Working Days",
                 // attendance_mode: plainRecord.employeeAttendanceTemplate?.mode || 'N/A',
                 attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
-                reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No'
+                supervisor_details: supervisorRecord,
+                reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No',
+                reporting_manager_details: reportingManagerRecord
             },
             employment_info: {
                 joining_date: plainRecord.joining_date ? formatDateTime(plainRecord.joining_date) : 'N/A',
                 employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
                 worker_type: ["On-Role", "Off-Role"][plainRecord.worker_type - 1] || 'N/A',
+                employment_type: plainRecord.employment_type || 'N/A',
                 uan: plainRecord.uan_number || 'N/A',
                 pan: plainRecord.pan_number || 'N/A',
                 aadhaar: plainRecord.aadhaar_number || 'N/A',
@@ -858,8 +889,12 @@ exports.getProfile = async (req, res) => {
                 eps_joining_date: plainRecord.eps_joining_date ? formatDateTime(plainRecord.eps_joining_date) : 'N/A',
                 eps_exit_date: plainRecord.eps_exit_date ? formatDateTime(plainRecord.eps_exit_date) : 'N/A',
                 hps_eligible: plainRecord.hps_eligible ? 'Yes' : 'No',
-                // probation_period: plainRecord.probation_period_days ? `${plainRecord.probation_period_days} Days` : 'N/A',
-                // notice_period: plainRecord.notice_period_days ? `${plainRecord.notice_period_days} Days` : 'N/A',
+                exit_date: plainRecord.exit_date ? formatDateTime(plainRecord.exit_date) : 'N/A',
+                physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
+                probation_period: probationPeriodDays ? `${probationPeriodDays} Days` : 'N/A',
+                notice_period: plainRecord.resignationTemplate?.notice_period_days ? `${plainRecord.resignationTemplate.notice_period_days} Days` : 'N/A',
+                attendance_supervisor: plainRecord.supervisor || 'N/A',
+                reporting_manager: plainRecord.manager || 'N/A',
                 // referred_by: plainRecord.referred_by || 'N/A'
             },
             address_info: {
@@ -886,15 +921,32 @@ exports.getProfile = async (req, res) => {
             background_details: {
                 education_details: plainRecord.education_details || [],
                 family_details: plainRecord.family_members || [],
-                experience_details: (plainRecord.experience_details || []).map(exp => {
-                    if (Array.isArray(exp.attachments)) {
-                        exp.attachment_urls = exp.attachments.map(att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`);
-                    }
-                    return exp;
-                }),
+                experience_details: Array.isArray(plainRecord.experience_details)
+                    ? plainRecord.experience_details.map(exp => {
+                        if (Array.isArray(exp.attachments)) {
+                            exp.attachment_urls = exp.attachments.map(
+                                att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`
+                            );
+                        } else {
+                            exp.attachment_urls = [];
+                        }
+                        return exp;
+                    })
+                : [],
             },
             additional_details: {
-                professional_reference: plainRecord.professional_reference || [],
+                professional_reference: (() => {
+                    let professionalReference = plainRecord.professional_reference || [];
+                    if (typeof professionalReference === "string") {
+                        try {
+                            professionalReference = JSON.parse(professionalReference);
+                        } catch (e) {
+                            professionalReference = [];
+                        }
+                    }
+
+                    return Array.isArray(professionalReference) ? professionalReference : [];
+                })(),
                 custom_fields: (plainRecord.custom_fields && Object.keys(plainRecord.custom_fields).length > 0) ? plainRecord.custom_fields : null
             },
         };
@@ -1000,6 +1052,7 @@ exports.getAll = async (req, res) => {
                     "status",
                     "onboarding_status"
                 ],
+                order: [["first_name", "ASC"]]
             },
             true,
             "created_at"

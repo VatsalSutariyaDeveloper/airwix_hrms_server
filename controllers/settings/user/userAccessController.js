@@ -44,7 +44,7 @@ exports.sessionData = async (req, res) => {
       include: [{ 
           model: RolePermission, 
           as: "RolePermission", 
-          attributes: ["permissions", "role_key", "role_name"],
+          attributes: ["role_key", "role_name"],
           required: false 
       }],
       transaction
@@ -53,6 +53,22 @@ exports.sessionData = async (req, res) => {
     if (!userData) {
         await transaction.rollback();
         return res.error(constants.USER_NOT_FOUND);
+    }
+
+    const permissions = await commonQuery.findOneRecord(
+      RolePermission,
+      { role_key: userData.RolePermission.role_key, status: 0 },
+      {
+        attributes: ["permissions", "role_name"],
+      },
+      null,
+      false,
+      { company_id: true }
+    );
+
+    if (!permissions) {
+        await transaction.rollback();
+        return res.error(constants.NOT_FOUND, { message: `Your role (${userData.RolePermission.role_name}) not exist in this company. Please Contact Admin.` });
     }
 
     // Fetch employee data if employee_id exists
@@ -211,12 +227,12 @@ exports.sessionData = async (req, res) => {
     const userJson = userData.toJSON();
     const enrichedUserData = {
         ...userJson,
-        permission: userData.RolePermission?.permissions ?? null,
+        permission: permissions?.permissions ?? null,
         branch_access: userData.branch_access || "",
         profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
-        role_name : userData.RolePermission.role_name,
         is_attendance_supervisor : userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR? true : false,
-        is_reporting_manager : userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER? true : false
+        is_reporting_manager : userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER? true : false,
+        role_name : permissions?.role_name
     };
 
     delete enrichedUserData.RolePermission;

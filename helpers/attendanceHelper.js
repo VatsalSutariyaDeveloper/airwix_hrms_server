@@ -286,7 +286,7 @@ async function punch(employeeId, meta, transaction = null) {
               if (dayjs(now).isBefore(otCutoff)) {
                 cutoffTime = otCutoff;
               } else {
-                cutoffTime = dayjs(startTime).add(24, "hour");
+                cutoffTime = dayjs(startTime).add(16, "hour");
               }
             }
           }
@@ -840,6 +840,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     is_encashment: false,
     status: 0
   }, {}, transaction, false, {});
+  console.log(approvedLeave, 'approvedLeave');
 
   const approvedOutDuty = (meta.preFetchedOutDuty !== undefined) ? meta.preFetchedOutDuty : await commonQuery.findOneRecord(OutDutyRequest, {
     employee_id: employeeId,
@@ -1700,9 +1701,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
            const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
            fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
            fineAmount += res.amount;
-        }
+         }
+      }
 
-        rule = null;
+      rule = null;
         // Early Exit Fine
         if (earlyOutMinutes > 0) {
           fineData.early_exit.minutes = earlyOutMinutes;
@@ -1874,7 +1876,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
             fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
             fineAmount += res.amount;
           }
-        }
+
           // Shortage Fine (Work hours less than shift hours)
           // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
           //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;

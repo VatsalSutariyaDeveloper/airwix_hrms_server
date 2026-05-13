@@ -913,6 +913,7 @@ class EmployeeTemplateService {
             ],
             status: 0
         }, {}, transaction);
+        console.log(allApprovedLeaves, 'allApprovedLeaves');
         
         const leaveMap = new Map(); // Key: empId_YYYY-MM-DD
         allApprovedLeaves.forEach(l => {
