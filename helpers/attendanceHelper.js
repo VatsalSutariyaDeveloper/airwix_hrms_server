@@ -148,7 +148,7 @@ async function punch(employeeId, meta, transaction = null) {
   console.log(`[Punch] Employee Access Branches:`, employee.access_branches);
 
   // --- BRANCH ACCESS CHECK ---
-  const settings = await getCompanySetting(meta.device_company_id);
+  const settings = await getCompanySetting(meta.device_company_id || employee.company_id);
   const company_punch_config = settings.company_punch_config === true || settings.company_punch_config === "true";
   const company_branch_punch_config = settings.company_branch_punch_config === true || settings.company_branch_punch_config === "true";
 
@@ -264,7 +264,8 @@ async function punch(employeeId, meta, transaction = null) {
       const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
       const currentDate = dayjs(now).format("YYYY-MM-DD");
 
-      let cutoffTime = dayjs(startTime).add(24, "hour");
+      const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
+      let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
 
       // ✅ If punch is on a different date and max_overtime_mins > 0, treat as new IN for the new date
       if (lastInDate !== currentDate && template && template.max_overtime_mins > 0) {
@@ -286,7 +287,8 @@ async function punch(employeeId, meta, transaction = null) {
               if (dayjs(now).isBefore(otCutoff)) {
                 cutoffTime = otCutoff;
               } else {
-                cutoffTime = dayjs(startTime).add(16, "hour");
+                const maxOvertimeCutoffHours = parseInt(settings.max_overtime_cutoff_hours || 16);
+                cutoffTime = dayjs(startTime).add(maxOvertimeCutoffHours, "hour");
               }
             }
           }
@@ -2122,9 +2124,17 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       // Save original worked minutes before setting to 0
       const originalWorkedMinutes = finalWorkedMinutes;
 
-      // Mark as ABSENT, set worked time to 0, fines to 0
-      status = 5; // ABSENT
-      autoAbsentReason = `Auto Absent: Worked time (${originalWorkedMinutes}m) outside shift hours`;
+      // only flexible shift have this outside shift hours worked minutes condition
+      if (shift.shift_type === "Flexible Shift" && originalWorkedMinutes >= minFullDay) {
+        status = 0; // PRESENT
+        autoAbsentReason = `Worked outside shift hours: ${originalWorkedMinutes}m`;
+      } else if (shift.shift_type === "Flexible Shift" && originalWorkedMinutes >= minHalfDay) {
+        status = 1; // HALF_DAY
+        autoAbsentReason = `Worked outside shift hours (Half Day): ${originalWorkedMinutes}m`;
+      } else {
+        status = 5; // ABSENT
+        autoAbsentReason = `Auto Absent: Worked time (${originalWorkedMinutes}m) outside shift hours`;
+      }
       finalWorkedMinutes = 0;
       lateMinutes = 0;
       earlyOutMinutes = 0;

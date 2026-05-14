@@ -1546,7 +1546,11 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     let { employee_id, month_year } = req.body;
     if(!employee_id){
-      employee_id = req.user.employee_id;
+      employee_id = req.user?.employee_id;
+    }
+
+    if (!employee_id) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
     }
     
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")

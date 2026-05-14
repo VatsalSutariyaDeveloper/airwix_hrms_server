@@ -3363,32 +3363,27 @@ exports.getPayrollSummary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        const employee = await commonQuery.findAllRecords(
+        // Fetch all active employees matching filter
+        const employees = await commonQuery.findAllRecords(
             Employee,
-            employeeFilter,
             {
-                include: [
-                    {
-                        model: Payslip,
-                        as: "payslips",
-                        where: {
-                            month: month,
-                            year: year
-                        },
-                        required: true
-                    },
-                    {
-                        model: PaymentHistory,
-                        as: "paymentHistories",
-                        where: {
-                            month: month,
-                            year: year
-                        },
-                        required: false
-                    }
-                ]
+                ...employeeFilter,
+                status: { [Op.in]: [0, 1] } // Active employees
+            },
+            {
+                attributes: ['id']
             }
-        )
+        );
+
+        // Fetch salary summary (existing payslip or fresh calculation) for all employees
+        const summaries = await Promise.all(employees.map(async (emp) => {
+            try {
+                return await fetchSalarySummary(emp.id, month, year, { skipStatutory: false });
+            } catch (err) {
+                console.error(`[PAYROLL-SUMMARY] Error calculating salary for employee ${emp.id}:`, err.message);
+                return null;
+            }
+        }));
 
         // Initialize summary object
         const summary = {
@@ -3401,69 +3396,63 @@ exports.getPayrollSummary = async (req, res) => {
             total_statutory: {}
         };
 
-        // Process each employee and accumulate totals
-        employee.forEach(emp => {
-            const payslips = emp.payslips || [];
-            const paymentHistories = emp.paymentHistories || [];
+        summaries.forEach(empSummary => {
+            if (!empSummary) return;
 
-            // Count employees
             summary.total_employees += 1;
 
-            payslips.forEach(payslip => {
-                summary.total_payable_amount += parseFloat(payslip.net_salary || 0);
+            const netPayable = parseFloat(empSummary.salary?.netPayable || 0);
+            const paidSum = parseFloat(empSummary.payment_history?.salary?.sum || 0);
 
-                // Process earnings breakdown
-                if (payslip.break_down && payslip.break_down.earnings) {
-                    payslip.break_down.earnings.forEach(earning => {
-                        const name = earning.name.trim();
-                        const amount = parseFloat(earning.actual_amount || 0);
+            summary.total_payable_amount += netPayable;
+            summary.total_paid_amount += paidSum;
 
-                        if (!summary.total_earnings[name]) {
-                            summary.total_earnings[name] = { amount: 0, count: 0 };
+            // Process earnings breakdown
+            if (empSummary.breakdown && empSummary.breakdown.earnings) {
+                empSummary.breakdown.earnings.forEach(earning => {
+                    const name = (earning.name || "").trim();
+                    const amount = parseFloat(earning.actual_amount ?? earning.amount ?? 0);
+
+                    if (!summary.total_earnings[name]) {
+                        summary.total_earnings[name] = { amount: 0, count: 0 };
+                    }
+                    summary.total_earnings[name].amount += amount;
+                    summary.total_earnings[name].count += 1;
+                });
+            }
+
+            // Process deductions breakdown
+            if (empSummary.breakdown && empSummary.breakdown.deductions) {
+                empSummary.breakdown.deductions.forEach(deduction => {
+                    const name = (deduction.name || "").trim();
+                    const amount = parseFloat(deduction.actual_amount ?? deduction.amount ?? 0);
+
+                    if (!summary.total_deductions_breakdown[name]) {
+                        summary.total_deductions_breakdown[name] = { amount: 0, count: 0 };
+                    }
+                    summary.total_deductions_breakdown[name].amount += amount;
+                    summary.total_deductions_breakdown[name].count += 1;
+                });
+            }
+
+            // Process statutory deductions
+            if (empSummary.breakdown && empSummary.breakdown.statutory) {
+                Object.entries(empSummary.breakdown.statutory).forEach(([key, value]) => {
+                    const name = key.trim();
+                    const amount = parseFloat(value || 0);
+
+                    if (amount > 0) {
+                        if (!summary.total_statutory[name]) {
+                            summary.total_statutory[name] = { amount: 0, count: 0 };
                         }
-                        summary.total_earnings[name].amount += amount;
-                        summary.total_earnings[name].count += 1;
-                    });
-                }
-
-                // Process deductions breakdown
-                if (payslip.break_down && payslip.break_down.deductions) {
-                    payslip.break_down.deductions.forEach(deduction => {
-                        const name = deduction.name.trim();
-                        const amount = parseFloat(deduction.amount || 0);
-
-                        if (!summary.total_deductions_breakdown[name]) {
-                            summary.total_deductions_breakdown[name] = { amount: 0, count: 0 };
-                        }
-                        summary.total_deductions_breakdown[name].amount += amount;
-                        summary.total_deductions_breakdown[name].count += 1;
-                    });
-                }
-
-                // Process statutory deductions
-                if (payslip.break_down && payslip.break_down.statutory) {
-                    Object.entries(payslip.break_down.statutory).forEach(([key, value]) => {
-                        const name = key.trim();
-                        const amount = parseFloat(value || 0);
-
-                        if (amount > 0) {
-                            if (!summary.total_statutory[name]) {
-                                summary.total_statutory[name] = { amount: 0, count: 0 };
-                            }
-                            summary.total_statutory[name].amount += amount;
-                            summary.total_statutory[name].count += 1;
-                        }
-                    });
-                }
-            });
-
-            // Calculate paid amount from payment histories
-            paymentHistories.forEach(ph => {
-                summary.total_paid_amount += parseFloat(ph.amount || 0);
-            });
+                        summary.total_statutory[name].amount += amount;
+                        summary.total_statutory[name].count += 1;
+                    }
+                });
+            }
         });
 
-        summary.total_pending_amount = summary.total_payable_amount - summary.total_paid_amount;
+        summary.total_pending_amount = Math.max(summary.total_payable_amount - summary.total_paid_amount, 0);
 
         // Round all monetary values to 2 decimal places
         Object.keys(summary).forEach(key => {
