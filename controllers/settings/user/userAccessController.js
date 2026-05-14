@@ -90,7 +90,7 @@ exports.sessionData = async (req, res) => {
     }
     
     // Check if user has a role assigned for this specific company/branch
-    if (!userData.RolePermission?.permissions && !isAdmin) {
+    if (!permissions?.permissions && !isAdmin) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "User does not have a role assigned in this company." });
     }

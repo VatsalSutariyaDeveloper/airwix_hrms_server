@@ -598,8 +598,8 @@ exports.verifyMobileNo = async (req, res) => {
     };
 
     if (otp){
-      responseData.pin_set = pin_set;
-      responseData.dev_otp = otp;
+      // responseData.pin_set = pin_set;
+      // responseData.dev_otp = otp;
       return res.success("VERIFY OTP", responseData);
     } else 
     if (!pin_set) {

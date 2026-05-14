@@ -3073,24 +3073,32 @@ exports.getEmployeeHolidays = async (req, res) => {
 
 exports.availableOutDuty = async (req, res) => {
     try {
-        const today = dayjs().format("YYYY-MM-DD");
-        const todayOutDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, {
-            employee_id: req.user.employee_id,
-            start_date: { [Op.lte]: today },
-            end_date: { [Op.gte]: today },
-            approval_status: 3, // APPROVED
-            status: 0
-        });
+        const employee_id = req.user?.employee_id;
+        
+        let todayOutDutyRequest = null;
+        let outDuty = null;
 
-        const outDuty = await commonQuery.findOneRecord(EmployeeAttendanceTemplate,
-            {
-                employee_id: req.user.employee_id,
-            },
-            {
-                attributes:["enble_out_duty"]
-            }
-        )
-        return res.ok({can_punch_from_personal_device: todayOutDutyRequest ? true : false, outDuty});
+        if (employee_id) {
+            const today = dayjs().format("YYYY-MM-DD");
+            todayOutDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, {
+                employee_id: employee_id,
+                start_date: { [Op.lte]: today },
+                end_date: { [Op.gte]: today },
+                approval_status: 3, // APPROVED
+                status: 0
+            });
+
+            outDuty = await commonQuery.findOneRecord(EmployeeAttendanceTemplate,
+                {
+                    employee_id: employee_id,
+                },
+                {
+                    attributes:["enble_out_duty"]
+                }
+            );
+        }
+
+        return res.ok({can_punch_from_personal_device: !!todayOutDutyRequest, outDuty});
     } catch (err) {
         return handleError(err, res, req);
     }
