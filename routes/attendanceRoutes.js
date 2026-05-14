@@ -20,5 +20,6 @@ router.post("/leave-summary", attendanceController.getLeaveSummary);
 router.post("/face-recognition-error", bufferImage("image"), attendanceController.storeFaceRecognitionError);
 router.post("/face-recognition-errors/list", attendanceController.getFaceRecognitionErrors);
 router.post("/face-recognition-errors/resolve", attendanceController.resolveFaceRecognitionError);
+router.post("/face-recognition-errors/delete", attendanceController.deleteFaceRecognitionError);
 
 module.exports = router;

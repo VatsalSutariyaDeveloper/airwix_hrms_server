@@ -2201,12 +2201,15 @@ exports.getFaceRecognitionErrors = async (req, res) => {
 
     const fieldConfig = [];
 
+    const payloadForPagination = { ...req.body, status: req.body.status !== undefined ? req.body.status : 0 };
+    delete payloadForPagination.startDate;
+    delete payloadForPagination.endDate;
+
     const result = await commonQuery.fetchPaginatedData(
       FaceRecognitionError,
-      { ...req.body, status: req.body.status !== undefined ? req.body.status : 0 },
+      payloadForPagination,
       fieldConfig,
       {
-        where,
         include: [
           {
             model: BranchMaster,
@@ -2215,7 +2218,10 @@ exports.getFaceRecognitionErrors = async (req, res) => {
           }
         ],
         order: [['time', 'DESC']]
-      }
+      },
+      true,
+      "time",
+      where
     );
 
     // Format URLs for images
@@ -2265,3 +2271,17 @@ exports.resolveFaceRecognitionError = async (req, res) => {
   }
 };
 
+/**
+ * Delete Face Recognition Error Log
+ */
+exports.deleteFaceRecognitionError = async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.error(constants.VALIDATION_ERROR, "ID is required");
+
+    await commonQuery.hardDeleteRecords(FaceRecognitionError, id, null, false, { company_id: true });
+    return res.ok({ message: "Face recognition error log deleted successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
