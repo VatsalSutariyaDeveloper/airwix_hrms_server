@@ -31,42 +31,42 @@ const parseDateTime = (timeStr, baseDate) => {
  * If multiple shifts exist in the branch, we find the one closest to the punch time.
  */
 async function findMatchingShift(branchId, companyId, punchTime, transaction) {
-    if (!branchId) return null;
-    const shifts = await commonQuery.findAllRecords(ShiftTemplate, {
-        branch_id: branchId,
-        company_id: companyId,
-        status: 0
-    }, {}, transaction, {});
+  if (!branchId) return null;
+  const shifts = await commonQuery.findAllRecords(ShiftTemplate, {
+    branch_id: branchId,
+    company_id: companyId,
+    status: 0
+  }, {}, transaction, {});
 
-    if (!shifts || shifts.length === 0) return null;
-    if (shifts.length === 1) {
-        console.log(`[ShiftMatch] Found single shift: ${shifts[0].shift_name}`);
-        return shifts[0];
+  if (!shifts || shifts.length === 0) return null;
+  if (shifts.length === 1) {
+    console.log(`[ShiftMatch] Found single shift: ${shifts[0].shift_name}`);
+    return shifts[0];
+  }
+
+  const now = dayjs(punchTime);
+  const todayStr = now.format("YYYY-MM-DD");
+  let bestMatch = null;
+  let minDiff = 24 * 60; // Max distance in minutes (24 hours)
+
+  for (const shift of shifts) {
+    // Normalize shift start time to today
+    const start = dayjs(`${todayStr} ${shift.start_time}`);
+
+    // Calculate distance for today, yesterday (night shifts), and tomorrow (just in case)
+    const dToday = Math.abs(now.diff(start, 'minute'));
+    const dYest = Math.abs(now.diff(start.subtract(1, 'day'), 'minute'));
+    const dTomm = Math.abs(now.diff(start.add(1, 'day'), 'minute'));
+
+    const minD = Math.min(dToday, dYest, dTomm);
+    if (minD < minDiff) {
+      minDiff = minD;
+      bestMatch = shift;
     }
+  }
 
-    const now = dayjs(punchTime);
-    const todayStr = now.format("YYYY-MM-DD");
-    let bestMatch = null;
-    let minDiff = 24 * 60; // Max distance in minutes (24 hours)
-
-    for (const shift of shifts) {
-        // Normalize shift start time to today
-        const start = dayjs(`${todayStr} ${shift.start_time}`);
-        
-        // Calculate distance for today, yesterday (night shifts), and tomorrow (just in case)
-        const dToday = Math.abs(now.diff(start, 'minute'));
-        const dYest = Math.abs(now.diff(start.subtract(1, 'day'), 'minute'));
-        const dTomm = Math.abs(now.diff(start.add(1, 'day'), 'minute'));
-        
-        const minD = Math.min(dToday, dYest, dTomm);
-        if (minD < minDiff) {
-            minDiff = minD;
-            bestMatch = shift;
-        }
-    }
-
-    console.log(`[ShiftMatch] Multiple shifts found. Best match: ${bestMatch ? bestMatch.shift_name : 'NONE'}`);
-    return bestMatch;
+  console.log(`[ShiftMatch] Multiple shifts found. Best match: ${bestMatch ? bestMatch.shift_name : 'NONE'}`);
+  return bestMatch;
 }
 
 /**
@@ -126,7 +126,7 @@ async function punch(employeeId, meta, transaction = null) {
   // --- CROSS-COMPANY CONTEXT SWITCH ---
   // Store device info for auditing if needed.
   // [User Request] Store device company ID in records instead of employee home company.
-  meta.device_company_id = meta.company_id; 
+  meta.device_company_id = meta.company_id;
   // meta.company_id = employee.company_id; // STOP overwriting with employee company
 
   // Update: We'll use punchWhere.company_id for lookups across the allowed scope.
@@ -185,7 +185,7 @@ async function punch(employeeId, meta, transaction = null) {
     }
   }
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
- 
+
   // --- CANTEEN ATTENDANCE LOGIC ---
   let isCanteenPunch = false;
   if (meta.device_id) {
@@ -306,8 +306,8 @@ async function punch(employeeId, meta, transaction = null) {
     } else {
       punchType = "IN";
       console.log(`[Punch] Defaulting to IN (No last punch or last was OUT)`);
-    } 
-  } 
+    }
+  }
 
   // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
   targetDayDate = today;
@@ -318,7 +318,7 @@ async function punch(employeeId, meta, transaction = null) {
         company_id: { [Op.in]: allowedCompanyIds }
       }, {}, transaction, false, {});
     }
-    
+
     if (lastInDay) {
       targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
     }
@@ -400,9 +400,9 @@ async function punch(employeeId, meta, transaction = null) {
       const hoursSinceLastIn = Math.abs(dayjs(now).diff(dayjs(lastIn.punch_time), "hour", true));
       if (hoursSinceLastIn < 24 && dayjs(lastIn.punch_time).format("YYYY-MM-DD") === targetDayDate) {
         const hasOut = await commonQuery.findOneRecord(AttendancePunch, {
-          employee_id: employeeId, 
-          punch_type: "OUT", 
-          day_id: lastIn.day_id, 
+          employee_id: employeeId,
+          punch_type: "OUT",
+          day_id: lastIn.day_id,
           company_id: meta.company_id,
           status: 0
         }, {}, transaction, true, {});
@@ -448,11 +448,11 @@ async function punch(employeeId, meta, transaction = null) {
 
   // Store resolved shift_id in AttendanceDay if it matches the current day
   if (shift && attendanceDay && attendanceDay.shift_id !== shift.id) {
-    await commonQuery.updateRecordById(AttendanceDay, dayId, { 
+    await commonQuery.updateRecordById(AttendanceDay, dayId, {
       shift_id: shift.id,
-      branch_id: meta.branch_id || attendanceDay.branch_id  
+      branch_id: meta.branch_id || attendanceDay.branch_id
     }, transaction, true, {});
-    
+
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = meta.branch_id || attendanceDay.branch_id;
   }
@@ -529,7 +529,7 @@ async function punch(employeeId, meta, transaction = null) {
   // 4️⃣ Save raw punch
   // Remove id from meta to avoid conflicts with auto-increment and local IDs from offline sync
   const { id: _, ...cleanMeta } = meta;
-  
+
   console.log(`[Punch] Creating AttendancePunch record...`);
   console.log(`[Punch] Payload for createRecord:`, {
     employee_id: employeeId,
@@ -567,7 +567,7 @@ async function punch(employeeId, meta, transaction = null) {
   try {
     const { User: UserModel } = require("../models");
     const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, transaction);
-    
+
     if (targetUser) {
       await notificationService.createNotification({
         user_id: targetUser.id,
@@ -788,14 +788,14 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   // 4. --- Attendance Processing Logic ---
   if (meta.onlyCreateNonWorking && meta.skipIfPunchesExist) {
-    const exists = await AttendanceDay.count({ 
-      where: { 
-        employee_id: employeeId, 
-        attendance_date: date, 
+    const exists = await AttendanceDay.count({
+      where: {
+        employee_id: employeeId,
+        attendance_date: date,
         company_id: { [Op.in]: cleanAllowedCompanyIds },
-        status: { [Op.ne]: 2 } 
-      }, 
-      transaction 
+        status: { [Op.ne]: 2 }
+      },
+      transaction
     });
     if (exists > 0) return;
   }
@@ -880,12 +880,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       };
 
       const existingDayRecord = await commonQuery.findOneRecord(AttendanceDay, {
-          employee_id: employeeId,
-          attendance_date: date,
+        employee_id: employeeId,
+        attendance_date: date,
       }, {}, transaction, false, {});
 
       if (existingDayRecord) {
-          await commonQuery.updateRecordById(AttendanceDay, existingDayRecord.id, odPayload, transaction, false, {});
+        await commonQuery.updateRecordById(AttendanceDay, existingDayRecord.id, odPayload, transaction, false, {});
       } else {
         await commonQuery.createRecord(AttendanceDay, odPayload, transaction);
       }
@@ -933,8 +933,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Store session in meta for shift adjustment later
     if (isHalfDay) {
-        meta.leave_is_half_day = true;
-        meta.leave_session = currentSession;
+      meta.leave_is_half_day = true;
+      meta.leave_session = currentSession;
     }
 
 
@@ -945,7 +945,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       if (isHalfDay) {
         // [MOD] If worked on a half-day leave day, preserve the leave (Status 1: Half Day) 
         // and do not cancel the leave request.
-        meta.forcedStatus = 1; 
+        meta.forcedStatus = 1;
         meta.leave_category_id = approvedLeave.leave_category_id;
         meta.leave_session = (approvedLeave.start_date === date) ? approvedLeave.start_session : approvedLeave.end_session;
         // meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
@@ -1039,25 +1039,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     );
     if (lastOut) punches.push(lastOut);
   } else {
-  // Process pairs of IN-OUT from the pre-fetched list (Robust Pairing)
-  let inP = null;
-  for (let i = 0; i < allDayPunches.length; i++) {
-    const p = allDayPunches[i];
-    const pType = String(p.punch_type || "").toUpperCase();
-    if (pType === "IN") {
-      inP = p; // Start/Restart a block with the latest IN
-    } else if (pType === "OUT" && inP) {
+    // Process pairs of IN-OUT from the pre-fetched list (Robust Pairing)
+    let inP = null;
+    for (let i = 0; i < allDayPunches.length; i++) {
+      const p = allDayPunches[i];
+      const pType = String(p.punch_type || "").toUpperCase();
+      if (pType === "IN") {
+        inP = p; // Start/Restart a block with the latest IN
+      } else if (pType === "OUT" && inP) {
+        punches.push(inP);
+        punches.push(p);
+        inP = null; // Block completed
+      }
+    }
+    // If an IN is left without an OUT, it might be an open shift.
+    // We add it anyway so 'Incomplete' or 'Currently Working' logic works later.
+    if (inP) {
       punches.push(inP);
-      punches.push(p);
-      inP = null; // Block completed
     }
   }
-  // If an IN is left without an OUT, it might be an open shift.
-  // We add it anyway so 'Incomplete' or 'Currently Working' logic works later.
-  if (inP) {
-    punches.push(inP);
-  }
-}
   console.log(`[Rebuild] Paired Punches:`, punches.map(p => `${p.punch_type}@${dayjs(p.punch_time).format('HH:mm')}`));
 
   // Ensure unique and sorted
@@ -1179,6 +1179,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
       await syncAttendanceToLeaveBalance(employeeId, null, payload, transaction);
       await commonQuery.createRecord(AttendanceDay, payload, transaction);
+    }
+
+    // [MOD] Absent Fine Logic (No Punches Case)
+    // Recalculate ALL absent records in the month so fines are order-independent.
+    if (emptyStatus === 5 && template && template.allow_absent_fine && Array.isArray(template.absent_fine_rules) && template.absent_fine_rules.length > 0) {
+      await recalculateMonthAbsentFines(employeeId, date, employee, transaction);
     }
     return;
   }
@@ -1465,7 +1471,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   // if (shift && expectedShiftWorkMinutes > 0) {
   //   finalWorkedMinutes = Math.min(finalWorkedMinutes, expectedShiftWorkMinutes);
   // }
-  
+
   // [MOD] Do not trim worked minutes by policy here. 
   // We want worked_minutes to store total site duration (Total - Breaks), as requested.
   // if (template && !template.include_overtime_in_total && shift) {
@@ -1495,7 +1501,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         // --- Flexible Shift Logic ---
         // OT/Shortfall is based on total worked minutes vs expected shift minutes
         earlyOvertimeMinutes = 0;
-        
+
         // [User Request] Only calculate fine/overtime after punch out
         if (lastOut) {
           if (finalWorkedMinutes > expectedShiftWorkMinutes) {
@@ -1697,90 +1703,25 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
           fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
           fineAmount += res.amount;
         }
-        
+
         // --- FALLBACK: Default 1x Salary Deduction for Late Entry ---
         if (lateMinutes > 0 && fineData.late_entry.amount <= 0 && (!rule || rule.type !== 'NONE' || rule.amount > 0)) {
-           const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
-           fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-           fineAmount += res.amount;
-         }
+          const res = getRateIdAndAmount(5, 1, lateMinutes, dailyWage, hourlyWage);
+          fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+          fineAmount += res.amount;
+        }
       }
 
       rule = null;
-        // Early Exit Fine
-        if (earlyOutMinutes > 0) {
-          fineData.early_exit.minutes = earlyOutMinutes;
-          if (template.early_exit_rules.length > 0) {
-            rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
-            if (rule) {
-              // Check Tiered Occurrence Limit
-              if (rule.occurrence_limit > 0 && rule.action_after_limit && rule.action_after_limit !== "NONE") {
-                const ruleOccurrences = await AttendanceDay.count({
-                  where: {
-                    employee_id: employeeId,
-                    attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
-                    company_id: employee.company_id,
-                    [Op.and]: [sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)],
-                    status: { [Op.ne]: 2 }
-                  },
-                  transaction
-                });
-
-                if ((ruleOccurrences + 1) > rule.occurrence_limit) {
-                  // Override rule for this calculation
-                  rule = {
-                    ...rule,
-                    type: rule.action_after_limit,
-                    value: rule.action_value || rule.value,
-                    isEscalated: true
-                  };
-                }
-              }
-
-              const tierSuffix = rule.isEscalated ? " (Escalated)" : "";
-
-              if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
-                const amount = parseFloat(rule.value || 0);
-                fineAmount += amount;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 1 };
-              } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
-                const rate = parseFloat(rule.value || 0);
-                const amount = parseFloat(((earlyOutMinutes / 60) * rate).toFixed(2));
-                fineAmount += amount;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount, rate, calculation_type: 2 };
-              } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
-                const rate = parseFloat((dailyWage * 0.5).toFixed(2));
-                fineAmount += rate;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 3 };
-                meta.forcedStatus = 1; // Mark as Half Day
-                meta.overrideAutomationNote = `Penalty: Early Exit Tier Limit reached${tierSuffix} (${earlyOutMinutes} mins)`;
-              } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
-                const rate = parseFloat(dailyWage.toFixed(2));
-                fineAmount += rate;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 4 };
-                meta.forcedStatus = 5; // Mark as Absent
-                meta.overrideAutomationNote = `Penalty: Early Exit Tier Limit reached${tierSuffix} (${earlyOutMinutes} mins)`;
-              } else if (['5', '6', '7', '8'].includes(rule.type)) {
-                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-                fineAmount += res.amount;
-              } else if (rule.type === 'PERCENTAGE') {
-                const rate = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
-                fineAmount += rate;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 2 };
-              } else if (rule.type === 'MINUTE_DEDUCTION') {
-                const deductMins = parseFloat(rule.value || 0);
-                finalWorkedMinutes -= deductMins;
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 2, deducted_mins: deductMins };
-              } else if (rule.type === 'NONE') {
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 5 };
-              } else {
-                const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
-                fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-                fineAmount += res.amount;
-              }
-            } else if (template.early_exit_fine_type !== 'NONE') {
-              const earlyExitCount = await AttendanceDay.count({
+      // Early Exit Fine
+      if (earlyOutMinutes > 0) {
+        fineData.early_exit.minutes = earlyOutMinutes;
+        if (template.early_exit_rules.length > 0) {
+          rule = getMatchingRule(earlyOutMinutes, template.early_exit_rules);
+          if (rule) {
+            // Check Tiered Occurrence Limit
+            if (rule.occurrence_limit > 0 && rule.action_after_limit && rule.action_after_limit !== "NONE") {
+              const ruleOccurrences = await AttendanceDay.count({
                 where: {
                   employee_id: employeeId,
                   attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
@@ -1790,103 +1731,168 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
                 },
                 transaction
               });
-              if ((earlyExitCount + 1) > (template.early_exit_limit || 0)) {
-                if (template.early_exit_fine_type === 'FIXED') {
-                  const amount = parseFloat(template.early_exit_fine_value || 0);
-                  fineAmount += amount;
-                  fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 1 };
-                } else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') {
-                  finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
-                  fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 2, deducted_mins: parseFloat(template.early_exit_fine_value || 0) };
-                } else if (template.early_exit_fine_type === 'DEDUCTION') {
-                  const res = getRateIdAndAmount(template.early_exit_fine_type, template.early_exit_fine_value, earlyOutMinutes, dailyWage, hourlyWage);
-                  fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-                  fineAmount += res.amount;
-                } else if (template.early_exit_fine_type === 'HALF_DAY') {
-                  const amount = parseFloat((dailyWage * 0.5).toFixed(2));
-                  fineAmount += amount;
-                  fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 3 };
-                  meta.forcedStatus = 1; // Mark as Half Day
-                  meta.overrideAutomationNote = "Penalty: Early Exit Limit Exceeded (Half Day)";
-                } else if (template.early_exit_fine_type === 'FULL_DAY') {
-                  const amount = parseFloat(dailyWage.toFixed(2));
-                  fineAmount += amount;
-                  fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 4 };
-                  meta.forcedStatus = 5; // Mark as Absent
-                  meta.overrideAutomationNote = "Penalty: Early Exit Limit Exceeded (Full Day)";
-                }
+
+              if ((ruleOccurrences + 1) > rule.occurrence_limit) {
+                // Override rule for this calculation
+                rule = {
+                  ...rule,
+                  type: rule.action_after_limit,
+                  value: rule.action_value || rule.value,
+                  isEscalated: true
+                };
               }
             }
-          } 
-          
-          // --- FALLBACK: Default 1x Salary Deduction for Early Exit ---
-          if (fineData.early_exit.amount <= 0 && (!rule || (rule.type !== 'NONE' && rule.type !== 'MINUTE_DEDUCTION'))) {
-            const res = getRateIdAndAmount(5, 1, earlyOutMinutes, dailyWage, hourlyWage);
-            fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-            fineAmount += res.amount;
+
+            const tierSuffix = rule.isEscalated ? " (Escalated)" : "";
+
+            if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
+              const amount = parseFloat(rule.value || 0);
+              fineAmount += amount;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 1 };
+            } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
+              const rate = parseFloat(rule.value || 0);
+              const amount = parseFloat(((earlyOutMinutes / 60) * rate).toFixed(2));
+              fineAmount += amount;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount, rate, calculation_type: 2 };
+            } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
+              const rate = parseFloat((dailyWage * 0.5).toFixed(2));
+              fineAmount += rate;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 3 };
+              meta.forcedStatus = 1; // Mark as Half Day
+              meta.overrideAutomationNote = `Penalty: Early Exit Tier Limit reached${tierSuffix} (${earlyOutMinutes} mins)`;
+            } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
+              const rate = parseFloat(dailyWage.toFixed(2));
+              fineAmount += rate;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 4 };
+              meta.forcedStatus = 5; // Mark as Absent
+              meta.overrideAutomationNote = `Penalty: Early Exit Tier Limit reached${tierSuffix} (${earlyOutMinutes} mins)`;
+            } else if (['5', '6', '7', '8'].includes(rule.type)) {
+              const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+              fineAmount += res.amount;
+            } else if (rule.type === 'PERCENTAGE') {
+              const rate = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
+              fineAmount += rate;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: rate, rate, calculation_type: 2 };
+            } else if (rule.type === 'MINUTE_DEDUCTION') {
+              const deductMins = parseFloat(rule.value || 0);
+              finalWorkedMinutes -= deductMins;
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 2, deducted_mins: deductMins };
+            } else if (rule.type === 'NONE') {
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 5 };
+            } else {
+              const res = getRateIdAndAmount(rule.type, rule.value, earlyOutMinutes, dailyWage, hourlyWage);
+              fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+              fineAmount += res.amount;
+            }
+          } else if (template.early_exit_fine_type !== 'NONE') {
+            const earlyExitCount = await AttendanceDay.count({
+              where: {
+                employee_id: employeeId,
+                attendance_date: { [Op.gte]: monthStart, [Op.lt]: date },
+                company_id: employee.company_id,
+                [Op.and]: [sequelize.literal(`fine_data->'early_exit' IS NOT NULL`)],
+                status: { [Op.ne]: 2 }
+              },
+              transaction
+            });
+            if ((earlyExitCount + 1) > (template.early_exit_limit || 0)) {
+              if (template.early_exit_fine_type === 'FIXED') {
+                const amount = parseFloat(template.early_exit_fine_value || 0);
+                fineAmount += amount;
+                fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 1 };
+              } else if (template.early_exit_fine_type === 'MINUTE_DEDUCTION') {
+                finalWorkedMinutes -= parseFloat(template.early_exit_fine_value || 0);
+                fineData.early_exit = { minutes: earlyOutMinutes, amount: 0, rate: 0, calculation_type: 2, deducted_mins: parseFloat(template.early_exit_fine_value || 0) };
+              } else if (template.early_exit_fine_type === 'DEDUCTION') {
+                const res = getRateIdAndAmount(template.early_exit_fine_type, template.early_exit_fine_value, earlyOutMinutes, dailyWage, hourlyWage);
+                fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+                fineAmount += res.amount;
+              } else if (template.early_exit_fine_type === 'HALF_DAY') {
+                const amount = parseFloat((dailyWage * 0.5).toFixed(2));
+                fineAmount += amount;
+                fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 3 };
+                meta.forcedStatus = 1; // Mark as Half Day
+                meta.overrideAutomationNote = "Penalty: Early Exit Limit Exceeded (Half Day)";
+              } else if (template.early_exit_fine_type === 'FULL_DAY') {
+                const amount = parseFloat(dailyWage.toFixed(2));
+                fineAmount += amount;
+                fineData.early_exit = { minutes: earlyOutMinutes, amount, rate: amount, calculation_type: 4 };
+                meta.forcedStatus = 5; // Mark as Absent
+                meta.overrideAutomationNote = "Penalty: Early Exit Limit Exceeded (Full Day)";
+              }
+            }
           }
         }
 
-          rule = null;
-          let excessMins = 0;
-          // Excess Break Fine (using fineableBreakMinutes instead of totalBreakMinutes)
-          if (fineableBreakMinutes > (template.paid_break_duration_mins || 0)) {
-            excessMins = fineableBreakMinutes - (template.paid_break_duration_mins || 0);
-            fineData.excess_breaks.minutes = excessMins;
-            rule = getMatchingRule(excessMins, template.break_rules);
-            if (rule) {
-              if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
-                const amount = parseFloat(rule.value || 0);
-                fineAmount += amount;
-                fineData.excess_breaks = { minutes: excessMins, amount, rate: amount, calculation_type: 1 };
-              } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
-                const rate = parseFloat(rule.value || 0);
-                const amount = parseFloat(((excessMins / 60) * rate).toFixed(2));
-                fineAmount += amount;
-                fineData.excess_breaks = { minutes: excessMins, amount, rate, calculation_type: 2 };
-              } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
-                const rate = parseFloat((dailyWage * 0.5).toFixed(2));
-                fineAmount += rate;
-                fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 3 };
-              } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
-                const rate = parseFloat(dailyWage.toFixed(2));
-                fineAmount += rate;
-                fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 4 };
-              } else if (['5', '6', '7', '8'].includes(rule.type)) {
-                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
-                fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-                fineAmount += res.amount;
-              } else if (rule.type === 'PERCENTAGE') {
-                const rate = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
-                fineAmount += rate;
-                fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 2 };
-              } else if (rule.type === 'MINUTE_DEDUCTION') {
-                const deductMins = parseFloat(rule.value || 0);
-                finalWorkedMinutes -= deductMins;
-                fineData.excess_breaks = { minutes: excessMins, amount: 0, rate: 0, calculation_type: 2, deducted_mins: deductMins };
-              } else {
-                const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
-                fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
-                fineAmount += res.amount;
-              }
-            }
-          } 
-          
-          // --- FALLBACK: Default 1x Salary Deduction for Excess Breaks ---
-          if (fineData.excess_breaks.amount <= 0 && (!rule || rule.type !== 'NONE')) {
-            const res = getRateIdAndAmount(5, 1, excessMins, dailyWage, hourlyWage);
+        // --- FALLBACK: Default 1x Salary Deduction for Early Exit ---
+        if (fineData.early_exit.amount <= 0 && (!rule || (rule.type !== 'NONE' && rule.type !== 'MINUTE_DEDUCTION'))) {
+          const res = getRateIdAndAmount(5, 1, earlyOutMinutes, dailyWage, hourlyWage);
+          fineData.early_exit = { minutes: earlyOutMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+          fineAmount += res.amount;
+        }
+      }
+
+      rule = null;
+      let excessMins = 0;
+      // Excess Break Fine (using fineableBreakMinutes instead of totalBreakMinutes)
+      if (fineableBreakMinutes > (template.paid_break_duration_mins || 0)) {
+        excessMins = fineableBreakMinutes - (template.paid_break_duration_mins || 0);
+        fineData.excess_breaks.minutes = excessMins;
+        rule = getMatchingRule(excessMins, template.break_rules);
+        if (rule) {
+          if (rule.type === '1' || rule.type === 'FIXED' || rule.type === 'FIXED_AMOUNT') {
+            const amount = parseFloat(rule.value || 0);
+            fineAmount += amount;
+            fineData.excess_breaks = { minutes: excessMins, amount, rate: amount, calculation_type: 1 };
+          } else if (rule.type === '2' || rule.type === 'FIXED_PER_HOUR') {
+            const rate = parseFloat(rule.value || 0);
+            const amount = parseFloat(((excessMins / 60) * rate).toFixed(2));
+            fineAmount += amount;
+            fineData.excess_breaks = { minutes: excessMins, amount, rate, calculation_type: 2 };
+          } else if (rule.type === '3' || rule.type === 'HALF_DAY') {
+            const rate = parseFloat((dailyWage * 0.5).toFixed(2));
+            fineAmount += rate;
+            fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 3 };
+          } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
+            const rate = parseFloat(dailyWage.toFixed(2));
+            fineAmount += rate;
+            fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 4 };
+          } else if (['5', '6', '7', '8'].includes(rule.type)) {
+            const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
+            fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+            fineAmount += res.amount;
+          } else if (rule.type === 'PERCENTAGE') {
+            const rate = parseFloat((dailyWage * ((parseFloat(rule.value) || 0) / 100)).toFixed(2));
+            fineAmount += rate;
+            fineData.excess_breaks = { minutes: excessMins, amount: rate, rate, calculation_type: 2 };
+          } else if (rule.type === 'MINUTE_DEDUCTION') {
+            const deductMins = parseFloat(rule.value || 0);
+            finalWorkedMinutes -= deductMins;
+            fineData.excess_breaks = { minutes: excessMins, amount: 0, rate: 0, calculation_type: 2, deducted_mins: deductMins };
+          } else {
+            const res = getRateIdAndAmount(rule.type, rule.value, excessMins, dailyWage, hourlyWage);
             fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
             fineAmount += res.amount;
           }
+        }
+      }
 
-          // Shortage Fine (Work hours less than shift hours)
-          // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
-          //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;
-          //   // Check if there's a specific rule or just default to 1x salary deduction
-          //   const res = getRateIdAndAmount(shortageMins, hourlyWage, 1);
-          //   fineData.shortage = { minutes: shortageMins, amount: res.amount, rate: res.rateId };
-          //   fineAmount += res.amount;
-          // }
+      // --- FALLBACK: Default 1x Salary Deduction for Excess Breaks ---
+      if (fineData.excess_breaks.amount <= 0 && (!rule || rule.type !== 'NONE')) {
+        const res = getRateIdAndAmount(5, 1, excessMins, dailyWage, hourlyWage);
+        fineData.excess_breaks = { minutes: excessMins, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
+        fineAmount += res.amount;
+      }
+
+      // Shortage Fine (Work hours less than shift hours)
+      // if (regularWorkedMinutes < expectedShiftWorkMinutes) {
+      //   const shortageMins = expectedShiftWorkMinutes - regularWorkedMinutes;
+      //   // Check if there's a specific rule or just default to 1x salary deduction
+      //   const res = getRateIdAndAmount(shortageMins, hourlyWage, 1);
+      //   fineData.shortage = { minutes: shortageMins, amount: res.amount, rate: res.rateId };
+      //   fineAmount += res.amount;
+      // }
     }
   } // End if (shift)
 
@@ -1998,7 +2004,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   // --- ALLOW_NORMAL / COMP_OFF on Holiday/WeeklyOff: use first_in→last_out span with break deduction ---
   if ((meta.isHolidayAllowNormal || meta.isHolidayCompOff) && firstIn && lastOut) {
     const rawSpanMinutes = Math.max(0, dayjs(lastOut.punch_time).diff(dayjs(firstIn.punch_time), "minute"));
-    
+
     // Calculate break minutes to deduct (same logic as regular days)
     let breakMinutesToDeduct = 0;
     if (shift && shift.ShiftBreaks && shift.ShiftBreaks.length > 0) {
@@ -2006,16 +2012,16 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         if ((breakRule.is_automatic === true || breakRule.is_automatic === undefined) && breakRule.start_time && breakRule.end_time) {
           const breakStart = dayjs(`${date} ${breakRule.start_time}`);
           let breakEnd = dayjs(`${date} ${breakRule.end_time}`);
-          
+
           // Handle breaks that cross midnight for night shifts
           if (breakEnd.isBefore(breakStart)) {
             breakEnd = breakEnd.add(1, 'day');
           }
-          
+
           // Check if break period falls within work time
           const workStart = dayjs(firstIn.punch_time);
           const workEnd = dayjs(lastOut.punch_time);
-          
+
           if (workStart.isBefore(breakEnd) && workEnd.isAfter(breakStart)) {
             const actualBreakStart = workStart.isAfter(breakStart) ? workStart : breakStart;
             const actualBreakEnd = workEnd.isBefore(breakEnd) ? workEnd : breakEnd;
@@ -2063,7 +2069,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       finalWorkedMinutes = workedToSave;
       overtimeMinutes = ot;
       earlyOvertimeMinutes = 0;
-      
+
       if (ot > 0) {
         const otRes = getRateIdAndAmount(5, 1, ot, dailyWage, hourlyWage);
         lateOtData = { minutes: ot, amount: otRes.amount, rate: otRes.rate, calculation_type: otRes.rateId };
@@ -2187,7 +2193,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     employee_id: employeeId,
     attendance_date: date,
   }, { attributes: ['status'] }, transaction, false, {});
-  
+
   if (existingDayForStatus) {
     // If preserveStatus is set (e.g. Manual Punch), strictly keep the existing status
     if (meta.preserveStatus) {
@@ -2210,7 +2216,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (status === 0 || status === 1) { // 0: Present, 1: Half Day
       const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
       const minHalfDay = shift ? (shift.min_half_day_minutes || 240) : 240;
-      
+
       const requiresOut = template ? template.require_punch_out : true;
 
       if (status === 0) {
@@ -2354,6 +2360,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     console.log(`[Rebuild] Creating new day record for ${employeeId} on ${date} with status ${status}...`);
     await commonQuery.createRecord(AttendanceDay, attendancePayload, transaction);
   }
+
+  // [MOD] Absent Fine Logic (With Punches Case)
+  // Recalculate ALL absent records in the month so fines are order-independent.
+  if (status === 5 && template && template.allow_absent_fine && Array.isArray(template.absent_fine_rules) && template.absent_fine_rules.length > 0) {
+    await recalculateMonthAbsentFines(employeeId, date, employee, transaction);
+  }
 }
 
 async function manualPunch(employeeId, date, inTime, outTime, meta, transaction = null) {
@@ -2397,11 +2409,11 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   const dayId = attendanceDay.id;
   // Update attendance day with the resolved shift and branch
   if (shift && attendanceDay.shift_id != shift.id) {
-    await commonQuery.updateRecordById(AttendanceDay, dayId, { 
-        shift_id: shift.id,
-        branch_id: commonMeta.branch_id || attendanceDay.branch_id
+    await commonQuery.updateRecordById(AttendanceDay, dayId, {
+      shift_id: shift.id,
+      branch_id: commonMeta.branch_id || attendanceDay.branch_id
     }, transaction, true, { company_id: true });
-    
+
     attendanceDay.shift_id = shift.id;
     attendanceDay.branch_id = commonMeta.branch_id || attendanceDay.branch_id;
   }
@@ -2636,7 +2648,7 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
 
   // Determine if it's a working state based on status OR worked time on non-working days
   let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
-  
+
   // Important: If it's a Holiday (4) or Weekly Off (3), check if they actually worked (worked_minutes > 0 or has times)
   if (!isWorkingStatus && [3, 4].includes(Number(status))) {
     const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
@@ -2957,6 +2969,114 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     await commonQuery.bulkCreate(AttendanceDay, payloads, {}, transaction);
   }
 }
+/**
+ * Recalculate Absent Fines for the entire month
+ * This ensures that if you mark an employee absent on May 8, then May 10, then May 12,
+ * the fines are updated correctly across all of them regardless of the order of updates.
+ */
+async function recalculateMonthAbsentFines(employeeId, date, employee, transaction) {
+  const startOfMonth = dayjs(date).startOf('month').format('YYYY-MM-DD');
+  const endOfMonth = dayjs(date).endOf('month').format('YYYY-MM-DD');
+
+  // Fetch all absent days for this employee in this month
+  const absentDays = await commonQuery.findAllRecords(AttendanceDay, {
+    employee_id: employeeId,
+    attendance_date: { [Op.between]: [startOfMonth, endOfMonth] },
+    status: 5, // ABSENT
+    company_id: employee.company_id
+  }, { order: [['attendance_date', 'ASC']] }, transaction);
+
+  if (!absentDays || absentDays.length === 0) return { amount: 0, data: null };
+
+  const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+  if (!template || !template.allow_absent_fine || !Array.isArray(template.absent_fine_rules) || template.absent_fine_rules.length === 0) {
+    // Clear all fines for this month if rules are gone or disabled
+    for (const day of absentDays) {
+      await commonQuery.updateRecordById(AttendanceDay, day.id, {
+        fine_amount: 0,
+        fine_data: null
+      }, transaction);
+    }
+    return { amount: 0, data: null };
+  }
+
+  // Get salary info for wage-based calculations
+  const salaryTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: employeeId, status: 0 }, {}, transaction);
+  
+  if (!salaryTemplate) {
+      console.log(`[Absent Fine] No salary template found for employee ${employeeId}. Skipping wage-based fines.`);
+      return { amount: 0, data: null };
+  }
+
+  const ctcMonthly = parseFloat(salaryTemplate.ctc_monthly || 0);
+  const daysInMonth = dayjs(date).daysInMonth();
+  
+  // Default to 30 days if no specific basis is provided, consistent with payroll defaults
+  let dailyWage = ctcMonthly / (salaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS' ? 30 : daysInMonth);
+  
+  // If it's a daily/hourly rate employee
+  if (salaryTemplate.salary_type === "Daily") {
+      dailyWage = parseFloat(salaryTemplate.daily_rate || 0);
+  } else if (salaryTemplate.salary_type === "Hourly") {
+      dailyWage = parseFloat(salaryTemplate.hourly_rate || 0) * 8; // Assuming 8 unit hours
+  }
+
+  let totalAbsentFineAmount = 0;
+  let currentFineData = null;
+
+  for (let i = 0; i < absentDays.length; i++) {
+    const day = absentDays[i];
+    const occurrence = i + 1;
+
+    // Find matching rule based on occurrence
+    // Rule matches if occurrence > occurrence_limit
+    const rule = [...template.absent_fine_rules]
+      .sort((a, b) => (b.occurrence_limit || 0) - (a.occurrence_limit || 0))
+      .find(r => occurrence > (r.occurrence_limit || 0));
+
+    if (rule) {
+      let amount = 0;
+      const type = String(rule.action_after_limit);
+
+      if (type === '1') amount = parseFloat(rule.action_value || 0); // Fixed
+      else if (type === '5') amount = dailyWage; // 1x Salary
+      else if (type === '6') amount = dailyWage * 1.5; // 1.5x Salary
+      else if (type === '7') amount = dailyWage * 2; // 2x Salary
+      else if (type === '8') amount = dailyWage * 3; // 3x Salary
+      else if (type === '3') amount = dailyWage / 2; // Half Day (approximation)
+      else if (type === '4') amount = dailyWage; // Full Day
+
+      const fineData = {
+        absent_fine: {
+          occurrence,
+          rule: rule,
+          amount: parseFloat(amount.toFixed(2)),
+          label: "Absent Fine"
+        }
+      };
+
+      // Update the day record
+      await commonQuery.updateRecordById(AttendanceDay, day.id, {
+        fine_amount: parseFloat(amount.toFixed(2)),
+        fine_data: fineData
+      }, transaction);
+
+      if (dayjs(day.attendance_date).isSame(date)) {
+        totalAbsentFineAmount = amount;
+        currentFineData = fineData;
+      }
+    } else {
+      // Clear fine if no rule matches
+      await commonQuery.updateRecordById(AttendanceDay, day.id, {
+        fine_amount: 0,
+        fine_data: null
+      }, transaction);
+    }
+  }
+
+  return { amount: totalAbsentFineAmount, data: currentFineData };
+}
+
 module.exports = {
   punch,
   rebuildAttendanceDay,
@@ -2964,5 +3084,6 @@ module.exports = {
   getOrCreateAttendanceDay,
   syncAttendanceToLeaveBalance,
   bulkSyncAttendanceDays,
-  getDayOffInfo
+  getDayOffInfo,
+  recalculateMonthAbsentFines
 };

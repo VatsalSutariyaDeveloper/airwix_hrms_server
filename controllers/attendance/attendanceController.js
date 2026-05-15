@@ -28,13 +28,13 @@ exports.attendancePunch = async (req, res) => {
     let punchImage = null;
     if (req.files && (req.files.image || req.files['image'])) {
       const savedFiles = await uploadFile(
-        req, 
-        res, 
-        constants.ATTENDANCE_FOLDER, 
+        req,
+        res,
+        constants.ATTENDANCE_FOLDER,
         t
       );
       punchImage = savedFiles.image || savedFiles['image'];
-      
+
       if (!punchImage) {
         await t.rollback();
         return res.error(constants.SERVER_ERROR, { message: "Image upload failed" });
@@ -49,20 +49,20 @@ exports.attendancePunch = async (req, res) => {
     }
 
     const result = await punch(
-      req.body.employee_id, 
+      req.body.employee_id,
       {
-      ...req.body,
-      user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
-      company_id: req.user.company_id,
-      branch_id: req.user.branch_id,
-      ip_address: req.ip,
-      latitude: req.body.latitude || null,
-      longitude: req.body.longitude || null,
-      device_id: resolvedDeviceId,
-      image_name: punchImage,
-      access: req.user.access
-    }, t);
-    
+        ...req.body,
+        user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
+        company_id: req.user.company_id,
+        branch_id: req.user.branch_id,
+        ip_address: req.ip,
+        latitude: req.body.latitude || null,
+        longitude: req.body.longitude || null,
+        device_id: resolvedDeviceId,
+        image_name: punchImage,
+        access: req.user.access
+      }, t);
+
     await t.commit();
     return res.success(constants.ACTION_SUCCESSFUL, result);
   } catch (err) {
@@ -89,7 +89,7 @@ exports.syncPunches = async (req, res) => {
 
     // Resolve Device ID once for the entire sync batch
     let resolvedDeviceId = null;
-    console.log("req.user",req.user)
+    console.log("req.user", req.user)
     if (['attendance', 'canteen'].includes(req.user?.access)) {
       const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
       resolvedDeviceId = device ? device.id : req.user.id;
@@ -107,13 +107,13 @@ exports.syncPunches = async (req, res) => {
     for (const punchData of sortedPunches) {
       delete punchData.punch_type;
       console.log(`\n--- [Sync] Processing Punch: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
-      console.log(`\n--- [Sync] Processing Punch:`,punchData);
-      
+      console.log(`\n--- [Sync] Processing Punch:`, punchData);
+
       try {
         // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
         if (punchData.image) {
-           punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, t);
+          punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, t);
         }
 
         const result = await punch(
@@ -130,24 +130,24 @@ exports.syncPunches = async (req, res) => {
             image_name: punchImage,
             face_descriptor: punchData.face_descriptor || null,
             match_score: punchData.match_score || null,
-            bypassGapCheck: true, 
+            bypassGapCheck: true,
             skipRebuild: false,
             access: req.user.access
           },
           t
         );
-        results.push({ 
-          employee_id: punchData.employee_id, 
-          punch_time: punchData.punch_time, 
-          success: true, 
+        results.push({
+          employee_id: punchData.employee_id,
+          punch_time: punchData.punch_time,
+          success: true,
           punch_id: result.punchId,
-          type: result.punchType 
+          type: result.punchType
         });
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         // Log the failure for this specific punch but proceed with the sync
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
-        
+
         // 🚀 NEW: Store the failed punch attempt in ActivityLog for debugging
         try {
           await ActivityLog.create({
@@ -157,8 +157,8 @@ exports.syncPunches = async (req, res) => {
             entity_name: "AttendanceSync",
             action_type: "ERROR",
             log_message: `Sync Failed: ${punchErr.message || "Unknown Error"}`,
-            new_data: { 
-              ...punchData, 
+            new_data: {
+              ...punchData,
               error: punchErr.message,
               stack: punchErr.stack
             },
@@ -169,24 +169,24 @@ exports.syncPunches = async (req, res) => {
           console.error("❌ Failed to log sync error to DB:", logErr);
         }
 
-        results.push({ 
-          employee_id: punchData.employee_id, 
-          punch_time: punchData.punch_time, 
-          success: false, 
-          error: punchErr.message || "Unknown error" 
+        results.push({
+          employee_id: punchData.employee_id,
+          punch_time: punchData.punch_time,
+          success: false,
+          error: punchErr.message || "Unknown error"
         });
       }
     }
 
     await t.commit();
-    return res.success(constants.ACTION_SUCCESSFUL, { 
+    return res.success(constants.ACTION_SUCCESSFUL, {
       sync_summary: {
         total_received: punches.length,
         total_processed: results.length,
         success_count: results.filter(r => r.success).length,
         fail_count: results.filter(r => !r.success).length
       },
-      results 
+      results
     });
   } catch (err) {
     await t.rollback();
@@ -229,9 +229,9 @@ exports.getAttendanceSummary = async (req, res) => {
     };
 
     // Create a shared employee filter for all summary queries
-    const employeeWhere = { 
-      ...consolidatedFilter, 
-      company_id: req.user.company_id, 
+    const employeeWhere = {
+      ...consolidatedFilter,
+      company_id: req.user.company_id,
       branch_id: req.user.branch_id,
       [Op.and]: [...joiningDateFilter[Op.and]]
     };
@@ -247,7 +247,7 @@ exports.getAttendanceSummary = async (req, res) => {
 
     // 1.5 AUTO-SYNC: Create records for WO/Holiday/Leave if missing
     // This allows them to show up in summary and list immediately.
-    
+
     // try {
     //     const isPastOrToday = dayjs(targetDate).isBefore(dayjs().add(1, 'day'), 'day');
     //     if (isPastOrToday) {
@@ -257,7 +257,7 @@ exports.getAttendanceSummary = async (req, res) => {
     //             { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
     //             null, 
     //         );
-            
+
 
     //         if (employeesToSync.length > 0) {
     //           await bulkSyncAttendanceDays(
@@ -282,15 +282,15 @@ exports.getAttendanceSummary = async (req, res) => {
 
     // 2. FETCH PAGINATED LIST (Lightweight: only 20 records with full associations)
     const employeesResult = await commonQuery.fetchPaginatedData(
-      Employee, 
-      { ...req.body, status: 0, filter: consolidatedFilter }, 
-      fieldConfig, 
+      Employee,
+      { ...req.body, status: 0, filter: consolidatedFilter },
+      fieldConfig,
       {
         include: [
           {
             model: AttendanceDay,
             as: "attendanceDays",
-            where: { attendance_date: targetDate, status: {[Op.ne]: 2} },
+            where: { attendance_date: targetDate, status: { [Op.ne]: 2 } },
             limit: 1,
             order: [["id", "DESC"]],
             required: false,
@@ -330,7 +330,7 @@ exports.getAttendanceSummary = async (req, res) => {
           },
           {
             model: ShiftTemplate,
-            as: "shiftTemplate",  
+            as: "shiftTemplate",
             attributes: ["id", "shift_name", "start_time", "end_time"],
             include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
           },
@@ -352,15 +352,15 @@ exports.getAttendanceSummary = async (req, res) => {
       const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
 
       const [itemHolidays, itemWeeklyOffs, itemOutDuties] = await Promise.all([
-        commonQuery.findAllRecords(EmployeeHoliday, { 
-          employee_id: { [Op.in]: itemIds }, 
-          date: targetDate, 
-          status: 0 
+        commonQuery.findAllRecords(EmployeeHoliday, {
+          employee_id: { [Op.in]: itemIds },
+          date: targetDate,
+          status: 0
         }),
-        commonQuery.findAllRecords(EmployeeWeeklyOff, { 
-          employee_id: { [Op.in]: itemIds }, 
-          day_of_week: dayOfWeek, 
-          status: 0, 
+        commonQuery.findAllRecords(EmployeeWeeklyOff, {
+          employee_id: { [Op.in]: itemIds },
+          day_of_week: dayOfWeek,
+          status: 0,
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
         }),
@@ -390,22 +390,22 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
           day.setDataValue('is_out_duty_approved', itemOutDutyMap.has(emp.id));
           day.setDataValue('branch_name', day.branch?.branch_name);
-          
+
           // Enhanced Status Text logic (Same as monthly summary)
           const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
-             const h = itemHolidays.find(h => h.employee_id === emp.id);
-             statusText = h ? h.name : "Holiday";
+            const h = itemHolidays.find(h => h.employee_id === emp.id);
+            statusText = h ? h.name : "Holiday";
           } else if (day.status === 6) {
-             statusText = day.leaveCategory?.leave_category_name || "Leave";
+            statusText = day.leaveCategory?.leave_category_name || "Leave";
           } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
-             statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
+            statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
           } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
-             statusText = day.leaveCategory.leave_category_name;
+            statusText = day.leaveCategory.leave_category_name;
           }
           day.setDataValue('status_text', statusText);
-          
+
           // Map employee and worker type labels
           const employeeTypeMap = { 1: "Staff", 2: "Worker", 3: "Contractor" };
           const workerTypeMap = { 1: "On-role", 2: "Off-role" };
@@ -423,23 +423,57 @@ exports.getAttendanceSummary = async (req, res) => {
             day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
           }
           if (day.attendancePunches) {
-            day.attendancePunches.sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time));
+            day.attendancePunches.sort((a, b) => new Date(a.punch_time) - new Date(b.punch_time));
           }
         }
       });
     }
 
+    // 2.7 Fetch Monthly Absent Counts for these employees to support UI limit checks
+    try {
+        const startOfMonth = dayjs(targetDate).startOf('month').format("YYYY-MM-DD");
+        const endOfMonth = dayjs(targetDate).endOf('month').format("YYYY-MM-DD");
+
+        const absentCounts = await AttendanceDay.findAll({
+            attributes: ['employee_id', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+            where: {
+                employee_id: { [Op.in]: itemIds },
+                attendance_date: { [Op.between]: [startOfMonth, endOfMonth] },
+                status: 5, // ABSENT
+            },
+            group: ['employee_id'],
+            raw: true
+        });
+
+        const absentCountMap = {};
+        absentCounts.forEach(ac => {
+            absentCountMap[ac.employee_id] = parseInt(ac.count);
+        });
+
+        employeesResult.items = employeesResult.items.map(emp => {
+            const empJson = emp.get ? emp.get({ plain: true }) : emp;
+            const empId = empJson.id;
+            const count = absentCountMap[empId] || 0;
+            return {
+                ...empJson,
+                monthly_absent_count: count
+            };
+        });
+    } catch (countErr) {
+        console.error("Failed to fetch monthly absent counts:", countErr);
+    }
+
     // 3. CALCULATE SUMMARY (Efficient aggregate query on AttendanceDay)
-    
+
     // Total matching employees for the summary context
     const totalStaff = employeesResult.total;
 
     // Aggregate counts from AttendanceDay table for this date
     // This is much faster than fetching objects.
     const dayStats = await commonQuery.findAllRecords(
-      AttendanceDay, 
-      { 
-        attendance_date: targetDate, 
+      AttendanceDay,
+      {
+        attendance_date: targetDate,
         status: { [Op.ne]: 2 },
         company_id: req.user.company_id
       },
@@ -496,7 +530,7 @@ exports.getAttendanceSummary = async (req, res) => {
     dayStats.forEach(stat => {
       const count = parseInt(stat.count);
       const status = parseInt(stat.status);
-      
+
       if (status === 0) summary.present += count;
       else if (status === 12) summary.present += count; // Out Duty
       else if (status === 1) summary.halfDay += count;
@@ -507,7 +541,7 @@ exports.getAttendanceSummary = async (req, res) => {
       else if (status === 5) summary.absent += count;
       else if (status === 7) summary.present += count; // Overtime Day
       else if (status === 9) summary.incomplete += count;
-      
+
       totalAccounted += count;
       totalFineMins += (parseInt(stat.total_fine) || 0);
       totalOvertimeMins += (parseInt(stat.total_ot) || 0);
@@ -527,8 +561,8 @@ exports.getAttendanceSummary = async (req, res) => {
     summary.overtimeHours = `${Math.floor(totalOvertimeMins / 60)}h ${totalOvertimeMins % 60}m`;
     summary.fineHours = `${Math.floor(totalFineMins / 60)}h ${totalFineMins % 60}m`;
 
-    return res.ok({ 
-      summary, 
+    return res.ok({
+      summary,
       items: employeesResult.items,
       total: employeesResult.total,
       currentPage: employeesResult.currentPage,
@@ -564,22 +598,22 @@ exports.updateAttendanceDay = async (req, res) => {
     }, t, false, { company_id: true });
     const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
-    
+
     // Get shift_id from employee if available
     const shift_id = emp && emp.shift_template ? emp.shift_template : null;
 
     // Add conditional required fields based on status
     if ([0, 12].includes(req.body.status)) {
-      if(!req.body.note && isTrackInOutOn){
+      if (!req.body.note && isTrackInOutOn) {
         // requiredFields.first_in = "In Time";
       }
     } else if ([1, 6, 13].includes(req.body.status)) {
-      if(!req.body.note && isTrackInOutOn){
+      if (!req.body.note && isTrackInOutOn) {
         // requiredFields.first_in = "In Time";
         // requiredFields.last_out = "Out Time";
       }
       if ([1, 6].includes(req.body.status)) {
-          requiredFields.leave_category_id = "Leave Category";
+        requiredFields.leave_category_id = "Leave Category";
       }
     }
 
@@ -589,12 +623,12 @@ exports.updateAttendanceDay = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
-    let { 
-      employee_id, 
-      attendance_date, 
-      status, 
-      first_in, 
-      last_out, 
+    let {
+      employee_id,
+      attendance_date,
+      status,
+      first_in,
+      last_out,
       fine_minutes,
       late_minutes,
       early_out_minutes,
@@ -626,83 +660,83 @@ exports.updateAttendanceDay = async (req, res) => {
     const salaryTemplate = emp?.employeeSalaryTemplate;
     const holidayPolicy = template ? template.holiday_policy : 'BLOCK_ATTENDANCE';
     const lwpBasis = salaryTemplate ? salaryTemplate.lwp_calculation_basis : 'WORKING_DAYS';
-    
+
     // Determine effective status evaluating if explicitly passed or inherited
     const effectiveStatusForProcessing = (status !== undefined && status !== null) ? Number(status) : Number(day.status);
 
     if (effectiveStatusForProcessing === 0) {
-        const targetDateJS = dayjs(attendance_date);
-        const dayOfWeek = targetDateJS.day();
-        const weekNo = Math.ceil(targetDateJS.date() / 7);
+      const targetDateJS = dayjs(attendance_date);
+      const dayOfWeek = targetDateJS.day();
+      const weekNo = Math.ceil(targetDateJS.date() / 7);
 
-        const isHL = (emp.employeeHolidays || []).length > 0;
-        const isWO = (emp.employeeWeeklyOffs || []).find(wo => 
-            wo.day_of_week === dayOfWeek && 
-            (wo.week_no === 0 || wo.week_no === weekNo)
-        );
+      const isHL = (emp.employeeHolidays || []).length > 0;
+      const isWO = (emp.employeeWeeklyOffs || []).find(wo =>
+        wo.day_of_week === dayOfWeek &&
+        (wo.week_no === 0 || wo.week_no === weekNo)
+      );
 
-        if (isHL || isWO) {
-            // 1. Extra Overtime Logic
-            if (holidayPolicy === 'ALLOW_NORMAL') {
-                if (salaryTemplate) {
-                    const salaryType = (salaryTemplate.salary_type || 'Monthly').toString();
-                    const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
-                    const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
+      if (isHL || isWO) {
+        // 1. Extra Overtime Logic
+        if (holidayPolicy === 'ALLOW_NORMAL') {
+          if (salaryTemplate) {
+            const salaryType = (salaryTemplate.salary_type || 'Monthly').toString();
+            const daysInCalc = lwpBasis === 'FIXED_30_DAYS' ? 30 : targetDateJS.daysInMonth();
+            const monthlyGross = parseFloat(salaryTemplate.ctc_monthly || 0);
 
-                    let daySalaryAddress = 0;
-                    if (salaryType === 'Hourly') {
-                        const hourlyRate = parseFloat(salaryTemplate.hourly_rate || 0);
-                        let effectiveWorkedMinutes = parseFloat((worked_minutes !== undefined && worked_minutes !== null) ? worked_minutes : (day.worked_minutes || 0)) || 0;
+            let daySalaryAddress = 0;
+            if (salaryType === 'Hourly') {
+              const hourlyRate = parseFloat(salaryTemplate.hourly_rate || 0);
+              let effectiveWorkedMinutes = parseFloat((worked_minutes !== undefined && worked_minutes !== null) ? worked_minutes : (day.worked_minutes || 0)) || 0;
 
-                        if (!(effectiveWorkedMinutes > 0)) {
-                            const calcFirstIn = first_in !== undefined ? first_in : day.first_in;
-                            const calcLastOut = last_out !== undefined ? last_out : day.last_out;
-                            const breakMins = parseFloat((total_break_minutes !== undefined && total_break_minutes !== null) ? total_break_minutes : (day.total_break_minutes || 0)) || 0;
-                            if (calcFirstIn && calcLastOut) {
-                                let inTime = dayjs(calcFirstIn);
-                                let outTime = dayjs(calcLastOut);
-                                if (outTime.isBefore(inTime)) {
-                                    outTime = outTime.add(1, 'day');
-                                }
-                                const diffMins = outTime.diff(inTime, 'minute');
-                                effectiveWorkedMinutes = Math.max(0, diffMins - breakMins);
-                            }
-                        }
-
-                        let hoursForPay = effectiveWorkedMinutes / 60;
-                        if (!(hoursForPay > 0)) {
-                            const shift = emp?.shiftTemplate;
-                            if (shift) {
-                                const payableMins = parseFloat(shift.total_payable_hours || 0) || parseFloat(shift.min_full_day_minutes || 0) || 0;
-                                if (payableMins > 0) hoursForPay = payableMins / 60;
-                            }
-                        }
-                        if (!(hoursForPay > 0)) hoursForPay = 8;
-
-                        if (hourlyRate > 0) {
-                            daySalaryAddress = hourlyRate * hoursForPay;
-                        } else {
-                            daySalaryAddress = monthlyGross / (daysInCalc || 30);
-                        }
-                    } else if (salaryType === 'Daily') {
-                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
-                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
-                    } else {
-                        const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
-                        daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
-                    }
-
-                    const currentOvertime = parseFloat(overtime_amount || 0);
-                    overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
+              if (!(effectiveWorkedMinutes > 0)) {
+                const calcFirstIn = first_in !== undefined ? first_in : day.first_in;
+                const calcLastOut = last_out !== undefined ? last_out : day.last_out;
+                const breakMins = parseFloat((total_break_minutes !== undefined && total_break_minutes !== null) ? total_break_minutes : (day.total_break_minutes || 0)) || 0;
+                if (calcFirstIn && calcLastOut) {
+                  let inTime = dayjs(calcFirstIn);
+                  let outTime = dayjs(calcLastOut);
+                  if (outTime.isBefore(inTime)) {
+                    outTime = outTime.add(1, 'day');
+                  }
+                  const diffMins = outTime.diff(inTime, 'minute');
+                  effectiveWorkedMinutes = Math.max(0, diffMins - breakMins);
                 }
+              }
+
+              let hoursForPay = effectiveWorkedMinutes / 60;
+              if (!(hoursForPay > 0)) {
+                const shift = emp?.shiftTemplate;
+                if (shift) {
+                  const payableMins = parseFloat(shift.total_payable_hours || 0) || parseFloat(shift.min_full_day_minutes || 0) || 0;
+                  if (payableMins > 0) hoursForPay = payableMins / 60;
+                }
+              }
+              if (!(hoursForPay > 0)) hoursForPay = 8;
+
+              if (hourlyRate > 0) {
+                daySalaryAddress = hourlyRate * hoursForPay;
+              } else {
+                daySalaryAddress = monthlyGross / (daysInCalc || 30);
+              }
+            } else if (salaryType === 'Daily') {
+              const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+              daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
+            } else {
+              const dailyRate = parseFloat(salaryTemplate.daily_rate || 0);
+              daySalaryAddress = dailyRate > 0 ? dailyRate : (monthlyGross / (daysInCalc || 30));
             }
+
+            const currentOvertime = parseFloat(overtime_amount || 0);
+            overtime_amount = (currentOvertime + daySalaryAddress).toFixed(2);
+          }
         }
+      }
     }
 
     let needsPunchUpdate = false;
     let effectiveFirstIn = first_in;
     let effectiveLastOut = last_out;
-    
+
     // Determine Effective Status (Current DB status if not changing)
     // let effectiveStatus = status !== undefined ? status : day.status;
 
@@ -721,60 +755,60 @@ exports.updateAttendanceDay = async (req, res) => {
     const isNonWorkingStatus = [3, 4, 5, 6].includes(effectiveStatus);
 
     if (isTimeUpdate || req.body.punches || (status !== undefined && status !== null)) {
-        needsPunchUpdate = true;
+      needsPunchUpdate = true;
     }
 
     if (isNonWorkingStatus) {
-        // Only clear punches if they are NOT being explicitly updated for WO(3) or HL(4)
-        const isPunchAllowed = [3, 4].includes(effectiveStatus) && isTimeUpdate;
-        
-        if (!isPunchAllowed) {
-             effectiveFirstIn = null;
-             effectiveLastOut = null;
-             needsPunchUpdate = true;
-        }
+      // Only clear punches if they are NOT being explicitly updated for WO(3) or HL(4)
+      const isPunchAllowed = [3, 4].includes(effectiveStatus) && isTimeUpdate;
+
+      if (!isPunchAllowed) {
+        effectiveFirstIn = null;
+        effectiveLastOut = null;
+        needsPunchUpdate = true;
+      }
     }
 
     // 🔄 Auto-calculate Times if Overtime/Fine is Adjusted (and Times are NOT explicitly provided and Status IS provided)
     // We only auto-calculate if status is being set/updated as per user request to avoid touching punches on detail-only updates.
     if (!isNonWorkingStatus && !isTimeUpdate && (status !== undefined && status !== null) && day.shift_id && (overtime_minutes !== undefined || fine_minutes !== undefined)) {
-        const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
-        if (shift) {
-            needsPunchUpdate = true;
+      const shift = await commonQuery.findOneRecord(ShiftTemplate, { id: day.shift_id });
+      if (shift) {
+        needsPunchUpdate = true;
 
-            const firstInPunch = await commonQuery.findOneRecord(AttendancePunch, {
-                day_id: day.id,
-                punch_type: 'IN',
-                status: 0
-            }, { order: [['punch_time', 'ASC']] }, t, true, { company_id: true });
+        const firstInPunch = await commonQuery.findOneRecord(AttendancePunch, {
+          day_id: day.id,
+          punch_type: 'IN',
+          status: 0
+        }, { order: [['punch_time', 'ASC']] }, t, true, { company_id: true });
 
-            const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
-                day_id: day.id,
-                punch_type: 'OUT',
-                status: 0
-            }, { order: [['punch_time', 'DESC']] }, t, true, { company_id: true });
+        const lastOutPunch = await commonQuery.findOneRecord(AttendancePunch, {
+          day_id: day.id,
+          punch_type: 'OUT',
+          status: 0
+        }, { order: [['punch_time', 'DESC']] }, t, true, { company_id: true });
 
-            // 1. LATE ENTRY (Affects First In)
-            if (fine_minutes !== undefined) {
-                const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
-                effectiveFirstIn = baseIn.add(fine_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
-            }
-
-            // 2. LATE OVERTIME or EARLY EXIT (Affects Last Out)
-            if (overtime_minutes !== undefined) {
-                let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
-                if (shift.is_night_shift || shift.end_time < shift.start_time) {
-                    shiftEnd = shiftEnd.add(1, 'day');
-                }
-
-                let baseOut = lastOutPunch ? dayjs(lastOutPunch.punch_time) : shiftEnd;
-
-                if (overtime_minutes !== undefined) {
-                    const lateOvertime = parseFloat(overtime_minutes || 0);
-                    effectiveLastOut = baseOut.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
-                }
-            }
+        // 1. LATE ENTRY (Affects First In)
+        if (fine_minutes !== undefined) {
+          const baseIn = firstInPunch ? dayjs(firstInPunch.punch_time) : dayjs(`${attendance_date} ${shift.start_time}`);
+          effectiveFirstIn = baseIn.add(fine_minutes, 'minute').format("YYYY-MM-DD HH:mm:ss");
         }
+
+        // 2. LATE OVERTIME or EARLY EXIT (Affects Last Out)
+        if (overtime_minutes !== undefined) {
+          let shiftEnd = dayjs(`${attendance_date} ${shift.end_time}`);
+          if (shift.is_night_shift || shift.end_time < shift.start_time) {
+            shiftEnd = shiftEnd.add(1, 'day');
+          }
+
+          let baseOut = lastOutPunch ? dayjs(lastOutPunch.punch_time) : shiftEnd;
+
+          if (overtime_minutes !== undefined) {
+            const lateOvertime = parseFloat(overtime_minutes || 0);
+            effectiveLastOut = baseOut.add(lateOvertime, 'minute').format("YYYY-MM-DD HH:mm:ss");
+          }
+        }
+      }
     }
 
     // Only trigger punch update if strictly needed
@@ -792,7 +826,7 @@ exports.updateAttendanceDay = async (req, res) => {
           force_status: req.body.force_status === true
         })
       );
-      
+
       // Check if today is a holiday - if so, store working hours as overtime
       let isTodayHoliday = false;
       if (emp.holiday_template) {
@@ -822,7 +856,7 @@ exports.updateAttendanceDay = async (req, res) => {
       }
 
       const isNonWorkingForPolicy = isTodayHoliday || isTodayWeeklyOff;
-      
+
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
@@ -858,7 +892,7 @@ exports.updateAttendanceDay = async (req, res) => {
         effectiveStatus = refreshedDay.status;
       }
     }
- 
+
     const payload = {
       employee_id,
       attendance_date,
@@ -869,158 +903,177 @@ exports.updateAttendanceDay = async (req, res) => {
       late_minutes: late_minutes !== undefined ? late_minutes : (day ? day.late_minutes : 0),
       early_out_minutes: early_out_minutes !== undefined ? early_out_minutes : (day ? day.early_out_minutes : 0),
     };
-    
+
     if (shift_id) payload.shift_id = shift_id;
 
     // Clear data for non-working statuses
     if ([3, 4, 5, 6].includes(effectiveStatus)) {
-        // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
-        const isPunchAllowed = [3, 4].includes(effectiveStatus) && (payload.first_in || payload.last_out || overtime_minutes);
+      // ALLOW overtime/punch for WO(3) and HL(4) if times are explicitly provided
+      const isPunchAllowed = [3, 4].includes(effectiveStatus) && (payload.first_in || payload.last_out || overtime_minutes);
 
-        if (!isPunchAllowed) {
-            payload.first_in = null;
-            payload.last_out = null;
-            payload.shift_id = null;
-            payload.worked_minutes = 0;
-            payload.total_break_minutes = 0;
-            payload.overtime_minutes = 0;
-            payload.overtime_data = null;
-            payload.overtime_amount = 0; // Ensure amount is cleared
-        } else {
-             // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
-            if (first_in !== undefined) payload.first_in = first_in;
-            if (last_out !== undefined) payload.last_out = last_out;
-            if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
-            
-            // Re-calculate Overtime from Data if provided
-            if (overtime_data !== undefined) {
-                const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-                payload.overtime_data = finalOTData;
-                if (finalOTData && typeof finalOTData === 'object') {
-                    const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
-                    const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
-                    
-                    // Prioritize calculated values if provided summary is 0/null
-                    payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
-                    payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
-                } else {
-                    payload.overtime_amount = 0;
-                    payload.overtime_minutes = 0;
-                }
-            } else {
-                if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-                if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-            }
-        }
-
-        // Always clear these for non-working status
-        payload.fine_minutes = 0;
-        payload.fine_data = null;
-        payload.fine_amount = 0; // Ensure fine amount is cleared
-        
-        if (effectiveStatus !== 6) {
-            payload.leave_category_id = null;
-            payload.leave_session = null;
-        } else {
-             // For LEAVE (6), we MUST assign the category/session if provided
-             if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
-             if (leave_session !== undefined) payload.leave_session = leave_session;
-             if (overtime_data !== undefined) {
-                 const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-                 payload.overtime_data = finalOTData;
-                 if (finalOTData && typeof finalOTData === 'object') {
-                     const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
-                     const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
-                     
-                     // Prioritize calculated values if provided summary is 0/null
-                     payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
-                     payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
-                 } else {
-                     payload.overtime_amount = 0;
-                     payload.overtime_minutes = 0;
-                 }
-             } else {
-                 if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-                 if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-             }
-        }
-    } else {
-        // Skip fine and overtime calculations for out-duty days (status 12 and 13)
-        const isOutDutyStatus = [12, 13].includes(effectiveStatus);
-
+      if (!isPunchAllowed) {
+        payload.first_in = null;
+        payload.last_out = null;
+        payload.shift_id = null;
+        payload.worked_minutes = 0;
+        payload.total_break_minutes = 0;
+        payload.overtime_minutes = 0;
+        payload.overtime_data = null;
+        payload.overtime_amount = 0; // Ensure amount is cleared
+      } else {
+        // If Allowed, we KEEP first_in, last_out, worked_minutes, overtime_minutes
         if (first_in !== undefined) payload.first_in = first_in;
         if (last_out !== undefined) payload.last_out = last_out;
-        
         if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
 
-        // Only calculate fine/overtime if NOT out-duty status
-        if (!isOutDutyStatus) {
-            const finesAllowed = template ? (template.fines_allowed !== false) : true;
-            if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
+        // Re-calculate Overtime from Data if provided
+        if (overtime_data !== undefined) {
+          const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+          payload.overtime_data = finalOTData;
+          if (finalOTData && typeof finalOTData === 'object') {
+            const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+            const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
 
-            // Re-calculate Overtime from Data if provided
-            if (overtime_data !== undefined) {
-                const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
-                payload.overtime_data = finalOTData;
-                if (finalOTData && typeof finalOTData === 'object') {
-                    const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
-                    const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
-                    
-                    // Prioritize calculated values if provided summary is 0/null
-                    payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
-                    payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
-                } else {
-                    payload.overtime_amount = 0;
-                    payload.overtime_minutes = 0;
-                }
-            } else {
-                if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
-                if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
-            }
-
-            // Re-calculate Fine from Data if provided
-            if (!finesAllowed) {
-                payload.fine_data = null;
-                payload.fine_amount = 0;
-                payload.fine_minutes = 0;
-            } else if (fine_data !== undefined) {
-                const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
-                payload.fine_data = finalFineData;
-                if (finalFineData && typeof finalFineData === 'object') {
-                    const calcFineAmount = parseFloat((
-                        parseFloat(finalFineData.late_entry?.amount || 0) + 
-                        parseFloat(finalFineData.early_exit?.amount || 0) + 
-                        parseFloat(finalFineData.excess_breaks?.amount || 0)
-                    ).toFixed(2));
-                    const calcFineMinutes = parseInt(finalFineData.late_entry?.minutes || 0) + 
-                                           parseInt(finalFineData.early_exit?.minutes || 0) + 
-                                           parseInt(finalFineData.excess_breaks?.minutes || 0);
-
-                    // Prioritize calculated values if provided summary is 0/null
-                    payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
-                    payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
-                } else {
-                    payload.fine_data = null;
-                    payload.fine_amount = 0;
-                    payload.fine_minutes = 0;
-                }
-            } else {
-                if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
-                if (fine_amount !== undefined) payload.fine_amount = fine_amount;
-            }
-        } else {
-            // Clear fine and overtime for out-duty days
-            payload.fine_minutes = 0;
-            payload.fine_data = null;
-            payload.fine_amount = 0;
-            payload.overtime_minutes = 0;
-            payload.overtime_data = null;
+            // Prioritize calculated values if provided summary is 0/null
+            payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+            payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+          } else {
             payload.overtime_amount = 0;
+            payload.overtime_minutes = 0;
+          }
+        } else {
+          if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+          if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
         }
+      }
 
-        if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
+      // For Absent (5): preserve the absent fine computed by rebuildAttendanceDay OR manual override
+      // For Weekly Off (3), Holiday (4), Leave (6): always clear fines
+      if (effectiveStatus === 5) {
+        // Re-fetch the rebuilt day so the absent fine is carried into the payload
+        const rebuiltDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+        console.log(`[updateAttendanceDay] Absent status - rebuiltDay fine_data=${JSON.stringify(rebuiltDay?.fine_data)} fine_amount=${rebuiltDay?.fine_amount}`);
+
+        if (fine_data !== undefined) {
+          // Use explicitly provided fine data (manual override from adjustment modal)
+          const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+          payload.fine_data = finalFineData;
+          payload.fine_amount = fine_amount !== undefined ? fine_amount : (rebuiltDay?.fine_amount ?? 0);
+          payload.fine_minutes = fine_minutes !== undefined ? fine_minutes : (rebuiltDay?.fine_minutes ?? 0);
+        } else if (rebuiltDay) {
+          payload.fine_data = rebuiltDay.fine_data ?? null;
+          payload.fine_amount = rebuiltDay.fine_amount ?? 0;
+          payload.fine_minutes = rebuiltDay.fine_minutes ?? 0;
+        }
+      } else {
+        payload.fine_minutes = 0;
+        payload.fine_data = null;
+        payload.fine_amount = 0;
+      }
+
+      if (effectiveStatus !== 6) {
+        payload.leave_category_id = null;
+        payload.leave_session = null;
+      } else {
+        // For LEAVE (6), we MUST assign the category/session if provided
         if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
         if (leave_session !== undefined) payload.leave_session = leave_session;
+        if (overtime_data !== undefined) {
+          const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+          payload.overtime_data = finalOTData;
+          if (finalOTData && typeof finalOTData === 'object') {
+            const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+            const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+
+            // Prioritize calculated values if provided summary is 0/null
+            payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+            payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+          } else {
+            payload.overtime_amount = 0;
+            payload.overtime_minutes = 0;
+          }
+        } else {
+          if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+          if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+        }
+      }
+    } else {
+      // Skip fine and overtime calculations for out-duty days (status 12 and 13)
+      const isOutDutyStatus = [12, 13].includes(effectiveStatus);
+
+      if (first_in !== undefined) payload.first_in = first_in;
+      if (last_out !== undefined) payload.last_out = last_out;
+
+      if (worked_minutes !== undefined) payload.worked_minutes = worked_minutes;
+
+      // Only calculate fine/overtime if NOT out-duty status
+      if (!isOutDutyStatus) {
+        const finesAllowed = template ? (template.fines_allowed !== false) : true;
+        if (fine_minutes !== undefined && finesAllowed) payload.fine_minutes = fine_minutes;
+
+        // Re-calculate Overtime from Data if provided
+        if (overtime_data !== undefined) {
+          const finalOTData = (overtime_data === 'null' || overtime_data === null) ? null : overtime_data;
+          payload.overtime_data = finalOTData;
+          if (finalOTData && typeof finalOTData === 'object') {
+            const calcOTAmount = parseFloat((parseFloat(finalOTData.late_ot?.amount || 0) + parseFloat(finalOTData.early_ot?.amount || 0)).toFixed(2));
+            const calcOTMinutes = parseInt(finalOTData.late_ot?.minutes || 0) + parseInt(finalOTData.early_ot?.minutes || 0);
+
+            // Prioritize calculated values if provided summary is 0/null
+            payload.overtime_amount = (!overtime_amount) ? calcOTAmount : overtime_amount;
+            payload.overtime_minutes = (!overtime_minutes) ? calcOTMinutes : overtime_minutes;
+          } else {
+            payload.overtime_amount = 0;
+            payload.overtime_minutes = 0;
+          }
+        } else {
+          if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
+          if (overtime_amount !== undefined) payload.overtime_amount = overtime_amount;
+        }
+
+        // Re-calculate Fine from Data if provided
+        if (!finesAllowed) {
+          payload.fine_data = null;
+          payload.fine_amount = 0;
+          payload.fine_minutes = 0;
+        } else if (fine_data !== undefined) {
+          const finalFineData = (fine_data === 'null' || fine_data === null) ? null : fine_data;
+          payload.fine_data = finalFineData;
+          if (finalFineData && typeof finalFineData === 'object') {
+            const calcFineAmount = parseFloat((
+              parseFloat(finalFineData.late_entry?.amount || 0) +
+              parseFloat(finalFineData.early_exit?.amount || 0) +
+              parseFloat(finalFineData.excess_breaks?.amount || 0)
+            ).toFixed(2));
+            const calcFineMinutes = parseInt(finalFineData.late_entry?.minutes || 0) +
+              parseInt(finalFineData.early_exit?.minutes || 0) +
+              parseInt(finalFineData.excess_breaks?.minutes || 0);
+
+            // Prioritize calculated values if provided summary is 0/null
+            payload.fine_amount = (!fine_amount) ? calcFineAmount : fine_amount;
+            payload.fine_minutes = (!fine_minutes) ? calcFineMinutes : fine_minutes;
+          } else {
+            payload.fine_data = null;
+            payload.fine_amount = 0;
+            payload.fine_minutes = 0;
+          }
+        } else {
+          if (fine_minutes !== undefined) payload.fine_minutes = fine_minutes;
+          if (fine_amount !== undefined) payload.fine_amount = fine_amount;
+        }
+      } else {
+        // Clear fine and overtime for out-duty days
+        payload.fine_minutes = 0;
+        payload.fine_data = null;
+        payload.fine_amount = 0;
+        payload.overtime_minutes = 0;
+        payload.overtime_data = null;
+        payload.overtime_amount = 0;
+      }
+
+      if (total_break_minutes !== undefined) payload.total_break_minutes = total_break_minutes;
+      if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
+      if (leave_session !== undefined) payload.leave_session = leave_session;
     }
 
     // If status is not Half Day(1) or Leave(6) or Half OD (13), explicitly clear leave category/session
@@ -1044,68 +1097,68 @@ exports.updateAttendanceDay = async (req, res) => {
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
     if (emp.leave_template) {
-        // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
-        const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
-        
-        const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
-            leave_template_id: emp.leave_template,
-            leave_category_name: "Short Leave",
-            status: 0
-        }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
+      // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
+      const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
 
-        if (shortLeaveCategory && currentDay) {
-            const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
-            const currentFineMinutes = currentDay.fine_minutes || 0;
-            const currentLastOut = currentDay.last_out;
-            
-            const totalMissedMinutes = currentFineMinutes;
-            const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+      const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+        leave_template_id: emp.leave_template,
+        leave_category_name: "Short Leave",
+        status: 0
+      }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
 
-            const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
-                employee_id: employee_id,
-                start_date: attendance_date,
-                leave_category_id: shortLeaveCategory.id,
-                reason: AUTO_REASON_LATE,
-                status: 0
-            }, {}, t);
+      if (shortLeaveCategory && currentDay) {
+        const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
+        const currentFineMinutes = currentDay.fine_minutes || 0;
+        const currentLastOut = currentDay.last_out;
 
-            if (isLateForShortLeave) {
-                if (!existingShortLeave) {
-                    // Check balance before deducting
-                    const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-                        employee_id: employee_id,
-                        leave_category_id: shortLeaveCategory.id,
-                        status: 0
-                    }, {}, t, false, { company_id: true });
+        const totalMissedMinutes = currentFineMinutes;
+        const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+
+        const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
+          employee_id: employee_id,
+          start_date: attendance_date,
+          leave_category_id: shortLeaveCategory.id,
+          reason: AUTO_REASON_LATE,
+          status: 0
+        }, {}, t);
+
+        if (isLateForShortLeave) {
+          if (!existingShortLeave) {
+            // Check balance before deducting
+            const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+              employee_id: employee_id,
+              leave_category_id: shortLeaveCategory.id,
+              status: 0
+            }, {}, t, false, { company_id: true });
 
 
-                    if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
-                        const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
-                        if (leaveError) {
-                            console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
-                            await t.rollback();
-                            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-                        }
-                        await LeaveRequest.update({ reason: AUTO_REASON_LATE }, { 
-                            where: { 
-                                employee_id: employee_id, 
-                                start_date: attendance_date, 
-                                leave_category_id: shortLeaveCategory.id,
-                                reason: "Auto-generated from Attendance"
-                            },
-                            transaction: t 
-                        });
-                    } 
-                }
-            } else if (existingShortLeave) {
-                // Reverse deduction if conditions are no longer met
-                const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
-                if (leaveError) {
-                    await t.rollback();
-                    return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-                }
+            if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
+              const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
+              if (leaveError) {
+                console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
+                await t.rollback();
+                return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+              }
+              await LeaveRequest.update({ reason: AUTO_REASON_LATE }, {
+                where: {
+                  employee_id: employee_id,
+                  start_date: attendance_date,
+                  leave_category_id: shortLeaveCategory.id,
+                  reason: "Auto-generated from Attendance"
+                },
+                transaction: t
+              });
             }
+          }
+        } else if (existingShortLeave) {
+          // Reverse deduction if conditions are no longer met
+          const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
+          if (leaveError) {
+            await t.rollback();
+            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+          }
         }
+      }
     }
 
     await t.commit();
@@ -1167,8 +1220,8 @@ exports.deleteAttendanceDay = async (req, res) => {
     }
 
     // 1. Fetch the day(s) to get ID
-    const days = await commonQuery.findAllRecords(AttendanceDay, { 
-      employee_id, 
+    const days = await commonQuery.findAllRecords(AttendanceDay, {
+      employee_id,
       attendance_date,
     }, {}, t, {});
 
@@ -1186,7 +1239,7 @@ exports.deleteAttendanceDay = async (req, res) => {
       }, t, {});
 
       // 3. Delete the day summary
-      await commonQuery.hardDeleteRecords(AttendanceDay, { 
+      await commonQuery.hardDeleteRecords(AttendanceDay, {
         id: day.id
       }, t, {});
     }
@@ -1225,11 +1278,11 @@ exports.deleteAttendanceDay = async (req, res) => {
 exports.bulkUpdateAttendanceDay = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { 
-      employee_ids, 
-      attendance_date, 
-      status, 
-      first_in, 
+    const {
+      employee_ids,
+      attendance_date,
+      status,
+      first_in,
       last_out,
       leave_category_id,
       leave_session,
@@ -1239,7 +1292,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       fine_amount,
       note
     } = req.body;
-    
+
     if (!employee_ids || !Array.isArray(employee_ids) || !attendance_date) {
       await t.rollback();
       return res.error(constants.VALIDATION_ERROR, "Employee IDs array and Date are required");
@@ -1257,10 +1310,10 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
 
     for (const employee_id of employee_ids) {
       const emp = empMap.get(employee_id);
-      
+
       // Get shift_id from employee if available
       const employee_shift_id = emp && emp.shift_template ? emp.shift_template : null;
-      
+
       // [USER REQUEST] Delete existing entry for this specific date first to ensure a fresh start
       await AttendanceDay.destroy({
         where: {
@@ -1271,8 +1324,8 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         transaction: t
       });
 
-      let existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-        employee_id, 
+      let existingRecord = await commonQuery.findOneRecord(AttendanceDay, {
+        employee_id,
         attendance_date,
       }, {}, t, false, { company_id: true });
 
@@ -1287,25 +1340,25 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
           existingDay: existingRecord // Pass pre-fetched day
         }, t);
         // Refresh after manualPunch (which calls rebuild)
-        existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-          employee_id, 
+        existingRecord = await commonQuery.findOneRecord(AttendanceDay, {
+          employee_id,
           attendance_date,
         }, {}, t, false, { company_id: true });
       } else if ([0, 1, 12, 13].includes(status)) {
-          // If marking present/working without providing times, trigger a rebuild to process any existing punches
-          await rebuildAttendanceDay(employee_id, attendance_date, {
-            user_id: req.user.id,
-            company_id: req.user.company_id,
-            branch_id: req.body.branch_id || req.user.branch_id,
-            shift_id: employee_shift_id,
-            employee: emp,
-            forcedStatus: status // [NEW] Pass status to ensure leave adjustment during rebuild
-          }, t);
-          // Refresh after rebuild
-          existingRecord = await commonQuery.findOneRecord(AttendanceDay, { 
-            employee_id, 
-            attendance_date,
-          }, {}, t, false, { company_id: true });
+        // If marking present/working without providing times, trigger a rebuild to process any existing punches
+        await rebuildAttendanceDay(employee_id, attendance_date, {
+          user_id: req.user.id,
+          company_id: req.user.company_id,
+          branch_id: req.body.branch_id || req.user.branch_id,
+          shift_id: employee_shift_id,
+          employee: emp,
+          forcedStatus: status // [NEW] Pass status to ensure leave adjustment during rebuild
+        }, t);
+        // Refresh after rebuild
+        existingRecord = await commonQuery.findOneRecord(AttendanceDay, {
+          employee_id,
+          attendance_date,
+        }, {}, t, false, { company_id: true });
       }
 
       const payload = {
@@ -1326,13 +1379,13 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if ([3, 4, 5, 6].includes(status)) {
         const isTimeProvided = first_in !== undefined || last_out !== undefined;
         if (!isTimeProvided) {
-            payload.first_in = null;
-            payload.last_out = null;
-            payload.shift_id = null;
-            payload.worked_minutes = 0;
-            payload.overtime_minutes = 0;
+          payload.first_in = null;
+          payload.last_out = null;
+          payload.shift_id = null;
+          payload.worked_minutes = 0;
+          payload.overtime_minutes = 0;
         }
-        
+
         // Also clear punches
         await commonQuery.updateRecordById(AttendancePunch, {
           employee_id,
@@ -1344,12 +1397,12 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (leave_category_id !== undefined) payload.leave_category_id = leave_category_id;
       if (leave_session !== undefined) payload.leave_session = leave_session;
       if (overtime_data !== undefined) {
-          payload.overtime_data = overtime_data;
-          if (payload.overtime_data && typeof payload.overtime_data === 'object') {
-              payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
-          } else if (payload.overtime_data === null) {
-              payload.overtime_amount = 0;
-          }
+        payload.overtime_data = overtime_data;
+        if (payload.overtime_data && typeof payload.overtime_data === 'object') {
+          payload.overtime_amount = parseFloat((parseFloat(payload.overtime_data.late_ot?.amount || 0) + parseFloat(payload.overtime_data.early_ot?.amount || 0)).toFixed(2));
+        } else if (payload.overtime_data === null) {
+          payload.overtime_amount = 0;
+        }
       }
       if (fine_data !== undefined) payload.fine_data = fine_data;
       if (overtime_minutes !== undefined) payload.overtime_minutes = overtime_minutes;
@@ -1364,7 +1417,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       }
 
       if (existingRecord) {
-        await commonQuery.updateRecordById(AttendanceDay, { 
+        await commonQuery.updateRecordById(AttendanceDay, {
           id: existingRecord.id,
         }, payload, t, false, { company_id: true });
       } else {
@@ -1416,7 +1469,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
         },
         {
           model: LeaveTemplateCategory,
-          as: "leaveCategory", 
+          as: "leaveCategory",
           attributes: ["id", "leave_category_name"],
           required: false
         },
@@ -1464,15 +1517,15 @@ exports.getAttendanceDayDetails = async (req, res) => {
       const weekNo = Math.ceil(dayjs(attendance_date).date() / 7);
 
       let [isHoliday, isWeeklyOff] = await Promise.all([
-        commonQuery.findOneRecord(EmployeeHoliday, { 
-          employee_id, 
-          date: attendance_date, 
-          status: 0 
+        commonQuery.findOneRecord(EmployeeHoliday, {
+          employee_id,
+          date: attendance_date,
+          status: 0
         }),
-        commonQuery.findOneRecord(EmployeeWeeklyOff, { 
-          employee_id, 
-          day_of_week: dayOfWeek, 
-          status: 0, 
+        commonQuery.findOneRecord(EmployeeWeeklyOff, {
+          employee_id,
+          day_of_week: dayOfWeek,
+          status: 0,
           is_off: true,
           [Op.or]: [{ week_no: 0 }, { week_no: weekNo }]
         })
@@ -1480,20 +1533,20 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
       // Fallback to Master Templates
       if (!isHoliday && attendanceDay?.employee?.holiday_template) {
-          isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
-              template_id: attendanceDay.employee.holiday_template,
-              date: attendance_date,
-              status: 0
-          });
+        isHoliday = await commonQuery.findOneRecord(HolidayTransaction, {
+          template_id: attendanceDay.employee.holiday_template,
+          date: attendance_date,
+          status: 0
+        });
       }
       if (!isWeeklyOff && attendanceDay?.employee?.weekly_off_template) {
-          isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
-              template_id: attendanceDay.employee.weekly_off_template,
-              day_of_week: dayOfWeek,
-              [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
-              is_off: true,
-              status: 0
-          });
+        isWeeklyOff = await commonQuery.findOneRecord(WeeklyOffTemplateDay, {
+          template_id: attendanceDay.employee.weekly_off_template,
+          day_of_week: dayOfWeek,
+          [Op.or]: [{ week_no: 0 }, { week_no: weekNo }],
+          is_off: true,
+          status: 0
+        });
       }
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
@@ -1512,7 +1565,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
           punch.ip_address = punch.ip_address || null;
           return punch;
         });
-        
+
         // Re-assign processed punches to the day object
         attendanceDayJson.attendancePunches = punchesWithImages;
       }
@@ -1545,20 +1598,20 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     let { employee_id, month_year } = req.body;
-    if(!employee_id){
+    if (!employee_id) {
       employee_id = req.user?.employee_id;
     }
 
     if (!employee_id) {
       return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
     }
-    
+
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")
     const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
 
     // Parse the date using various formats
     const date = dayjs(normalizedMonthYear, ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
-    
+
     if (!date.isValid()) {
       return res.error(constants.VALIDATION_ERROR, "Invalid month and year format. Use 'Jan 2026' or 'January 2026'");
     }
@@ -1568,7 +1621,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'shift_template', 'leave_template','holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
+      attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'shift_template', 'leave_template', 'holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1653,11 +1706,11 @@ exports.getMonthlyAttendance = async (req, res) => {
     });
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
-        employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
-            template_id: employee.holiday_template,
-            date: { [Op.between]: [startDate, endDate] },
-            status: 0
-        });
+      employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
+        template_id: employee.holiday_template,
+        date: { [Op.between]: [startDate, endDate] },
+        status: 0
+      });
     }
 
     // 2.2 Fetch Weekly Offs for the employee
@@ -1668,11 +1721,11 @@ exports.getMonthlyAttendance = async (req, res) => {
     });
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
-        employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
-            template_id: employee.weekly_off_template,
-            is_off: true,
-            status: 0
-        });
+      employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
+        template_id: employee.weekly_off_template,
+        is_off: true,
+        status: 0
+      });
     }
     const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
       employee_id,
@@ -1698,22 +1751,22 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     const allDays = [];
     const daysInMonth = date.daysInMonth();
-    
+
     const today = dayjs().format('YYYY-MM-DD');
     for (let d = 1; d <= daysInMonth; d++) {
       const curDate = date.date(d).format('YYYY-MM-DD');
       const dayObj = dayjs(curDate);
-      
+
       // Stop if date is in the future
       if (dayObj.isAfter(dayjs(), 'day')) continue;
-      
+
       // Stop if date is before joining_date
       if (employee.joining_date && dayObj.isBefore(dayjs(employee.joining_date), 'day')) continue;
-      
+
       const attendanceDay = attendanceDays.find(ad => ad.attendance_date === curDate);
       // const dayPunches = attendanceDay?.attendancePunches ? [...attendanceDay.attendancePunches].sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time)) : [];
       const dayPunches = attendanceDay?.attendancePunches || [];
-      
+
       let dayData = {
         date_display: dayObj.format("DD MMM"),
         day_display: dayObj.format("dddd"),
@@ -1791,7 +1844,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         let varianceStr = "";
         const dayFine = dayFinePenaltyMins;
         const totalOvertime = (parseInt(attendanceDay.overtime_minutes) || 0);
-        
+
         if (dayFine > 0 && totalOvertime > 0) {
           // Show both fine and overtime
           varianceStr = ` [+ ${Math.floor(totalOvertime / 60)}:${(totalOvertime % 60).toString().padStart(2, '0')} Hrs] [- ${Math.floor(dayFine / 60)}:${(dayFine % 60).toString().padStart(2, '0')} Hrs]`;
@@ -1829,9 +1882,9 @@ exports.getMonthlyAttendance = async (req, res) => {
           leave_category_id: attendanceDay.leave_category_id,
           is_scheduled_holiday: !!employeeHolidays.find(h => h.date === curDate),
           is_scheduled_weekly_off: !!employeeWeeklyOffs.find(wo => {
-             const dayOfWeek = dayObj.day();
-             const weekOfMonth = Math.ceil(dayObj.date() / 7);
-             return wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth);
+            const dayOfWeek = dayObj.day();
+            const weekOfMonth = Math.ceil(dayObj.date() / 7);
+            return wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth);
           }),
           punches: dayPunches
             .sort((a, b) => a.id - b.id) // 🔥 ASC order by ID
@@ -1870,15 +1923,15 @@ exports.getMonthlyAttendance = async (req, res) => {
       //       dayData.day_status = 3;
       //     }
       //   }
-        
+
       //   // Count as Absent if explicitly marked as Absent (day_status 5) and not Today/Future
       //   if (dayData.day_status === 5 && dayObj.isBefore(dayjs(), 'day')) {
       //       summary.absent++;
       //   }
       // }
-      
+
       allDays.push(dayData);
-    }    
+    }
 
     // Finalize Summary Formatting
     summary.fine = `${Math.floor(totalFineMins / 60)}:${(totalFineMins % 60).toString().padStart(2, '0')}`;
@@ -1903,12 +1956,12 @@ exports.getMonthlyAttendance = async (req, res) => {
 exports.getLeaveSummary = async (req, res) => {
   try {
     let { employee_id } = req.body;
-    if(!employee_id){
+    if (!employee_id) {
       employee_id = req.user.employee_id;
     }
 
     if (!employee_id) {
-       return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
+      return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
     }
 
     // 1. Fetch Leave Balances
@@ -1958,7 +2011,7 @@ exports.getLeaveSummary = async (req, res) => {
     const formattedBalances = balances.map(b => {
       const used = parseFloat(b.used_leaves || 0);
       const pending = parseFloat(b.pending_leaves || 0);
-      
+
       totalUsed += used;
       totalLeft += pending;
 
@@ -1975,7 +2028,7 @@ exports.getLeaveSummary = async (req, res) => {
     history.forEach(leave => {
       const monthYear = dayjs(leave.start_date).format("MMM, YYYY");
       let group = groupedHistory.find(g => g.month_label === monthYear);
-      
+
       if (!group) {
         group = {
           month_label: monthYear,
@@ -1994,12 +2047,12 @@ exports.getLeaveSummary = async (req, res) => {
       // Let's keep total_days as volume but differentiate in the items.
       // Sum up only "Taken" (DEBIT) leaves for the monthly header count.
       // This avoids negative counts (like -1) when only earned leaves exist.
-      if([constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.PENDING].includes(leave.approval_status)){
+      if ([constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.PENDING].includes(leave.approval_status)) {
         if (leave.request_type !== 'CREDIT') {
           group.total_days += parseFloat(leave.total_days || 0);
         }
       }
-      
+
       const start = dayjs(leave.start_date);
       const end = dayjs(leave.end_date);
       const dateRange = `${start.format("D MMM, ddd")} - ${end.format("D MMM, ddd")}`;
@@ -2116,7 +2169,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
         t
       );
       errorImage = savedFiles.image || savedFiles['image'];
-    } 
+    }
     // 2. Check if the image is provided as a base64 string
     else if (base64Image) {
       errorImage = await uploadBase64File(

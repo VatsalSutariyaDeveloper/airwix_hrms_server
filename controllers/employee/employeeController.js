@@ -120,11 +120,11 @@ const FILE_COLUMNS = [
 // Helper: Parse JSON fields from Multipart/Form-Data
 const parseJsonFields = (body) => {
     const fieldsToParse = [
-        "education_details", 
-        "custom_fields", 
-        "access_branches", 
-        "experience_details", 
-        "professional_reference", 
+        "education_details",
+        "custom_fields",
+        "access_branches",
+        "experience_details",
+        "professional_reference",
         "family_details"
     ];
 
@@ -143,8 +143,8 @@ const parseJsonFields = (body) => {
 // Helper: Handle invalid date strings (like "Invalid date") which can crash Sequelize/Postgres
 const sanitizeDateFields = (body) => {
     const dateFields = [
-        "dob", "joining_date", "pf_joining_date", "eps_joining_date", 
-        "eps_exit_date", "marriage_date", "confirmation_date", 
+        "dob", "joining_date", "pf_joining_date", "eps_joining_date",
+        "eps_exit_date", "marriage_date", "confirmation_date",
         "passport_expiry_date", "exit_date"
     ];
 
@@ -223,7 +223,7 @@ const handleExperienceAttachments = async (req, res, experienceDetails = [], all
                 }
             }
         }
-        
+
         exp.attachments = Array.isArray(keptAttachments) ? [...keptAttachments.filter(a => typeof a === 'string'), ...newAttachments] : [...newAttachments];
         delete exp.attachment_keys;
         return exp;
@@ -520,7 +520,7 @@ exports.update = async (req, res) => {
             const hasManualData = POST[`manual_${field}_data`] !== undefined;
             const fieldValueChanged = POST[field] !== undefined && String(POST[field]) !== String(existingEmployee[field]);
 
-             // Special handling for leave_template - reject pending requests BEFORE updating
+            // Special handling for leave_template - reject pending requests BEFORE updating
             if (field === 'leave_template' && fieldValueChanged) {
                 await EmployeeTemplateService.rejectPendingLeaveRequestsOnTemplateChange(id, req, transaction, existingEmployee[field]);
             }
@@ -533,7 +533,7 @@ exports.update = async (req, res) => {
             if (shouldSyncLeave || shouldSyncOthers || (field === 'leave_template' && hasManualData)) {
                 const manualDataKey = `manual_${field}_data`;
                 const manualData = POST[manualDataKey] || null;
-                
+
                 // Prepare meta data for syncLeaveTemplate to handle pending request rejection
                 const meta = {
                     employee: existingEmployee,
@@ -541,12 +541,12 @@ exports.update = async (req, res) => {
                     req: req,
                     existingEmployee: existingEmployee
                 };
-                
+
                 await EmployeeTemplateService.syncSpecificTemplate(
-                    id, 
-                    field, 
-                    POST[field] !== undefined ? POST[field] : existingEmployee[field], 
-                    manualData, 
+                    id,
+                    field,
+                    POST[field] !== undefined ? POST[field] : existingEmployee[field],
+                    manualData,
                     transaction,
                     false,
                     meta
@@ -555,7 +555,7 @@ exports.update = async (req, res) => {
         }
 
         // 4. Sync User
-        await commonQuery.updateRecordById(User, { employee_id: id }, { 
+        await commonQuery.updateRecordById(User, { employee_id: id }, {
             user_name: POST.first_name,
             email: POST.email,
             mobile_no: POST.mobile_no,
@@ -752,18 +752,20 @@ exports.getProfile = async (req, res) => {
                 { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
                 { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
                 { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
-                
+
                 // Joins with Employee-specific Templates/Data
                 { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
-                { model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
+                {
+                    model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
                     include: [
                         { model: AttendanceTemplate, as: 'attendanceTemplate', attributes: ['name'] }
-                    ]    
-                 },
-                
+                    ]
+                },
+
                 // Master Template Joins (kept for names if not in employee-specific tables)
                 { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
-                { model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
+                {
+                    model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
                     include: [
                         { model: HolidayTransaction, as: "holidayTransactions", attributes: ['id', 'name', 'date', 'holiday_type', 'color'], required: false }
                     ]
@@ -782,38 +784,38 @@ exports.getProfile = async (req, res) => {
         // Helper to generate full file URLs
         const getFileUrl = (fileName, folder = constants.EMPLOYEE_IMG_FOLDER) => {
             if (!fileName) return null;
-            
+
             // Check provided (preferred) folder first
             if (fileExists(folder, fileName)) {
                 return `${process.env.FILE_SERVER_URL}${folder}${fileName}`;
             }
-            
+
             // Fallback for files that might be in the other folder
             const fallback = folder === constants.EMPLOYEE_IMG_FOLDER ? constants.EMPLOYEE_DOC_FOLDER : constants.EMPLOYEE_IMG_FOLDER;
             if (fileExists(fallback, fileName)) {
                 return `${process.env.FILE_SERVER_URL}${fallback}${fileName}`;
             }
-            
+
             return null;
         };
 
         let supervisorRecord = [];
         let reportingManagerRecord = [];
 
-        if (plainRecord.is_attendance_supervisor){
-            supervisorRecord = await commonQuery.findAllRecords(Employee, 
-               { attendance_supervisor: plainRecord.linked_user.id },
-               { attributes: ['id', 'first_name', 'mobile_no', 'email']}
+        if (plainRecord.is_attendance_supervisor) {
+            supervisorRecord = await commonQuery.findAllRecords(Employee,
+                { attendance_supervisor: plainRecord.linked_user.id },
+                { attributes: ['id', 'first_name', 'mobile_no', 'email'] }
             );
         }
 
-        if (plainRecord.is_reporting_manager){
-            reportingManagerRecord = await commonQuery.findAllRecords(Employee, 
-               { reporting_manager: plainRecord.linked_user.id },
-               { attributes: ['id', 'first_name', 'mobile_no', 'email']}
+        if (plainRecord.is_reporting_manager) {
+            reportingManagerRecord = await commonQuery.findAllRecords(Employee,
+                { reporting_manager: plainRecord.linked_user.id },
+                { attributes: ['id', 'first_name', 'mobile_no', 'email'] }
             );
         }
-        
+
         const companySettings = await getCompanySetting(plainRecord.company_id);
         const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
 
@@ -932,7 +934,7 @@ exports.getProfile = async (req, res) => {
                         }
                         return exp;
                     })
-                : [],
+                    : [],
             },
             additional_details: {
                 professional_reference: (() => {
@@ -1078,50 +1080,50 @@ exports.checkEmployeeCode = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { employee_code } = req.body;
-        
+
         // Extract prefix and number from employee_code (e.g., "EMP14" -> prefix="EMP", number=14)
         const match = employee_code.match(/^([A-Za-z]+)(\d+)$/);
         if (!match) {
             await transaction.commit();
             return res.ok({ exists: false, next_available_code: employee_code });
         }
-        
+
         const prefix = match[1];
         let currentNumber = parseInt(match[2], 10);
-        
+
         // First check if the given code exists
         const employeeCodeExists = await commonQuery.findOneRecord(Employee, {
             employee_code: employee_code,
         }, {}, transaction);
-        
+
         // If it doesn't exist, return it immediately
         if (!employeeCodeExists) {
             await transaction.commit();
             return res.ok({ exists: false, next_available_code: employee_code });
         }
-        
+
         // If it exists, start incrementing until we find a non-existent code
         currentNumber++;
         let nextAvailableCode;
-        
+
         while (true) {
             const codeToCheck = `${prefix}${currentNumber}`;
             const codeExists = await commonQuery.findOneRecord(Employee, {
                 employee_code: codeToCheck,
             }, {}, transaction);
-            
+
             if (!codeExists) {
                 nextAvailableCode = codeToCheck;
                 break;
             }
-            
+
             currentNumber++;
         }
-        
+
         await transaction.commit();
-        return res.ok({ 
-            exists: true, 
-            next_available_code: nextAvailableCode 
+        return res.ok({
+            exists: true,
+            next_available_code: nextAvailableCode
         });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
@@ -1303,12 +1305,12 @@ exports.assignRole = async (req, res) => {
         }
 
         // 3. Determine role_id based on field_name dynamically using role_key
-        const roleKey = field_name === 'is_reporting_manager' 
-            ? constants.ROLE_KEYS.REPORTING_MANAGER 
+        const roleKey = field_name === 'is_reporting_manager'
+            ? constants.ROLE_KEYS.REPORTING_MANAGER
             : constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR;
 
         const targetRole = await RolePermission.findOne({
-            where: { 
+            where: {
                 company_id: req.user.company_id,
                 role_key: roleKey
             },
@@ -1794,7 +1796,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 //                 if (dist < threshold) {
 //                     const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
 //                     const branchName = branch?.branch_name || "N/A";
-                    
+
 //                     await transaction.rollback();
 //                     // Clean up the uploaded file since the process failed validation
 //                     try { fs.unlinkSync(fullFilePath); } catch (e) { }
@@ -1811,7 +1813,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 
 //             console.error("AI Service Error:", aiError.message);
 //             writeLogToFile('face_recognition.log', `[REGISTER_FAILED] ID: ${id}, Error: ${aiError.response?.data?.message || aiError.message}`);
-            
+
 //             const friendlyMsg = aiError.response?.data?.message || "Face analysis failed. Please ensure your photo is clear and try again.";
 //             return res.error(constants.SERVER_ERROR, { message: friendlyMsg });
 //         }
@@ -1963,7 +1965,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 //                 timings.upload = Date.now() - uploadStart;
 
 //                 const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
-                
+
 //                 // 2. Use the robust punch helper
 //                 const punchResult = await punch(bestMatch.id, {
 //                     punch_time: now,
@@ -2041,8 +2043,8 @@ exports.registerFace = async (req, res) => {
 
         const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
 
-        if(req.user.access == "attendance"){
-            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, {status: 0});
+        if (req.user.access == "attendance") {
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, { status: 0 });
             if (!device) {
                 await transaction.rollback();
                 return res.status(401).json({
@@ -2052,7 +2054,7 @@ exports.registerFace = async (req, res) => {
                 });
             }
 
-            if(!employeeId){
+            if (!employeeId) {
                 await transaction.rollback();
                 return res.error(constants.VALIDATION_ERROR, { message: "Please Select Employee" });
             }
@@ -2066,8 +2068,8 @@ exports.registerFace = async (req, res) => {
 
         // 🚀 2. Grab the pre-calculated Math Vector sent from Flutter
         // Make sure your Flutter 'home_repository.dart' appends this as 'face_descriptor' in FormData
-        const faceDescriptorString = req.body.face_descriptor; 
-        
+        const faceDescriptorString = req.body.face_descriptor;
+
         if (!faceDescriptorString) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Face mathematical vector is missing from app" });
@@ -2200,16 +2202,16 @@ exports.facePunch = async (req, res) => {
 
         console.log("start time", time);
         // Kept your exact timings object schema so your frontend/logs don't break
-        const timings = { 
+        const timings = {
             ai: 0, // 0 because Flutter did it
-            db: 0, 
+            db: 0,
             matching: 0, // 0 because Flutter did it
-            upload: 0, 
-            total: 0 
+            upload: 0,
+            total: 0
         };
 
         if (req.user.access == "attendance") {
-            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, {status: 0});
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, { status: 0 });
             if (!device) {
                 return res.status(401).json({
                     success: false,
@@ -2264,7 +2266,7 @@ exports.facePunch = async (req, res) => {
                 longitude: longitude || null,
                 device_id: req.user?.access === 'attendance' ? req.user.id : (device_id || null),
                 attendance_by: 'face',
-                skipRebuild: true 
+                skipRebuild: true
             }, transaction);
 
             await transaction.commit();
@@ -2280,12 +2282,12 @@ exports.facePunch = async (req, res) => {
             });
 
             timings.total = Date.now() - startTime;
-            
+
             // YOUR ORIGINAL LOGS EXACTLY AS THEY WERE
             const successMsg = `✅ [Punch Synced] ${employee.first_name} (${employee.employee_code}) | Total: ${timings.total}ms | Match: ${matchPercentage}%`;
             console.log(successMsg);
             writeLogToFile('face_recognition.log', successMsg + ` | App-AI: 0ms | DB: ${timings.db}ms | Upload: ${timings.upload}ms`);
-            
+
             const endTime2222 = new Date().toTimeString().split(' ')[0];
             console.log("end time2222", endTime2222);
 
@@ -2341,9 +2343,7 @@ exports.getWages = async (req, res) => {
             { company_id: true }
         );
 
-        if (!attendanceDay) {
-            return res.error(constants.NOT_FOUND, { message: "Attendance record not found for the selected date" });
-        }
+        // Allow getWages to proceed even if attendance record is not found (useful for manual Absent entry)
 
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             attributes: ['id', 'salary_template_id', 'company_id', 'weekly_off_template', 'shift_template']
@@ -2368,7 +2368,7 @@ exports.getWages = async (req, res) => {
         // Only calculate wages if employeeSalaryTemplate exists
         if (!employeeSalaryTemplate) {
             const responseData = {
-                last_out: attendanceDay.last_out || null,
+                last_out: attendanceDay?.last_out || null,
                 overtime_data: attendanceDay?.overtime_data || null,
                 fine_data: attendanceDay?.fine_data || null,
             };
@@ -2462,7 +2462,7 @@ exports.getWages = async (req, res) => {
             month_days: monthDays,
             working_days: workingDays,
             unit_working_hours: unitWorkingHours,
-            last_out: attendanceDay.last_out || null,
+            last_out: attendanceDay?.last_out || null,
             overtime_data: attendanceDay?.overtime_data || null,
             overtime_amount: attendanceDay?.overtime_amount || 0,
             fine_data: attendanceDay?.fine_data || null,
@@ -3005,7 +3005,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             company_id: emp.company_id,
             branch_id: emp.branch_id,
             profile_image_url: emp.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` : null,
-            
+
             // --- VALIDATION DATA ---
             attendance_template: emp.employeeAttendanceTemplate,
             assigned_shift: emp.shiftTemplate,
@@ -3022,7 +3022,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             canteen_attendance_count: emp.canteenAttendances?.length || 0
         }));
 
-        return res.success("Employee list fetched successfully", { 
+        return res.success("Employee list fetched successfully", {
             employees: employeeList,
             settings: {
                 company_punch_config: settings.company_punch_config,
@@ -3041,7 +3041,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
 exports.getEmployeeHolidays = async (req, res) => {
     try {
         let employeeId = req.params.employeeId;
-        
+
         if (!employeeId) {
             employeeId = req.user.employee_id;
         }
@@ -3058,7 +3058,7 @@ exports.getEmployeeHolidays = async (req, res) => {
 
         // Get holidays for the employee using commonQuery findAllRecords
         const holidays = await commonQuery.findAllRecords(
-            EmployeeHoliday, 
+            EmployeeHoliday,
             {
                 employee_id: employeeId
             }
@@ -3074,7 +3074,7 @@ exports.getEmployeeHolidays = async (req, res) => {
 exports.availableOutDuty = async (req, res) => {
     try {
         const employee_id = req.user?.employee_id;
-        
+
         let todayOutDutyRequest = null;
         let outDuty = null;
 
@@ -3093,12 +3093,12 @@ exports.availableOutDuty = async (req, res) => {
                     employee_id: employee_id,
                 },
                 {
-                    attributes:["enble_out_duty"]
+                    attributes: ["enble_out_duty"]
                 }
             );
         }
 
-        return res.ok({can_punch_from_personal_device: !!todayOutDutyRequest, outDuty});
+        return res.ok({ can_punch_from_personal_device: !!todayOutDutyRequest, outDuty });
     } catch (err) {
         return handleError(err, res, req);
     }

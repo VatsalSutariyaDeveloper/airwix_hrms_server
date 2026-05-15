@@ -33,6 +33,8 @@ module.exports = (sequelize, DataTypes) => {
 
     early_overtime_allowed: { type: DataTypes.BOOLEAN, defaultValue: false },
     early_overtime_rules: { type: DataTypes.JSON, defaultValue: [] },
+    allow_absent_fine: { type: DataTypes.BOOLEAN, defaultValue: false },
+    absent_fine_rules: { type: DataTypes.JSON, defaultValue: [] },
 
     // Absenteeism & Breaks
     auto_mark_absent: { type: DataTypes.BOOLEAN, defaultValue: false },
