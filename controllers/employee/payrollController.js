@@ -1,5 +1,5 @@
 const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType, CompanySettings } = require("../../models");
-const { commonQuery, handleError, fail, formatDateTime, constants } = require("../../helpers");
+const { commonQuery, handleError, fail, formatDateTime, constants, applyRounding } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const pdfService = require("../../helpers/functions/pdfService");
@@ -17,40 +17,7 @@ const employee = require("../../models/employee");
  * Handles the "consumption" of attendance data to generate salary summaries.
  */
 
-/**
- * Helper function to apply rounding based on company settings
- * @param {number} amount - The amount to round
- * @param {number} roundOffType - 1: round to nearest integer (0.50→1, 0.40→0), 2: round to nearest 10 (5→10, 4→0), 3: round to nearest 100 (55→100, 45→0)
- * @returns {object} - { roundedAmount: number, roundOffAmount: number }
- */
-const applyRounding = (amount, roundOffType) => {
-    if (!roundOffType || roundOffType === 0) {
-        return { roundedAmount: amount, roundOffAmount: 0 };
-    }
 
-    let roundedAmount;
-    let roundOffAmount;
-
-    switch (roundOffType) {
-        case 1:
-            // Round to nearest integer (0.50→1, 0.40→0)
-            roundedAmount = Math.round(amount);
-            break;
-        case 2:
-            // Round to nearest 10 (5→10, 4→0)
-            roundedAmount = Math.round(amount / 10) * 10;
-            break;
-        case 3:
-            // Round to nearest 100 (55→100, 45→0)
-            roundedAmount = Math.round(amount / 100) * 100;
-            break;
-        default:
-            roundedAmount = amount;
-    }
-
-    roundOffAmount = roundedAmount - amount;
-    return { roundedAmount, roundOffAmount };
-};
 
 /**
  * Internal helper to evaluate formula-based components
@@ -477,7 +444,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Note: Encashments are tracked separately in encashment_history, not added to earnings
 
     // Calculate current pro-rated gross/ctc base for formulas to use current amounts
-    const currentGross = parseFloat(((monthlyGross / (daysInCalculation || 1)) * payableDaysValue).toFixed(2));
+    const { roundedAmount: roundedCurrentGross } = applyRounding((monthlyGross / (daysInCalculation || 1)) * payableDaysValue, roundOffType);
+    const currentGross = roundedCurrentGross;
 
     // Values map for formula evaluation - initialize with globals
     const valuesMap = {
@@ -531,23 +499,22 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 const totalPossibleHours = daysInCalculation * unitWorkingHours;
                 const workedHours = totalWorkedMins / 60;
                 const hourRatio = totalPossibleHours > 0 ? workedHours / totalPossibleHours : 0;
-                if (calcType !== 'FIXED') {
-                    actualAmount = amount * hourRatio;
-                } else {
-                    actualAmount = amount;
-                }
+                actualAmount = (calcType !== 'FIXED') ? (amount * hourRatio) : amount;
             } else {
                 if (calcType === 'ATTENDANCE_BASED') {
-                    actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
+                    actualAmount = (amount / daysInCalculation) * payableDaysValue;
                 } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
                     // Only apply LWP impact if not already pro-rated via percentage/formula base
                     const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
                     if (!isAlreadyProRated) {
-                        actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                        actualAmount = amount - (totalLWP * (amount / daysInCalculation));
                     }
                 }
             }
 
+            // Apply Company Rounding to Basic
+            const { roundedAmount: roundedBasic } = applyRounding(actualAmount, roundOffType);
+            actualAmount = roundedBasic;
             valuesMap.BASIC = actualAmount;
 
             // Also update by component name in valuesMap
@@ -590,15 +557,19 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             }
         } else {
             if (calcType === 'ATTENDANCE_BASED') {
-                actualAmount = parseFloat(((amount / daysInCalculation) * payableDaysValue).toFixed(2));
+                actualAmount = (amount / daysInCalculation) * payableDaysValue;
             } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
                 // Only apply LWP impact if not already pro-rated via percentage/formula base
                 const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && formula && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
                 if (!isAlreadyProRated) {
-                    actualAmount = parseFloat((amount - (totalLWP * (amount / daysInCalculation))).toFixed(2));
+                    actualAmount = amount - (totalLWP * (amount / daysInCalculation));
                 }
             }
         }
+
+        // Apply Company Rounding to individual component
+        const { roundedAmount: roundedCompAmount } = applyRounding(actualAmount, roundOffType);
+        actualAmount = roundedCompAmount;
 
         const nameKey = comp.component_name.toUpperCase().replace(/\s+/g, '_');
         const cleanKey = comp.component_name.toUpperCase().trim();
@@ -768,7 +739,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             if (serviceYears >= 5) {
                 const basic = valuesMap.BASIC || 0;
-                const amount = Math.round(basic * 0.0481);
+                const { roundedAmount: roundedGratuity } = applyRounding(basic * 0.0481, roundOffType);
+                const amount = roundedGratuity;
                 addStatRecord("Gratuity Provision", amount, true);
             }
         }
@@ -784,7 +756,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 amount = sc.leave_encashment.amount || 0;
             } else if (calcType === 'Attendance') {
                 // amount / workingday * 1.25 (roughly 4.81% of monthly)
-                amount = Math.round(baseAmount * 0.0481);
+                const { roundedAmount: roundedEncashment } = applyRounding(baseAmount * 0.0481, roundOffType);
+                amount = roundedEncashment;
             }
             addStatRecord("Leave Encashment Provision", amount, true);
         }
@@ -798,7 +771,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             const payoutMonth = parseInt(sc.bonus.payout_month || 11);
 
             // Calculate current month's provision
-            const currentMonthBonus = Math.round(basic * (percentage / 100));
+            const { roundedAmount: roundedBonus } = applyRounding(basic * (percentage / 100), roundOffType);
+            const currentMonthBonus = roundedBonus;
 
             // Query previous finalized payslips to find accumulated bonus since last payout
             let pastAccrued = 0;

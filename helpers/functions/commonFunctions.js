@@ -768,6 +768,56 @@ function getOrdinal(num) {
  * 2. company_branch_punch_config: Employee can punch in any branch of their company.
  * 3. company_punch_config: Employee can punch in any branch/company within their organization.
  */
+exports.applyRounding = (amount, roundOffType) => {
+    if (!roundOffType || roundOffType === 0) {
+        return { roundedAmount: amount, roundOffAmount: 0 };
+    }
+
+    let roundedAmount;
+    let roundOffAmount;
+
+    switch (parseInt(roundOffType)) {
+        case 1: {
+            // Normal Rounding: 0.1 - 0.5 → 0, 0.51 - 0.99 → 1
+            const fractionalPart = amount - Math.floor(amount);
+            if (fractionalPart <= 0.5) {
+                roundedAmount = Math.floor(amount);
+            } else {
+                roundedAmount = Math.ceil(amount);
+            }
+            break;
+        }
+        case 2: {
+            // Medium Rounding: 1 - 5 → 0, 6 - 10 → 10
+            const remainder = amount % 10;
+            if (remainder <= 5) {
+                roundedAmount = Math.floor(amount / 10) * 10;
+            } else {
+                roundedAmount = Math.ceil(amount / 10) * 10;
+            }
+            break;
+        }
+        case 3: {
+            // High Rounding: 1 - 25 → 0, 26 - 50 → 50, 51 - 75 → 50, 76 - 100 → 100
+            const remainder = amount % 100;
+            const base = Math.floor(amount / 100) * 100;
+            if (remainder <= 25) {
+                roundedAmount = base;
+            } else if (remainder <= 75) {
+                roundedAmount = base + 50;
+            } else {
+                roundedAmount = base + 100;
+            }
+            break;
+        }
+        default:
+            roundedAmount = amount;
+    }
+
+    roundOffAmount = roundedAmount - amount;
+    return { roundedAmount, roundOffAmount };
+};
+
 exports.getPunchAllowedWhere = async (company_id, branch_id) => {
     const settings = await getCompanySetting(company_id);
     const company_branch_punch_config = settings.company_branch_punch_config;

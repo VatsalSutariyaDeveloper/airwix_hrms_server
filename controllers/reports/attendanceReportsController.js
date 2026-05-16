@@ -878,16 +878,21 @@ exports.getLateEntryReport = async (req, res) => {
  */
 exports.getMissPunchOutReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { report_type, date, month, year, branch_id, department_id } = req.body;
 
-    if (!month || !year) {
-      return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+    let startDate, endDate;
+    if (report_type === 'daily' && date) {
+      startDate = dayjs(date).format('YYYY-MM-DD');
+      endDate = dayjs(date).format('YYYY-MM-DD');
+    } else {
+      const targetMonth = month || dayjs().month() + 1;
+      const targetYear = year || dayjs().year();
+
+      startDate = dayjs(`${targetYear}-${targetMonth}-01`).startOf('month').format('YYYY-MM-DD');
+      endDate = dayjs(`${targetYear}-${targetMonth}-01`).endOf('month').format('YYYY-MM-DD');
     }
 
-    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
-    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
-
-    // Cap the endDate to today's date if the selected month is the current month or in the future
+    // Cap the endDate to today's date if the selected end date is in the future
     if (dayjs(endDate).isAfter(dayjs(), 'day')) {
       endDate = dayjs().format('YYYY-MM-DD');
     }
@@ -917,8 +922,10 @@ exports.getMissPunchOutReport = async (req, res) => {
             required: true,
             where: {
               attendance_date: { [Op.between]: [startDate, endDate] },
-              last_out: null,
-              first_in: { [Op.ne]: null },
+              [Op.or]: [
+                { last_out: null, first_in: { [Op.ne]: null } },
+                { first_in: null, last_out: { [Op.ne]: null } }
+              ],
               status: { [Op.ne]: 2 }
             }
           }

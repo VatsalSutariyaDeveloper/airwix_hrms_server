@@ -1,6 +1,6 @@
 const dayjs = require("dayjs");
-const { commonQuery, handleError, Op } = require("../../helpers");
-const { AttendanceDay, Employee, CashVoucher, EmployeeAttendanceTemplate } = require("../../models");
+const { AttendanceDay, Employee, CashVoucher, EmployeeAttendanceTemplate, CompanySettings } = require("../../models");
+const { commonQuery, handleError, Op, applyRounding } = require("../../helpers");
 
 
 exports.getEmployeesByMonthYear = async (req, res) => {
@@ -263,6 +263,13 @@ exports.calculateCashVoucher = async (req, res) => {
         let totalOvertimeMinutes = 0;
         let totalAmount = 0;
 
+        // Fetch company settings for rounding configuration
+        const companySettings = await commonQuery.findOneRecord(CompanySettings, {
+            settings_name: 'round_off_salary',
+            status: 0
+        }, {}, null, false, true);
+        const roundOffType = companySettings?.settings_value || 0;
+
         for (const day of attendanceDays) {
             const dayOtData = {
                 attendance_date: day.attendance_date
@@ -308,7 +315,7 @@ exports.calculateCashVoucher = async (req, res) => {
             attendance_date: startDate,
             voucher_type: "OVERTIME",
             overtime_minutes: totalOvertimeMinutes,
-            amount: parseFloat(totalAmount.toFixed(2)),
+            amount: applyRounding(totalAmount, roundOffType).roundedAmount,
             overtime_data: overtimeHistory,
             status: 0
         };
