@@ -11,5 +11,7 @@ router.post("/department_stats", controller.getDepartmentStats);
 router.post("/recent_leaves", controller.getRecentLeaves);
 router.post("/payroll_overview", controller.getPayrollOverview);
 router.get("/birthday-list", controller.getBirthdayList);
+router.post("/on-leave-employees", controller.getOnLeaveEmployees);
+router.post("/late-entry-employees", controller.getLateEntryEmployees);
 
 module.exports = router;

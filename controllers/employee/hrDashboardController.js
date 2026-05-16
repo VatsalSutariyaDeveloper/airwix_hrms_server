@@ -14,7 +14,8 @@ const {
     EmployeeResignation,
     Announcement,
     Notification,
-    User
+    User,
+    LeaveTemplateCategory
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
@@ -70,19 +71,19 @@ exports.getCounts = async (req, res) => {
 
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: { [Op.in]: [0, 1] },
+            status: { [Op.in]: [constants.ATTENDANCE_STATUS.PRESENT, constants.ATTENDANCE_STATUS.HALF_DAY] },
             // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 5,
+            status: constants.ATTENDANCE_STATUS.ABSENT,
             // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
 
         const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: 6,
+            status: constants.ATTENDANCE_STATUS.LEAVE,
             // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
         }, {}, false);
         
@@ -399,7 +400,7 @@ exports.getBirthdayList = async (req, res) => {
             status: 0,
             [Op.and]: [
                 sequelize.where(
-                    sequelize.literal(`make_date(extract(year from date '${today}')::int, extract(month from "dob")::int, extract(day from "dob")::int)`),
+                    sequelize.literal(`make_date(extract(year from date '${today}')::int, extract(month from \"dob\")::int, extract(day from \"dob\")::int)`),
                     {
                         [Op.between]: [today, thirtyDaysLater]
                     }
@@ -422,8 +423,8 @@ exports.getBirthdayList = async (req, res) => {
                 }
             ],
             order: [
-                [sequelize.literal(`EXTRACT(MONTH FROM "dob")`), 'ASC'],
-                [sequelize.literal(`EXTRACT(DAY FROM "dob")`), 'ASC']
+                [sequelize.literal(`EXTRACT(MONTH FROM \"dob\")`), 'ASC'],
+                [sequelize.literal(`EXTRACT(DAY FROM \"dob\")`), 'ASC']
             ]
         });
 
@@ -502,8 +503,8 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
         const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
             status: 0,
             [Op.and]: [
-                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'MM')`), todayMonth),
-                sequelize.where(sequelize.literal(`TO_CHAR("dob", 'DD')`), todayDay)
+                sequelize.where(sequelize.literal(`TO_CHAR(\"dob\", 'MM')`), todayMonth),
+                sequelize.where(sequelize.literal(`TO_CHAR(\"dob\", 'DD')`), todayDay)
             ]
         }, {
             attributes: ['id', 'first_name', 'company_id', 'branch_id', 'dob']
@@ -542,3 +543,128 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
     }
 };
 
+
+exports.getOnLeaveEmployees = async (req, res) => {
+    try {
+        const today = dayjs().format("YYYY-MM-DD");
+        const onLeaveEmployees = await AttendanceDay.findAll({
+            where: {
+                attendance_date: today,
+                status: constants.ATTENDANCE_STATUS.LEAVE
+            },
+            include: [
+                {
+                    model: Employee,
+                    as: "employee",
+                    attributes: ["id", "first_name", "employee_code", "profile_image", "department_id", "designation_id"],
+                    required: true,
+                    include: [
+                        { model: Department, as: "department", attributes: ["name"], required: false },
+                        { model: DesignationMaster, as: "designation", attributes: ["designation_name"], required: false }
+                    ]
+                }
+            ]
+        });
+
+        const format = await Promise.all(onLeaveEmployees.map(async record => {
+            const emp = record.employee;
+            
+            // Find the specific leave request for this employee covering today
+            const leaveRequest = await LeaveRequest.findOne({
+                where: {
+                    employee_id: emp.id,
+                    start_date: { [Op.lte]: today },
+                    end_date: { [Op.gte]: today },
+                    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED
+                },
+                include: [
+                    { 
+                        model: LeaveTemplateCategory, 
+                        as: 'category',
+                        attributes: ['leave_category_name']
+                    }
+                ]
+            });
+
+            return {
+                id: emp.id,
+                first_name: emp.first_name,
+                employee_code: emp.employee_code,
+                department: emp.department?.name || "-",
+                designation: emp.designation?.designation_name || "-",
+                profile_image_url: emp.profile_image 
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` 
+                    : null,
+                leave_request: leaveRequest ? {
+                    ...leaveRequest.toJSON(),
+                    employee: emp
+                } : null
+            };
+        }));
+
+        return res.ok(format);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getLateEntryEmployees = async (req, res) => {
+    try {
+        const today = dayjs().format("YYYY-MM-DD");
+        
+        const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay,
+            { attendance_date: today },
+            {
+                include: [
+                    {
+                        model: ShiftTemplate,
+                        as: 'shiftTemplate',
+                        required: false,
+                        attributes: ['start_time', 'grace_minutes']
+                    },
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "profile_image", "department_id", "designation_id"],
+                        required: true,
+                        include: [
+                            { model: Department, as: "department", attributes: ["name"], required: false },
+                            { model: DesignationMaster, as: "designation", attributes: ["designation_name"], required: false }
+                        ]
+                    }
+                ]
+            }
+        );
+
+        const lateEmployees = attendanceRecords.filter(record => {
+            if (!record.first_in || !record.shiftTemplate) return false;
+            
+            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+            
+            return firstInTime.isAfter(allowedTime);
+        });
+
+        const format = lateEmployees.map(record => {
+            const emp = record.employee;
+            return {
+                id: emp.id,
+                first_name: emp.first_name,
+                employee_code: emp.employee_code,
+                department: emp.department?.name || "-",
+                designation: emp.designation?.designation_name || "-",
+                profile_image_url: emp.profile_image 
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${emp.profile_image}` 
+                    : null,
+                first_in: record.first_in,
+                shift_start: record.shiftTemplate?.start_time || "-"
+            };
+        });
+
+        return res.ok(format);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

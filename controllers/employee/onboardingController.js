@@ -727,3 +727,49 @@ exports.resendInvite = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+/**
+ * Get onboarding list based on onboarding status (0 and 1)
+ */
+exports.getOnboardingList = async (req, res) => {
+    try {
+        const POST = req.body;
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["email", true, false],
+            ["mobile_no", true, false],
+        ];
+
+        if (!POST.filter) {
+            POST.filter = {};
+        }
+        
+        // POST.filter.onboarding_status = [0, 1];
+
+        if (!POST.filter) {
+            POST.filter = {};
+        }
+        POST.filter.status = 3;
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            POST,
+            fieldConfig,
+            {
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] }
+                ],
+                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "onboarding_status", "created_at", "status"]
+            }
+        );
+
+        return res.ok({
+            ...data,
+            length: data.total
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+

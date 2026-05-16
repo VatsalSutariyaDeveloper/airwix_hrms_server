@@ -211,11 +211,22 @@ exports.getAttendanceSummary = async (req, res) => {
 
     const { date, staff_type, shift_id, page, limit, search, filter } = req.body;
     const targetDate = date || dayjs().format("YYYY-MM-DD");
+    const effectiveStatus = filter?.attendance_status;
 
-    // 1. Prepare base filters for Employee list
     const consolidatedFilter = { ...(filter || {}), status: 0 };
+    delete consolidatedFilter.attendance_status; // Remove to prevent column error on Employee table
+
     if (staff_type) consolidatedFilter.employee_type = staff_type;
     if (shift_id) consolidatedFilter.shift_template = shift_id;
+
+    // Filter by role
+    if (req.user.is_attendance_supervisor === true) {
+      consolidatedFilter.attendance_supervisor = req.user.id;
+    }
+
+    if (req.user.is_reporting_manager === true) {
+      consolidatedFilter.reporting_manager = req.user.id;
+    }
 
     const joiningDateFilter = {
       [Op.and]: [
@@ -280,6 +291,31 @@ exports.getAttendanceSummary = async (req, res) => {
       ["employee_code", true, true],
     ];
 
+    // Status filter mapping
+    const attendanceWhere = { attendance_date: targetDate, status: { [Op.ne]: 2 } };
+    let attendanceRequired = false;
+
+    if (effectiveStatus && effectiveStatus !== 'All') {
+      attendanceRequired = true;
+      const statusValue = effectiveStatus === 'Present' || effectiveStatus === String(constants.ATTENDANCE_STATUS.PRESENT) 
+        ? constants.ATTENDANCE_STATUS.PRESENT 
+        : constants.ATTENDANCE_STATUS.ABSENT;
+
+      // Simplest subquery for Present or Absent filtering
+      consolidatedFilter.id = {
+        [Op.in]: sequelize.literal(`(
+          SELECT employee_id 
+          FROM attendance_day 
+          WHERE attendance_date = '${targetDate}' 
+          AND status = ${statusValue}
+          AND company_id = ${req.user.company_id}
+        )`)
+      };
+
+      // Update attendanceWhere for the include
+      attendanceWhere.status = statusValue;
+    }
+
     // 2. FETCH PAGINATED LIST (Lightweight: only 20 records with full associations)
     const employeesResult = await commonQuery.fetchPaginatedData(
       Employee,
@@ -290,10 +326,8 @@ exports.getAttendanceSummary = async (req, res) => {
           {
             model: AttendanceDay,
             as: "attendanceDays",
-            where: { attendance_date: targetDate, status: { [Op.ne]: 2 } },
-            limit: 1,
-            order: [["id", "DESC"]],
-            required: false,
+            where: attendanceWhere,
+            required: attendanceRequired,
             include: [
               {
                 model: AttendancePunch,
