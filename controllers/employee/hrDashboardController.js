@@ -25,39 +25,42 @@ const { createNotification } = require("../../services/notificationService");
 const getProbationCompletionData = async (companyId) => {
     const today = dayjs().format("YYYY-MM-DD");
     const companySettings = await getCompanySetting(companyId);
-    const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
+    const companyProbationDays = Number(companySettings?.probation_period_days) || 0;
 
     let completedProbationEmployees = [];
 
-    if (probationPeriodDays > 0) {
-        const probationEmployees = await commonQuery.findAllRecords(Employee, {
-            status: 0,
-            employment_type: 4,
-            joining_date: { [Op.ne]: null }
-        }, {
-            attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'employment_type']
-        }, null, false);
+    const probationEmployees = await commonQuery.findAllRecords(Employee, {
+        status: 0,
+        employment_type: 4,
+        joining_date: { [Op.ne]: null }
+    }, {
+        attributes: ['id', 'first_name', 'employee_code', 'joining_date', 'employment_type', 'probation_period_days']
+    }, null, false);
 
-        completedProbationEmployees = probationEmployees
-            .map(employee => {
-                const probationEndDate = dayjs(employee.joining_date).add(probationPeriodDays, 'day');
+    completedProbationEmployees = probationEmployees
+        .map(employee => {
+            const empProbationDays = employee.probation_period_days !== null && employee.probation_period_days !== undefined
+                ? Number(employee.probation_period_days)
+                : companyProbationDays;
 
-                return {
-                    id: employee.id,
-                    first_name: employee.first_name,
-                    employee_code: employee.employee_code,
-                    joining_date: employee.joining_date,
-                    employment_type: employee.employment_type,
-                    probation_end_date: probationEndDate.format("YYYY-MM-DD")
-                };
-            })
-            .filter(employee => dayjs(employee.probation_end_date).isSame(dayjs(today), 'day') || dayjs(employee.probation_end_date).isBefore(dayjs(today), 'day'));
-    }
+            const probationEndDate = dayjs(employee.joining_date).add(empProbationDays, 'day');
+
+            return {
+                id: employee.id,
+                first_name: employee.first_name,
+                employee_code: employee.employee_code,
+                joining_date: employee.joining_date,
+                employment_type: employee.employment_type,
+                probation_period_days: employee.probation_period_days,
+                probation_end_date: probationEndDate.format("YYYY-MM-DD")
+            };
+        })
+        .filter(employee => dayjs(employee.probation_end_date).isSame(dayjs(today), 'day') || dayjs(employee.probation_end_date).isBefore(dayjs(today), 'day'));
 
     return {
         show_alert: completedProbationEmployees.length > 0,
         count: completedProbationEmployees.length,
-        probation_period_days: probationPeriodDays,
+        probation_period_days: companyProbationDays,
         completedProbationEmployees,
     };
 };
@@ -542,6 +545,71 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
     } catch (err) {
         console.error('❌ Holiday and birthday notifications failed:', err.message);
         throw err;
+    }
+};
+
+exports.updateProbationAction = async (req, res) => {
+    try {
+        const { employeeId, action, exitDate, extendedDays } = req.body;
+
+        if (!employeeId || !action) {
+            return res.badRequest("Employee ID and action are required.");
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, { id: employeeId });
+        if (!employee) {
+            return res.badRequest("Employee not found.");
+        }
+
+        if (action === "reject") {
+            if (!exitDate) {
+                return res.badRequest("Exit date is required for rejection.");
+            }
+
+            const today = dayjs().format("YYYY-MM-DD");
+            const isExitDateReached = dayjs(exitDate).isSame(dayjs(today), 'day') || dayjs(exitDate).isBefore(dayjs(today), 'day');
+
+            const employeePayload = {
+                exit_date: exitDate,
+                resignation_status: 2 // Exited/Inactive marked
+            };
+
+            if (isExitDateReached) {
+                employeePayload.status = 4; // Exited
+            }
+
+            await commonQuery.updateRecordById(Employee, employee.id, employeePayload);
+
+            if (isExitDateReached) {
+                await User.update({ status: 4 }, { where: { employee_id: employee.id } });
+            }
+
+            return res.ok({ message: "Employee probation rejected and exit date saved successfully." });
+
+        } else if (action === "extend") {
+            if (extendedDays === undefined || extendedDays === null || isNaN(Number(extendedDays))) {
+                return res.badRequest("Valid extended days are required.");
+            }
+
+            const companySettings = await getCompanySetting(req.user.company_id);
+            const companyProbationDays = Number(companySettings?.probation_period_days) || 0;
+
+            const currentProbationDays = employee.probation_period_days !== null && employee.probation_period_days !== undefined
+                ? Number(employee.probation_period_days)
+                : companyProbationDays;
+
+            const newProbationDays = currentProbationDays + Number(extendedDays);
+
+            await commonQuery.updateRecordById(Employee, employee.id, {
+                probation_period_days: newProbationDays
+            });
+
+            return res.ok({ message: `Probation extended by ${extendedDays} days (Total: ${newProbationDays} days) successfully.` });
+        } else {
+            return res.badRequest("Invalid action type.");
+        }
+    } catch (err) {
+        return handleError(err, res, req);
     }
 };
 
