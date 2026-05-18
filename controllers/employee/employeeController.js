@@ -733,53 +733,57 @@ exports.getById = async (req, res) => {
     } catch (err) {
         return handleError(err, res, req);
     }
-};
-
+}
 /**
  * Gets the profile of the currently logged-in user (Employee context).
  */
 exports.getProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const employeeId = req.user.employee_id;
-
-        const where = employeeId ? { id: employeeId } : { user_id: userId };
-
-        const record = await commonQuery.findOneRecord(Employee, where, {
-            include: [
-                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                { model: Department, as: 'department', attributes: ['name'] },
-                { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
-                { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
-                { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
-
-                // Joins with Employee-specific Templates/Data
-                { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
-                {
-                    model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
-                    include: [
-                        { model: AttendanceTemplate, as: 'attendanceTemplate', attributes: ['name'] }
-                    ]
-                },
-
-                // Master Template Joins (kept for names if not in employee-specific tables)
-                { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
-                {
-                    model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
-                    include: [
-                        { model: HolidayTransaction, as: "holidayTransactions", attributes: ['id', 'name', 'date', 'holiday_type', 'color'], required: false }
-                    ]
-                },
-                { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
-                { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] },
-                { model: EmployeeFamilyMember, as: 'family_members' },
-                { model: ResignationTemplate, as: 'resignationTemplate', attributes: ['notice_period_days'] }
-            ]
+        
+        // Always fetch the User data first
+        const user = await commonQuery.findOneRecord(User, { id: userId, status: 0 }, { 
+            attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id', 'employee_id'] 
         });
 
-        if (!record) return res.error(constants.EMPLOYEE_NOT_FOUND);
+        if (!user) return res.error(constants.USER_NOT_FOUND);
 
-        const plainRecord = record.get({ plain: true });
+        let employeeId = req.user.employee_id || user.employee_id;
+        let record = null;
+
+        if (employeeId) {
+            record = await commonQuery.findOneRecord(Employee, employeeId, {
+                include: [
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] },
+                    { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
+                    { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                    { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+
+                    // Joins with Employee-specific Templates/Data
+                    { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
+                    {
+                        model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
+                        include: [
+                            { model: AttendanceTemplate, as: 'attendanceTemplate', attributes: ['name'] }
+                        ]
+                    },
+
+                    // Master Template Joins (kept for names if not in employee-specific tables)
+                    { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
+                    {
+                        model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
+                        include: [
+                            { model: HolidayTransaction, as: "holidayTransactions", attributes: ['id', 'name', 'date', 'holiday_type', 'color'], required: false }
+                        ]
+                    },
+                    { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
+                    { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] },
+                    { model: EmployeeFamilyMember, as: 'family_members' },
+                    { model: ResignationTemplate, as: 'resignationTemplate', attributes: ['notice_period_days'] }
+                ]
+            });
+        }
 
         // Helper to generate full file URLs
         const getFileUrl = (fileName, folder = constants.EMPLOYEE_IMG_FOLDER) => {
@@ -798,6 +802,29 @@ exports.getProfile = async (req, res) => {
 
             return null;
         };
+
+        if (!record) {
+            // Return basic User-only profile if no Employee record exists
+            const profileData = {
+                header: {
+                    id: null,
+                    employee_code: 'N/A',
+                    full_name: user.user_name || 'N/A',
+                    profile_image_url: null,
+                    designation: 'User',
+                    department: 'N/A',
+                },
+                account_settings: {
+                    user_name: user.user_name || 'N/A',
+                    email: user.email || 'N/A',
+                    mobile_no: user.mobile_no || 'N/A',
+                },
+                is_user_only: true // Flag for frontend
+            };
+            return res.ok(profileData);
+        }
+
+        const plainRecord = record.get({ plain: true });
 
         let supervisorRecord = [];
         let reportingManagerRecord = [];
@@ -957,11 +984,7 @@ exports.getProfile = async (req, res) => {
     } catch (err) {
         return handleError(err, res, req);
     }
-};
-
-/**
- * Soft deletes Employees and cleans up files.
- */
+}
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -2509,15 +2532,15 @@ exports.inviteUser = async (req, res) => {
 
         // Check if user already exists
         let user = await commonQuery.findOneRecord(User, { employee_id }, {}, transaction);
-
-        if (!user) {
+        let role = await commonQuery.findOneRecord(RolePermission, { role_key: constants.ROLE_KEYS.EMPLOYEE }, {}, transaction);
+        if (!user && role) {
             // This case should theoretically not happen with auto-creation, but handle it for legacy employees
             user = await commonQuery.createRecord(User, {
                 user_name: employee.first_name,
                 email: employee.email,
                 mobile_no: employee.mobile_no,
                 employee_id: employee.id,
-                role_id: 5,
+                role_id: role.id,
                 company_id: employee.company_id,
                 branch_id: employee.branch_id,
                 company_access: employee.company_id,

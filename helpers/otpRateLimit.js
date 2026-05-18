@@ -9,8 +9,8 @@ const MAX_OTP_LIMIT = 3;
 const BLOCK_TIME_SECONDS = 60 * 60; // 1 hour
 
 module.exports = {
-  checkRateLimit: async (mobile_no) => {
-    const key = `otp_limit:${mobile_no}`;
+  checkRateLimit: async (identifier) => {
+    const key = `otp_limit:${identifier}`;
     const attempts = cache.get(key);
 
     if (attempts === undefined) {
@@ -34,8 +34,8 @@ module.exports = {
     return { allowed: true };
   },
 
-  increaseAttempt: async (mobile_no) => {
-    const key = `otp_limit:${mobile_no}`;
+  increaseAttempt: async (identifier) => {
+    const key = `otp_limit:${identifier}`;
     const attempts = cache.get(key);
 
     if (attempts === undefined) {
@@ -57,14 +57,14 @@ module.exports = {
     }
   },
 
-  resetAttempts: async (mobile_no) => {
-    const key = `otp_limit:${mobile_no}`;
+  resetAttempts: async (identifier) => {
+    const key = `otp_limit:${identifier}`;
     cache.del(key);
   },
 
   // Get blocked number details
-  getBlockedNumberInfo: async (mobile_no) => {
-    const key = `otp_limit:${mobile_no}`;
+  getBlockedNumberInfo: async (identifier) => {
+    const key = `otp_limit:${identifier}`;
     const attempts = cache.get(key);
     
     // Calculate TTL

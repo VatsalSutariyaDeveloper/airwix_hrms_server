@@ -539,7 +539,7 @@ const ENTITIES = {
 
   DISPATCH: { ID: 49, NAME: "DeliveryChallan" },
 
-  ACTIVITY_LOG: { ID: 400, NAME: "ActivityLog" },
+
   LOGIN_HISTORY: { ID: 401, NAME: "LoginHistory" },
   COMPANY_CONFIGRATION: { ID: 401, NAME: "CompanyConfigration" },
   COMPANY_BANK: { ID: 401, NAME: "CompanyBank" },

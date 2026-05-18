@@ -1,7 +1,5 @@
 const responseCodes = require("../helpers/responseCodes");
-const { logActivity } = require("../helpers"); 
 
-// Mapping common success actions to the logActivity ENUM format
 const logActionTypeMap = {
     "CREATE": "CREATE",
     "UPDATE": "UPDATE",

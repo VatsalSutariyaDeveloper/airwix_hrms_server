@@ -66,30 +66,34 @@ exports.getCounts = async (req, res) => {
     try {
         const today = dayjs().format("YYYY-MM-DD");
 
-        const totalEmployees = await commonQuery.countRecords(Employee, { status: 0 }, {}, false);
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] }, false);
+        const employeeIds = allEmployees?.map(e => e.id) || [];
+        const employeeScope = employeeIds.length > 0 ? { employee_id: { [Op.in]: employeeIds } } : {};
+
+        const totalEmployees = allEmployees.length;
 
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: { [Op.in]: [0, 1] },
-            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
-        }, {}, false);
-
+            ...employeeScope
+        }, {}, {});
+console.log("presentToday",presentToday)
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: 5,
-            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
-        }, {}, false);
+            ...employeeScope
+        }, {}, {});
 
         const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: 6,
-            // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
-        }, {}, false);
+            ...employeeScope
+        }, {}, {});
         
         const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
             {
                 attendance_date: today,
-                // employee_id: { [Op.in]: req.user.employees.map(e => e.id) }
+                ...employeeScope
             },
             {
                 include: [{
@@ -100,7 +104,7 @@ exports.getCounts = async (req, res) => {
                 }]
             },
             null,
-            false
+            {}
         );
        
         const lateEntryRecords = lateEntry.filter(record => {
@@ -116,10 +120,9 @@ exports.getCounts = async (req, res) => {
 
         const lateEntryCount = lateEntryRecords.length;
 
-        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, {}, null, false);
         const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
             date: today
-        }, {}, null, false);
+        }, {}, null, {});
       
         // Separate guest and employee data
         const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);

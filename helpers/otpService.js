@@ -97,13 +97,22 @@ module.exports = {
       throw { status: "VALIDATION_ERROR", message: "Invalid mobile number. Must be a valid Indian mobile number." };
     }
 
-    // Increase attempt count
-    await otpRateLimit.increaseAttempt(identifier);
+    // Check Rate Limit
+    const rateLimit = await otpRateLimit.checkRateLimit(identifier);
+    if (!rateLimit.allowed) {
+      throw { status: "RATE_LIMIT_ERROR", message: rateLimit.message };
+    }
 
-    // TODO: Remove this hardcoded OTP when going live
-    const otp = generateNumericOTP(6);
-    // const otp = "123456";
+    // 🛠️ DEVELOPMENT MODE: Use a static OTP if running locally
+    const isLocal = process.env.NODE_ENV === 'local';
+    const otp = isLocal ? "123456" : generateNumericOTP(6);
     const expires_at = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+    if (isLocal) {
+      console.log(`\n-----------------------------------------`);
+      console.log(`🛠️  [DEV-MODE] OTP for ${identifier}: ${otp}`);
+      console.log(`-----------------------------------------\n`);
+    }
 
     const existing = await OtpVerification.findOne({
       where: { identifier },
@@ -122,23 +131,25 @@ module.exports = {
       );
     }
 
-    // Resolve company_id to check settings
+    // Resolve company_id and userName to personalize email
     let resolvedCompanyId = companyId;
-    if (!resolvedCompanyId) {
+    let userName = "User";
+    if (true) { // Always try to find user info for personalization
       try {
-        const { User, Employee } = require("../models");
+        const { User, DeviceMaster } = require("../models");
         let record;
         if (isEmailAddress) {
-          record = await User.findOne({ where: { email: identifier }, transaction, attributes: ["company_id"] });
+          record = await User.findOne({ where: { email: identifier, status: 0 }, transaction, attributes: ["company_id", "user_name"] });
         } else {
-          record = await User.findOne({ where: { mobile_no: identifier }, transaction, attributes: ["company_id"] }) ||
-                   await Employee.findOne({ where: { mobile_no: identifier }, transaction, attributes: ["company_id"] });
+          record = await User.findOne({ where: { mobile_no: identifier, status: 0 }, transaction, attributes: ["company_id", "user_name"] }) ||
+                   await DeviceMaster.findOne({ where: { mobile_no: identifier, status: 0 }, transaction, attributes: ["company_id", "device_name"] });
         }
         if (record) {
-          resolvedCompanyId = record.company_id;
+          resolvedCompanyId = record.company_id || resolvedCompanyId;
+          userName = record.user_name || record.device_name || "User";
         }
       } catch (e) {
-        console.error("[OTP-SERVICE] Error resolving company ID:", e.message);
+        console.error("[OTP-SERVICE] Error resolving user info:", e.message);
       }
     }
 
@@ -156,16 +167,38 @@ module.exports = {
     }
 
     // Send OTP via SMS or Email based on identifier type
-    if (isEmailAddress) {
-      await emailService.sendOtpToEmail(identifier, otp);
+    let isSent = false;
+    if (isLocal) {
+      // In local mode, we already logged the OTP above, no need to send actual email/SMS
+      isSent = true;
+    } else if (isEmailAddress) {
+      await emailService.sendOtpToEmail(identifier, otp, userName);
+      isSent = true;
     } else {
-      await sendOtpToSms(identifier, otp, shouldSendSms);
+      const response = await sendOtpToSms(identifier, otp, shouldSendSms);
+      // If bypassed (shouldSendSms=false), response is undefined but we count it as "sent"
+      // If sent via MSG91, we check if the API returned success
+      if (!shouldSendSms || (response && response.type === "success")) {
+        isSent = true;
+      }
     }
 
+    // Increase attempt count only after successful delivery
+    if (isSent) {
+      await otpRateLimit.increaseAttempt(identifier);
+    }
     return otp;
   },
 
   verifyOtp: async (identifier, otp) => {
+    const isLocal = process.env.NODE_ENV === 'local';
+    
+    // 🛠️ DEVELOPMENT BYPASS: Accept 123456 as a universal OTP in local mode
+    if (isLocal && otp === "123456") {
+      console.log(`🛠️  [DEV-MODE] Universal OTP Verification bypassed for ${identifier}`);
+      return true;
+    }
+
     const record = await OtpVerification.findOne({
       where: { identifier }
     });

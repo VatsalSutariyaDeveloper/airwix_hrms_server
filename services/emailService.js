@@ -11,20 +11,41 @@ const emailService = {
      * @param {string} email
      * @param {string} otp
      */
-    sendOtpToEmail: async (email, otp) => {
+    sendOtpToEmail: async (email, otp, userName = "User") => {
         try {
-            await sendEmailHelper({
-                from: process.env.EMAIL_FROM || "noreply@airwix.in",
-                email: [email],
-                subject: "Your Registration OTP",
-                message: `
-                    <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
-                        <h2 style="color: #2563eb;">Registration OTP</h2>
-                        <p>Your One-Time Password (OTP) for registration is:</p>
-                        <h1 style="font-size: 32px; color: #2563eb; letter-spacing: 5px; text-align: center; margin: 20px 0;">${otp}</h1>
-                        <p style="color: #666;">This OTP is valid for 10 minutes. Please do not share it with anyone.</p>
+            const message = `
+                <p style="color: #475569; font-size: 16px; line-height: 1.6; margin-bottom: 24px;">
+                    Your One-Time Password (OTP) for secure login is provided below. Please use this code to complete your verification process.
+                </p>
+                
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; text-align: center; margin: 24px 0;">
+                    <div style="font-size: 36px; font-weight: 700; color: #1e293b; letter-spacing: 8px; font-family: 'Courier New', Courier, monospace;">
+                        ${otp}
                     </div>
-                `,
+                </div>
+                
+                <p style="color: #64748b; font-size: 14px; line-height: 1.5; margin-top: 24px;">
+                    <strong>Note:</strong> This OTP is valid for 10 minutes and should not be shared with anyone. If you did not request this code, please ignore this email.
+                </p>
+                
+                <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 32px 0;">
+                <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-bottom: 0;">
+                    This is an automated security message from Airwix HRMS.
+                </p>
+            `;
+
+            await sendEmailHelper({
+                from: `${process.env.EMAIL_COMPANY_NAME} <${process.env.ADMIN_EMAIL}>`,
+                email: [email],
+                subject: "Your Verification OTP",
+                message: generateEmailTemplate({
+                    title: "Security Verification",
+                    subject: "Your Verification OTP",
+                    userName: userName,
+                    message: message,
+                    buttonText: '',
+                    actionUrl: ''
+                }),
             });
             return true;
         } catch (error) {

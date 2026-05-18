@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, ActivityLog, FaceRecognitionError } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError } = require("../../models");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -148,27 +148,6 @@ exports.syncPunches = async (req, res) => {
         // Log the failure for this specific punch but proceed with the sync
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
 
-        // 🚀 NEW: Store the failed punch attempt in ActivityLog for debugging
-        try {
-          await ActivityLog.create({
-            company_id: req.user.company_id,
-            branch_id: req.user.branch_id,
-            user_id: req.user.id,
-            entity_name: "AttendanceSync",
-            action_type: "ERROR",
-            log_message: `Sync Failed: ${punchErr.message || "Unknown Error"}`,
-            new_data: {
-              ...punchData,
-              error: punchErr.message,
-              stack: punchErr.stack
-            },
-            ip_address: req.ip,
-            access_type: "attendance device"
-          }, { transaction: t });
-        } catch (logErr) {
-          console.error("❌ Failed to log sync error to DB:", logErr);
-        }
-
         results.push({
           employee_id: punchData.employee_id,
           punch_time: punchData.punch_time,
@@ -275,12 +254,30 @@ exports.getAttendanceSummary = async (req, res) => {
     //     console.error("Attendance Auto-Sync Error:", syncErr);
     // }
 
+    // 2. FETCH PAGINATED LIST & SUMMARY (Combined using window functions)
+    const summaryAttributes = [
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status IN (0, 7, 12) THEN 1 END) OVER()`), 'summary_present'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status IN (1, 13) THEN 1 END) OVER()`), 'summary_halfday'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 3 THEN 1 END) OVER()`), 'summary_weeklyoff'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 4 THEN 1 END) OVER()`), 'summary_holiday'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 6 THEN 1 END) OVER()`), 'summary_leave'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 5 THEN 1 END) OVER()`), 'summary_absent'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 9 THEN 1 END) OVER()`), 'summary_incomplete'],
+      [sequelize.literal(`SUM(COALESCE("attendanceDays".overtime_minutes, 0)) OVER()`), 'summary_total_ot'],
+      [sequelize.literal(`SUM(COALESCE("attendanceDays".fine_minutes, 0)) OVER()`), 'summary_total_fine'],
+      [sequelize.literal(`SUM(COALESCE("attendanceDays".fine_amount, 0)) OVER()`), 'summary_total_fine_amount'],
+      [sequelize.literal(`SUM(COALESCE("attendanceDays".overtime_amount, 0)) OVER()`), 'summary_total_overtime_amount'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".first_in IS NOT NULL THEN 1 END) OVER()`), 'summary_punched_in'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".last_out IS NOT NULL THEN 1 END) OVER()`), 'summary_punched_out'],
+      [sequelize.literal(`COUNT(CASE WHEN "attendanceDays".status = 0 AND "attendanceDays".first_in IS NOT NULL THEN 1 END) OVER()`), 'summary_short_presence'],
+      [sequelize.literal(`COUNT("attendanceDays".id) OVER()`), 'summary_total_accounted'],
+    ];
+
     const fieldConfig = [
       ["first_name", true, true],
       ["employee_code", true, true],
     ];
 
-    // 2. FETCH PAGINATED LIST (Lightweight: only 20 records with full associations)
     const employeesResult = await commonQuery.fetchPaginatedData(
       Employee,
       { ...req.body, status: 0, filter: consolidatedFilter },
@@ -290,9 +287,8 @@ exports.getAttendanceSummary = async (req, res) => {
           {
             model: AttendanceDay,
             as: "attendanceDays",
-            where: { attendance_date: targetDate, status: { [Op.ne]: 2 } },
-            limit: 1,
-            order: [["id", "DESC"]],
+            where: { attendance_date: targetDate, status: {[Op.ne]: 2} },
+            duplicating: false,
             required: false,
             include: [
               {
@@ -338,7 +334,11 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [['first_name', 'ASC']],
-        attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches"]
+        attributes: [
+          'id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches",
+          ...summaryAttributes
+        ],
+        subQuery: false // Required for window functions to work correctly with pagination
       },
       true,
       "createdAt",
@@ -429,134 +429,35 @@ exports.getAttendanceSummary = async (req, res) => {
       });
     }
 
-    // 2.7 Fetch Monthly Absent Counts for these employees to support UI limit checks
-    try {
-        const startOfMonth = dayjs(targetDate).startOf('month').format("YYYY-MM-DD");
-        const endOfMonth = dayjs(targetDate).endOf('month').format("YYYY-MM-DD");
-
-        const absentCounts = await AttendanceDay.findAll({
-            attributes: ['employee_id', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
-            where: {
-                employee_id: { [Op.in]: itemIds },
-                attendance_date: { [Op.between]: [startOfMonth, endOfMonth] },
-                status: 5, // ABSENT
-            },
-            group: ['employee_id'],
-            raw: true
-        });
-
-        const absentCountMap = {};
-        absentCounts.forEach(ac => {
-            absentCountMap[ac.employee_id] = parseInt(ac.count);
-        });
-
-        employeesResult.items = employeesResult.items.map(emp => {
-            const empJson = emp.get ? emp.get({ plain: true }) : emp;
-            const empId = empJson.id;
-            const count = absentCountMap[empId] || 0;
-            return {
-                ...empJson,
-                monthly_absent_count: count
-            };
-        });
-    } catch (countErr) {
-        console.error("Failed to fetch monthly absent counts:", countErr);
-    }
-
-    // 3. CALCULATE SUMMARY (Efficient aggregate query on AttendanceDay)
-
-    // Total matching employees for the summary context
+    // 3. EXTRACT SUMMARY FROM RESULTS
     const totalStaff = employeesResult.total;
-
-    // Aggregate counts from AttendanceDay table for this date
-    // This is much faster than fetching objects.
-    const dayStats = await commonQuery.findAllRecords(
-      AttendanceDay,
-      {
-        attendance_date: targetDate,
-        status: { [Op.ne]: 2 },
-        company_id: req.user.company_id
-      },
-      {
-        include: [{
-          model: Employee,
-          as: 'employee',
-          where: employeeWhere,
-          required: true,
-          attributes: []
-        }],
-        attributes: [
-          'status',
-          [sequelize.fn('COUNT', sequelize.col('AttendanceDay.id')), 'count'],
-          [sequelize.fn('SUM', sequelize.col('fine_minutes')), 'total_fine'],
-          [sequelize.fn('SUM', sequelize.col('overtime_minutes')), 'total_ot'],
-          // Custom logic for short presence (status 5 and first_in exists)
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 0 AND "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'short_presence_count'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".status = 5 AND "AttendanceDay".first_in IS NULL THEN 1 END)`), 'absent_count_from_day'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".first_in IS NOT NULL THEN 1 END)`), 'punched_in_count'],
-          [sequelize.literal(`COUNT(CASE WHEN "AttendanceDay".last_out IS NOT NULL THEN 1 END)`), 'punched_out_count'],
-          [sequelize.fn('SUM', sequelize.col('fine_amount')), 'total_fine_amount'],
-          [sequelize.fn('SUM', sequelize.col('overtime_amount')), 'total_overtime_amount']
-        ],
-        group: ['AttendanceDay.status'],
-        raw: true
-      }, null, { company_id: true }
-    );
+    const firstItem = employeesResult.items[0];
 
     let summary = {
       totalStaff,
-      present: 0,
-      absent: 0,
-      halfDay: 0,
-      weeklyOff: 0,
-      holiday: 0,
-      leave: 0,
-      shortPresence: 0,
+      present: parseInt(firstItem?.getDataValue('summary_present') || 0),
+      absent: parseInt(firstItem?.getDataValue('summary_absent') || 0),
+      halfDay: parseInt(firstItem?.getDataValue('summary_halfday') || 0),
+      weeklyOff: parseInt(firstItem?.getDataValue('summary_weeklyoff') || 0),
+      holiday: parseInt(firstItem?.getDataValue('summary_holiday') || 0),
+      leave: parseInt(firstItem?.getDataValue('summary_leave') || 0),
+      shortPresence: parseInt(firstItem?.getDataValue('summary_short_presence') || 0),
       currentlyWorking: 0,
       pendingPunch: 0,
       overtimeHours: "0h 0m",
       fineHours: "0h 0m",
-      fineAmount: 0,
-      overtimeAmount: 0,
-      punchedIn: 0,
-      punchedOut: 0,
-      incomplete: 0
+      fineAmount: parseFloat(firstItem?.getDataValue('summary_total_fine_amount') || 0),
+      overtimeAmount: parseFloat(firstItem?.getDataValue('summary_total_overtime_amount') || 0),
+      punchedIn: parseInt(firstItem?.getDataValue('summary_punched_in') || 0),
+      punchedOut: parseInt(firstItem?.getDataValue('summary_punched_out') || 0),
+      incomplete: parseInt(firstItem?.getDataValue('summary_incomplete') || 0)
     };
 
-    let totalFineMins = 0;
-    let totalOvertimeMins = 0;
-    let totalAccounted = 0;
+    const totalAccounted = parseInt(firstItem?.getDataValue('summary_total_accounted') || 0);
+    const totalOvertimeMins = parseInt(firstItem?.getDataValue('summary_total_ot') || 0);
+    const totalFineMins = parseInt(firstItem?.getDataValue('summary_total_fine') || 0);
 
-    dayStats.forEach(stat => {
-      const count = parseInt(stat.count);
-      const status = parseInt(stat.status);
-
-      if (status === 0) summary.present += count;
-      else if (status === 12) summary.present += count; // Out Duty
-      else if (status === 1) summary.halfDay += count;
-      else if (status === 13) summary.halfDay += count; // Half Out Duty
-      else if (status === 3) summary.weeklyOff += count;
-      else if (status === 4) summary.holiday += count;
-      else if (status === 6) summary.leave += count;
-      else if (status === 5) summary.absent += count;
-      else if (status === 7) summary.present += count; // Overtime Day
-      else if (status === 9) summary.incomplete += count;
-
-      totalAccounted += count;
-      totalFineMins += (parseInt(stat.total_fine) || 0);
-      totalOvertimeMins += (parseInt(stat.total_ot) || 0);
-      summary.fineAmount += parseFloat(stat.total_fine_amount || 0);
-      summary.overtimeAmount += parseFloat(stat.total_overtime_amount || 0);
-      summary.shortPresence += parseInt(stat.short_presence_count || 0);
-      summary.punchedIn += parseInt(stat.punched_in_count || 0);
-      summary.punchedOut += parseInt(stat.punched_out_count || 0);
-    });
-
-    // Handle employees without day records (considered Absent/Pending)
-    const unaccounted = Math.max(0, totalStaff - totalAccounted);
-    // summary.absent += unaccounted;
-    summary.pendingPunch = unaccounted;
-
+    summary.pendingPunch = Math.max(0, totalStaff - totalAccounted);
     summary.currentlyWorking = Math.max(0, summary.punchedIn - summary.punchedOut);
     summary.overtimeHours = `${Math.floor(totalOvertimeMins / 60)}h ${totalOvertimeMins % 60}m`;
     summary.fineHours = `${Math.floor(totalFineMins / 60)}h ${totalFineMins % 60}m`;

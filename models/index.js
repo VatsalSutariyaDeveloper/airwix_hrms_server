@@ -47,7 +47,7 @@ function initModels(prefix) {
   const Login = require("./auth/login")(seq, DataTypes);
   const LoginHistory = require("./auth/loginHistory")(seq, DataTypes);
   const OtpVerification = require("./auth/otpVerification")(seq, DataTypes);
-  const ActivityLog = require("./activityLog")(seq, DataTypes);
+
   const ActivationRequest = require("./activationRequest")(seq, DataTypes);
   const EmployeeResignation = require("./employeeResignation")(seq, DataTypes);
   const ApiLog = require("./apiLog")(seq, DataTypes);
@@ -166,7 +166,7 @@ function initModels(prefix) {
     Login,
     LoginHistory,
     OtpVerification,
-    ActivityLog,
+
     ActivationRequest,
     EmployeeResignation,
     ApiLog,

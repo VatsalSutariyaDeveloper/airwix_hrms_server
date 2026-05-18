@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster } = require("../models");
+const { sequelize, AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -264,44 +264,62 @@ async function punch(employeeId, meta, transaction = null) {
       const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
       const currentDate = dayjs(now).format("YYYY-MM-DD");
 
+      // INITIAL FALLBACK
+      // 1. Employee shift NOT assign and overtime allow -> default day cutoff time
+      // 4. Employee shift NOT assign and overtime NOT allow -> default day cutoff time
       const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
       let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
 
-      // ✅ If punch is on a different date and max_overtime_mins > 0, treat as new IN for the new date
-      if (lastInDate !== currentDate && template && template.max_overtime_mins > 0) {
-        punchType = "IN";
-      } else {
-        if (lastInDay && lastInDay.shift_id) {
-          const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
-            attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
-          }, transaction, false, {});
-          if (lastShift) {
-            let shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+      // CHECK IF OVERTIME ALLOWED
+      const isOvertimeAllowed = template && template.overtime_allowed === true && template.max_overtime_mins > 0;
 
-            if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
-              shiftEnd = shiftEnd.add(1, 'day');
-            }
+      // GET SHIFT DETAILS IF AVAILABLE
+      let hasShift = false;
+      let shiftEnd = null;
 
-            if (template && template.max_overtime_mins > 0) {
-              const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
-              if (dayjs(now).isBefore(otCutoff)) {
-                cutoffTime = otCutoff;
-              } else {
-                const maxOvertimeCutoffHours = parseInt(settings.max_overtime_cutoff_hours || 16);
-                cutoffTime = dayjs(startTime).add(maxOvertimeCutoffHours, "hour");
-              }
-            }
+      if (lastInDay && lastInDay.shift_id) {
+        const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
+          attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
+        }, transaction, false, {});
+        
+        if (lastShift) {
+          hasShift = true;
+          shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+          
+          if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
+            shiftEnd = shiftEnd.add(1, 'day');
           }
         }
+      }
 
-        // Toggle decision
-        if (dayjs(now).isBefore(cutoffTime)) {
-          punchType = "OUT";
-          console.log(`[Punch] Toggle Decision: OUT (Before cutoff ${cutoffTime.format('HH:mm')})`);
+      // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
+      if (hasShift) {
+        if (isOvertimeAllowed) {
+          // 2. Employee shift assign AND overtime allow -> Max Overtime Cutoff Hours
+          const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+          
+          if (dayjs(now).isBefore(otCutoff)) {
+            // Still within explicit overtime limits
+            cutoffTime = otCutoff;
+          } else {
+            // Past the explicit limits, rely on Max Overtime Cutoff Hours to break the day
+            const maxOvertimeCutoffHours = parseInt(settings.max_overtime_cutoff_hours || 16);
+            cutoffTime = dayjs(startTime).add(maxOvertimeCutoffHours, "hour");
+          }
         } else {
-          punchType = "IN";
-          console.log(`[Punch] Toggle Decision: IN (After cutoff ${cutoffTime.format('HH:mm')})`);
+          // 3. Employee shift assign BUT overtime NOT allow -> Shift End Cutoff Hours
+          const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || settings.default_punch_cutoff_hours || 14);
+          cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
         }
+      }
+
+      // UNIFIED DECISION based purely on final calculated cutoffTime
+      if (dayjs(now).isBefore(cutoffTime)) {
+        punchType = "OUT";
+        console.log(`[Punch] Toggle Decision: OUT (Before cutoff ${cutoffTime.format('HH:mm')})`);
+      } else {
+        punchType = "IN";
+        console.log(`[Punch] Toggle Decision: IN (After cutoff ${cutoffTime.format('HH:mm')})`);
       }
     } else {
       punchType = "IN";
@@ -1081,6 +1099,12 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       emptyStatus = Number(meta.forcedStatus);
     } else if (existingDay) {
       emptyStatus = existingDay.status;
+    }
+
+    // Auto-present policy check
+    if (emptyStatus === null && template?.auto_mark_present) {
+    // if ((emptyStatus === null || emptyStatus === 5) && template?.auto_mark_present) {
+      emptyStatus = 0; // Mark as PRESENT
     }
 
     // Auto-absent policy check
@@ -2919,7 +2943,9 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       // note = "System: Weekly Off auto-detected";
     } else {
       const template = emp.employeeAttendanceTemplate || emp.attendanceTemplate;
-      if (template?.auto_mark_absent) {
+      if (template?.auto_mark_present) {
+        status = 0; // PRESENT
+      } else if (template?.auto_mark_absent) {
         // Preference: EmployeeShift > Default ShiftTemplate
         const eShift = empShiftMap.get(emp.id);
         const shift = eShift || emp.shiftTemplate;

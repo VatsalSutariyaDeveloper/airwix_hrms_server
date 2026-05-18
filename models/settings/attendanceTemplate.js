@@ -38,6 +38,7 @@ module.exports = (sequelize, DataTypes) => {
 
     // --- ABSENTEEISM AUTOMATION ---
     auto_mark_absent: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'Enable cron job to mark "Absent" for previous days with no data' },
+    auto_mark_present: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'Enable auto marking "Present" for the day' },
     auto_absent_buffer_days: { type: DataTypes.INTEGER, defaultValue: 2, validate: { min: 0 } },
     deduct_breaks_from_total: { type: DataTypes.BOOLEAN, defaultValue: false, comment: 'Rule 4: All breaks deducted. Rule 1: Paid breaks deducted.' },
     include_overtime_in_total: { type: DataTypes.BOOLEAN, defaultValue: true, comment: 'Rule 3: Overtime deducted (False) vs Included (True)' },
