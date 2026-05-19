@@ -531,6 +531,19 @@ exports.getAll = async (req, res) => {
             ["employee.employee_code", true, false],
         ];
 
+        // If status filter is sent from useTableData, map it to approval_status
+        if (req.body?.status !== undefined && req.body?.status !== null && req.body?.status !== '') {
+            const statusVal = req.body.status;
+            delete req.body.status;
+            
+            if (statusVal !== "All") {
+                if (!req.body.filter) {
+                    req.body.filter = {};
+                }
+                req.body.filter.approval_status = statusVal;
+            }
+        }
+
         // Add date filtering based on payload
         let whereClause = {};
         const leaveFilter = req.body?.leave_filter;
@@ -547,6 +560,28 @@ exports.getAll = async (req, res) => {
                     // Upcoming: ends today or later
                     whereClause.end_date = { [Op.gte]: today };
                     break;
+            }
+        }
+
+        // Extract custom date filters if provided
+        const startDate = req.body?.startDate;
+        const endDate = req.body?.endDate;
+        if (startDate || endDate) {
+            delete req.body.startDate;
+            delete req.body.endDate;
+            
+            if (startDate && endDate) {
+                if (!whereClause[Op.and]) {
+                    whereClause[Op.and] = [];
+                }
+                whereClause[Op.and].push(
+                    { start_date: { [Op.lte]: dayjs(endDate).endOf('day').toDate() } },
+                    { end_date: { [Op.gte]: dayjs(startDate).startOf('day').toDate() } }
+                );
+            } else if (startDate) {
+                whereClause.end_date = { ...(whereClause.end_date || {}), [Op.gte]: dayjs(startDate).startOf('day').toDate() };
+            } else if (endDate) {
+                whereClause.start_date = { ...(whereClause.start_date || {}), [Op.lte]: dayjs(endDate).endOf('day').toDate() };
             }
         }
 
@@ -574,7 +609,7 @@ exports.getAll = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["first_name", "employee_code"],
+                        attributes: ["id", "first_name", "employee_code", "profile_image", "joining_date", "employment_type"],
                         include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }],
                         where: employeeWhere
                     },
@@ -611,6 +646,12 @@ exports.getAll = async (req, res) => {
                 raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
             } else {
                 raw.document_url = null;
+            }
+
+            if (raw.employee) {
+                raw.employee.profile_image_url = raw.employee.profile_image
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${raw.employee.profile_image}`
+                    : null;
             }
 
             // Add approver name if available
@@ -813,10 +854,11 @@ exports.updateStatus = async (req, res) => {
                 await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
             }
 
+            const actionStr = (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? "REJECTED" : "CANCELLED";
             const history = leaveRequest.approval_history || [];
             history.push({
                 level: currentLevel,
-                action: approval_status,
+                action: actionStr,
                 by: req.user?.id,
                 at: new Date()
             });

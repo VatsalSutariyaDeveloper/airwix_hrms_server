@@ -50,7 +50,7 @@ const enrichReportData = async (reportData, employeesItems, transaction) => {
 
 const hasSelectedValue = (value) => {
   if (Array.isArray(value)) {
-    const cleaned = value.filter(v => 
+    const cleaned = value.filter(v =>
       v !== undefined &&
       v !== null &&
       v !== "" &&
@@ -120,13 +120,38 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       req.body.entry_type ??
       req.body.filter_type
     );
-    const canteenFilter =
-      typeof rawCanteenFilter === "string" &&
-      ["all", "employee", "guest"].includes(rawCanteenFilter.trim().toLowerCase())
-        ? rawCanteenFilter.trim().toLowerCase()
-        : (req.body.include_guest === true || req.body.include_guest === "true" ? "all" : "employee");
-    const shouldIncludeEmployees = canteenFilter !== "guest";
-    const shouldIncludeGuests = canteenFilter !== "employee";
+
+    let selectedFilters = [];
+    if (Array.isArray(rawCanteenFilter)) {
+      selectedFilters = rawCanteenFilter;
+    } else if (typeof rawCanteenFilter === "string") {
+      if (rawCanteenFilter.includes(',')) {
+        selectedFilters = rawCanteenFilter.split(',').map(s => s.trim());
+      } else {
+        const val = rawCanteenFilter.trim().toLowerCase();
+        if (val === 'all') {
+          selectedFilters = ['1', '2', '3', 'guest'];
+        } else if (val === 'employee') {
+          selectedFilters = ['1', '2', '3'];
+        } else if (val === 'guest') {
+          selectedFilters = ['guest'];
+        } else {
+          selectedFilters = [rawCanteenFilter];
+        }
+      }
+    } else {
+      selectedFilters = ['1', '2', '3', 'guest'];
+    }
+
+    const shouldIncludeEmployees = selectedFilters.some(f => f === '1' || f === '2' || f === '3' || String(f).toLowerCase() === 'employee' || String(f).toLowerCase() === 'all');
+    const shouldIncludeGuests = selectedFilters.some(f => String(f).toLowerCase() === 'guest' || String(f).toLowerCase() === 'all');
+
+    let canteenFilter = "all";
+    if (shouldIncludeEmployees && !shouldIncludeGuests) {
+      canteenFilter = "employee";
+    } else if (!shouldIncludeEmployees && shouldIncludeGuests) {
+      canteenFilter = "guest";
+    }
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(
@@ -178,6 +203,19 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     const cleanedCompany = hasSelectedValue(company_id);
     if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (shouldIncludeEmployees) {
+      const selectedEmployeeTypes = selectedFilters
+        .filter(f => f === '1' || f === '2' || f === '3' || f === 1 || f === 2 || f === 3)
+        .map(f => parseInt(f));
+      if (selectedEmployeeTypes.length > 0) {
+        employeeFilter.employee_type = { [Op.in]: selectedEmployeeTypes };
+      } else if (hasSelectedValue(staff_type)) {
+        employeeFilter.employee_type = staff_type;
+      }
+    } else {
+      if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    }
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const daysArray = [];
@@ -805,7 +843,7 @@ exports.getAttendanceReport = async (req, res) => {
       const activeDaysVal = empData.summary.present + empData.summary.outDuty + (empData.summary.halfDay * 0.5);
       empData.summary.activeDays = parseFloat(activeDaysVal.toFixed(1));
       empData.summary.totalActiveDays = parseFloat(activeDaysVal.toFixed(1));
-      
+
       const absentDayVal = empData.summary.absent + (empData.summary.halfDay * 0.5);
       empData.summary.absentDay = parseFloat(absentDayVal.toFixed(1));
 

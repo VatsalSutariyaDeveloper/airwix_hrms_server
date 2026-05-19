@@ -211,9 +211,21 @@ exports.getAttendanceSummary = async (req, res) => {
 
     const { date, staff_type, shift_id, page, limit, search, filter } = req.body;
     const targetDate = date || dayjs().format("YYYY-MM-DD");
+    const effectiveStatus = filter?.attendance_status !== undefined ? filter.attendance_status : -1;
+
+    const consolidatedFilter = { ...(filter || {}) };
+    delete consolidatedFilter.attendance_status;
+
+    // Filter by role
+    if (req.user.is_attendance_supervisor === true) {
+      consolidatedFilter.attendance_supervisor = req.user.id;
+    }
+
+    if (req.user.is_reporting_manager === true) {
+      consolidatedFilter.reporting_manager = req.user.id;
+    }
 
     // 1. Prepare base filters for Employee list
-    const consolidatedFilter = { ...(filter || {}), status: 0 };
     if (staff_type) consolidatedFilter.employee_type = staff_type;
     if (shift_id) consolidatedFilter.shift_template = shift_id;
 
@@ -308,9 +320,14 @@ exports.getAttendanceSummary = async (req, res) => {
           {
             model: AttendanceDay,
             as: "attendanceDays",
-            where: { attendance_date: targetDate, status: {[Op.ne]: 2} },
+            required: effectiveStatus !== -1,
+            where: {
+              attendance_date: targetDate,
+              ...(effectiveStatus === -1
+                ? { status: { [Op.ne]: 2 } }
+                : { status: effectiveStatus }),
+            },
             duplicating: false,
-            required: false,
             include: [
               {
                 model: AttendancePunch,

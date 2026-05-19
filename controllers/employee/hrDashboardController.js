@@ -14,13 +14,16 @@ const {
     EmployeeResignation,
     Announcement,
     Notification,
-    User
+    User,
+    EmployeeLeaveBalance,
+    LeaveTemplateCategory
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const { createNotification } = require("../../services/notificationService");
+const LeaveBalanceService = require("../../services/leaveBalanceService");
 
 const getProbationCompletionData = async (companyId) => {
     const today = dayjs().format("YYYY-MM-DD");
@@ -608,6 +611,211 @@ exports.updateProbationAction = async (req, res) => {
         } else {
             return res.badRequest("Invalid action type.");
         }
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+const compileLeaveSummary = async (employee) => {
+    const employee_id = employee.id;
+    let balanceCriteria = { employee_id, status: 0 };
+    if (employee && employee.leaveTemplate) {
+        const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, employee.leaveTemplate.leave_policy_cycle);
+        balanceCriteria.year = end.year();
+        if (employee.leaveTemplate.leave_policy_cycle === 'MONTHLY') {
+            balanceCriteria.month = end.month() + 1;
+        } else {
+            balanceCriteria.month = null;
+        }
+    }
+
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
+
+    const history = await commonQuery.findAllRecords(LeaveRequest, {
+        employee_id,
+        status: 0
+    }, {
+        include: [
+            {
+                model: LeaveTemplateCategory,
+                as: "category",
+                attributes: ["id", "leave_category_name"]
+            },
+            {
+                model: User,
+                as: "approvedBy",
+                attributes: ["id", "user_name"],
+                required: false
+            }
+        ],
+        order: [["start_date", "DESC"]]
+    });
+
+    let totalUsed = 0;
+    let totalLeft = 0;
+    const formattedBalances = balances.map(b => {
+        const used = parseFloat(b.used_leaves || 0);
+        const pending = parseFloat(b.pending_leaves || 0);
+
+        totalUsed += used;
+        totalLeft += pending;
+
+        return {
+            id: b.id,
+            leave_name: b.leave_category_name,
+            balance: `${pending.toFixed(1)} Left`,
+            to_be_accrued: `${used.toFixed(1)} Used`
+        };
+    });
+
+    const groupedHistory = [];
+    history.forEach(leave => {
+        const monthYear = dayjs(leave.start_date).format("MMM, YYYY");
+        let group = groupedHistory.find(g => g.month_label === monthYear);
+
+        if (!group) {
+            group = {
+                month_label: monthYear,
+                total_days: 0,
+                leaves: []
+            };
+            groupedHistory.push(group);
+        }
+
+        if ([constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.PENDING].includes(leave.approval_status)) {
+            if (leave.request_type !== 'CREDIT') {
+                group.total_days += parseFloat(leave.total_days || 0);
+            }
+        }
+
+        const start = dayjs(leave.start_date);
+        const end = dayjs(leave.end_date);
+        const dateRange = `${start.format("D MMM, ddd")} - ${end.format("D MMM, ddd")}`;
+
+        const statusMap = {
+            [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
+            [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+            [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "APPROVED",
+            [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "REJECTED",
+            [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+            [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
+        };
+
+        const colorMap = {
+            [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "#10B981",
+            [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "#EF4444",
+            [constants.LEAVE_APPROVAL_STATUS.PENDING]: "#F59E0B",
+            [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+            [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "#6B7280",
+            [constants.LEAVE_APPROVAL_STATUS.DELETED]: "#9CA3AF",
+        };
+
+        const isCredit = leave.request_type === 'CREDIT';
+        const labelPrefix = isCredit ? "(+) " : "";
+        const typeSuffix = isCredit ? " (Earned)" : "";
+
+        group.leaves.push({
+            id: leave.id,
+            date_range: dateRange,
+            request_type: leave.request_type || 'DEBIT',
+            applied_date: leave.createdAt ? dayjs(leave.createdAt).format("D MMM, ddd") : "",
+            duration_display: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days | ${leave.category?.leave_category_name}${typeSuffix}`,
+            duration_days: `${labelPrefix}${parseFloat(leave.total_days).toFixed(1)} Days`,
+            leave_type: `${leave.category?.leave_category_name}${typeSuffix}`,
+            reason: leave.reason || "",
+            document_url: leave.document ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${leave.document}` : null,
+            status_id: leave.approval_status,
+            status: statusMap[leave.approval_status] || "PENDING",
+            status_color: isCredit ? "#10B981" : (colorMap[leave.approval_status] || "#F59E0B"),
+            approved_by: leave.approvedBy?.user_name || null,
+            approval_remark: leave.approval_remark || "",
+            start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
+            end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
+        });
+    });
+
+    return {
+        leave_balance: {
+            total_balance_text: `${totalLeft.toFixed(1)} Leaves`,
+            categories: formattedBalances,
+            total_used_text: `${totalUsed.toFixed(1)} Days`
+        },
+        leave_history: groupedHistory
+    };
+};
+
+exports.getLateEntryEmployees = async (req, res) => {
+    try {
+        const today = dayjs().format("YYYY-MM-DD");
+
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] }, false);
+        const employeeIds = allEmployees?.map(e => e.id) || [];
+        const employeeScope = employeeIds.length > 0 ? { employee_id: { [Op.in]: employeeIds } } : {};
+
+        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
+            {
+                attendance_date: today,
+                ...employeeScope
+            },
+            {
+                include: [
+                    {
+                        model: ShiftTemplate,
+                        as: 'shiftTemplate',
+                        required: false,
+                        attributes: ['start_time', 'grace_minutes']
+                    },
+                    {
+                        model: Employee,
+                        as: 'employee',
+                        attributes: ['id', 'first_name', 'employee_code', 'profile_image', 'joining_date', 'employment_type']
+                    }
+                ]
+            },
+            null,
+            {}
+        );
+
+        const lateEntryRecords = lateEntry.filter(record => {
+            if (!record.first_in || !record.shiftTemplate) return false;
+            
+            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+            
+            return firstInTime.isAfter(allowedTime);
+        });
+
+        const data = lateEntryRecords.map(item => {
+            if (!item.employee) return null;
+            const plainEmployee = item.employee.get({ plain: true });
+
+            let lateMin = "";
+            if (item.late_minutes !== undefined && item.late_minutes !== null) {
+                lateMin = String(item.late_minutes);
+            } else if (item.first_in && item.shiftTemplate?.start_time) {
+                const firstInTime = dayjs(`2000-01-01 ${item.first_in}`);
+                const shiftStartTime = dayjs(`2000-01-01 ${item.shiftTemplate.start_time}`);
+                const diff = firstInTime.diff(shiftStartTime, "minute");
+                lateMin = diff > 0 ? String(diff) : "0";
+            }
+
+            return {
+                id: plainEmployee.id,
+                first_name: plainEmployee.first_name,
+                employee_code: plainEmployee.employee_code,
+                profile_image: plainEmployee.profile_image,
+                first_in: item.first_in,
+                shift_start: item.shiftTemplate?.start_time,
+                profile_image_url: plainEmployee.profile_image 
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}` 
+                    : null,
+                late_min: lateMin
+            };
+        }).filter(Boolean);
+
+        return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
     }

@@ -4,6 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     {
         employee_id: { type: DataTypes.INTEGER, allowNull: true },
         guest_name: { type: DataTypes.STRING, allowNull: true },
+        ref_employee_id: { type: DataTypes.INTEGER, allowNull: true },
         is_guest: { type: DataTypes.BOOLEAN, defaultValue: false },
         date: { type: DataTypes.DATEONLY, allowNull: true },
         status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: PRESENT, 1: ABSENT, 2: DELETED" },
@@ -25,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
 
   CanteenAttendance.associate = (models) => {
     CanteenAttendance.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+    CanteenAttendance.belongsTo(models.Employee, { foreignKey: "ref_employee_id", as: "referencedEmployee" });
   };
 
   return CanteenAttendance;

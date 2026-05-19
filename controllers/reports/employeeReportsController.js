@@ -295,7 +295,7 @@ exports.getEmployeeExitReport = async (req, res) => {
                 resignation_date: latestResignation?.resignation_date || '-',
                 reason: latestResignation?.reason_type?.reason_name || latestResignation?.reason_description || 'N/A',
                 exit_type: latestResignation ? 'Resignation' : (emp.exit_date ? 'Terminated/Other' : 'N/A'),
-                status: emp.resignation_status === 1 ? 'On Notice' : (emp.resignation_status === 2 ? 'Resigned' : 'Pending'),
+                status: emp.resignation_status === 1 ? 'On Notice' : (emp.resignation_status === 2 ? 'Exited' : 'Pending'),
             };
         });
 
