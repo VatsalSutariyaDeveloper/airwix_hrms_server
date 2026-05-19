@@ -382,7 +382,7 @@ router.delete("/attendance-regularization", attendanceRegularizationController.d
 // 41. SYSTEM LOG ROUTES
 // ==========================
 router.post("/system-logs/audit", systemLogController.getAuditLogs);
-router.post("/system-logs/activity", systemLogController.getActivityLogs);
 router.post("/system-logs/api", systemLogController.getApiLogs);
+router.post("/system-logs/resolve", systemLogController.resolveSystemLog);
 
 module.exports = router;

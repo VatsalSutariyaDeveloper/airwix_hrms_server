@@ -61,14 +61,14 @@ exports.create = async (req, res) => {
             let sessionReduction = 0;
             if (start_session !== 0) sessionReduction += 0.5;
             if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
-            
+
             // If it's a single day leave and a session is selected, total is 0.5
             if (start_date === end_date && start_session !== 0) {
                 total_days = workingDays > 0 ? 0.5 : 0;
             } else {
                 total_days = Math.max(0, workingDays - sessionReduction);
             }
-            
+
             total_days = Math.round(total_days * 10) / 10;
 
             if (total_days <= 0) {
@@ -137,7 +137,7 @@ exports.create = async (req, res) => {
                     const template = employee.leaveTemplate;
                     const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
                     const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
-                    
+
                     // If the cycle itself is monthly, carry forward doesn't apply across months unless we anchor to a year
                     // But usually, carry_forward for monthly limits implies an annual cycle.
                     if (cycleType !== 'MONTHLY') {
@@ -216,7 +216,7 @@ exports.create = async (req, res) => {
                 }
             }
         }
-        
+
         // 3. Min Working Time & Late/Early Exit (Check Attendance)
         if (rules.min_working_time_mins || rules.max_late_early_mins) {
             const attDate = dayjs(start_date).format('YYYY-MM-DD');
@@ -275,8 +275,8 @@ exports.create = async (req, res) => {
         }
 
         // Create Leave Request
-        const POST = { 
-            ...req.body, 
+        const POST = {
+            ...req.body,
             total_days,
             branch_id: req.body.branch_id || employee.branch_id,
             company_id: req.body.company_id || employee.company_id,
@@ -356,7 +356,7 @@ exports.update = async (req, res) => {
             let sessionReduction = 0;
             if (start_session !== 0) sessionReduction += 0.5;
             if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
-            
+
             if (start_date === end_date && start_session !== 0) {
                 total_days = workingDays > 0 ? 0.5 : 0;
             } else {
@@ -502,8 +502,8 @@ exports.update = async (req, res) => {
             return res.error("INSUFFICIENT_BALANCE", { message: error.message });
         }
 
-        const PUT = { 
-            ...req.body, 
+        const PUT = {
+            ...req.body,
             total_days
         };
 
@@ -531,13 +531,26 @@ exports.getAll = async (req, res) => {
             ["employee.employee_code", true, false],
         ];
 
+        // If status filter is sent from useTableData, map it to approval_status
+        if (req.body?.status !== undefined && req.body?.status !== null && req.body?.status !== '') {
+            const statusVal = req.body.status;
+            delete req.body.status;
+            
+            if (statusVal !== "All") {
+                if (!req.body.filter) {
+                    req.body.filter = {};
+                }
+                req.body.filter.approval_status = statusVal;
+            }
+        }
+
         // Add date filtering based on payload
         let whereClause = {};
         const leaveFilter = req.body?.leave_filter;
-        
+
         if (leaveFilter) {
             const today = dayjs().toDate();
-            
+
             switch (leaveFilter) {
                 case 'previous':
                     // Previous: ended before today
@@ -550,6 +563,43 @@ exports.getAll = async (req, res) => {
             }
         }
 
+        // Extract custom date filters if provided
+        const startDate = req.body?.startDate;
+        const endDate = req.body?.endDate;
+        if (startDate || endDate) {
+            delete req.body.startDate;
+            delete req.body.endDate;
+            
+            if (startDate && endDate) {
+                if (!whereClause[Op.and]) {
+                    whereClause[Op.and] = [];
+                }
+                whereClause[Op.and].push(
+                    { start_date: { [Op.lte]: dayjs(endDate).endOf('day').toDate() } },
+                    { end_date: { [Op.gte]: dayjs(startDate).startOf('day').toDate() } }
+                );
+            } else if (startDate) {
+                whereClause.end_date = { ...(whereClause.end_date || {}), [Op.gte]: dayjs(startDate).startOf('day').toDate() };
+            } else if (endDate) {
+                whereClause.start_date = { ...(whereClause.start_date || {}), [Op.lte]: dayjs(endDate).endOf('day').toDate() };
+            }
+        }
+
+        const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
+
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR) {
+                employeeWhere.attendance_supervisor = req.user.id;
+            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER) {
+                employeeWhere.reporting_manager = req.user.id;
+            }
+            employeeWhere[Op.or] = [
+                { attendance_supervisor: req.user.id },
+                { reporting_manager: req.user.id },
+                { id: req.user.employee_id }
+            ];
+        }
+
         const data = await commonQuery.fetchPaginatedData(
             LeaveRequest,
             req.body,
@@ -559,9 +609,9 @@ exports.getAll = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["first_name", "employee_code"],
+                        attributes: ["id", "first_name", "employee_code", "profile_image", "joining_date", "employment_type"],
                         include: [{ model: LeaveTemplate, as: "leaveTemplate", attributes: ["approval_levels"] }],
-                        where: { status: { [Op.in]: [0, 1, 2] } }
+                        where: employeeWhere
                     },
                     { model: LeaveTemplateCategory, as: "category", attributes: ["leave_category_name"] },
                     { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
@@ -596,6 +646,12 @@ exports.getAll = async (req, res) => {
                 raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
             } else {
                 raw.document_url = null;
+            }
+
+            if (raw.employee) {
+                raw.employee.profile_image_url = raw.employee.profile_image
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${raw.employee.profile_image}`
+                    : null;
             }
 
             // Add approver name if available
@@ -753,8 +809,8 @@ exports.updateStatus = async (req, res) => {
                 await notificationService.createNotification({
                     user_id: user.id,
                     title: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED ? "Leave Approved" : "Leave Partially Approved",
-                    message: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED 
-                        ? `Your leave request for ${formatDateTime(leaveRequest.start_date, 'DD MMM')} to ${formatDateTime(leaveRequest.end_date, 'DD MMM')} has been approved.` 
+                    message: updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED
+                        ? `Your leave request for ${formatDateTime(leaveRequest.start_date, 'DD MMM')} to ${formatDateTime(leaveRequest.end_date, 'DD MMM')} has been approved.`
                         : `Your leave request has been partially approved (Stage ${updateData.current_level}).`,
                     type: "LEAVE",
                     reference_id: id,
@@ -798,10 +854,11 @@ exports.updateStatus = async (req, res) => {
                 await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
             }
 
+            const actionStr = (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? "REJECTED" : "CANCELLED";
             const history = leaveRequest.approval_history || [];
             history.push({
                 level: currentLevel,
-                action: approval_status,
+                action: actionStr,
                 by: req.user?.id,
                 at: new Date()
             });
@@ -915,12 +972,12 @@ exports.getPendingApprovals = async (req, res) => {
 
             let currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) currentStage = { type: "ANYONE" };
-            
+
             let isAuthorized = false;
             if (req.user.is_super_admin) {
                 isAuthorized = true;
             } else {
-            
+
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
                         if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
@@ -946,7 +1003,7 @@ exports.getPendingApprovals = async (req, res) => {
             }
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
-                
+
                 // Add Progression Summary consistent with getAll
                 const statusLabels = {
                     [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
@@ -975,7 +1032,7 @@ exports.getPendingApprovals = async (req, res) => {
 
         // --- 5. Apply Search filter ---
         const search = req.body.search ? req.body.search.toLowerCase() : null;
-        const filteredPending = search 
+        const filteredPending = search
             ? pendingForUser.filter(item => {
                 const searchString = `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`.toLowerCase();
                 return searchString.includes(search);
@@ -1057,11 +1114,11 @@ exports.cancelLeave = async (req, res) => {
                 // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
                 // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
                 await LeaveBalanceService.adjustLeaveBalance(
-                    leaveRequest.employee_id, 
-                    leaveRequest.leave_category_id, 
-                    -parseFloat(leaveRequest.total_days), 
-                    transaction, 
-                    dayjs(leaveRequest.start_date), 
+                    leaveRequest.employee_id,
+                    leaveRequest.leave_category_id,
+                    -parseFloat(leaveRequest.total_days),
+                    transaction,
+                    dayjs(leaveRequest.start_date),
                     employee
                 );
             }
@@ -1104,7 +1161,7 @@ exports.cancelLeave = async (req, res) => {
 exports.calculateLeaveDays = async (req, res) => {
     try {
         let { employee_id, start_date, end_date } = req.body;
-        if(!employee_id){
+        if (!employee_id) {
             employee_id = req.user.employee_id;
             req.body.employee_id = employee_id;
         }
@@ -1201,7 +1258,7 @@ exports.calculateLeaveDays = async (req, res) => {
                     } else if (i === (calendarDays - 1) && end_session !== 0) {
                         dayVal = 0.5;
                     }
-                    
+
                     // Handle single day session leave
                     if (calendarDays === 1 && start_session !== 0) {
                         dayVal = 0.5;
@@ -1212,7 +1269,7 @@ exports.calculateLeaveDays = async (req, res) => {
             }
         }
 
-        return res.success("Working days calculated", { 
+        return res.success("Working days calculated", {
             total_days: workingDays,
             breakdown: dateWiseBreakdown,
             is_allow_full_day: rules?.allow_full_day ?? true,

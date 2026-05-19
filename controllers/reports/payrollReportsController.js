@@ -2,6 +2,31 @@ const { Employee, SalaryComponent, Payslip, EmployeeSalaryTemplate, EmployeeSala
 const { commonQuery, handleError } = require("../../helpers");
 const { Op } = require("sequelize");
 
+const hasSelectedValue = (value) => {
+  if (Array.isArray(value)) {
+    const cleaned = value.filter(v => 
+      v !== undefined &&
+      v !== null &&
+      v !== "" &&
+      v !== "All" &&
+      v !== "all" &&
+      v !== 0 &&
+      v !== "0"
+    );
+    return cleaned.length > 0 ? cleaned : null;
+  }
+  return (
+    value !== undefined &&
+    value !== null &&
+    value !== "" &&
+    value !== "All" &&
+    value !== "all" &&
+    value !== 0 &&
+    value !== "0"
+  ) ? value : null;
+};
+
+
 exports.getTDSDeductionReport = async (req, res) => {
     return res.ok([]);
     /*
@@ -72,7 +97,7 @@ exports.getTDSDeductionReport = async (req, res) => {
 
 exports.getEmployerContributionReport = async (req, res) => {
     try {
-        const { month, year, branch_id } = req.body;
+        const { month, year, branch_id, company_id } = req.body;
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
@@ -83,8 +108,16 @@ exports.getEmployerContributionReport = async (req, res) => {
             status: { [Op.in]: [1, 3] } // Finalized or Paid
         };
 
-        if (branch_id) {
-            where.branch_id = branch_id;
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
+
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
 
         const fieldConfig = [
@@ -174,11 +207,18 @@ exports.getEmployerContributionReport = async (req, res) => {
 
 exports.getCTCBreakdownReport = async (req, res) => {
     try {
-        const { branch_id } = req.body;
+        const { branch_id, company_id } = req.body;
         
-        let where = { status: 0, company_id: req.user.company_id };
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
+        let where = { status: 0 };
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
 
         const fieldConfig = [
@@ -213,9 +253,16 @@ exports.getCTCBreakdownReport = async (req, res) => {
             'created_at'
         );
 
-        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+        const branchWhere = {};
+        if (cleanedCompany) {
+            branchWhere.company_id = cleanedCompany;
+        } else {
+            branchWhere.company_id = req.user.company_id;
+        }
+        const branches = await commonQuery.findAllRecords(BranchMaster, branchWhere, {}, null, { company_id: true });
         const branchMap = {};
         branches.forEach(b => branchMap[b.id] = b.branch_name);
+
 
         let allComponentNames = new Set();
         let reportData = [];
@@ -285,15 +332,22 @@ exports.getCTCBreakdownReport = async (req, res) => {
 
 exports.getGeneratedPayslipReport = async (req, res) => {
     try {
-        const { month, year, branch_id } = req.body;
+        const { month, year, branch_id, company_id } = req.body;
         
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; // not deleted
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
+        let where = { month, year, status: { [Op.ne]: 2 } }; // not deleted
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
 
         const fieldConfig = [
@@ -322,9 +376,16 @@ exports.getGeneratedPayslipReport = async (req, res) => {
             'created_at'
         );
 
-        const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id }, {}, null, { company_id: true });
+        const branchWhere = {};
+        if (cleanedCompany) {
+            branchWhere.company_id = cleanedCompany;
+        } else {
+            branchWhere.company_id = req.user.company_id;
+        }
+        const branches = await commonQuery.findAllRecords(BranchMaster, branchWhere, {}, null, { company_id: true });
         const branchMap = {};
         branches.forEach(b => branchMap[b.id] = b.branch_name);
+
 
         let dynamicEarnings = new Set();
         let dynamicDeductions = new Set();
@@ -467,15 +528,22 @@ exports.getGeneratedPayslipReport = async (req, res) => {
 
 exports.getPFReport = async (req, res) => {
     try {
-        const { month, year, branch_id } = req.body;
+        const { month, year, branch_id, company_id } = req.body;
         
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
+        let where = { month, year, status: { [Op.ne]: 2 } }; 
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
 
         const fieldConfig = [
@@ -631,7 +699,7 @@ exports.getPFReport = async (req, res) => {
 
 exports.getEmployeeSummaryReport = async (req, res) => {
     try {
-        const { month, year, ...employeeFilter } = req.body;
+        const { month, year, branch_id, company_id, ...employeeFilter } = req.body;
         if (!year) {
             return res.error("VALIDATION_ERROR", { message: "Year is required" });
         }
@@ -641,6 +709,23 @@ exports.getEmployeeSummaryReport = async (req, res) => {
 
         const paymentHistoryWhere = { year };
         if (month) paymentHistoryWhere.month = month;
+
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            employeeFilter.company_id = cleanedCompany;
+            payslipWhere.company_id = cleanedCompany;
+            paymentHistoryWhere.company_id = cleanedCompany;
+        } else {
+            employeeFilter.company_id = req.user.company_id;
+            payslipWhere.company_id = req.user.company_id;
+            paymentHistoryWhere.company_id = req.user.company_id;
+        }
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            employeeFilter.branch_id = cleanedBranch;
+            payslipWhere.branch_id = cleanedBranch;
+            paymentHistoryWhere.branch_id = cleanedBranch;
+        }
 
         const fieldConfig = [
             ["first_name", true, true],
@@ -704,15 +789,22 @@ exports.getEmployeeSummaryReport = async (req, res) => {
 
 exports.getESIReport = async (req, res) => {
     try {
-        const { month, year, branch_id } = req.body;
+        const { month, year, branch_id, company_id } = req.body;
         
         if (!month || !year) {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        let where = { month, year, company_id: req.user.company_id, status: { [Op.ne]: 2 } }; 
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
+        let where = { month, year, status: { [Op.ne]: 2 } }; 
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
 
         const fieldConfig = [

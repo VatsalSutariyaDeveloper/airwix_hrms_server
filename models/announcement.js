@@ -22,11 +22,13 @@ module.exports = (sequelize, DataTypes) => {
         },
         target_type: {
             type: DataTypes.INTEGER,
-            defaultValue: 0
+            defaultValue: 0,
+            comment: "0: All users, 1: All employees, 2: Specific roles, 3: Specific users"
         },
         target:{
             type: DataTypes.STRING,
-            allowNull: true
+            allowNull: true,
+            comment: "Target can be role_ids, user_ids, or null depending on target_type"
         },
         status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
         user_id: { type: DataTypes.INTEGER, allowNull: true },

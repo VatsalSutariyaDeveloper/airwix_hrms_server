@@ -71,6 +71,21 @@ if (cluster.isMaster) {
   const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
 
   const app = express();
+  const { requestContext } = require("./utils/requestContext.js");
+  app.use((req, res, next) => {
+    requestContext.run(
+      {
+        userId: null,
+        companyId: null,
+        branchId: null,
+        ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip,
+        userAgent: req.headers["user-agent"] || "unknown",
+        endpoint: `${req.method} ${req.originalUrl}`,
+        access: "public"
+      },
+      () => next()
+    );
+  });
   const { authMiddleware } = require("./middlewares/authMiddleware");
   const server = http.createServer(app);
 

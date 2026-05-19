@@ -26,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    fcm_token: { type: DataTypes.STRING(255), allowNull: true },
   },
     {
       tableName: "users",

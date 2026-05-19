@@ -1,4 +1,4 @@
-const { Notification, Announcement, Employee, sequelize, RolePermission } = require("../models");
+const { Notification, Announcement, Employee, sequelize, RolePermission, User, UserDevice } = require("../models");
 const { handleError, constants, commonQuery, Op } = require("../helpers");
 const { getFilteredAnnouncements } = require("../helpers/functions/commonFunctions");
 const dayjs = require("dayjs");
@@ -304,3 +304,61 @@ exports.getUnreadCount = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+/**
+ * Update User FCM Token for push notifications
+ */
+exports.updateFcmToken = async (req, res) => {
+    try {
+        const { fcm_token } = req.body;
+        const userId = req.user.id;
+        console.log("userId", userId);
+        if (!fcm_token) {
+            return res.error(constants.VALIDATION_ERROR, "FCM token is required");
+        }
+
+        // 1. Dual-register in our multi-device table
+        const companyId = req.user.company_id || null;
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: userId, fcm_token }, {}, null, false, {});
+        if (!existingDevice) {
+            await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
+        } else if (!existingDevice.company_id && companyId) {
+            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, null, false, {});
+        }
+
+        // 2. Fallback update on User model for legacy/single-query references
+        await commonQuery.updateRecordById(User, userId, { fcm_token }, null, true, {});
+
+        return res.ok({ message: "FCM token updated successfully" });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Remove User FCM Token on logout or token deactivation
+ */
+exports.removeFcmToken = async (req, res) => {
+    try {
+        const { fcm_token } = req.body;
+        const userId = req.user.id;
+
+        if (!fcm_token) {
+            return res.error(constants.VALIDATION_ERROR, "FCM token is required");
+        }
+
+        // 1. Remove from multi-device table
+        await commonQuery.deleteRecord(UserDevice, { user_id: userId, fcm_token }, null);
+
+        // 2. Clear legacy fcm_token on User model if it matches
+        const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["id", "fcm_token"] }, null, false, {});
+        if (user && user.fcm_token === fcm_token) {
+            await commonQuery.updateRecordById(User, userId, { fcm_token: null }, null, true, {});
+        }
+
+        return res.ok({ message: "FCM token removed successfully" });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+

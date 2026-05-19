@@ -14,7 +14,7 @@ router.post("/get-employee-summary-report", reportsController.getEmployeeSummary
 
 // Attendance Report Routes
 router.post("/get-late-entry-report", attendanceReportsController.getLateEntryReport);
-router.post("/get-regularities-report", attendanceReportsController.getMissPunchOutReport);
+router.post("/get-irregularities-report", attendanceReportsController.getMissPunchOutReport);
 router.post("/get-overtime-report", attendanceReportsController.getOvertimeReport);
 router.post("/attendance-report", attendanceReportsController.getAttendanceReport);
 router.post("/canteen-attendance-report", attendanceReportsController.getCanteenAttendanceReport);

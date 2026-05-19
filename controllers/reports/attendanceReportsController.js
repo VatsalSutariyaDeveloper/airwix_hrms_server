@@ -9,15 +9,68 @@ const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 dayjs.extend(customParseFormat);
 dayjs.extend(isSameOrBefore);
 
-const hasSelectedValue = (value) => (
-  value !== undefined &&
-  value !== null &&
-  value !== "" &&
-  value !== "All" &&
-  value !== "all" &&
-  value !== 0 &&
-  value !== "0"
-);
+const enrichReportData = async (reportData, employeesItems, transaction) => {
+  if (!Array.isArray(reportData) || reportData.length === 0) return;
+  if (!Array.isArray(employeesItems) || employeesItems.length === 0) return;
+
+  const branchIds = [...new Set(employeesItems.map(emp => emp.branch_id).filter(Boolean))];
+  const companyIds = [...new Set(employeesItems.map(emp => emp.company_id).filter(Boolean))];
+
+  const [branches, companies] = await Promise.all([
+    BranchMaster.findAll({ where: { id: { [Op.in]: branchIds } }, attributes: ['id', 'branch_name'], raw: true, transaction }),
+    sequelize.models.CompanyMaster.findAll({ where: { id: { [Op.in]: companyIds } }, attributes: ['id', 'company_name'], raw: true, transaction })
+  ]);
+
+  const branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
+  const companyMap = Object.fromEntries(companies.map(c => [c.id, c.company_name]));
+
+  const empMap = {};
+  employeesItems.forEach(emp => {
+    const data = {
+      company_name: companyMap[emp.company_id] || 'N/A',
+      branch_name: branchMap[emp.branch_id] || 'N/A'
+    };
+    if (emp.id) empMap[emp.id] = data;
+    if (emp.employee_code) empMap[emp.employee_code] = data;
+  });
+
+  reportData.forEach(row => {
+    const key = row.employee_id || row.employee_code;
+    const enriched = empMap[key] || empMap[row.employee_code] || empMap[row.employee_id];
+    if (enriched) {
+      row.company_name = enriched.company_name;
+      row.branch_name = enriched.branch_name;
+    } else {
+      row.company_name = row.company_name || 'N/A';
+      row.branch_name = row.branch_name || 'N/A';
+    }
+  });
+};
+
+
+const hasSelectedValue = (value) => {
+  if (Array.isArray(value)) {
+    const cleaned = value.filter(v =>
+      v !== undefined &&
+      v !== null &&
+      v !== "" &&
+      v !== "All" &&
+      v !== "all" &&
+      v !== 0 &&
+      v !== "0"
+    );
+    return cleaned.length > 0 ? cleaned : null;
+  }
+  return (
+    value !== undefined &&
+    value !== null &&
+    value !== "" &&
+    value !== "All" &&
+    value !== "all" &&
+    value !== 0 &&
+    value !== "0"
+  ) ? value : null;
+};
 
 const buildEmploymentRangeWhere = (startDate, endDate) => ({
   [Op.and]: [
@@ -36,9 +89,8 @@ const buildEmploymentRangeWhere = (startDate, endDate) => ({
   ]
 });
 
-const buildEmployeePaginationBody = (reqBody, companyId, extraFilter = {}, status = [0, 1]) => ({
+const buildEmployeePaginationBody = (reqBody, extraFilter = {}, status = [0, 1]) => ({
   ...reqBody,
-  company_id: companyId,
   status,
   filter: {
     ...(reqBody?.filter || {}),
@@ -57,7 +109,8 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       month_year,
       staff_type,
       branch_id,
-      department_id
+      department_id,
+      company_id
     } = req.body;
     const employeeTypeLabels = { 1: "Staff", 2: "Worker", 3: "Contractor" };
     const rawCanteenFilter = (
@@ -67,13 +120,38 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       req.body.entry_type ??
       req.body.filter_type
     );
-    const canteenFilter =
-      typeof rawCanteenFilter === "string" &&
-      ["all", "employee", "guest"].includes(rawCanteenFilter.trim().toLowerCase())
-        ? rawCanteenFilter.trim().toLowerCase()
-        : (req.body.include_guest === true || req.body.include_guest === "true" ? "all" : "employee");
-    const shouldIncludeEmployees = canteenFilter !== "guest";
-    const shouldIncludeGuests = canteenFilter !== "employee";
+
+    let selectedFilters = [];
+    if (Array.isArray(rawCanteenFilter)) {
+      selectedFilters = rawCanteenFilter;
+    } else if (typeof rawCanteenFilter === "string") {
+      if (rawCanteenFilter.includes(',')) {
+        selectedFilters = rawCanteenFilter.split(',').map(s => s.trim());
+      } else {
+        const val = rawCanteenFilter.trim().toLowerCase();
+        if (val === 'all') {
+          selectedFilters = ['1', '2', '3', 'guest'];
+        } else if (val === 'employee') {
+          selectedFilters = ['1', '2', '3'];
+        } else if (val === 'guest') {
+          selectedFilters = ['guest'];
+        } else {
+          selectedFilters = [rawCanteenFilter];
+        }
+      }
+    } else {
+      selectedFilters = ['1', '2', '3', 'guest'];
+    }
+
+    const shouldIncludeEmployees = selectedFilters.some(f => f === '1' || f === '2' || f === '3' || String(f).toLowerCase() === 'employee' || String(f).toLowerCase() === 'all');
+    const shouldIncludeGuests = selectedFilters.some(f => String(f).toLowerCase() === 'guest' || String(f).toLowerCase() === 'all');
+
+    let canteenFilter = "all";
+    if (shouldIncludeEmployees && !shouldIncludeGuests) {
+      canteenFilter = "employee";
+    } else if (!shouldIncludeEmployees && shouldIncludeGuests) {
+      canteenFilter = "guest";
+    }
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(
@@ -120,8 +198,24 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    if (shouldIncludeEmployees) {
+      const selectedEmployeeTypes = selectedFilters
+        .filter(f => f === '1' || f === '2' || f === '3' || f === 1 || f === 2 || f === 3)
+        .map(f => parseInt(f));
+      if (selectedEmployeeTypes.length > 0) {
+        employeeFilter.employee_type = { [Op.in]: selectedEmployeeTypes };
+      } else if (hasSelectedValue(staff_type)) {
+        employeeFilter.employee_type = staff_type;
+      }
+    } else {
+      if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
+    }
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const daysArray = [];
@@ -187,7 +281,6 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     };
 
     const guestWhere = {
-      company_id: req.user.company_id,
       is_guest: true,
       status: 0,
       date: {
@@ -215,7 +308,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     const employees = shouldIncludeEmployees
       ? await commonQuery.fetchPaginatedData(
         Employee,
-        buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+        buildEmployeePaginationBody(req.body, employeeFilter),
         [
           ["first_name", true, true],
           ["employee_code", true, true]
@@ -225,11 +318,13 @@ exports.getCanteenAttendanceReport = async (req, res) => {
             'id',
             'first_name',
             'employee_code',
-            'employee_type'
+            'employee_type',
+            'company_id',
+            'branch_id'
           ],
           order: [['first_name', 'ASC']]
         },
-        { company_id: true, branch_id: true },
+        true,
         'created_at',
         buildEmploymentRangeWhere(startDate, endDate)
       )
@@ -260,7 +355,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
           order: [['employee_id', 'ASC'], ['date', 'ASC'], ['created_at', 'ASC']]
         },
         null,
-        { company_id: true, branch_id: true }
+        {}
       )
       : [];
 
@@ -370,6 +465,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
         });
       }
     }
+    await enrichReportData(reportData, employees.items);
 
     return res.ok({
       report_type,
@@ -401,7 +497,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
  */
 exports.getAttendanceReport = async (req, res) => {
   try {
-    const { report_type, date, month_year, staff_type, branch_id, department_id } = req.body;
+    const { report_type, date, month_year, staff_type, branch_id, department_id, company_id } = req.body;
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(constants.VALIDATION_ERROR, "report_type must be either 'daily' or 'monthly'");
@@ -424,7 +520,10 @@ exports.getAttendanceReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
@@ -436,10 +535,10 @@ exports.getAttendanceReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+      buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id'],
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id', 'company_id'],
         include: [
           { model: ShiftTemplate, as: "shiftTemplate", attributes: ["id", "shift_name"] },
           { model: Department, as: "department", attributes: ["name"] },
@@ -447,7 +546,7 @@ exports.getAttendanceReport = async (req, res) => {
         ],
         order: [['first_name', 'ASC']]
       },
-      { company_id: true, branch_id: true },
+      {},
       'created_at',
       buildEmploymentRangeWhere(startDate, endDate)
     );
@@ -463,10 +562,10 @@ exports.getAttendanceReport = async (req, res) => {
       status: { [Op.ne]: 2 }
     }, {
       include: [
-        { model: LeaveTemplateCategory, as: "leaveCategory", attributes: ["id", "leave_category_name"] }
+        { model: LeaveTemplateCategory, as: "leaveCategory", attributes: ["id", "leave_category_name", "is_paid", "is_compoff"] }
       ],
       order: [['attendance_date', 'ASC']]
-    }, null, { company_id: true });
+    }, null, {});
 
     // 2.1. Fetch Punch Records for detailed attendance data
     let punchRecords = await commonQuery.findAllRecords(AttendancePunch, {
@@ -477,7 +576,7 @@ exports.getAttendanceReport = async (req, res) => {
       ]
     }, {
       order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
-    }, null, { company_id: true });
+    }, null, {});
 
     // 3. Pre-fetch Holidays & Week Offs & Out Duty
     const [holidays, weeklyOffs, outDuties] = await Promise.all([
@@ -520,7 +619,7 @@ exports.getAttendanceReport = async (req, res) => {
       punchesByEmployeeDate.get(key).push({
         punch_time: punch.punch_time,
         punch_type: punch.punch_type,
-        formatted_time: dayjs(punch.punch_time).format('HH:mm')
+        formatted_time: dayjs(punch.punch_time).format('h:mm A')
       });
     });
 
@@ -558,7 +657,22 @@ exports.getAttendanceReport = async (req, res) => {
           outDuty: 0,
           totalWorkedMinutes: 0,
           totalLateMinutes: 0,
-          totalOvertimeMinutes: 0
+          totalOvertimeMinutes: 0,
+          totalBreakMinutes: 0,
+          activeDays: 0,
+          totalActiveDays: 0,
+          payDay: 0,
+          absentDay: 0,
+          casualLeave: 0,
+          compoffLeave: 0,
+          paidLeave: 0,
+          unpaidLeave: 0,
+          leaveCounts: {
+            "Casual Leave": 0,
+            "Compoff Leave": 0,
+            "Paid Leave": 0,
+            "Unpaid Leave": 0
+          }
         }
       };
 
@@ -573,33 +687,92 @@ exports.getAttendanceReport = async (req, res) => {
         let workedMins = 0;
         let lateMins = 0;
         let otMins = 0;
+        let breakMins = 0;
 
         const dayOfWeek = dayjs(d).day();
         const weekNo = Math.ceil(dayjs(d).date() / 7);
         const isScheduledWo = weeklyOffs.some(wo => wo.employee_id === emp.id && wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekNo));
+
+        let leaveCategoryName = null;
+        let isHalfDayLeave = false;
 
         if (dayRecord) {
           statusId = dayRecord.status;
           const sMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 12: "Out Duty", 13: "Half Out Duty" };
           status = sMap[statusId] || "Pending";
 
-          if (statusId === 6 && dayRecord.leaveCategory) status = dayRecord.leaveCategory.leave_category_name;
-          else if (statusId === 1 && dayRecord.leaveCategory) status = `Half Day / ${dayRecord.leaveCategory.leave_category_name}`;
+          if (statusId === 6 && dayRecord.leaveCategory) {
+            status = dayRecord.leaveCategory.leave_category_name;
+            leaveCategoryName = dayRecord.leaveCategory.leave_category_name;
+          } else if (statusId === 1 && dayRecord.leaveCategory) {
+            status = `Half Day / ${dayRecord.leaveCategory.leave_category_name}`;
+            leaveCategoryName = dayRecord.leaveCategory.leave_category_name;
+            isHalfDayLeave = true;
+          }
 
-          if (dayRecord.first_in) inTime = dayRecord.first_in;
-          if (dayRecord.last_out) outTime = dayRecord.last_out;
+          if (dayRecord.first_in) inTime = dayjs(dayRecord.first_in, 'HH:mm:ss').format('h:mm A');
+          if (dayRecord.last_out) outTime = dayjs(dayRecord.last_out, 'HH:mm:ss').format('h:mm A');
           workedMins = dayRecord.worked_minutes || 0;
           lateMins = dayRecord.fine_data?.late_entry?.minutes || 0;
           otMins = dayRecord.overtime_minutes || 0;
+          breakMins = dayRecord.total_break_minutes || 0;
 
-          if (statusId === 0) empData.summary.present += 1;
-          else if (statusId === 1) empData.summary.halfDay += 1;
-          else if (statusId === 3) empData.summary.weeklyOff += 1;
-          else if (statusId === 4) empData.summary.holiday += 1;
-          else if (statusId === 5) empData.summary.absent += 1;
-          else if (statusId === 6) empData.summary.leave += 1;
-          else if (statusId === 12) empData.summary.outDuty += 1;
-          else if (statusId === 13) empData.summary.halfDay += 1;
+          if (statusId === 0) {
+            empData.summary.present += 1;
+          } else if (statusId === 1) {
+            empData.summary.halfDay += 1;
+            if (dayRecord.leaveCategory) {
+              const leaveName = dayRecord.leaveCategory.leave_category_name;
+              const catName = leaveName.toLowerCase();
+              const isPaid = dayRecord.leaveCategory.is_paid !== false;
+              const isCompoff = !!dayRecord.leaveCategory.is_compoff;
+              const isCasual = catName.includes("casual");
+              const isComp = isCompoff || catName.includes("comp");
+
+              empData.summary.leave += 0.5;
+              if (!empData.summary.leaveCounts[leaveName]) {
+                empData.summary.leaveCounts[leaveName] = 0;
+              }
+              empData.summary.leaveCounts[leaveName] += 0.5;
+
+              if (isCasual) empData.summary.casualLeave += 0.5;
+              else if (isComp) empData.summary.compoffLeave += 0.5;
+              else if (isPaid) empData.summary.paidLeave += 0.5;
+              else empData.summary.unpaidLeave += 0.5;
+            }
+          } else if (statusId === 3) {
+            empData.summary.weeklyOff += 1;
+          } else if (statusId === 4) {
+            empData.summary.holiday += 1;
+          } else if (statusId === 5) {
+            empData.summary.absent += 1;
+          } else if (statusId === 6) {
+            empData.summary.leave += 1;
+            if (dayRecord.leaveCategory) {
+              const leaveName = dayRecord.leaveCategory.leave_category_name;
+              const catName = leaveName.toLowerCase();
+              const isPaid = dayRecord.leaveCategory.is_paid !== false;
+              const isCompoff = !!dayRecord.leaveCategory.is_compoff;
+              const isCasual = catName.includes("casual");
+              const isComp = isCompoff || catName.includes("comp");
+
+              if (!empData.summary.leaveCounts[leaveName]) {
+                empData.summary.leaveCounts[leaveName] = 0;
+              }
+              empData.summary.leaveCounts[leaveName] += 1.0;
+
+              if (isCasual) empData.summary.casualLeave += 1.0;
+              else if (isComp) empData.summary.compoffLeave += 1.0;
+              else if (isPaid) empData.summary.paidLeave += 1.0;
+              else empData.summary.unpaidLeave += 1.0;
+            } else {
+              empData.summary.unpaidLeave += 1.0;
+            }
+          } else if (statusId === 12) {
+            empData.summary.outDuty += 1;
+          } else if (statusId === 13) {
+            empData.summary.halfDay += 1;
+          }
         } else {
           // Inherit auto statuses
           if (holidayMap.has(key)) {
@@ -623,6 +796,7 @@ exports.getAttendanceReport = async (req, res) => {
         empData.summary.totalWorkedMinutes += workedMins;
         empData.summary.totalLateMinutes += lateMins;
         empData.summary.totalOvertimeMinutes += otMins;
+        empData.summary.totalBreakMinutes += breakMins;
 
         // Get punch data for this employee and date
         const punchKey = `${emp.id}_${d}`;
@@ -658,11 +832,50 @@ exports.getAttendanceReport = async (req, res) => {
           workedMins: Math.floor(workedMins / 60) + 'h ' + (workedMins % 60) + 'm',
           otMins: Math.floor(otMins / 60) + 'h ' + (otMins % 60) + 'm',
           lateMins: Math.floor(lateMins / 60) + 'h ' + (lateMins % 60) + 'm',
-          punch_pairs: punchPairs.length > 0 ? punchPairs : [{ in: '-', out: '-' }]
+          breakMins: Math.floor(breakMins / 60) + 'h ' + (breakMins % 60) + 'm',
+          punch_pairs: punchPairs.length > 0 ? punchPairs : [{ in: '-', out: '-' }],
+          leave_category_name: leaveCategoryName,
+          is_half_day_leave: isHalfDayLeave
         };
       }
+
+      // Calculate final activeDays, totalActiveDays, payDay, absentDay
+      const activeDaysVal = empData.summary.present + empData.summary.outDuty + (empData.summary.halfDay * 0.5);
+      empData.summary.activeDays = parseFloat(activeDaysVal.toFixed(1));
+      empData.summary.totalActiveDays = parseFloat(activeDaysVal.toFixed(1));
+
+      const absentDayVal = empData.summary.absent + (empData.summary.halfDay * 0.5);
+      empData.summary.absentDay = parseFloat(absentDayVal.toFixed(1));
+
+      // payDay strictly excludes unpaid leaves
+      const paidLeavesVal = empData.summary.paidLeave + empData.summary.casualLeave + empData.summary.compoffLeave;
+      const payDayVal = activeDaysVal + paidLeavesVal + empData.summary.weeklyOff + empData.summary.holiday;
+      empData.summary.payDay = parseFloat(payDayVal.toFixed(1));
+
+      // Round all other numeric fields to 1 decimal place
+      empData.summary.present = parseFloat(empData.summary.present.toFixed(1));
+      empData.summary.absent = parseFloat(empData.summary.absent.toFixed(1));
+      empData.summary.halfDay = parseFloat(empData.summary.halfDay.toFixed(1));
+      empData.summary.leave = parseFloat(empData.summary.leave.toFixed(1));
+      empData.summary.weeklyOff = parseFloat(empData.summary.weeklyOff.toFixed(1));
+      empData.summary.holiday = parseFloat(empData.summary.holiday.toFixed(1));
+      empData.summary.outDuty = parseFloat(empData.summary.outDuty.toFixed(1));
+      empData.summary.casualLeave = parseFloat(empData.summary.casualLeave.toFixed(1));
+      empData.summary.compoffLeave = parseFloat(empData.summary.compoffLeave.toFixed(1));
+      empData.summary.paidLeave = parseFloat(empData.summary.paidLeave.toFixed(1));
+      empData.summary.unpaidLeave = parseFloat(empData.summary.unpaidLeave.toFixed(1));
+
+      // Also round each dynamic leave count to 1 decimal place
+      if (empData.summary.leaveCounts) {
+        for (const leaveName of Object.keys(empData.summary.leaveCounts)) {
+          empData.summary.leaveCounts[leaveName] = parseFloat(empData.summary.leaveCounts[leaveName].toFixed(1));
+        }
+      }
+
       reportData.push(empData);
     }
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       report_type,
       start_date: startDate,
@@ -687,7 +900,7 @@ exports.getAttendanceReport = async (req, res) => {
  */
 exports.getLateEntryReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { month, year, branch_id, department_id, company_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -702,7 +915,10 @@ exports.getLateEntryReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -712,10 +928,10 @@ exports.getLateEntryReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+      buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type', 'company_id'],
         distinct: true,
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
@@ -735,7 +951,7 @@ exports.getLateEntryReport = async (req, res) => {
           }
         ]
       },
-      { company_id: true, branch_id: true },
+      true,
       'created_at',
       buildEmploymentRangeWhere(startDate, endDate)
     );
@@ -855,6 +1071,8 @@ exports.getLateEntryReport = async (req, res) => {
       reportData.push(row);
     });
 
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       daysArray: daysArray,
       items: reportData,
@@ -878,22 +1096,30 @@ exports.getLateEntryReport = async (req, res) => {
  */
 exports.getMissPunchOutReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { report_type, date, month, year, branch_id, department_id, company_id } = req.body;
 
-    if (!month || !year) {
-      return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
+    let startDate, endDate;
+    if (report_type === 'daily' && date) {
+      startDate = dayjs(date).format('YYYY-MM-DD');
+      endDate = dayjs(date).format('YYYY-MM-DD');
+    } else {
+      const targetMonth = month || dayjs().month() + 1;
+      const targetYear = year || dayjs().year();
+
+      startDate = dayjs(`${targetYear}-${targetMonth}-01`).startOf('month').format('YYYY-MM-DD');
+      endDate = dayjs(`${targetYear}-${targetMonth}-01`).endOf('month').format('YYYY-MM-DD');
     }
 
-    const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
-    let endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
-
-    // Cap the endDate to today's date if the selected month is the current month or in the future
+    // Cap the endDate to today's date if the selected end date is in the future
     if (dayjs(endDate).isAfter(dayjs(), 'day')) {
       endDate = dayjs().format('YYYY-MM-DD');
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -903,10 +1129,10 @@ exports.getMissPunchOutReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+      buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type', 'company_id'],
         distinct: true,
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
@@ -917,14 +1143,16 @@ exports.getMissPunchOutReport = async (req, res) => {
             required: true,
             where: {
               attendance_date: { [Op.between]: [startDate, endDate] },
-              last_out: null,
-              first_in: { [Op.ne]: null },
+              [Op.or]: [
+                { last_out: null, first_in: { [Op.ne]: null } },
+                { first_in: null, last_out: { [Op.ne]: null } }
+              ],
               status: { [Op.ne]: 2 }
             }
           }
         ]
       },
-      { company_id: true, branch_id: true },
+      true,
       'created_at',
       buildEmploymentRangeWhere(startDate, endDate)
     );
@@ -994,6 +1222,8 @@ exports.getMissPunchOutReport = async (req, res) => {
       reportData.push(row);
     });
 
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       daysArray: daysArray,
       items: reportData,
@@ -1017,7 +1247,7 @@ exports.getMissPunchOutReport = async (req, res) => {
  */
 exports.getOvertimeReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { month, year, branch_id, department_id, company_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -1032,7 +1262,10 @@ exports.getOvertimeReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -1042,7 +1275,7 @@ exports.getOvertimeReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter),
+      buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
@@ -1051,7 +1284,7 @@ exports.getOvertimeReport = async (req, res) => {
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }
         ]
       },
-      { company_id: true, branch_id: true },
+      true,
       'created_at',
       buildEmploymentRangeWhere(startDate, endDate)
     );
@@ -1067,7 +1300,7 @@ exports.getOvertimeReport = async (req, res) => {
       status: { [Op.ne]: 2 }
     }, {
       order: [['attendance_date', 'ASC']]
-    }, null, { company_id: true });
+    }, null, {});
 
     // Group overtime records by employee
     const otDataMap = {};
@@ -1148,11 +1381,9 @@ exports.getOvertimeReport = async (req, res) => {
     return handleError(err, res, req);
   }
 };
-
-
 exports.getLeaveReport = async (req, res) => {
   try {
-    const { year, staff_type, branch_id } = req.body;
+    const { year, staff_type, branch_id, company_id } = req.body;
 
     if (!year) {
       return res.error(constants.VALIDATION_ERROR, "year is required");
@@ -1165,11 +1396,20 @@ exports.getLeaveReport = async (req, res) => {
 
     // Fetch Employees
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
 
     // Fetch all branches for mapping since it's not directly included via model sometimes
-    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id });
+    const branchWhere = {};
+    if (cleanedCompany) {
+      branchWhere.company_id = cleanedCompany;
+    } else {
+      branchWhere.company_id = req.user.company_id;
+    }
+    const branches = await commonQuery.findAllRecords(BranchMaster, branchWhere);
     const branchMap = {};
     branches.forEach(b => branchMap[b.id] = b.branch_name);
 
@@ -1180,16 +1420,16 @@ exports.getLeaveReport = async (req, res) => {
 
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, req.user.company_id, employeeFilter, 0),
+      buildEmployeePaginationBody(req.body, employeeFilter, 0),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id', 'company_id'],
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
         ]
       },
-      { company_id: true },
+      true,
       'created_at'
     );
 
@@ -1212,7 +1452,7 @@ exports.getLeaveReport = async (req, res) => {
     });
 
     // Prepare categories
-    const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { company_id: req.user.company_id, branch_id: req.user.branch_id, status: 0 });
+    const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { status: 0 });
     const leaveCatNames = allLeaveCategories.map(c => c.leave_category_name);
     const allCategories = ['Week Off', 'Holiday', ...leaveCatNames];
 
@@ -1350,6 +1590,8 @@ exports.getLeaveReport = async (req, res) => {
 
       return row;
     });
+
+    await enrichReportData(reportData, employees.items);
 
     return res.ok({
       categories: allCategories,

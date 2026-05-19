@@ -7,7 +7,7 @@ const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
 const DeviceHealthService = require("../services/deviceHealthService");
-const { CronJobRun, Logs, sequelize } = require("../models");
+const { CronJobRun, Logs, FaceRecognitionError, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
 const hrDashboardController = require("../controllers/employee/hrDashboardController");
 
@@ -17,7 +17,7 @@ const hrDashboardController = require("../controllers/employee/hrDashboardContro
 
 const jobLogCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily log cleanup task...');
-    await archiveAndCleanupLogs(90);
+    await archiveAndCleanupLogs();
     console.log('✅ Log cleanup completed.');
 };
 
@@ -158,6 +158,50 @@ const jobHolidayAndBirthdayNotifications = async (asOf = null, batch_id = null) 
     await hrDashboardController.sendHolidayAndBirthdayNotifications(asOf);
 };
 
+const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
+    console.log('⏰ Running daily face recognition audit cleanup task...');
+    const fifteenDaysAgo = dayjs().subtract(15, 'day').format('YYYY-MM-DD HH:mm:ss');
+    
+    // 1. Find records to delete (need image paths)
+    const records = await FaceRecognitionError.findAll({
+        where: {
+            created_at: { [Op.lt]: fifteenDaysAgo }
+        },
+        attributes: ['id', 'image']
+    });
+
+    if (records.length === 0) {
+        console.log('ℹ️ No expired face recognition audit logs found.');
+        return;
+    }
+
+    // 2. Delete images from filesystem
+    let deletedFiles = 0;
+    for (const record of records) {
+        if (record.image) {
+            const filePath = path.join(process.cwd(), 'uploads', 'employee', 'face_errors', record.image);
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                    deletedFiles++;
+                }
+            } catch (err) {
+                console.error(`[FaceAuditCleanup] Failed to delete image ${record.image}:`, err.message);
+            }
+        }
+    }
+
+    // 3. Delete records from database
+    const recordIds = records.map(r => r.id);
+    await FaceRecognitionError.destroy({
+        where: {
+            id: { [Op.in]: recordIds }
+        }
+    });
+
+    console.log(`✅ Face audit cleanup completed. ${recordIds.length} records and ${deletedFiles} images removed.`);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // All jobs registry (used by runAllNow)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +217,7 @@ const ALL_JOBS = [
     { name: 'Announcement Expiry',      fn: jobAnnouncementExpiry },
     { name: 'Device Health Check',      fn: jobDeviceHealthCheck },
     { name: 'Holiday & Birthday Notifications', fn: jobHolidayAndBirthdayNotifications },
+    { name: 'Face Audit Cleanup',       fn: jobFaceAuditCleanup },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,7 +393,7 @@ const initCronJobs = () => {
     });
 
     // ⏰ Device Health Check — runs every 30 minutes
-    cron.schedule('*/5 * * * *', async () => {
+    cron.schedule('*/30 * * * *', async () => {
         await jobDeviceHealthCheck().catch(e => console.error('❌ Device health check failed:', e));
     });
 
@@ -371,6 +416,7 @@ module.exports = {
     jobAnnouncementExpiry,
     jobDeviceHealthCheck,
     jobHolidayAndBirthdayNotifications,
+    jobFaceAuditCleanup,
     revertCronJobRun,
 };
 

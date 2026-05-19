@@ -22,6 +22,7 @@ router.post("/register", authController.register);
 router.post("/register/send-otp", authController.sendOtp);
 router.post("/register/verify-otp", authController.verifyOtp);
 router.post("/login/send-otp", loginController.sendLoginOtp);
+router.post("/verify-identifier", loginController.verifyIdentifier);
 router.post("/verify-mobile", loginController.verifyMobileNo);
 router.post("/verify-pin", loginController.verifyPin);
 router.post("/login/verify-otp", loginController.verifyOtp);

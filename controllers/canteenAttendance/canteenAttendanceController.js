@@ -187,17 +187,28 @@ exports.getSummary = async (req, res) => {
         date: date,
         is_guest: true,
         status: 0
+    }, {
+        include: [
+            {
+                model: Employee,
+                as: "referencedEmployee",
+                attributes: ["id", "first_name", "employee_code"]
+            }
+        ]
     });
 
     guestAttendance.forEach(att => {
+        const plainAtt = att.get ? att.get({ plain: true }) : att;
         presentEmployees.push({
-            id: att.id,
-            first_name: att.guest_name,
+            id: plainAtt.id,
+            first_name: plainAtt.guest_name,
             employee_code: "GUEST",
             employee_type: "GUEST",
             worker_type: "GUEST",
             is_guest: true,
-            created_at: att.created_at,
+            ref_employee_id: plainAtt.ref_employee_id,
+            referenced_employee: plainAtt.referencedEmployee || null,
+            created_at: plainAtt.created_at,
             profile_image_url: null
         });
     });

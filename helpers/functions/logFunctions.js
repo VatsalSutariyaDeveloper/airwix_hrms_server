@@ -1,4 +1,4 @@
-const { ActivityLog, Logs, sequelize, Employee } = require("../../models"); 
+const { Logs, ApiLog, sequelize, Employee } = require("../../models"); 
 const { generateLogMessage } = require("./logMessageGenerator"); // Assuming you have this
 const fs = require('fs');
 const path = require('path');
@@ -95,32 +95,6 @@ const truncateText = (text, limit) => {
 
 // --- EXPORTS ---
 
-// 1. Log User Activity (Simple Table)
-exports.logActivity = async (logData, transaction = null) => {
-  try {
-    let ctx = null;
-    try { ctx = getContext(); } catch (e) {}
-
-    const message = logData.log_message || `${logData.action_type} on ${logData.entity_name}`;
-    
-    await ActivityLog.create({
-      entity_name: logData.entity_name,
-      action_type: logData.action_type,
-      user_id: sanitizeUserId(logData.user_id),
-      company_id: logData.company_id,
-      branch_id: logData.branch_id,
-      record_id: logData.record_id,
-      log_message: truncateText(message, TEXT_LIMIT), 
-      ip_address: logData.ip_address,
-      access_type: logData.access_type || (ctx ? ctx.access : 'system'),
-      sql_query: logData.sql_query,
-      caller: logData.caller
-    }, { transaction });
-  } catch (err) {
-    console.error(`[CRITICAL] Failed to log activity: ${err.message}`);
-    throw err;
-  }
-};
 
 // 2. Log Data Changes (CRUD) -> Goes to 'Logs' Table
 exports.logQuery = async (logData, mainTransaction = null) => {
@@ -203,6 +177,7 @@ exports.logQuery = async (logData, mainTransaction = null) => {
         old_data: safeJson(finalOld),
         new_data: safeJson(finalNew),
         endpoint: logData.endpoint || (ctx ? ctx.endpoint : 'unknown'),
+        ip_address: logData.ip_address || (ctx ? ctx.ip : null),
         user_agent: logData.user_agent || (ctx ? ctx.userAgent : 'unknown'),
         caller: logData.caller,
         batch_id: logData.batch_id
@@ -306,9 +281,9 @@ exports.writeLogToFile = (filename, message) => {
 };
 
 // Archive Function (Updated for new table names)
-exports.archiveAndCleanupLogs = async (daysToKeep = 90) => {
+exports.archiveAndCleanupLogs = async () => {
     const thresholdDate = new Date();
-    thresholdDate.setDate(thresholdDate.getDate() - daysToKeep);
+    thresholdDate.setDate(thresholdDate.getDate() - 31);
     
     // Archive Logs Table
     const oldLogs = await Logs.findAll({
@@ -319,9 +294,19 @@ exports.archiveAndCleanupLogs = async (daysToKeep = 90) => {
     if (oldLogs.length > 0) {
         const fileName = `logs_archive_${new Date().toISOString().split('T')[0]}.json`;
         const filePath = path.join(__dirname, '../../uploads/archives', fileName);
+        if (!fs.existsSync(path.dirname(filePath))) {
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        }
         fs.writeFileSync(filePath, JSON.stringify(oldLogs));
         
         const idsToDelete = oldLogs.map(log => log.id);
         await Logs.destroy({ where: { id: idsToDelete } });
     }
+
+    // Cleanup ApiLog Table (No archive, just delete after 10 days)
+    const apiLogThreshold = new Date();
+    apiLogThreshold.setDate(apiLogThreshold.getDate() - 10);
+    await ApiLog.destroy({
+        where: { created_at: { [Op.lt]: apiLogThreshold } }
+    });
 };

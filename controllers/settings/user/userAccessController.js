@@ -83,7 +83,11 @@ exports.sessionData = async (req, res) => {
 
     const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
 
-    const companyAccessList = normalizeCompanyAccess(userData.company_access || "");
+    let companyAccessList = normalizeCompanyAccess(userData.company_access || "");
+    if (userData.company_id && !companyAccessList.includes(String(userData.company_id))) {
+      companyAccessList.push(String(userData.company_id));
+    }
+
     if (!isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
@@ -157,13 +161,19 @@ exports.sessionData = async (req, res) => {
       // E. Branch List
       BranchMaster.findAll({ 
           where: { 
-              company_id: record.id, 
               status: 0,
+              company_id: {
+                  [Op.in]: sequelize.literal(
+                      isAdmin 
+                        ? `(SELECT id FROM company_master WHERE organization_id = ${orgId} AND status != 2)`
+                        : `(SELECT id FROM company_master WHERE id IN (${companyAccessList.map(Number).join(',') || 0}) AND status != 2)`
+                  )
+              },
               ...(!isAdmin && normalizeBranchAccess(userData.branch_access).length > 0 ? {
                   id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
               } : {})
           },
-          attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id'],
+          attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id', 'company_id'],
           order: [["id", "ASC"]],
           transaction
       }),
@@ -542,7 +552,7 @@ exports.getCompanySettingsData = async (req, res) => {
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['show_accuracy','punch_cooldown_seconds', 'leave_past_datelimit']
+        [Op.in]: ['show_accuracy','punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage']
       },
       status: 0
     }, {

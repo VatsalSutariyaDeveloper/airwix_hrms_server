@@ -47,7 +47,7 @@ function initModels(prefix) {
   const Login = require("./auth/login")(seq, DataTypes);
   const LoginHistory = require("./auth/loginHistory")(seq, DataTypes);
   const OtpVerification = require("./auth/otpVerification")(seq, DataTypes);
-  const ActivityLog = require("./activityLog")(seq, DataTypes);
+
   const ActivationRequest = require("./activationRequest")(seq, DataTypes);
   const EmployeeResignation = require("./employeeResignation")(seq, DataTypes);
   const ApiLog = require("./apiLog")(seq, DataTypes);
@@ -55,6 +55,7 @@ function initModels(prefix) {
   const Notification = require("./notification")(seq, DataTypes);
   const Announcement = require("./announcement")(seq, DataTypes);
   const CronJobRun = require("./cronJobRun")(seq, DataTypes);
+  const UserDevice = require("./userDevice")(seq, DataTypes);
 
   // Subscription models
   const CompanySubscription = require("./subscription/companySubscriptions")(seq, DataTypes);
@@ -166,7 +167,7 @@ function initModels(prefix) {
     Login,
     LoginHistory,
     OtpVerification,
-    ActivityLog,
+
     ActivationRequest,
     EmployeeResignation,
     ApiLog,
@@ -174,6 +175,7 @@ function initModels(prefix) {
     Notification,
     Announcement,
     CronJobRun,
+    UserDevice,
     CompanySubscription,
     SubscriptionPlan,
     AttendanceTemplate,

@@ -58,3 +58,4 @@ Dockerfile
 
 scripts/*
 helpers/moduleEntitiesConstants.js
+config/firebase-service-account.json
