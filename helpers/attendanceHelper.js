@@ -380,8 +380,44 @@ async function punch(employeeId, meta, transaction = null) {
         }
       }
     } else {
-      punchType = "IN";
-      console.log(`[Punch] Defaulting to IN (No last punch or last was OUT)`);
+      // 🚀 Check if this is an evening punch-out without a morning punch-in
+      const currentDate = dayjs(now).format("YYYY-MM-DD");
+      const currentDayOfWeek = dayjs(now).day();
+
+      const currentEmpShift = await commonQuery.findOneRecord(EmployeeShift, {
+        employee_id: employeeId,
+        day_of_week: currentDayOfWeek,
+        status: 0,
+      }, {}, transaction);
+
+      let todayShift = null;
+      if (currentEmpShift) {
+        todayShift = await commonQuery.findOneRecord(ShiftTemplate, currentEmpShift.shift_id, {}, transaction);
+      } else if (employee.shift_template) {
+        todayShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+      }
+
+      const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
+
+      if (todayShift && !isOvertimeAllowed && todayShift.shift_type !== "Flexible Shift") {
+        const isNightShift = todayShift.is_night_shift || todayShift.end_time < todayShift.start_time;
+        if (!isNightShift) {
+          const todayShiftEnd = dayjs(`${currentDate} ${todayShift.end_time}`);
+          const windowStart = todayShiftEnd.subtract(180, 'minute'); // e.g. 3 hours before shift end (03:30 PM for a 06:30 PM end)
+          const windowEnd = todayShiftEnd.add(240, 'minute');     // e.g. 4 hours after shift end (10:30 PM for a 06:30 PM end)
+          const currentPunchTime = dayjs(now);
+
+          if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+            punchType = "OUT";
+            console.log(`[Punch] Direct Punch-Out Match: OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
+          }
+        }
+      }
+
+      if (!punchType) {
+        punchType = "IN";
+        console.log(`[Punch] Defaulting to IN (No last punch or last was OUT)`);
+      }
     }
   }
 
