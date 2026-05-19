@@ -1,5 +1,6 @@
-const { Notification } = require("../models");
-const { commonQuery, handleError } = require("../helpers");
+const { Notification, User, UserDevice } = require("../models");
+const { commonQuery, handleError, logError } = require("../helpers");
+const firebaseService = require("../helpers/firebaseService");
 
 /**
  * Service to handle system notifications creation.
@@ -23,6 +24,7 @@ const createNotification = async (payload, transaction = null) => {
             return null;
         }
 
+        // 1. Create DB Record
         const notification = await commonQuery.createRecord(Notification, {
             user_id,
             title,
@@ -35,6 +37,65 @@ const createNotification = async (payload, transaction = null) => {
             branch_id,
             status: 0 // Unread
         }, transaction);
+
+        // 2. Send Firebase Push Notification to all registered devices in parallel
+        try {
+            // Fetch all registered devices for this user
+            const registeredDevices = await commonQuery.findAllRecords(UserDevice, { user_id: user_id }, { attributes: ["fcm_token"] }, transaction);
+            let tokens = registeredDevices.map(d => d.fcm_token).filter(Boolean);
+
+            // Safety fallback: if no devices are registered in UserDevice yet, check the legacy User fcm_token
+            if (tokens.length === 0) {
+                const user = await commonQuery.findOneRecord(User, { id: user_id }, { attributes: ["fcm_token"] }, transaction, false, {});
+                if (user && user.fcm_token) {
+                    tokens.push(user.fcm_token);
+                }
+            }
+
+            // Remove any duplicates to avoid double-pushing same device
+            tokens = [...new Set(tokens)];
+
+            if (tokens.length > 0) {
+                console.log(`[FCM Service] Dispatching parallel push notifications to ${tokens.length} registered devices for user ${user_id}...`);
+                
+                await Promise.all(tokens.map(async (token) => {
+                    try {
+                        const response = await firebaseService.sendPushNotification(token, {
+                            title: title,
+                            body: message,
+                            redirect_url: redirect_url,
+                            data: {
+                                type: type,
+                                reference_id: String(reference_id || ""),
+                                status_code: String(status_code || "")
+                            }
+                        });
+
+                        if (!response) {
+                            console.warn(`[FCM Notification Warning] FCM delivery returned failure/null for device token starts with: ${token.substring(0, 30)}...`);
+                        }
+                    } catch (deviceError) {
+                        console.error(`[FCM Notification Device Error] Failed to send push to device:`, deviceError.message);
+                        
+                        // Auto-Cleanup: If token is invalid or expired, automatically delete it from database
+                        if (deviceError.message && (deviceError.message.includes("not-registered") || deviceError.message.includes("invalid"))) {
+                            console.log(`[FCM Service] Removing invalid/expired token: ${token.substring(0, 30)}...`);
+                            await commonQuery.deleteRecord(UserDevice, { fcm_token: token }, transaction);
+                        }
+                    }
+                }));
+            } else {
+                console.warn(`[FCM Notification skipped] User ${user_id} has no registered device fcm_tokens.`);
+            }
+        } catch (fcmError) {
+            console.error("FCM Notification Error:", fcmError.message);
+            await logError({
+                entity_name: "FCM_NOTIFICATION",
+                error_message: `FCM Send Exception: ${fcmError.message}`,
+                request_body: { user_id, title, message },
+                stack_trace: fcmError.stack
+            });
+        }
 
         return notification;
     } catch (err) {

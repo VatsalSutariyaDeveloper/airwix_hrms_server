@@ -224,6 +224,36 @@ async function punch(employeeId, meta, transaction = null) {
     return { punchType: 'CanteenPunch', punchTime: now, punchId: 'N/A', targetDayDate };
   }
 
+  // 1️⃣.1️⃣ Check for duplicate punches within 5 seconds for the same employee
+  const duplicatePunch = await commonQuery.findOneRecord(AttendancePunch, {
+    employee_id: employeeId,
+    punch_time: {
+      [Op.between]: [
+        dayjs(now).subtract(5, "second").toDate(),
+        dayjs(now).add(5, "second").toDate()
+      ]
+    },
+    company_id: { [Op.in]: allowedCompanyIds },
+    status: 0
+  }, {
+    include: [{
+      model: AttendanceDay,
+      as: "attendanceDay",
+      attributes: ["attendance_date"]
+    }]
+  }, transaction, true, {});
+
+  if (duplicatePunch) {
+    console.log(`[Punch] Duplicate punch detected within 5 seconds for Employee ${employeeId} at ${dayjs(now).format('YYYY-MM-DD HH:mm:ss')}. Skipping creation.`);
+    const existingDayDate = duplicatePunch.attendanceDay ? dayjs(duplicatePunch.attendanceDay.attendance_date).format("YYYY-MM-DD") : targetDayDate;
+    return {
+      punchType: duplicatePunch.punch_type,
+      punchTime: duplicatePunch.punch_time,
+      punchId: duplicatePunch.id,
+      targetDayDate: existingDayDate
+    };
+  }
+
   console.log(`[Punch] Looking for last punch in company: ${meta.company_id || employee.company_id}`);
   console.log(`[Punch] Proceeding to lastPunchGlobal query...`);
   const lastPunchGlobal = await commonQuery.findOneRecord(AttendancePunch, {
@@ -247,79 +277,107 @@ async function punch(employeeId, meta, transaction = null) {
   let lastInDay = null; // Store for date alignment
   if (!punchType) {
     if (lastPunchGlobal && lastPunchGlobal.punch_type === "IN") {
-      // 🚀 Fetch the day record of the last IN to align the cutoff with the actual shift
-      // [FIX] Search for the day record across all allowed companies to support cross-company pairing.
-      lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
-        id: lastPunchGlobal.day_id,
-        company_id: { [Op.in]: allowedCompanyIds }
-      }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
-      // 🚀 Rule: Calculate cutoff based on the FIRST "IN" of this logical day
-      const firstIn = await commonQuery.findOneRecord(AttendancePunch, {
-        day_id: lastPunchGlobal.day_id,
-        punch_type: "IN",
-        status: 0
-      }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
-
-      const startTime = firstIn ? firstIn.punch_time : lastPunchGlobal.punch_time;
-      const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
+      // 🚀 STEP A: Check if this is a new day's punch-in near the shift start time
+      const lastPunchDate = dayjs(lastPunchGlobal.punch_time).format("YYYY-MM-DD");
       const currentDate = dayjs(now).format("YYYY-MM-DD");
 
-      // INITIAL FALLBACK
-      // 1. Employee shift NOT assign and overtime allow -> default day cutoff time
-      // 4. Employee shift NOT assign and overtime NOT allow -> default day cutoff time
-      const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
-      let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
+      if (lastPunchDate !== currentDate) {
+        const currentDayOfWeek = dayjs(now).day();
+        const currentEmpShift = await commonQuery.findOneRecord(EmployeeShift, {
+          employee_id: employeeId,
+          day_of_week: currentDayOfWeek,
+          status: 0,
+        }, {}, transaction);
 
-      // CHECK IF OVERTIME ALLOWED
-      const isOvertimeAllowed = template && template.overtime_allowed === true && template.max_overtime_mins > 0;
+        let todayShift = null;
+        if (currentEmpShift) {
+          todayShift = await commonQuery.findOneRecord(ShiftTemplate, currentEmpShift.shift_id, {}, transaction);
+        } else if (employee.shift_template) {
+          todayShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+        }
 
-      // GET SHIFT DETAILS IF AVAILABLE
-      let hasShift = false;
-      let shiftEnd = null;
+        if (todayShift) {
+          const isNightShift = todayShift.is_night_shift || todayShift.end_time < todayShift.start_time;
+          if (!isNightShift) {
+            const todayShiftStart = dayjs(`${currentDate} ${todayShift.start_time}`);
+            const windowStart = todayShiftStart.subtract(180, 'minute');
+            const windowEnd = todayShiftStart.add(300, 'minute');
+            const currentPunchTime = dayjs(now);
 
-      if (lastInDay && lastInDay.shift_id) {
-        const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
-          attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
-        }, transaction, false, {});
-        
-        if (lastShift) {
-          hasShift = true;
-          shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
-          
-          if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
-            shiftEnd = shiftEnd.add(1, 'day');
+            if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+              punchType = "IN";
+              console.log(`[Punch] Shift Match Decision: IN (Current punch is within today's shift start window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')})`);
+            }
           }
         }
       }
 
-      // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
-      if (hasShift) {
-        if (isOvertimeAllowed) {
-          // 2. Employee shift assign AND overtime allow -> Max Overtime Cutoff Hours
-          const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+      if (!punchType) {
+        // 🚀 Fetch the day record of the last IN to align the cutoff with the actual shift
+        // [FIX] Search for the day record across all allowed companies to support cross-company pairing.
+        lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
+          id: lastPunchGlobal.day_id,
+          company_id: { [Op.in]: allowedCompanyIds }
+        }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
+        // 🚀 Rule: Calculate cutoff based on the FIRST "IN" of this logical day
+        const firstIn = await commonQuery.findOneRecord(AttendancePunch, {
+          day_id: lastPunchGlobal.day_id,
+          punch_type: "IN",
+          status: 0
+        }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
+
+        const startTime = firstIn ? firstIn.punch_time : lastPunchGlobal.punch_time;
+        const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
+
+        // INITIAL FALLBACK
+        // 1. Employee shift NOT assign and overtime allow -> default day cutoff time
+        // 4. Employee shift NOT assign and overtime NOT allow -> default day cutoff time
+        const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
+        let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
+
+        // CHECK IF OVERTIME ALLOWED
+        const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
+
+        // GET SHIFT DETAILS IF AVAILABLE
+        let hasShift = false;
+        let shiftEnd = null;
+
+        if (lastInDay && lastInDay.shift_id) {
+          const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
+            attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
+          }, transaction, false, {});
           
-          if (dayjs(now).isBefore(otCutoff)) {
-            // Still within explicit overtime limits
+          if (lastShift) {
+            hasShift = true;
+            shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+            
+            if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
+              shiftEnd = shiftEnd.add(1, 'day');
+            }
+          }
+        }
+
+        // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
+        if (hasShift) {
+          if (isOvertimeAllowed) {
+            // 2. Employee shift assign AND overtime allow -> Use template max overtime mins directly
+            const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
             cutoffTime = otCutoff;
           } else {
-            // Past the explicit limits, rely on Max Overtime Cutoff Hours to break the day
-            const maxOvertimeCutoffHours = parseInt(settings.max_overtime_cutoff_hours || 16);
-            cutoffTime = dayjs(startTime).add(maxOvertimeCutoffHours, "hour");
+            // 3. Employee shift assign BUT overtime NOT allow -> Shift End Cutoff Hours
+            const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || settings.default_punch_cutoff_hours || 14);
+            cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
           }
-        } else {
-          // 3. Employee shift assign BUT overtime NOT allow -> Shift End Cutoff Hours
-          const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || settings.default_punch_cutoff_hours || 14);
-          cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
         }
-      }
 
-      // UNIFIED DECISION based purely on final calculated cutoffTime
-      if (dayjs(now).isBefore(cutoffTime)) {
-        punchType = "OUT";
-        console.log(`[Punch] Toggle Decision: OUT (Before cutoff ${cutoffTime.format('HH:mm')})`);
-      } else {
-        punchType = "IN";
-        console.log(`[Punch] Toggle Decision: IN (After cutoff ${cutoffTime.format('HH:mm')})`);
+        // UNIFIED DECISION based purely on final calculated cutoffTime
+        if (dayjs(now).isBefore(cutoffTime)) {
+          punchType = "OUT";
+          console.log(`[Punch] Toggle Decision: OUT (Before cutoff ${cutoffTime.format('HH:mm')})`);
+        } else {
+          punchType = "IN";
+          console.log(`[Punch] Toggle Decision: IN (After cutoff ${cutoffTime.format('HH:mm')})`);
+        }
       }
     } else {
       punchType = "IN";

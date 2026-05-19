@@ -93,7 +93,7 @@ function withDebug(options = {}, transaction = null, capture = null) {
  * @param {Boolean} [skipStatus=false] - When true the default status (not equal 2) check is skipped;
  *                                       useful for include queries where status should not be applied
  */
-async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
+async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, model = null) {
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -110,6 +110,10 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
   }
 
   // --- 2. Apply Status Filter ---
+  if (!skipStatus && model && model.rawAttributes && !model.rawAttributes.status) {
+    skipStatus = true;
+  }
+
   if (!skipStatus) {
     if (where.status === undefined) {
       where.status = { [Op.ne]: 2 };
@@ -138,43 +142,117 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false) {
   const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
 
+  const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
+  const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
+  const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
+
   if (tenantConfig === true) {
-    if (ctx.company_id) where.company_id = ctx.company_id;
-    if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
-      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
-        where.branch_id = ctx.branch_id;
-      } else if (!ctx.is_super_admin && ctx.branch_access) {
-        let branches = [];
-        if (typeof ctx.branch_access === 'string') {
-          branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-        } else if (Array.isArray(ctx.branch_access)) {
-          branches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+    if (ctx.company_id && hasCompanyField) {
+      if (where.company_id === undefined) {
+        where.company_id = ctx.company_id;
+      } else if (!ctx.is_super_admin) {
+        let requested = [];
+        if (Array.isArray(where.company_id)) {
+          requested = where.company_id;
+        } else if (where.company_id && typeof where.company_id === 'object' && where.company_id[Op.in]) {
+          requested = where.company_id[Op.in];
+        } else {
+          requested = [where.company_id];
         }
-        if (branches.length > 0) where.branch_id = { [Op.in]: branches };
+        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
+        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
       }
     }
-    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) where.user_id = ctx.user_id;
+    if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
+      if (hasBranchField) {
+        if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
+          if (where.branch_id === undefined) {
+            where.branch_id = ctx.branch_id;
+          } else {
+            where.branch_id = ctx.branch_id;
+          }
+        } else if (!ctx.is_super_admin && ctx.branch_access) {
+          let allowedBranches = [];
+          if (typeof ctx.branch_access === 'string') {
+            allowedBranches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+          } else if (Array.isArray(ctx.branch_access)) {
+            allowedBranches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+          }
+          if (allowedBranches.length > 0) {
+            if (where.branch_id === undefined) {
+              where.branch_id = { [Op.in]: allowedBranches };
+            } else {
+              let requested = [];
+              if (Array.isArray(where.branch_id)) {
+                requested = where.branch_id;
+              } else if (where.branch_id && typeof where.branch_id === 'object' && where.branch_id[Op.in]) {
+                requested = where.branch_id[Op.in];
+              } else {
+                requested = [where.branch_id];
+              }
+              const intersected = requested.filter(id => allowedBranches.includes(Number(id)));
+              where.branch_id = intersected.length > 0 ? { [Op.in]: intersected } : { [Op.in]: [-1] };
+            }
+          }
+        }
+      }
+    }
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id && hasUserField) where.user_id = ctx.user_id;
   } else if (tenantConfig === false) {
-    if (ctx.company_id) where.company_id = { [Op.or]: [-1, ctx.company_id] };
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id) where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
-    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id) where.user_id = { [Op.or]: [-1, ctx.user_id] };
+    if (ctx.company_id && hasCompanyField) where.company_id = { [Op.or]: [-1, ctx.company_id] };
+    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id && hasBranchField) where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+    if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id && hasUserField) where.user_id = { [Op.or]: [-1, ctx.user_id] };
   } else if (isObj && !isEmptyObj) {
     // --- EXPLICIT TOGGLES ---
-    if (tenantConfig.company_id && ctx.company_id) where.company_id = ctx.company_id;
-    if (tenantConfig.branch_id) {
-      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
-        where.branch_id = ctx.branch_id;
-      } else if (!ctx.is_super_admin && ctx.branch_access) {
-        let branches = [];
-        if (typeof ctx.branch_access === 'string') {
-          branches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-        } else if (Array.isArray(ctx.branch_access)) {
-          branches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+    if (tenantConfig.company_id && ctx.company_id && hasCompanyField) {
+      if (where.company_id === undefined) {
+        where.company_id = ctx.company_id;
+      } else if (!ctx.is_super_admin) {
+        let requested = [];
+        if (Array.isArray(where.company_id)) {
+          requested = where.company_id;
+        } else if (where.company_id && typeof where.company_id === 'object' && where.company_id[Op.in]) {
+          requested = where.company_id[Op.in];
+        } else {
+          requested = [where.company_id];
         }
-        if (branches.length > 0) where.branch_id = { [Op.in]: branches };
+        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
+        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
       }
     }
-    if (tenantConfig.user_id && ctx.user_id) where.user_id = ctx.user_id;
+    if (tenantConfig.branch_id && hasBranchField) {
+      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
+        if (where.branch_id === undefined) {
+          where.branch_id = ctx.branch_id;
+        } else {
+          where.branch_id = ctx.branch_id;
+        }
+      } else if (!ctx.is_super_admin && ctx.branch_access) {
+        let allowedBranches = [];
+        if (typeof ctx.branch_access === 'string') {
+          allowedBranches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        } else if (Array.isArray(ctx.branch_access)) {
+          allowedBranches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
+        }
+        if (allowedBranches.length > 0) {
+          if (where.branch_id === undefined) {
+            where.branch_id = { [Op.in]: allowedBranches };
+          } else {
+            let requested = [];
+            if (Array.isArray(where.branch_id)) {
+              requested = where.branch_id;
+            } else if (where.branch_id && typeof where.branch_id === 'object' && where.branch_id[Op.in]) {
+              requested = where.branch_id[Op.in];
+            } else {
+              requested = [where.branch_id];
+            }
+            const intersected = requested.filter(id => allowedBranches.includes(Number(id)));
+            where.branch_id = intersected.length > 0 ? { [Op.in]: intersected } : { [Op.in]: [-1] };
+          }
+        }
+      }
+    }
+    if (tenantConfig.user_id && ctx.user_id && hasUserField) where.user_id = ctx.user_id;
   }
 
   return where;
@@ -218,7 +296,7 @@ async function normalizeInclude(includeArray) {
       const newInc = { ...inc }; 
       const newWhere = { ...(newInc.where || {}) };
 
-      if (newWhere.status === undefined) {
+      if (newWhere.status === undefined && inc.model && inc.model.rawAttributes && inc.model.rawAttributes.status) {
         newWhere.status = { [Op.ne]: 2 };
       }
 
@@ -277,14 +355,18 @@ module.exports = {
       ctx = getContext();  
     }
 
+    const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
+    const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
+    const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
+
     if (requireTenantFields === true) {
-      if (ctx.company_id && enrichedData.company_id === undefined) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
-      if (ctx.user_id && enrichedData.user_id === undefined) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+      if (ctx.company_id && enrichedData.company_id === undefined && hasCompanyField) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (ctx.user_id && enrichedData.user_id === undefined && hasUserField) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (ctx.branch_id && enrichedData.branch_id === undefined && hasBranchField) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     } else if (isObj && !isEmptyObj) {
-      if (requireTenantFields.company_id && ctx.company_id && enrichedData.company_id === undefined) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
-      if (requireTenantFields.user_id && ctx.user_id && enrichedData.user_id === undefined) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+      if (requireTenantFields.company_id && ctx.company_id && enrichedData.company_id === undefined && hasCompanyField) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (requireTenantFields.user_id && ctx.user_id && enrichedData.user_id === undefined && hasUserField) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined && hasBranchField) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
     const capture = {};
@@ -331,14 +413,18 @@ module.exports = {
 
     let attachCompany = false, attachUser = false, attachBranch = false;
     
+    const hasCompanyField = !Model || !Model.rawAttributes || !!Model.rawAttributes.company_id;
+    const hasBranchField = !Model || !Model.rawAttributes || !!Model.rawAttributes.branch_id;
+    const hasUserField = !Model || !Model.rawAttributes || !!Model.rawAttributes.user_id;
+
     if (requireTenantFields === true) {
-      attachCompany = !!ctx.company_id;
-      attachUser = !!ctx.user_id;
-      attachBranch = !!ctx.branch_id;
+      attachCompany = !!ctx.company_id && hasCompanyField;
+      attachUser = !!ctx.user_id && hasUserField;
+      attachBranch = !!ctx.branch_id && hasBranchField;
     } else if (isObj && !isEmptyObj) {
-      attachCompany = !!(requireTenantFields.company_id && ctx.company_id);
-      attachUser = !!(requireTenantFields.user_id && ctx.user_id);
-      attachBranch = !!(requireTenantFields.branch_id && ctx.branch_id);
+      attachCompany = !!(requireTenantFields.company_id && ctx.company_id) && hasCompanyField;
+      attachUser = !!(requireTenantFields.user_id && ctx.user_id) && hasUserField;
+      attachBranch = !!(requireTenantFields.branch_id && ctx.branch_id) && hasBranchField;
     }
 
     if (attachCompany || attachUser || attachBranch) {
@@ -387,7 +473,7 @@ module.exports = {
   updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
-    let condition = await buildWhere(whereInput, requireTenantFields); 
+    let condition = await buildWhere(whereInput, requireTenantFields, false, model); 
     
     let safeData = { ...data };
     let commonData = {
@@ -404,14 +490,18 @@ module.exports = {
       ctx = getContext();  
     }
 
+    const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
+    const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
+    const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
+
     if (requireTenantFields === true) {
-      if (ctx.company_id && safeData.company_id === undefined) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
-      if (ctx.user_id && safeData.user_id === undefined) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (ctx.branch_id && safeData.branch_id === undefined) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+      if (ctx.company_id && safeData.company_id === undefined && hasCompanyField) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (ctx.user_id && safeData.user_id === undefined && hasUserField) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (ctx.branch_id && safeData.branch_id === undefined && hasBranchField) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     } else if (isObj && !isEmptyObj) {
-      if (requireTenantFields.company_id && ctx.company_id && safeData.company_id === undefined) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
-      if (requireTenantFields.user_id && ctx.user_id && safeData.user_id === undefined) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (requireTenantFields.branch_id && ctx.branch_id && safeData.branch_id === undefined) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
+      if (requireTenantFields.company_id && ctx.company_id && safeData.company_id === undefined && hasCompanyField) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
+      if (requireTenantFields.user_id && ctx.user_id && safeData.user_id === undefined && hasUserField) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
+      if (requireTenantFields.branch_id && ctx.branch_id && safeData.branch_id === undefined && hasBranchField) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
     let oldRecord = null;
@@ -463,7 +553,7 @@ module.exports = {
     if (!isEmptyObj) {
       ctx = getContext();  
     }
-    const condition = await buildWhere(whereInput, requireTenantFields);
+    const condition = await buildWhere(whereInput, requireTenantFields, false, model);
 
     const recordsToDelete = await model.findAll({
       where: condition,
@@ -508,7 +598,7 @@ module.exports = {
   findAllRecords: async (model, filters = {}, options = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus);
+    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus, model);
 
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -538,7 +628,7 @@ module.exports = {
   countRecords: async (model, filters = {}, options = {}, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus);
+    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus, model);
     
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
@@ -558,7 +648,7 @@ module.exports = {
   findOneRecord: async (model, whereInput = {}, options = {}, transaction = null, forceReload = false, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const condition = await buildWhere(whereInput, requireTenantFields, !!safeOptions.skipStatus);
+    const condition = await buildWhere(whereInput, requireTenantFields, !!safeOptions.skipStatus, model);
     
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -582,7 +672,7 @@ module.exports = {
   hardDeleteRecords: async (model, whereInput = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
     const ctx = getContext();
-    const condition = await buildWhere(whereInput, requireTenantFields);
+    const condition = await buildWhere(whereInput, requireTenantFields, false, model);
 
     // Fetch records before deletion to preserve data for audit log
     const recordsToDelete = await model.findAll({
@@ -622,33 +712,37 @@ module.exports = {
   // 9. Aggregates
   sumRecords: async (model, field, filters = {}, transaction = null) => {
     const caller = captureCaller();
-    const where = await buildWhere(filters, true);
+    const where = await buildWhere(filters, true, false, model);
     const total = await model.sum(field, withDebug({ where, __caller: caller }, transaction));
     return total || 0;
   },
 
   incrementRecords: async (model, field, by = 1, whereInput = {}, transaction = null) => {
-    const where = await buildWhere(whereInput, true);
+    const where = await buildWhere(whereInput, true, false, model);
     return model.increment(field, { by, where, transaction });
   },
 
   decrementRecords: async (model, field, by = 1, whereInput = {}, transaction = null) => {
-    const where = await buildWhere(whereInput, true);
+    const where = await buildWhere(whereInput, true, false, model);
     return model.decrement(field, { by, where, transaction });
   },
 
   minRecords: async (model, field, whereInput = {}, transaction = null) => {
-    const where = await buildWhere(whereInput, true);
+    const where = await buildWhere(whereInput, true, false, model);
     return model.min(field, { where, transaction });
   },
 
   maxRecords: async (model, field, whereInput = {}, transaction = null) => {
-    const where = await buildWhere(whereInput, true);
+    const where = await buildWhere(whereInput, true, false, model);
     return model.max(field, { where, transaction });
   },
 
     // 10. ADVANCED PAGINATION
 async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
+    if (model.name === 'Employee' && options.attributes && Array.isArray(options.attributes)) {
+        if (!options.attributes.includes('company_id')) options.attributes.push('company_id');
+        if (!options.attributes.includes('branch_id')) options.attributes.push('branch_id');
+    }
     const caller = captureCaller();
     try {
       const standardizedConfig = fieldConfig.map(([key, searchable, sortable]) => ({
@@ -881,7 +975,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         }
         if (includeConditions.length > 0) {
             // we intentionally bypass default status filtering for include logic
-            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields, true);
+            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields, true, model);
             const extraRecords = await model.findAll({ where: stickyWhere, ...options });
             const existingIds = new Set(data.map(d => String(d.id)));
             const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));

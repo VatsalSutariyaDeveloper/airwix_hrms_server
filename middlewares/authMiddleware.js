@@ -95,7 +95,8 @@ async function authMiddleware(req, res, next) {
       is_reporting_manager: decoded.is_reporting_manager,
       is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
-      access: decoded.access || (decoded.role_key ? "employee" : "attendance")
+      access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
+      fcm_token: decoded.fcm_token || null
     };
 // console.log("req.user",req.user)
     requestContext.run(

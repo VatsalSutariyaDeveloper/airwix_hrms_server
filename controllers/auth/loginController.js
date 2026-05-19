@@ -1,4 +1,4 @@
-const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification, UserDevice } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper, getCompanySetting } = require("../../helpers");
 const { validatePhone } = require("../../helpers/phoneValidation");
 const crypto = require("crypto");
@@ -89,7 +89,7 @@ exports.sendLoginOtp = async (req, res) => {
 exports.login = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { email, password, mobile_no, otp } = req.body;
+    const { email, password, mobile_no, otp, fcm_token } = req.body;
 
     let user = null;
     let loginMethod = ""; 
@@ -361,11 +361,23 @@ exports.login = async (req, res) => {
           attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
           transaction
       });
-
       if (employee) {
           user.is_attendance_supervisor = employee.is_attendance_supervisor;
           user.is_reporting_manager = employee.is_reporting_manager;
       }
+    }
+
+    // Register FCM Token if provided in login body
+    if (fcm_token) {
+      const companyId = user.company_id || null;
+      const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: user.id, fcm_token }, {}, transaction, false, {});
+      if (!existingDevice) {
+        await commonQuery.createRecord(UserDevice, { user_id: user.id, fcm_token, company_id: companyId }, transaction, true, {});
+      } else if (!existingDevice.company_id && companyId) {
+        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
+      }
+      await commonQuery.updateRecordById(User, user.id, { fcm_token }, transaction, true, {});
+      user.fcm_token = fcm_token;
     }
 
     const token = generateToken({
@@ -465,7 +477,19 @@ exports.logout = async (req, res) => {
       return res.error(constants.USER_NOT_FOUND);
     }
 
-    // Find the most recent login record for this user that hasn'transaction been logged out yet.
+    // If fcm_token is provided in the request body OR encoded in the JWT payload, remove it
+    const fcm_token = req.body?.fcm_token || req.user.fcm_token;
+    if (fcm_token) {
+      // 1. Delete from UserDevice
+      await commonQuery.deleteRecord(UserDevice, { fcm_token, user_id: req.user.id }, transaction);
+
+      // 2. Clear legacy fcm_token on User model if it matches
+      if (user.fcm_token === fcm_token) {
+        await commonQuery.updateRecordById(User, user.id, { fcm_token: null }, transaction);
+      }
+    }
+
+    // Find the most recent login record for this user that hasn't been logged out yet.
     const lastLogin = await commonQuery.findOneRecord(
       LoginHistory,
       {
@@ -791,7 +815,7 @@ exports.verifyIdentifier = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address } = req.body;  
+    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;  
     if(mobile_no){
       identifier = mobile_no;
     } else if(email){
@@ -1036,6 +1060,19 @@ exports.verifyOtp = async (req, res) => {
       }
     }
 
+    // Register FCM Token if provided in verifyOtp body
+    if (fcm_token && !isDevice) {
+      const companyId = entity.company_id || null;
+      const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: entity.id, fcm_token }, {}, transaction, false, {});
+      if (!existingDevice) {
+        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+      } else if (!existingDevice.company_id && companyId) {
+        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
+      }
+      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+      entity.fcm_token = fcm_token;
+    }
+
     const token = generateToken({
       ...(isDevice ? (entity.get ? entity.get({ plain: true }) : entity) : entity.get({ plain: true })),
       role_key: entity.RolePermission?.role_key,
@@ -1116,7 +1153,7 @@ exports.verifyOtp = async (req, res) => {
 exports.generatePin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address } = req.body;
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
     
     if (device_id) {
         device_id = cryptoHelper.decryptId(device_id);
@@ -1383,7 +1420,20 @@ exports.generatePin = async (req, res) => {
           entity.joining_date = employee.joining_date;
       }
     }
-console.log("entity",entity.device_type)
+    // Register FCM Token if provided in generatePin body
+    if (fcm_token && !isDevice) {
+      const companyId = entity.company_id || null;
+      const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: entity.id, fcm_token }, {}, transaction, false, {});
+      if (!existingDevice) {
+        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+      } else if (!existingDevice.company_id && companyId) {
+        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
+      }
+      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+      entity.fcm_token = fcm_token;
+    }
+
+    console.log("entity",entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
       role_key: entity.RolePermission?.role_key,
@@ -1458,7 +1508,7 @@ console.log("entity",entity.device_type)
 exports.pinLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address } = req.body;
+    let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
     
     if (device_id) {
         device_id = cryptoHelper.decryptId(device_id);
@@ -1685,6 +1735,19 @@ exports.pinLogin = async (req, res) => {
           entity.employee_profile_image = employee.profile_image;
           entity.joining_date = employee.joining_date;
       }
+    }
+
+    // Register FCM Token if provided in pinLogin body
+    if (fcm_token && !isDevice) {
+      const companyId = entity.company_id || null;
+      const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: entity.id, fcm_token }, {}, transaction, false, {});
+      if (!existingDevice) {
+        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+      } else if (!existingDevice.company_id && companyId) {
+        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
+      }
+      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+      entity.fcm_token = fcm_token;
     }
 
     const token = generateToken({

@@ -102,7 +102,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 where: {
                     adjusted_in_payroll: false,
                     status: 0
-                }
+                },
+                required: false
             },
             {
                 model: EmployeeIncentive,
@@ -111,7 +112,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 where: {
                     month: month,
                     year: year
-                }
+                },
+                required: false
             },
             {
                 model: Reimbursement,
@@ -421,7 +423,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Step E.1: Fetch Approved Encashment Requests (all unsettled, no month/year filter)
     const encashments = await commonQuery.findAllRecords(LeaveRequest, {
         employee_id,
-        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED, 
+        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
         is_encashment: true,
         request_type: 'ENCASHMENT',
         is_settled_encashment: false,
@@ -721,7 +723,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 restrict_to_ceiling: sc.employer_pf.restrict_to_ceiling
             });
             addStatRecord("Employer PF", pfResult.employer_pf, true);
-            
+
             // If PF Admin/EDLI charges are calculated via service
             if (sc.pf_edli_admin?.enabled) {
                 addStatRecord("PF EDLI/Admin", pfResult.admin_charges + pfResult.edli_amount, true);
@@ -730,7 +732,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         if (sc.employer_esi?.enabled) addStatRecord("Employer ESI", sc.employer_esi.amount, true);
         if (sc.employer_lwf?.enabled) addStatRecord("Employer LWF", sc.employer_lwf.amount, true);
         if (sc.pf_edli_admin?.enabled) addStatRecord("PF EDLI/Admin", sc.pf_edli_admin.amount, true);
-        
+
         // Gratuity Provision (Employer Side)
         if (sc.gratuity?.enabled) {
             const joiningDate = dayjs(employee.joining_date);
@@ -750,7 +752,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             const basic = valuesMap.BASIC || 0;
             const baseAmount = sc.leave_encashment.amount || basic;
             const calcType = sc.leave_encashment.calculation_type || 'Attendance';
-            
+
             let amount = 0;
             if (calcType === 'Fixed') {
                 amount = sc.leave_encashment.amount || 0;
@@ -789,7 +791,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             for (const ps of pastPayslips) {
                 const earningDetails = ps.earning_details || {};
                 const hasBonusPaid = earningDetails["Statutory Bonus"] || earningDetails["Statutory_Bonus"] || earningDetails["bonus"] || earningDetails["Bonus"];
-                
+
                 if (hasBonusPaid && parseFloat(hasBonusPaid) > 0) {
                     lastPayoutPayslipId = ps.id;
                     break; // Stop going further back as this was the last payout
@@ -825,7 +827,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             // Determine if we should pay/initialize the bonus in this payslip
             const isPayoutMonth = paymentFrequency === 'Yearly' && parseInt(payoutMonth) === parseInt(month);
-            
+
             let shouldPayBonus = false;
             if (options.initialize_bonus !== undefined && options.initialize_bonus !== null) {
                 // Explicit user override (either true or false) takes absolute precedence
@@ -837,7 +839,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             if (shouldPayBonus) {
                 bonusData.initialized_this_period = true;
-                
+
                 // Add "Statutory Bonus" to earnings array
                 earnings.push({
                     name: "Statutory Bonus",
@@ -1465,31 +1467,31 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
 
     // Process encashments (collect data)
     let encashmentUpdateData = null;
-    
+
     if (encashment_ids_to_adjust && encashment_ids_to_adjust.length > 0) {
         const allEncashmentIds = (summary.encashment_history?.history || []).map(e => e.id);
         let encashmentIdsToSettle = allEncashmentIds.filter(id => encashment_ids_to_adjust.includes(id));
-        
+
         if (encashmentIdsToSettle.length === 0) {
             throw new Error(`Invalid encashment IDs provided. Available encashment IDs: ${allEncashmentIds.join(', ') || 'none'}`);
         }
 
         if (encashmentIdsToSettle.length > 0) {
-        await commonQuery.updateRecordById(
-            LeaveRequest,
-            { id: { [Op.in]: encashmentIdsToSettle }, employee_id },
-            { is_settled_encashment: true },
-            transaction
-        );
-        
-        const settledHistory = summary.encashment_history?.history?.filter(e => encashmentIdsToSettle.includes(e.id)) || [];
-        const settledSum = settledHistory.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
-        const settledDays = settledHistory.reduce((sum, e) => sum + parseFloat(e.days || 0), 0);
-        
-        encashmentUpdateData = {
-            history: settledHistory,
-            sum: settledSum.toFixed(2),
-        };
+            await commonQuery.updateRecordById(
+                LeaveRequest,
+                { id: { [Op.in]: encashmentIdsToSettle }, employee_id },
+                { is_settled_encashment: true },
+                transaction
+            );
+
+            const settledHistory = summary.encashment_history?.history?.filter(e => encashmentIdsToSettle.includes(e.id)) || [];
+            const settledSum = settledHistory.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
+            const settledDays = settledHistory.reduce((sum, e) => sum + parseFloat(e.days || 0), 0);
+
+            encashmentUpdateData = {
+                history: settledHistory,
+                sum: settledSum.toFixed(2),
+            };
         }
     }
 
@@ -2144,7 +2146,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             });
         }
 
-        console.log("yearRange--------------------\n",yearRange);
+        console.log("yearRange--------------------\n", yearRange);
 
         return res.ok({
             min_year: yearRange?.min_year || selectedYear,
@@ -2962,17 +2964,16 @@ exports.getEmployeesByMonthYear = async (req, res) => {
             { id: { [Op.in]: Array.from(employeeIds) } }
         );
 
-        // 5. Fetch existing Payslips for current page's employees
-        const filteredEmployeeIds = paginatedData.items.map(emp => emp.id);
-        const existingPayslips = await commonQuery.findAllRecords(Payslip, {
-            month, year, employee_id: { [Op.in]: filteredEmployeeIds }
+        // 5. Fetch existing Payslips for ALL employees matching this month/year
+        const allExistingPayslips = await commonQuery.findAllRecords(Payslip, {
+            month, year, employee_id: { [Op.in]: Array.from(employeeIds) }
         });
-        const payslipMap = new Map(existingPayslips.map(p => [p.employee_id, p]));
+        const allPayslipMap = new Map(allExistingPayslips.map(p => [p.employee_id, p]));
 
-        // 6. Format Result items
+        // 6. Format Result items for the current page
         const items = [];
         for (const emp of paginatedData.items) {
-            const existing = payslipMap.get(emp.id);
+            const existing = allPayslipMap.get(emp.id);
             let ctc = "0.00";
             let net_payable = "0.00";
             let payslip_id = null;
@@ -3014,7 +3015,46 @@ exports.getEmployeesByMonthYear = async (req, res) => {
             });
         }
 
+        // 7. Calculate grand totals globally for all employees (not just the current page)
+        const allTotals = await Promise.all(Array.from(employeeIds).map(async (empId) => {
+            const existing = allPayslipMap.get(empId);
+            let net_payable = 0;
+            let paid_amount = 0;
+
+            if (existing) {
+                net_payable = Math.max(parseFloat(existing.net_salary || existing.net_payable || 0), 0);
+                paid_amount = parseFloat(existing.paid_amount || 0);
+            } else {
+                try {
+                    const sim = await performSalaryCalculation(empId, month, year, null, { skipStatutory: false });
+                    if (sim && sim.salary) {
+                        net_payable = Math.max(parseFloat(sim.salary.netPayable || 0), 0);
+                        paid_amount = parseFloat(sim.payment_history?.grand_total || 0);
+                    }
+                } catch (e) {
+                    // Ignore and keep as 0
+                }
+            }
+            return { net_payable, paid_amount };
+        }));
+
+        let total_net_payable = 0;
+        let total_paid_amount = 0;
+        let total_pending_amount = 0;
+
+        for (const t of allTotals) {
+            total_net_payable += t.net_payable;
+            total_paid_amount += t.paid_amount;
+            total_pending_amount += Math.max(0, t.net_payable - t.paid_amount);
+        }
+
         paginatedData.items = items;
+        paginatedData.grand_totals = {
+            total_net_payable: parseFloat(total_net_payable.toFixed(2)),
+            total_paid_amount: parseFloat(total_paid_amount.toFixed(2)),
+            total_pending_amount: parseFloat(total_pending_amount.toFixed(2))
+        };
+
         return res.ok(paginatedData);
     } catch (err) {
         return handleError(err, res, req);
@@ -3337,12 +3377,49 @@ exports.getPayrollSummary = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
         }
 
-        // Fetch all active employees matching filter
+        // 1. Get unique employee_ids from AttendanceDay for the given month/year
+        const attendanceEmployees = await commonQuery.findAllRecords(AttendanceDay, {
+            [Op.and]: [
+                sequelize.where(sequelize.fn('EXTRACT', sequelize.literal('MONTH FROM attendance_date')), month),
+                sequelize.where(sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM attendance_date')), year),
+                { status: { [Op.ne]: 2 } }
+            ]
+        }, {
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('employee_id')), 'employee_id']],
+            raw: true
+        }, null, { company_id: true });
+
+        // 2. Get unique employee_ids from Payslip for the given month/year
+        const payslipEmployees = await commonQuery.findAllRecords(Payslip, {
+            month, year
+        }, {
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('employee_id')), 'employee_id']],
+            raw: true
+        });
+
+        // 3. Combine unique employee IDs
+        const employeeIds = new Set();
+        attendanceEmployees.forEach(ae => employeeIds.add(ae.employee_id));
+        payslipEmployees.forEach(pe => employeeIds.add(pe.employee_id));
+
+        if (employeeIds.size === 0) {
+            return res.ok({
+                total_employees: 0,
+                total_payable_amount: 0,
+                total_paid_amount: 0,
+                total_pending_amount: 0,
+                total_earnings: {},
+                total_deductions_breakdown: {},
+                total_statutory: {}
+            });
+        }
+
+        // Fetch all employees matching filter and who have active attendance/payslips
         const employees = await commonQuery.findAllRecords(
             Employee,
             {
                 ...employeeFilter,
-                status: { [Op.in]: [0, 1] } // Active employees
+                id: { [Op.in]: Array.from(employeeIds) }
             },
             {
                 attributes: ['id']
@@ -3355,7 +3432,11 @@ exports.getPayrollSummary = async (req, res) => {
                 return await fetchSalarySummary(emp.id, month, year, { skipStatutory: false });
             } catch (err) {
                 console.error(`[PAYROLL-SUMMARY] Error calculating salary for employee ${emp.id}:`, err.message);
-                return null;
+                return {
+                    failed: true,
+                    salary: { netPayable: 0 },
+                    breakdown: { earnings: [], deductions: [], statutory: {} }
+                };
             }
         }));
 
@@ -3375,8 +3456,8 @@ exports.getPayrollSummary = async (req, res) => {
 
             summary.total_employees += 1;
 
-            const netPayable = parseFloat(empSummary.salary?.netPayable || 0);
-            const paidSum = parseFloat(empSummary.payment_history?.salary?.sum || 0);
+            const netPayable = Math.max(parseFloat(empSummary.salary?.netPayable || 0), 0);
+            const paidSum = parseFloat(empSummary.payment_history?.grand_total || empSummary.payment_history?.salary?.sum || 0);
 
             summary.total_payable_amount += netPayable;
             summary.total_paid_amount += paidSum;

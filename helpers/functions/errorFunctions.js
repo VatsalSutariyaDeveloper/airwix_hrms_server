@@ -31,10 +31,38 @@ exports.handleError = async (err, res = null, req = null, isHighRisk = false) =>
 
   // Extract metadata if available
   const body = req?.body || {};
-  const { user_id = null, company_id = null, branch_id = null } = body;
+  const user_id = req?.user?.id || body.user_id || null;
+  const company_id = req?.user?.company_id || body.company_id || null;
+  const branch_id = req?.user?.branch_id || body.branch_id || null;
   const method = req?.method || "N/A";
   const url = req?.originalUrl || req?.url || "Internal/Process";
   const ip = req?.ip || "127.0.0.1";
+
+  // Predict the Express response sent back to client
+  let predictedResponse = null;
+  if (err instanceof Err || err.handled) {
+    if (err.data) {
+      predictedResponse = { success: false, message: err.message, data: err.data };
+    } else {
+      predictedResponse = { success: false, code: constants.VALIDATION_ERROR, message: err.message };
+    }
+  } else if (err.name === "SequelizeValidationError" || err.name === "SequelizeUniqueConstraintError") {
+    const errors = {};
+    err.errors?.forEach((e) => {
+      errors[e.path] = e.type || "INVALID";
+    });
+    predictedResponse = { success: false, code: constants.VALIDATION_ERROR, errors };
+  } else if (err.original?.code === "ER_NO_REFERENCED_ROW_2" || err.message?.toLowerCase().includes("foreign key constraint fails")) {
+    predictedResponse = { success: false, code: constants.FOREIGN_KEY_CONSTRAINT };
+  } else if (err.message?.toLowerCase().includes("user is required") || err.message?.toLowerCase().includes("branch is required") || err.message?.toLowerCase().includes("company is required")) {
+    predictedResponse = { success: false, code: constants.REQUIRED_FIELDS_MISSING };
+  } else if (err.code === "FORBIDDEN") {
+    predictedResponse = { success: false, code: constants.FORBIDDEN };
+  } else if (err.code === "UNAUTHORIZED") {
+    predictedResponse = { success: false, code: constants.UNAUTHORIZED };
+  } else {
+    predictedResponse = { success: false, code: constants.SERVER_ERROR, message: err.message || "Internal server error" };
+  }
 
   /* =========================================================
      1. DETAILED DEVELOPER CONSOLE LOG
@@ -87,7 +115,8 @@ exports.handleError = async (err, res = null, req = null, isHighRisk = false) =>
         body: body,
         query: req?.query || {},
         failed_sql: err?.sql || null,
-        is_global_crash: isProcessError || isHighRisk
+        is_global_crash: isProcessError || isHighRisk,
+        response: predictedResponse
       },
       stack_trace: {
         name: err?.name,
@@ -95,7 +124,10 @@ exports.handleError = async (err, res = null, req = null, isHighRisk = false) =>
         stack: (err?.stack || "No stack").substring(0, 5000)
       },
       ip_address: ip,
-      caller: caller
+      caller: caller,
+      endpoint: `${method} ${url}`,
+      user_agent: req?.headers?.['user-agent'] || "unknown",
+      access_type: req?.user?.access_by || "web login"
     });
   } catch (logErr) {
     console.error("[CRITICAL] Secondary error during logging attempt:", logErr.message);

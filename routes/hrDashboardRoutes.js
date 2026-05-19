@@ -4,6 +4,7 @@ const controller = require("../controllers/employee/hrDashboardController");
 
 router.post("/counts", controller.getCounts);
 router.post("/probation-completion-alert", controller.getProbationCompletionAlert);
+router.post("/update-probation-action", controller.updateProbationAction);
 router.post("/pending-count", controller.getPendingCount);
 router.post("/pending-announcement-count", controller.getPendingAnnouncementCount);
 router.post("/holidays", controller.getUpcomingHolidays);

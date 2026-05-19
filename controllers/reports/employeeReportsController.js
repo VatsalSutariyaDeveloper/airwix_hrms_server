@@ -12,15 +12,22 @@ dayjs.extend(isSameOrBefore);
  */
 exports.getPerformanceReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id, staff_type } = req.body;
+    const { month, year, branch_id, department_id, staff_type, company_id } = req.body;
     if (!month || !year) return res.badRequest("Month and Year are required");
 
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(startDate).endOf('month').format('YYYY-MM-DD');
 
+    const hasSelectedValue = (value) => {
+      if (Array.isArray(value)) {
+        const cleaned = value.filter(v => v !== undefined && v !== null && v !== "" && v !== "All" && v !== "all" && v !== 0 && v !== "0");
+        return cleaned.length > 0 ? cleaned : null;
+      }
+      return (value !== undefined && value !== null && value !== "" && value !== "All" && value !== "all" && value !== 0 && value !== "0") ? value : null;
+    };
+
     // 1. Fetch Employees
     let employeeWhere = { 
-      company_id: req.user.company_id,
       status: [0, 1],
       [Op.and]: [
         {
@@ -37,7 +44,19 @@ exports.getPerformanceReport = async (req, res) => {
         }
       ]
     };
-    if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') employeeWhere.branch_id = branch_id;
+
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) {
+      employeeWhere.company_id = cleanedCompany;
+    } else {
+      employeeWhere.company_id = req.user.company_id;
+    }
+
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) {
+      employeeWhere.branch_id = cleanedBranch;
+    }
+
     if (staff_type) {
         const typeMap = { 'Staff': 1, 'Worker': 2 };
         if (typeMap[staff_type]) employeeWhere.employee_type = typeMap[staff_type];
@@ -202,18 +221,32 @@ exports.getPerformanceReport = async (req, res) => {
 
 exports.getEmployeeExitReport = async (req, res) => {
     try {
-        const { start_date, end_date, branch_id, department_id } = req.body;
+        const { start_date, end_date, branch_id, department_id, company_id } = req.body;
 
-        let where = {
-            company_id: req.user.company_id,
+        const hasSelectedValue = (value) => {
+          if (Array.isArray(value)) {
+            const cleaned = value.filter(v => v !== undefined && v !== null && v !== "" && v !== "All" && v !== "all" && v !== 0 && v !== "0");
+            return cleaned.length > 0 ? cleaned : null;
+          }
+          return (value !== undefined && value !== null && value !== "" && value !== "All" && value !== "all" && value !== 0 && value !== "0") ? value : null;
         };
+
+        let where = {};
+
+        const cleanedCompany = hasSelectedValue(company_id);
+        if (cleanedCompany) {
+            where.company_id = cleanedCompany;
+        } else {
+            where.company_id = req.user.company_id;
+        }
 
         if (start_date && end_date) {
             where.exit_date = { [Op.between]: [start_date, end_date] };
         }
 
-        if (branch_id && branch_id !== 'All' && branch_id !== 0 && branch_id !== '0') {
-            where.branch_id = branch_id;
+        const cleanedBranch = hasSelectedValue(branch_id);
+        if (cleanedBranch) {
+            where.branch_id = cleanedBranch;
         }
         if (department_id && department_id !== 'All' && department_id !== 0 && department_id !== '0') {
             where.department_id = department_id;

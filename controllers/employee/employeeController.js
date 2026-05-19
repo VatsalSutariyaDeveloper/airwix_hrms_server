@@ -351,6 +351,15 @@ exports.create = async (req, res) => {
             await commonQuery.createRecord(EmployeeSettings, settingsData, transaction);
         }
 
+        // Fetch starting probation period days from company settings
+        const companyId = req.user?.company_id || POST.company_id || req.body?.company_id;
+        if (companyId) {
+            const companySettings = await getCompanySetting(companyId);
+            if (companySettings && companySettings.probation_period_days !== undefined) {
+                POST.probation_period_days = Number(companySettings.probation_period_days || 0);
+            }
+        }
+
         // 3. Create Employee Record
         const employee = await commonQuery.createRecord(Employee, POST, transaction);
 
@@ -743,8 +752,13 @@ exports.getProfile = async (req, res) => {
         
         // Always fetch the User data first
         const user = await commonQuery.findOneRecord(User, { id: userId, status: 0 }, { 
-            attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id', 'employee_id'] 
-        });
+            attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id', 'employee_id'],
+            include: {
+                model: RolePermission,
+                as: 'RolePermission',
+                attributes: ['role_name']
+            } 
+        }, null, false, {});
 
         if (!user) return res.error(constants.USER_NOT_FOUND);
 
@@ -782,7 +796,7 @@ exports.getProfile = async (req, res) => {
                     { model: EmployeeFamilyMember, as: 'family_members' },
                     { model: ResignationTemplate, as: 'resignationTemplate', attributes: ['notice_period_days'] }
                 ]
-            });
+            }, null, false, {});
         }
 
         // Helper to generate full file URLs
@@ -811,7 +825,7 @@ exports.getProfile = async (req, res) => {
                     employee_code: 'N/A',
                     full_name: user.user_name || 'N/A',
                     profile_image_url: null,
-                    designation: 'User',
+                    designation: user.RolePermission.role_name,
                     department: 'N/A',
                 },
                 account_settings: {

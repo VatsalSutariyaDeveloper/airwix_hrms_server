@@ -9,15 +9,68 @@ const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 dayjs.extend(customParseFormat);
 dayjs.extend(isSameOrBefore);
 
-const hasSelectedValue = (value) => (
-  value !== undefined &&
-  value !== null &&
-  value !== "" &&
-  value !== "All" &&
-  value !== "all" &&
-  value !== 0 &&
-  value !== "0"
-);
+const enrichReportData = async (reportData, employeesItems, transaction) => {
+  if (!Array.isArray(reportData) || reportData.length === 0) return;
+  if (!Array.isArray(employeesItems) || employeesItems.length === 0) return;
+
+  const branchIds = [...new Set(employeesItems.map(emp => emp.branch_id).filter(Boolean))];
+  const companyIds = [...new Set(employeesItems.map(emp => emp.company_id).filter(Boolean))];
+
+  const [branches, companies] = await Promise.all([
+    BranchMaster.findAll({ where: { id: { [Op.in]: branchIds } }, attributes: ['id', 'branch_name'], raw: true, transaction }),
+    sequelize.models.CompanyMaster.findAll({ where: { id: { [Op.in]: companyIds } }, attributes: ['id', 'company_name'], raw: true, transaction })
+  ]);
+
+  const branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
+  const companyMap = Object.fromEntries(companies.map(c => [c.id, c.company_name]));
+
+  const empMap = {};
+  employeesItems.forEach(emp => {
+    const data = {
+      company_name: companyMap[emp.company_id] || 'N/A',
+      branch_name: branchMap[emp.branch_id] || 'N/A'
+    };
+    if (emp.id) empMap[emp.id] = data;
+    if (emp.employee_code) empMap[emp.employee_code] = data;
+  });
+
+  reportData.forEach(row => {
+    const key = row.employee_id || row.employee_code;
+    const enriched = empMap[key] || empMap[row.employee_code] || empMap[row.employee_id];
+    if (enriched) {
+      row.company_name = enriched.company_name;
+      row.branch_name = enriched.branch_name;
+    } else {
+      row.company_name = row.company_name || 'N/A';
+      row.branch_name = row.branch_name || 'N/A';
+    }
+  });
+};
+
+
+const hasSelectedValue = (value) => {
+  if (Array.isArray(value)) {
+    const cleaned = value.filter(v => 
+      v !== undefined &&
+      v !== null &&
+      v !== "" &&
+      v !== "All" &&
+      v !== "all" &&
+      v !== 0 &&
+      v !== "0"
+    );
+    return cleaned.length > 0 ? cleaned : null;
+  }
+  return (
+    value !== undefined &&
+    value !== null &&
+    value !== "" &&
+    value !== "All" &&
+    value !== "all" &&
+    value !== 0 &&
+    value !== "0"
+  ) ? value : null;
+};
 
 const buildEmploymentRangeWhere = (startDate, endDate) => ({
   [Op.and]: [
@@ -56,7 +109,8 @@ exports.getCanteenAttendanceReport = async (req, res) => {
       month_year,
       staff_type,
       branch_id,
-      department_id
+      department_id,
+      company_id
     } = req.body;
     const employeeTypeLabels = { 1: "Staff", 2: "Worker", 3: "Contractor" };
     const rawCanteenFilter = (
@@ -119,7 +173,10 @@ exports.getCanteenAttendanceReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
@@ -223,7 +280,9 @@ exports.getCanteenAttendanceReport = async (req, res) => {
             'id',
             'first_name',
             'employee_code',
-            'employee_type'
+            'employee_type',
+            'company_id',
+            'branch_id'
           ],
           order: [['first_name', 'ASC']]
         },
@@ -368,6 +427,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
         });
       }
     }
+    await enrichReportData(reportData, employees.items);
 
     return res.ok({
       report_type,
@@ -399,7 +459,7 @@ exports.getCanteenAttendanceReport = async (req, res) => {
  */
 exports.getAttendanceReport = async (req, res) => {
   try {
-    const { report_type, date, month_year, staff_type, branch_id, department_id } = req.body;
+    const { report_type, date, month_year, staff_type, branch_id, department_id, company_id } = req.body;
 
     if (!report_type || !['daily', 'monthly'].includes(report_type)) {
       return res.error(constants.VALIDATION_ERROR, "report_type must be either 'daily' or 'monthly'");
@@ -422,7 +482,10 @@ exports.getAttendanceReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
@@ -437,7 +500,7 @@ exports.getAttendanceReport = async (req, res) => {
       buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id'],
+        attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id', 'company_id'],
         include: [
           { model: ShiftTemplate, as: "shiftTemplate", attributes: ["id", "shift_name"] },
           { model: Department, as: "department", attributes: ["name"] },
@@ -445,7 +508,7 @@ exports.getAttendanceReport = async (req, res) => {
         ],
         order: [['first_name', 'ASC']]
       },
-      true,
+      {},
       'created_at',
       buildEmploymentRangeWhere(startDate, endDate)
     );
@@ -773,6 +836,8 @@ exports.getAttendanceReport = async (req, res) => {
 
       reportData.push(empData);
     }
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       report_type,
       start_date: startDate,
@@ -797,7 +862,7 @@ exports.getAttendanceReport = async (req, res) => {
  */
 exports.getLateEntryReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { month, year, branch_id, department_id, company_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -812,7 +877,10 @@ exports.getLateEntryReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -825,7 +893,7 @@ exports.getLateEntryReport = async (req, res) => {
       buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type', 'company_id'],
         distinct: true,
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
@@ -965,6 +1033,8 @@ exports.getLateEntryReport = async (req, res) => {
       reportData.push(row);
     });
 
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       daysArray: daysArray,
       items: reportData,
@@ -988,7 +1058,7 @@ exports.getLateEntryReport = async (req, res) => {
  */
 exports.getMissPunchOutReport = async (req, res) => {
   try {
-    const { report_type, date, month, year, branch_id, department_id } = req.body;
+    const { report_type, date, month, year, branch_id, department_id, company_id } = req.body;
 
     let startDate, endDate;
     if (report_type === 'daily' && date) {
@@ -1008,7 +1078,10 @@ exports.getMissPunchOutReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -1021,7 +1094,7 @@ exports.getMissPunchOutReport = async (req, res) => {
       buildEmployeePaginationBody(req.body, employeeFilter),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'branch_id', 'employee_type', 'worker_type', 'company_id'],
         distinct: true,
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
@@ -1111,6 +1184,8 @@ exports.getMissPunchOutReport = async (req, res) => {
       reportData.push(row);
     });
 
+    await enrichReportData(reportData, employees.items);
+
     return res.ok({
       daysArray: daysArray,
       items: reportData,
@@ -1134,7 +1209,7 @@ exports.getMissPunchOutReport = async (req, res) => {
  */
 exports.getOvertimeReport = async (req, res) => {
   try {
-    const { month, year, branch_id, department_id } = req.body;
+    const { month, year, branch_id, department_id, company_id } = req.body;
 
     if (!month || !year) {
       return res.error("VALIDATION_ERROR", { message: "Month and Year are required" });
@@ -1149,7 +1224,10 @@ exports.getOvertimeReport = async (req, res) => {
     }
 
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(department_id)) employeeFilter.department_id = department_id;
 
     const fieldConfig = [
@@ -1265,11 +1343,9 @@ exports.getOvertimeReport = async (req, res) => {
     return handleError(err, res, req);
   }
 };
-
-
 exports.getLeaveReport = async (req, res) => {
   try {
-    const { year, staff_type, branch_id } = req.body;
+    const { year, staff_type, branch_id, company_id } = req.body;
 
     if (!year) {
       return res.error(constants.VALIDATION_ERROR, "year is required");
@@ -1282,11 +1358,20 @@ exports.getLeaveReport = async (req, res) => {
 
     // Fetch Employees
     const employeeFilter = {};
-    if (hasSelectedValue(branch_id)) employeeFilter.branch_id = branch_id;
+    const cleanedBranch = hasSelectedValue(branch_id);
+    if (cleanedBranch) employeeFilter.branch_id = cleanedBranch;
+    const cleanedCompany = hasSelectedValue(company_id);
+    if (cleanedCompany) employeeFilter.company_id = cleanedCompany;
     if (hasSelectedValue(staff_type)) employeeFilter.employee_type = staff_type;
 
     // Fetch all branches for mapping since it's not directly included via model sometimes
-    const branches = await commonQuery.findAllRecords(BranchMaster, { company_id: req.user.company_id });
+    const branchWhere = {};
+    if (cleanedCompany) {
+      branchWhere.company_id = cleanedCompany;
+    } else {
+      branchWhere.company_id = req.user.company_id;
+    }
+    const branches = await commonQuery.findAllRecords(BranchMaster, branchWhere);
     const branchMap = {};
     branches.forEach(b => branchMap[b.id] = b.branch_name);
 
@@ -1300,7 +1385,7 @@ exports.getLeaveReport = async (req, res) => {
       buildEmployeePaginationBody(req.body, employeeFilter, 0),
       fieldConfig,
       {
-        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id'],
+        attributes: ['id', 'first_name', 'employee_code', 'mobile_no', 'joining_date', 'branch_id', 'company_id'],
         include: [
           { model: Department, as: 'department', attributes: ['name'] },
           { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
@@ -1467,6 +1552,8 @@ exports.getLeaveReport = async (req, res) => {
 
       return row;
     });
+
+    await enrichReportData(reportData, employees.items);
 
     return res.ok({
       categories: allCategories,

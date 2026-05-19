@@ -3,7 +3,7 @@ const router = express.Router();
 const systemLogController = require("../controllers/systemLogController");
 
 router.post("/audit", systemLogController.getAuditLogs);
-
 router.post("/api", systemLogController.getApiLogs);
+router.post("/resolve", systemLogController.resolveSystemLog);
 
 module.exports = router;

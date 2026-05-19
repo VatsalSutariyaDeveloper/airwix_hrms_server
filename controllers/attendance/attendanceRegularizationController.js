@@ -149,6 +149,22 @@ exports.getAll = async (req, res) => {
             }
         }
 
+        const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
+        
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR) {
+                employeeWhere.attendance_supervisor = req.user.id;
+            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER) {
+                employeeWhere.reporting_manager = req.user.id;
+            }
+            employeeWhere[Op.or] = [
+                { attendance_supervisor: req.user.id },
+                { reporting_manager: req.user.id },
+                { id: req.user.employee_id }
+            ];
+        }
+
+
         const data = await commonQuery.fetchPaginatedData(
             AttendanceRegularization , 
             {...req.body}, 
@@ -158,8 +174,9 @@ exports.getAll = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
+                        where: employeeWhere,
                         attributes: ["id", "first_name", "employee_code"],
-                        required: false
+                        required: true
                     },
                     {
                         model: User,
@@ -197,7 +214,7 @@ exports.getPendingApprovals = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code"],
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     },
                     {
                         model: User,
@@ -231,7 +248,6 @@ exports.getPendingApprovals = async (req, res) => {
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
-            
             if (req.user.is_super_admin) {
                 isAuthorized = true;
             } else {
@@ -257,8 +273,6 @@ exports.getPendingApprovals = async (req, res) => {
                         break;
                 }
             }
-            
-            console.log("Request", request.id, "Authorized:", isAuthorized);
             
             if (isAuthorized) {
                 const raw = request.get({ plain: true });

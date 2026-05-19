@@ -7,5 +7,7 @@ router.post("/mark-read", notificationController.markAsRead);
 router.post("/mark-all-read", notificationController.markAllAsRead);
 router.post("/clear-all", notificationController.clearAll);
 router.post("/unread-count", notificationController.getUnreadCount);
+router.post("/update-fcm-token", notificationController.updateFcmToken);
+router.post("/remove-fcm-token", notificationController.removeFcmToken);
 
 module.exports = router;

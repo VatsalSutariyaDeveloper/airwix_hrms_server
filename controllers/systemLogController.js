@@ -73,3 +73,35 @@ exports.getApiLogs = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
+
+exports.resolveSystemLog = async (req, res) => {
+  try {
+    const { id, is_resolved } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "ID is required" });
+    }
+
+    const log = await commonQuery.findOneRecord(Logs, { id }, {}, null, false, { company_id: true });
+
+    if (!log) {
+      return res.status(404).json({ success: false, message: "System log not found" });
+    }
+
+    await commonQuery.updateRecordById(
+      Logs,
+      id,
+      { is_resolved: is_resolved !== undefined ? Number(is_resolved) : 1 },
+      null,
+      false,
+      { company_id: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "System log resolution status updated successfully"
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};

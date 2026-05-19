@@ -393,7 +393,7 @@ const initCronJobs = () => {
     });
 
     // ⏰ Device Health Check — runs every 30 minutes
-    cron.schedule('*/5 * * * *', async () => {
+    cron.schedule('*/30 * * * *', async () => {
         await jobDeviceHealthCheck().catch(e => console.error('❌ Device health check failed:', e));
     });
 

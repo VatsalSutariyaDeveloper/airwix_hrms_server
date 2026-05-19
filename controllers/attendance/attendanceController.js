@@ -145,15 +145,36 @@ exports.syncPunches = async (req, res) => {
         });
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
-        // Log the failure for this specific punch but proceed with the sync
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
+        
+        // 1. Rollback the entire transaction immediately
+        await t.rollback();
 
-        results.push({
-          employee_id: punchData.employee_id,
-          punch_time: punchData.punch_time,
-          success: false,
-          error: punchErr.message || "Unknown error"
-        });
+        // 2. Alert System: Notify all admins/business admins of this company about this critical offline sync failure
+        try {
+          const admins = await commonQuery.findAllRecords(User, {
+            role_key: {
+              [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
+            },
+          }, { attributes: ["id"] }, null, { company_id: true });
+
+          const notificationService = require("../../services/notificationService");
+          for (const admin of admins) {
+            await notificationService.createNotification({
+              user_id: admin.id,
+              title: "🚨 Critical Sync Punch Failure",
+              message: `Offline punch sync failed for Employee ID: ${punchData.employee_id} at ${punchData.punch_time}. Error: ${punchErr.message}`,
+              type: "CRITICAL_SYNC_ERROR",
+              company_id: req.user.company_id,
+              branch_id: req.user.branch_id
+            });
+          }
+        } catch (notifErr) {
+          console.error("[SyncPunches Critical Error Alert] Failed to dispatch admin alert notifications:", notifErr.message);
+        }
+
+        // 3. Centralized Developer Log + Database Error Logging + HTTP Non-Success Response
+        return handleError(punchErr, res, req);
       }
     }
 
