@@ -10,6 +10,7 @@ const DeviceHealthService = require("../services/deviceHealthService");
 const { CronJobRun, Logs, FaceRecognitionError, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
 const hrDashboardController = require("../controllers/employee/hrDashboardController");
+const { requestContext } = require("../utils/requestContext");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Named job handlers (reusable for both cron schedule & on-demand execution)
@@ -34,13 +35,13 @@ const jobYearEndLeaveReset = async (asOf = null, batch_id = null) => {
 
 const jobContractorDeactivation = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily contractor deactivation task...');
-    await ContractorDeactivationService.deactivateInactiveContractors(asOf);
+    await ContractorDeactivationService.deactivateInactiveContractors(asOf, batch_id);
     console.log('✅ Contractor deactivation completed.');
 };
 
 const jobResignationProcessing = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily resignation/exit processing task...');
-    const count = await ResignationService.processDailyExits(asOf);
+    const count = await ResignationService.processDailyExits(asOf, batch_id);
     console.log(`✅ ${count} employee exits processed.`);
 };
 
@@ -55,7 +56,7 @@ const jobAttendanceRebuild = async (asOf = null, batch_id = null) => {
     const todayDate = refDate.format('YYYY-MM-DD');
     const targetDates = [yesterdayDate, todayDate];
 
-    await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true }, async () => {
+    await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true, batchId: batch_id }, async () => {
         const { Employee, AttendanceDay } = require("../models");
         const attendanceHelper = require("../helpers/attendanceHelper");
         const { commonQuery, Op } = require("../helpers");
@@ -81,7 +82,8 @@ const jobAttendanceRebuild = async (asOf = null, batch_id = null) => {
                         userId: 0,
                         companyId: emp?.company_id || 0,
                         branchId: emp?.branch_id || 0,
-                        is_super_admin: true
+                        is_super_admin: true,
+                        batchId: batch_id
                     }, async () => {
                         await attendanceHelper.rebuildAttendanceDay(empId, targetDate, {
                             employee: emp,
@@ -130,21 +132,23 @@ const jobAnnouncementExpiry = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily announcement expiry check task...');
     const dayjs = require('dayjs');
     const { Announcement } = require("../models");
-    const { Op } = require("../helpers");
+    const { Op, commonQuery } = require("../helpers");
 
     const currentDate = asOf ? dayjs(asOf) : dayjs();
 
-    const expiredAnnouncements = await Announcement.update(
-        { status: 1 },
-        {
-            where: {
-                expiry_date: { [Op.lt]: currentDate.format('YYYY-MM-DD') },
-                status: 0
-            }
+    const announcements = await Announcement.findAll({
+        where: {
+            expiry_date: { [Op.lt]: currentDate.format('YYYY-MM-DD') },
+            status: 0
         }
-    );
+    });
 
-    const count = expiredAnnouncements[0];
+    let count = 0;
+    for (const ann of announcements) {
+        await commonQuery.updateRecordById({ id: ann.id }, { status: 1 }, null, false, {}, batch_id);
+        count++;
+    }
+
     console.log(`✅ ${count} expired announcements updated to inactive status.`);
 };
 
@@ -161,7 +165,7 @@ const jobHolidayAndBirthdayNotifications = async (asOf = null, batch_id = null) 
 const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily face recognition audit cleanup task...');
     const fifteenDaysAgo = dayjs().subtract(15, 'day').format('YYYY-MM-DD HH:mm:ss');
-    
+
     // 1. Find records to delete (need image paths)
     const records = await FaceRecognitionError.findAll({
         where: {
@@ -207,17 +211,17 @@ const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ALL_JOBS = [
-    { name: 'Log Cleanup',              fn: jobLogCleanup },
-    { name: 'Monthly Leave Accrual',    fn: jobMonthlyLeaveAccrual },
-    { name: 'Year-End Leave Reset',     fn: jobYearEndLeaveReset },
-    { name: 'Contractor Deactivation',  fn: jobContractorDeactivation },
-    { name: 'Resignation Processing',   fn: jobResignationProcessing },
-    { name: 'Attendance Rebuild',       fn: jobAttendanceRebuild },
-    { name: 'Payslip PDF Cleanup',      fn: jobPayslipCleanup },
-    { name: 'Announcement Expiry',      fn: jobAnnouncementExpiry },
-    { name: 'Device Health Check',      fn: jobDeviceHealthCheck },
+    { name: 'Log Cleanup', fn: jobLogCleanup },
+    { name: 'Monthly Leave Accrual', fn: jobMonthlyLeaveAccrual },
+    { name: 'Year-End Leave Reset', fn: jobYearEndLeaveReset },
+    { name: 'Contractor Deactivation', fn: jobContractorDeactivation },
+    { name: 'Resignation Processing', fn: jobResignationProcessing },
+    { name: 'Attendance Rebuild', fn: jobAttendanceRebuild },
+    { name: 'Payslip PDF Cleanup', fn: jobPayslipCleanup },
+    { name: 'Announcement Expiry', fn: jobAnnouncementExpiry },
+    { name: 'Device Health Check', fn: jobDeviceHealthCheck },
     { name: 'Holiday & Birthday Notifications', fn: jobHolidayAndBirthdayNotifications },
-    { name: 'Face Audit Cleanup',       fn: jobFaceAuditCleanup },
+    { name: 'Face Audit Cleanup', fn: jobFaceAuditCleanup },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,7 +234,7 @@ const ALL_JOBS = [
 const runJobWithTracking = async (job, asOf = null) => {
     console.log(`\n▶️  Starting: ${job.name}`);
     const start = Date.now();
-    
+
     // Create tracking record
     const run = await CronJobRun.create({
         job_name: job.name,
@@ -242,10 +246,12 @@ const runJobWithTracking = async (job, asOf = null) => {
     try {
         // Execute the actual job, passing the batch_id (run.id)
         // Note: Individual services must be updated to accept and use this batch_id for logging.
-        await job.fn(asOf, run.id);
-        
+        await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true, batchId: run.id }, async () => {
+            await job.fn(asOf, run.id);
+        });
+
         const duration = ((Date.now() - start) / 1000).toFixed(2);
-        
+
         await run.update({
             end_time: new Date(),
             status: 'SUCCESS',
@@ -278,7 +284,7 @@ const runJobWithTracking = async (job, asOf = null) => {
  */
 const revertCronJobRun = async (runId) => {
     console.log(`\n🔙 Starting REVERT for Cron Job Run ID: ${runId}`);
-    
+
     const run = await CronJobRun.findByPk(runId);
     if (!run) throw new Error(`Cron job run ${runId} not found.`);
     if (run.status === 'REVERTED') throw new Error(`Run ${runId} is already reverted.`);

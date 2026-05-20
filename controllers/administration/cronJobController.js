@@ -52,7 +52,7 @@ const CronJobController = {
                         model: Logs,
                         as: "logs",
                         limit: 100, // Limit logs to avoid huge payload
-                        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "status"]
+                        attributes: ["id", "entity_name", "action_type", "record_id", "log_message", "status", "old_data", "new_data"]
                     }
                 ]
             }, null, false, {});

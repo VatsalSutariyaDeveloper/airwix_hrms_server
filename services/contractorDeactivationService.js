@@ -5,7 +5,7 @@ const dayjs = require('dayjs');
 
 
 class ContractorDeactivationService {
-    async deactivateInactiveContractors(asOf = null) {
+    async deactivateInactiveContractors(asOf = null, batch_id = null) {
         console.log('🕒 Starting contractor deactivation check...');
         try {
             const refDate = asOf ? dayjs(asOf) : dayjs();
@@ -39,9 +39,7 @@ class ContractorDeactivationService {
 
                 if (!lastPunch) {
                     // 3. Deactivate if no punches found
-                    await Employee.update({ status: 1 }, {
-                        where: { id: contractor.id }
-                    });
+                    await commonQuery.updateRecordById(Employee, { id: contractor.id }, { status: 1 }, null, false, {}, batch_id);
                     console.log(`✅ Deactivated contractor: ${contractor.first_name} (${contractor.employee_code})`);
                     deactivatedCount++;
                 }

@@ -180,7 +180,7 @@ exports.logQuery = async (logData, mainTransaction = null) => {
         ip_address: logData.ip_address || (ctx ? ctx.ip : null),
         user_agent: logData.user_agent || (ctx ? ctx.userAgent : 'unknown'),
         caller: logData.caller,
-        batch_id: logData.batch_id
+        batch_id: logData.batch_id || ctx?.batch_id
     };
     if (mainTransaction) {
         // [MAGIC FIX] Create a Nested Transaction (Savepoint)

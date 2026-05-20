@@ -319,11 +319,11 @@ exports.updateFcmToken = async (req, res) => {
 
         // 1. Dual-register in our multi-device table
         const companyId = req.user.company_id || null;
-        const existingDevice = await commonQuery.findOneRecord(UserDevice, { user_id: userId, fcm_token }, {}, null, false, {});
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, null, false, {});
         if (!existingDevice) {
             await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
-        } else if (!existingDevice.company_id && companyId) {
-            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, null, false, {});
+        } else if (existingDevice.user_id !== userId || existingDevice.company_id !== companyId) {
+            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
         }
 
         // 2. Fallback update on User model for legacy/single-query references
