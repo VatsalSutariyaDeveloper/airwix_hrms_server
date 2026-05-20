@@ -18,7 +18,8 @@ function getContext() {
       ip: "127.0.0.1",
       userAgent: "unknown",
       endpoint: "unknown",
-      access: "system"
+      access: "system",
+      batch_id: null
     };
   }
   
@@ -33,7 +34,8 @@ function getContext() {
     ip: store.ip,
     userAgent: store.userAgent || "unknown",
     endpoint: store.endpoint || "unknown",
-    access: store.access
+    access: store.access,
+    batch_id: store.batchId || null
   };
 }
 

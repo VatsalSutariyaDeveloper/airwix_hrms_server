@@ -841,7 +841,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
                 // 1. Mark ALL active balances for the cycle that just ended as processed (status 1)
                 // This correctly includes dynamic categories like Comp-Off that aren't in the template
-                const [updatedCount] = await EmployeeLeaveBalance.update({ status: 1 }, {
+                const balancesToUpdate = await EmployeeLeaveBalance.findAll({
                     where: {
                         employee_id: employee.id,
                         year: lastYear,
@@ -851,8 +851,12 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                     transaction
                 });
 
-                if (updatedCount > 0) {
-                    console.log(`[Year-End Log] Marked ${updatedCount} balances as processed for Emp ${employee.id} (Year: ${lastYear}${lastMonth ? ` Month: ${lastMonth}` : ''}).`);
+                for (const bal of balancesToUpdate) {
+                    await commonQuery.updateRecordById(EmployeeLeaveBalance, { id: bal.id }, { status: 1 }, transaction, false, {}, batch_id);
+                }
+
+                if (balancesToUpdate.length > 0) {
+                    console.log(`[Year-End Log] Marked ${balancesToUpdate.length} balances as processed for Emp ${employee.id} (Year: ${lastYear}${lastMonth ? ` Month: ${lastMonth}` : ''}).`);
                 }
 
                 // 2. Initialize NEW balance for the next cycle
