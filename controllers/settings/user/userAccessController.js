@@ -557,7 +557,7 @@ exports.getCompanySettingsData = async (req, res) => {
       status: 0
     }, {
       attributes: ['settings_name', 'settings_value']
-    });
+    }, null, { company_id: true });
 
     let enableOutDuty = false;
     let finesAllowed = true;
