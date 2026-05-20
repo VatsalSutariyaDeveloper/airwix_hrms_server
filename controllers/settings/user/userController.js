@@ -1,5 +1,6 @@
 const { User, RolePermission, CompanyMaster, UserCompanyRoles, Employee, BranchMaster } = require("../../../models");
 const { sequelize, Op, validateRequest, commonQuery, uploadFile, deleteFile, handleError, constants, ENTITIES, getCompanySubscription, } = require("../../../helpers");
+const { sendTemplateSMS } = require("../../../helpers/smsService");
 const { generateEmailTemplate } = require('../../../helpers/emailTemplate');
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 const bcrypt = require("bcrypt");
@@ -228,7 +229,34 @@ exports.create = async (req, res) => {
 
     await transaction.commit();
 
-    const activationLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${req.body.activation_code}`;
+    // const activationLink = `${process.env.FRONTEND_URL || 'https://yourhrms.com/'}activate?code=${req.body.activation_code}`;
+
+    // Send invitation SMS via centralized SMS service (non-blocking)
+    (async () => {
+      try {
+        const templateId = process.env.MSG91_AIRWIX_PAYROLL_INVITATION_TEMPLATE_ID;
+        const mobileNo = newUser.mobile_no;
+        if (templateId && mobileNo) {
+          // Resolve company name if possible
+          let companyName = process.env.EMAIL_COMPANY_NAME || "";
+          try {
+            const company = await commonQuery.findOneRecord(CompanyMaster, { id: newUser.company_id }, { attributes: ["company_name"] }, null, false, { company_id: true });
+            if (company && company.company_name) companyName = company.company_name;
+          } catch (e) {
+            // ignore
+          }
+
+          await sendTemplateSMS(mobileNo, templateId, {
+            employee_name: newUser.user_name || "User",
+            application_name: process.env.APP_NAME || "AIRWIX PAYROLL",
+            company_name: companyName,
+          });
+          console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}`);
+        }
+      } catch (err) {
+        console.error("[INVITE-SMS] Failed to send invitation SMS:", err?.response?.data || err.message || err);
+      }
+    })();
 
     return res.success(constants.CREATED, {
       user: {
@@ -237,7 +265,7 @@ exports.create = async (req, res) => {
         email: newUser.email,
         mobile_no: newUser.mobile_no,
         activation_code: req.body.activation_code,
-        activation_link: activationLink
+        // activation_link: activationLink
       }
     });
   } catch (err) {

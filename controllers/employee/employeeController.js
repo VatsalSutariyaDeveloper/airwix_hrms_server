@@ -51,6 +51,7 @@ const {
     writeLogToFile,
     getCompanySetting
 } = require("../../helpers");
+const { sendTemplateSMS } = require("../../helpers/smsService");
 
 // helper for dealing with image uploads inside custom field arrays
 const { handleCustomFieldImages, generateCustomFieldImageUrls } = require("../../helpers/customFieldImageHandler");
@@ -2585,16 +2586,42 @@ exports.inviteUser = async (req, res) => {
 
         await transaction.commit();
 
-        const setupLink = `${process.env.FRONTEND_URL}/generate-pin?token=${pin_setup_token}`;
+        // const setupLink = `${process.env.FRONTEND_URL}/generate-pin?token=${pin_setup_token}`;
 
         // Send WhatsApp Notification (Async)
-        const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
+        // const whatsappRes = await whatsappService.sendInvitationLink(employee, setupLink);
+
+        // Send SMS Invitation via centralized SMS service (non-blocking)
+        (async () => {
+          try {
+            const templateId = process.env.MSG91_AIRWIX_PAYROLL_INVITATION_TEMPLATE_ID;
+            const mobileNo = employee.mobile_no;
+            if (templateId && mobileNo) {
+              let companyName = process.env.EMAIL_COMPANY_NAME || "";
+              try {
+                const company = await commonQuery.findOneRecord(CompanyMaster, { id: employee.company_id }, { attributes: ["company_name"] }, null, false, { company_id: true });
+                if (company && company.company_name) companyName = company.company_name;
+              } catch (e) {
+                // ignore
+              }
+
+              await sendTemplateSMS(mobileNo, templateId, {
+                employee_name: employee.first_name || "Employee",
+                application_name: process.env.APP_NAME || "AIRWIX PAYROLL",
+                company_name: companyName,
+              });
+              console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}`);
+            }
+          } catch (err) {
+            console.error("[INVITE-SMS] Failed to send invitation SMS:", err?.response?.data || err.message || err);
+          }
+        })();
 
         return res.success("Invitation generated successfully", {
-            setup_link: setupLink,
+            // setup_link: setupLink,
             user_id: user.id,
             email: user.email,
-            whatsapp_status: whatsappRes?.success ? "Sent" : "Failed"
+            // whatsapp_status: whatsappRes?.success ? "Sent" : "Failed"
         });
 
     } catch (err) {
