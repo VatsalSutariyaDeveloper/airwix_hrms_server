@@ -19,11 +19,11 @@ const sendOtpToSms = async (mobile_no, otp, shouldSendSms = true) => {
     }
 
     const authKey = process.env.MSG91_AUTH_KEY;
-    const templateId = process.env.MSG91_TEMPLATE_ID;
+    const templateId = process.env.MSG91_AIRWIX_PAYROLL_OTP_TEMPLATE_ID;
     
     if (!authKey || !templateId) {
       console.warn(
-        "[OTP-SERVICE] MSG91_AUTH_KEY or MSG91_TEMPLATE_ID is not configured."
+        "[OTP-SERVICE] MSG91_AUTH_KEY or MSG91_AIRWIX_PAYROLL_OTP_TEMPLATE_ID is not configured."
       );
       return;
     }

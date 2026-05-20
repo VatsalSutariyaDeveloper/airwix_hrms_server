@@ -462,6 +462,21 @@ exports.logout = async (req, res) => {
       }
     }
 
+    // If a device_id is provided, unpair that device
+    if (req.user?.device_id != null) {
+      const decryptedDeviceId = cryptoHelper.decryptId(req.user.device_id);
+      await commonQuery.updateRecordById(
+        DeviceMaster,
+        {
+          device_id: decryptedDeviceId
+        },
+        { status: constants.DEVICE_STATUS.UNPAIRED, device_id: null },
+        transaction,
+        false,
+        {}
+      );
+    }
+
     // Get user data for activity logging
     const user = await commonQuery.findOneRecord(
       User,

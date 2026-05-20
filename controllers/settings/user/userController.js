@@ -108,7 +108,6 @@ exports.create = async (req, res) => {
     // Base required fields
     const requiredFields = {
       user_name: "User Name",
-      login_type: "Login Type",
     };
 
     if (!req.body.role_id && !req.body.role_key) {
@@ -118,12 +117,12 @@ exports.create = async (req, res) => {
     // Conditionally add required fields based on login_type
     const loginType = parseInt(req.body.login_type) || 1;
 
-    if (loginType === 1) {
-      requiredFields.mobile_no = "Mobile No";
-    } else if (loginType === 2) {
-      requiredFields.email = "Email";
-      requiredFields.password = "Password";
-    }
+    // if (loginType === 1) {
+    //   requiredFields.mobile_no = "Mobile No";
+    // } else if (loginType === 2) {
+    //   requiredFields.email = "Email";
+    //   requiredFields.password = "Password";
+    // }
 
     const uniqueCheckFields = [];
     if (req.body.email) uniqueCheckFields.push("email");
