@@ -1,5 +1,5 @@
 const { DeviceMaster, Employee, User, CompanyMaster, BranchMaster } = require("../../models");
-const { sequelize, validateRequest, commonQuery, handleError, cryptoHelper } = require("../../helpers");
+const { sequelize, validateRequest, commonQuery, handleError, cryptoHelper, deviceHelper } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { OS } = require("ua-parser-js/enums");
 
@@ -12,8 +12,6 @@ exports.create = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
-            // device_id: "Device ID",
-            // ip_address: "IP Address",
         };
 
         const errors = await validateRequest(req.body, requiredFields, {
@@ -41,6 +39,12 @@ exports.create = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
+
+        const companyId = req.body.company_id || req.user?.company_id;
+        const branchId = req.body.branch_id || req.user?.branch_id;
+        const newDeviceId = await deviceHelper.generateUniqueDeviceId(companyId, branchId, transaction);
+        req.body.device_id = newDeviceId;
+        req.body.status = STATUS.PAIRING;
 
         const device_master = await commonQuery.createRecord(DeviceMaster, req.body, transaction);
         await transaction.commit();
@@ -95,8 +99,6 @@ exports.update = async (req, res) => {
         const requiredFields = {
             device_name: "Device Name",
             mobile_no: "Mobile No",
-            // _number: "IMEI Number",
-            // ip_address: "IP Address",
         };
 
         const errors = await validateRequest(
@@ -109,7 +111,6 @@ exports.update = async (req, res) => {
                         fields: ["device_name"],
                         excludeId: req.params.id,
                     },
-                   
                     {
                         model: Employee,
                         fields: ["mobile_no"],
@@ -258,14 +259,22 @@ exports.unpairDevice = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
+        const device = await commonQuery.findOneRecord(DeviceMaster, { id }, { attributes: ['company_id', 'branch_id'] }, transaction, false, false);
+        if (!device) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, "Device not found.");
+        }
+
+        const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+
         const updated = await commonQuery.updateRecordById(DeviceMaster, id, {
-            device_id: null,
+            device_id: newDeviceId,
             ip_address: null,
             last_login_at: null,
-            os_version:null,
-            brand_name:null,
-            device_model:null,
-            status: constants.DEVICE_STATUS.UNPAIRED // Unpaired
+            os_version: null,
+            brand_name: null,
+            device_model: null,
+            status: STATUS.PAIRING // Instantly switch to pairing mode with new ID
         }, transaction);
 
         if (!updated) {
@@ -274,7 +283,10 @@ exports.unpairDevice = async (req, res) => {
         }
 
         await transaction.commit();
-        return res.success("Device unpaired successfully. It can now be paired with a new physical device.");
+        return res.success("Device unpaired successfully. It has automatically been placed in pairing mode with a new device ID.", {
+            device_id: cryptoHelper.encryptId(newDeviceId),
+            status: "PAIRING"
+        });
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -296,38 +308,7 @@ exports.pairDevice = async (req, res) => {
             return res.error(constants.NOT_FOUND, "Device not found.");
         }
 
-        const company = device.company_id ? await commonQuery.findOneRecord(CompanyMaster, { id: device.company_id }, { attributes: ['company_name'] }, null, false, {}) : null;
-        const branch = device.branch_id ? await commonQuery.findOneRecord(BranchMaster, { id: device.branch_id }, { attributes: ['branch_name'] }, null, false, {}) : null;
-
-        const normalizeCodePart = (value, length) => {
-            if (!value || typeof value !== "string") return null;
-            const letters = value.replace(/[^A-Za-z]/g, "").toUpperCase();
-            if (!letters) return null;
-            return letters.slice(0, length).padEnd(length, "X");
-        };
-
-        const generateDeviceId = () => {
-            const companyCode = normalizeCodePart(company?.company_name, 3) || "XXX";
-            const branchCode = normalizeCodePart(branch?.branch_name, 3) || "BRN";
-            const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-            return `DEV-${companyCode}${branchCode}-${randomSuffix}`;
-        };
-
-        let newDeviceId;
-        let isUnique = false;
-        let attempts = 0;
-
-        while (!isUnique && attempts < 10) {
-            newDeviceId = generateDeviceId();
-            const existing = await commonQuery.findOneRecord(DeviceMaster, { device_id: newDeviceId }, {}, transaction, false);
-            if (!existing) isUnique = true;
-            attempts++;
-        }
-
-        if (!isUnique) {
-            await transaction.rollback();
-            return res.error(constants.SERVER_ERROR, "Failed to generate a unique Device ID. Please try again.");
-        }
+        const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
 
         const updated = await commonQuery.updateRecordById(DeviceMaster, id, {
             device_id: newDeviceId,

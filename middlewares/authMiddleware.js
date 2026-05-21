@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 const { User, CompanyMaster, BranchMaster, DeviceMaster } = require("../models");
-const { constants } = require("../helpers");
+const { constants, deviceHelper } = require("../helpers");
 
 // In-memory token blacklist
 const tokenBlacklist = new Set();
@@ -70,6 +70,26 @@ async function authMiddleware(req, res, next) {
         } 
       });
       if (!device) {
+        try {
+          const existingDevice = await DeviceMaster.findOne({ where: { id: decoded.id } });
+          if (existingDevice && existingDevice.status !== 0 && existingDevice.status !== 3) {
+            const newDeviceId = await deviceHelper.generateUniqueDeviceId(existingDevice.company_id, existingDevice.branch_id);
+            await DeviceMaster.update({
+              device_id: newDeviceId,
+              ip_address: null,
+              last_login_at: null,
+              os_version: null,
+              brand_name: null,
+              device_model: null,
+              status: constants.DEVICE_STATUS.PAIRING
+            }, {
+              where: { id: existingDevice.id }
+            });
+            console.log(`🔌 [AUTO-UNPAIR] Device ID ${existingDevice.id} auto-switched to PAIRING mode.`);
+          }
+        } catch (unpairErr) {
+          console.error("Auto-unpair on status mismatch failed:", unpairErr.message);
+        }
         return res.status(401).json({ success: false, message: "Unauthorized - Device session is invalid or revoked" });
       }
 
@@ -96,6 +116,7 @@ async function authMiddleware(req, res, next) {
       is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
       access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
+      device_id: decoded.device_id || null,
       fcm_token: decoded.fcm_token || null
     };
 // console.log("req.user",req.user)
@@ -122,6 +143,41 @@ async function authMiddleware(req, res, next) {
     );
 
   } catch (err) {
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const token = authHeader.split(" ")[1];
+        if (token) {
+          const decoded = jwt.decode(token);
+          if (decoded && decoded.device_id) {
+            const device = await DeviceMaster.findOne({
+              where: {
+                id: decoded.id,
+                device_id: decoded.device_id
+              }
+            });
+
+            if (device && device.status === 0) {
+              const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
+              await DeviceMaster.update({
+                device_id: newDeviceId,
+                ip_address: null,
+                last_login_at: null,
+                os_version: null,
+                brand_name: null,
+                device_model: null,
+                status: constants.DEVICE_STATUS.PAIRING
+              }, {
+                where: { id: device.id }
+              });
+              console.log(`🔌 [AUTO-UNPAIR] Device ID ${device.id} auto-unpaired and set to PAIRING mode due to invalid/expired token.`);
+            }
+          }
+        }
+      }
+    } catch (unpairErr) {
+      console.error("Auto-unpair on verification error failed:", unpairErr.message);
+    }
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 }

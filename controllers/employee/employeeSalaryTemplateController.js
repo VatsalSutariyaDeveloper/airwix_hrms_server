@@ -13,6 +13,7 @@ const {
 } = require("../../models");
 const { commonQuery, handleError } = require("../../helpers");
 const { calculateWorkingAndOffDays } = require("../../helpers/functions/commonFunctions");
+const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 const { constants } = require("../../helpers/constants");
 const EmployeeTemplateService = require("../../services/employeeTemplateService");
@@ -153,6 +154,7 @@ const employeeSalaryTemplateController = {
             const oldCTC = employeeTemplate ? parseFloat(employeeTemplate.ctc_monthly) || 0 : 0;
             const newCTC = parseFloat(ctc_monthly) || 0;
 
+            const effectiveDateValue = effective_date !== undefined && effective_date !== null ? effective_date : (employeeTemplate?.effective_date || null);
             const templatePayload = {
                 employee_id: employeeId,
                 template_id: salary_template_id || null,
@@ -163,6 +165,7 @@ const employeeSalaryTemplateController = {
                 ctc_yearly: parseFloat(ctc_yearly) || (newCTC * 12),
                 lwp_calculation_basis,
                 statutory_config,
+                effective_date: effectiveDateValue,
                 daily_rate: parseFloat(daily_rate) || 0,
                 hourly_rate: parseFloat(hourly_rate) || 0,
                 company_id: req.user?.company_id || 0,
@@ -180,11 +183,11 @@ const employeeSalaryTemplateController = {
             if (oldCTC !== newCTC || (employeeTemplate && employeeTemplate.template_id !== (salary_template_id || null))) {
                 await commonQuery.createRecord(SalaryRevisionHistory, {
                     employee_id: employeeId,
-                    previous_template_id: employeeTemplate?.template_id || null,
-                    new_template_id: salary_template_id || null,
+                    previous_template_id: employeeTemplate?.id || null,
+                    new_template_id: employeeTemplate?.id || null,
                     previous_ctc: oldCTC,
                     new_ctc: newCTC,
-                    effective_date: effective_date || new Date(),
+                    effective_date: effectiveDateValue || new Date(),
                     increment_amount: newCTC - oldCTC,
                     increment_percentage: oldCTC > 0 ? ((newCTC - oldCTC) / oldCTC) * 100 : 0,
                     remarks: revision_remarks || "Salary update",
@@ -247,6 +250,26 @@ const employeeSalaryTemplateController = {
                 await commonQuery.bulkCreate(EmployeeSalaryTemplateTransaction, componentPayloads, {}, transaction);
             }
 
+            // 5. Rebuild attendance days if effective_date is in the past
+            // This recalculates overtime and fine amounts based on the new salary
+            if (effectiveDateValue) {
+                const today = dayjs().startOf('day');
+                const effDate = dayjs(effectiveDateValue).startOf('day');
+                
+                // If effective date is in the past or today, rebuild attendance from that date
+                if (effDate.isBefore(today) || effDate.isSame(today, 'day')) {
+                    let cur = effDate.clone();
+                    while (cur.isBefore(today) || cur.isSame(today, 'day')) {
+                        await rebuildAttendanceDay(employeeId, cur.format('YYYY-MM-DD'), {
+                            user_id: req.user?.id || 0,
+                            company_id: req.user?.company_id || 0,
+                            branch_id: req.user?.branch_id || 0
+                        }, transaction);
+                        cur = cur.add(1, 'day');
+                    }
+                }
+            }
+
             await transaction.commit();
             return res.success("Employee salary template updated successfully");
         } catch (error) {
@@ -264,6 +287,18 @@ const employeeSalaryTemplateController = {
                 order: [["effective_date", "DESC"]]
             });
             return res.success("Revision history fetched successfully", history);
+        } catch (error) {
+            return handleError(error, res, req);
+        }
+    },
+
+    deleteRevisionHistory: async (req, res) => {
+        try {
+            const { historyId } = req.params;
+
+            await commonQuery.softDeleteById(SalaryRevisionHistory, historyId);
+
+            return res.success("Salary revision history deleted successfully");
         } catch (error) {
             return handleError(error, res, req);
         }

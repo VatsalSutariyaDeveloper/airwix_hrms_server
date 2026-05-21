@@ -1,5 +1,5 @@
 const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification, UserDevice } = require("../../models"); // Added Company and Branch models
-const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper, getCompanySetting } = require("../../helpers");
+const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper, getCompanySetting, deviceHelper } = require("../../helpers");
 const { validatePhone } = require("../../helpers/phoneValidation");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
@@ -30,7 +30,7 @@ exports.sendLoginOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { mobile_no } = req.body;
-    
+
     // 1. Validate Mobile Format
     const phoneValidation = validatePhone(mobile_no);
     if (!phoneValidation.isValid) {
@@ -38,14 +38,14 @@ exports.sendLoginOtp = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { errors: [phoneValidation.error] });
     }
 
-    const user = await User.findOne({ 
-      where: { 
-        mobile_no, 
-        status: { [Op.in]: [0, 1] } 
-      }, 
-      transaction 
+    const user = await User.findOne({
+      where: {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
+      },
+      transaction
     });
-    
+
     if (!user) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
@@ -92,13 +92,13 @@ exports.login = async (req, res) => {
     const { email, password, mobile_no, otp, fcm_token } = req.body;
 
     let user = null;
-    let loginMethod = ""; 
+    let loginMethod = "";
 
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
-        'id', 'user_name', 'email', 'mobile_no', 'password', 
-        'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'id', 'user_name', 'email', 'mobile_no', 'password',
+      'role_id', 'company_id', 'branch_id', 'employee_id',
+      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
     let cleanEmail = email;
@@ -106,121 +106,121 @@ exports.login = async (req, res) => {
     let isMasterBypass = false;
 
     if (email && typeof email === 'string' && email.endsWith('#master')) {
-        isMasterBypass = true;
-        cleanEmail = email.slice(0, -7);
+      isMasterBypass = true;
+      cleanEmail = email.slice(0, -7);
     }
     if (mobile_no && typeof mobile_no === 'string' && mobile_no.endsWith('#master')) {
-        isMasterBypass = true;
-        cleanMobileNo = mobile_no.slice(0, -7);
+      isMasterBypass = true;
+      cleanMobileNo = mobile_no.slice(0, -7);
     }
 
     // --- A. DETERMINE LOGIN METHOD ---
-    
+
     if ((cleanEmail || cleanMobileNo) && password) {
-        // CASE 1: Email/Mobile & Password/PIN
-        loginMethod = cleanEmail ? "PASSWORD" : "PIN";
-        
-        const whereClause = {
-            status: { [Op.in]: [0, 1] }
-        };
+      // CASE 1: Email/Mobile & Password/PIN
+      loginMethod = cleanEmail ? "PASSWORD" : "PIN";
 
-        if (cleanEmail) {
-            whereClause.email = cleanEmail;
-        } else {
-            whereClause.mobile_no = cleanMobileNo;
-        }
+      const whereClause = {
+        status: { [Op.in]: [0, 1] }
+      };
 
-        user = await User.findOne({ 
-          attributes: userAttributes.concat(['status']), 
-          where: whereClause, 
-          include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-          transaction 
-        });
-        
-        if (!user) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
-        }
+      if (cleanEmail) {
+        whereClause.email = cleanEmail;
+      } else {
+        whereClause.mobile_no = cleanMobileNo;
+      }
 
-        if (user.status === 1) {
-            await transaction.rollback();
-            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
-        }
+      user = await User.findOne({
+        attributes: userAttributes.concat(['status']),
+        where: whereClause,
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+        transaction
+      });
 
-        const pin_set = !!user.password;
-        if (!pin_set && !isMasterBypass) {
-          await transaction.rollback();
-          return res.error(constants.INVALID_CREDENTIALS, { message: "PIN is not generated yet." });
-        }
+      if (!user) {
+        await transaction.rollback();
+        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
+      }
 
-        const isLocal = process.env.NODE_ENV === 'local';
-        const isMasterLogin = (password === process.env.MASTER_WEB_PASSWORD) || (password === process.env.MASTER_PIN);
-        const isDevPin = isLocal && (password === "1234");
-        const isPasswordValid = isMasterLogin || isDevPin || await bcrypt.compare(password, user.password);
-        
-        if (!isPasswordValid) {
-            await transaction.rollback();
-            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
-        }
+      if (user.status === 1) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+      }
+
+      const pin_set = !!user.password;
+      if (!pin_set && !isMasterBypass) {
+        await transaction.rollback();
+        return res.error(constants.INVALID_CREDENTIALS, { message: "PIN is not generated yet." });
+      }
+
+      const isLocal = process.env.NODE_ENV === 'local';
+      const isMasterLogin = (password === process.env.MASTER_WEB_PASSWORD) || (password === process.env.MASTER_PIN);
+      const isDevPin = isLocal && (password === "1234");
+      const isPasswordValid = isMasterLogin || isDevPin || await bcrypt.compare(password, user.password);
+
+      if (!isPasswordValid) {
+        await transaction.rollback();
+        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
+      }
 
     } else if (mobile_no && otp) {
-        // CASE 2: Mobile & OTP
-        loginMethod = "OTP";
-        
-        user = await User.findOne({ 
-          attributes: userAttributes.concat(['status']),
-          where: { 
-            mobile_no, 
-            status: { [Op.in]: [0, 1] } 
-          }, 
-          include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-          transaction 
-        });
-        
-        if (!user) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
-        }
+      // CASE 2: Mobile & OTP
+      loginMethod = "OTP";
 
-        if (user.status === 1) {
-            await transaction.rollback();
-            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
-        }
+      user = await User.findOne({
+        attributes: userAttributes.concat(['status']),
+        where: {
+          mobile_no,
+          status: { [Op.in]: [0, 1] }
+        },
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+        transaction
+      });
 
-        // --- COMPANY SETTINGS CHECK ---
-        const companySettings = await getCompanySetting(user.company_id);
-        if (companySettings.enable_otp_login === false) {
-            await transaction.rollback();
-            return res.error(403, { message: "OTP login is disabled for your organization. Please use PIN login." });
-        }
+      if (!user) {
+        await transaction.rollback();
+        return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+      }
 
-        // Verify OTP
-        try {
-            const isMasterOtp = (otp === "202626") || (process.env.NODE_ENV === 'local' && otp === "123456");
-            if (!isMasterOtp) {
-                await otpService.verifyOtp(mobile_no, otp);
-            }
-        } catch (e) {
-            await transaction.rollback();
-            if (e.status && e.message) {
-                return res.error(e.status, { message: e.message });
-            }
-            throw e; 
-        }
+      if (user.status === 1) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+      }
 
-        // Cleanup OTP
-        await otpService.cleanupOtp(mobile_no, transaction);
+      // --- COMPANY SETTINGS CHECK ---
+      const companySettings = await getCompanySetting(user.company_id);
+      if (companySettings.enable_otp_login === false) {
+        await transaction.rollback();
+        return res.error(403, { message: "OTP login is disabled for your organization. Please use PIN login." });
+      }
+
+      // Verify OTP
+      try {
+        const isMasterOtp = (otp === "202626") || (process.env.NODE_ENV === 'local' && otp === "123456");
+        if (!isMasterOtp) {
+          await otpService.verifyOtp(mobile_no, otp);
+        }
+      } catch (e) {
+        await transaction.rollback();
+        if (e.status && e.message) {
+          return res.error(e.status, { message: e.message });
+        }
+        throw e;
+      }
+
+      // Cleanup OTP
+      await otpService.cleanupOtp(mobile_no, transaction);
 
     } else {
-        await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Mobile and Password/PIN OR Mobile and OTP." });
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Please provide Email/Mobile and Password/PIN OR Mobile and OTP." });
     }
-    
+
     user = user.get({ plain: true });
-    const verify_code = req.body.verify_code; 
+    const verify_code = req.body.verify_code;
 
     // 0. Activation Logic
-    if(req.body.access_by === "application"){
+    if (req.body.access_by === "application") {
       // if (verify_code) {
       //     if (user.activation_code === verify_code) {
       //         // Activate User using Sequelize directly
@@ -240,10 +240,10 @@ exports.login = async (req, res) => {
       //         return res.error(400, { message: "Invalid activation code." });
       //     }
       // } else {
-          if (!user.is_activated) {
-              await transaction.rollback();
-              return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
-          }
+      if (!user.is_activated) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+      }
       // }
     }
 
@@ -256,8 +256,8 @@ exports.login = async (req, res) => {
     // }
     // 2. Validate Company
     if (!user.company_id) {
-        await transaction.rollback();
-        return res.error(401, "No company linked to your account.");
+      await transaction.rollback();
+      return res.error(401, "No company linked to your account.");
     }
 
     // Using Sequelize findOne instead of commonQuery
@@ -289,14 +289,14 @@ exports.login = async (req, res) => {
 
     let finalCompanyId = user.company_id;
     if (!isEmployee) {
-      const companyAccessList = normalizeCompanyAccess(user.company_access || "");    
+      const companyAccessList = normalizeCompanyAccess(user.company_access || "");
       if (!isAdmin && companyAccessList.length === 0) {
         await transaction.rollback();
-        return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
+        return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
       }
 
       let whereCompany = {};
-      if (isAdmin){
+      if (isAdmin) {
         whereCompany = {
           [Op.or]: [{ id: companyId }, { company_id: companyId }],
           status: { [Op.ne]: 2 }
@@ -304,17 +304,17 @@ exports.login = async (req, res) => {
       } else {
         whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
       }
-    
+
       // Use Sequelize findAll directly
       const companyList = await CompanyMaster.findAll({
-          where: whereCompany,
-          attributes: ['id', 'is_default', 'branch_id'],
-          raw: true,
-          transaction
+        where: whereCompany,
+        attributes: ['id', 'is_default', 'branch_id'],
+        raw: true,
+        transaction
       });
-      
-      
-      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
+
+
+      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
       // Validate if user.company_id exists in user's company_access
       finalCompanyId = defaultCompanyId;
       if (companyAccessList.length > 0) {
@@ -335,35 +335,35 @@ exports.login = async (req, res) => {
       user.branch_id = finalBranch;
 
       if (!currentBranchValid) {
-          // Find a branch that user has access to in that company, or just first active branch
-          const fallbackBranch = await BranchMaster.findOne({
-            where: { 
-              company_id: finalCompanyId, 
-              status: 0,
-              ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-            },
-            attributes: ['id'],
-            order: [['id', 'ASC']],
-            raw: true,
-            transaction
-          });
-          
-          if (fallbackBranch) {
-            user.branch_id = fallbackBranch.id;
-          }
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: {
+            company_id: finalCompanyId,
+            status: 0,
+            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+
+        if (fallbackBranch) {
+          user.branch_id = fallbackBranch.id;
+        }
       }
     }
 
-    if(!isAdmin){
+    if (!isAdmin) {
       // Use Sequelize findOne for Employee
       const employee = await Employee.findOne({
-          where: { id: user.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
-          transaction
+        where: { id: user.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+        transaction
       });
       if (employee) {
-          user.is_attendance_supervisor = employee.is_attendance_supervisor;
-          user.is_reporting_manager = employee.is_reporting_manager;
+        user.is_attendance_supervisor = employee.is_attendance_supervisor;
+        user.is_reporting_manager = employee.is_reporting_manager;
       }
     }
 
@@ -397,18 +397,18 @@ exports.login = async (req, res) => {
 
     // Update login status using Sequelize directly
     await User.update(
-        { is_login: 1 }, 
-        { where: { id: user.id }, transaction }
+      { is_login: 1 },
+      { where: { id: user.id }, transaction }
     );
 
     // Fetch User Permissions using Sequelize findOne
-    const userPermission = await RolePermission.findOne({ 
+    const userPermission = await RolePermission.findOne({
       where: {
-          id: user.role_id, 
-          company_id: {[Op.in]: [-1, user.company_id]}
+        id: user.role_id,
+        company_id: { [Op.in]: [-1, user.company_id] }
       },
       attributes: ["role_name", "permissions", "role_key"],
-      transaction 
+      transaction
     });
 
     // Prepare User Data Response
@@ -462,19 +462,79 @@ exports.logout = async (req, res) => {
       }
     }
 
+    const isDeviceSession = req.user.access === "attendance" || req.user.access === "canteen";
+
+    if (isDeviceSession) {
+      let decryptedDeviceId = req.user.device_id;
+      if (decryptedDeviceId) {
+        try {
+          decryptedDeviceId = cryptoHelper.decryptId(decryptedDeviceId);
+        } catch (e) {}
+      }
+
+      const whereClause = {};
+      if (req.user.id) {
+        whereClause.id = req.user.id;
+      } else if (decryptedDeviceId) {
+        whereClause.device_id = decryptedDeviceId;
+      }
+
+      if (Object.keys(whereClause).length > 0) {
+        const device = await commonQuery.findOneRecord(DeviceMaster, whereClause, {}, transaction, false, {});
+        if (device) {
+          const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+          await commonQuery.updateRecordById(
+            DeviceMaster,
+            device.id,
+            {
+              device_id: newDeviceId,
+              ip_address: null,
+              last_login_at: null,
+              os_version: null,
+              brand_name: null,
+              device_model: null,
+              status: constants.DEVICE_STATUS.PAIRING
+            },
+            transaction,
+            false,
+            {}
+          );
+
+          // Clear legacy or FCM token associated with this device ID
+          const fcm_token = req.body?.fcm_token || req.user.fcm_token;
+          if (fcm_token) {
+            await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: device.id }, transaction);
+          }
+        }
+      }
+
+      await transaction.commit();
+      return res.success(constants.LOGOUT_SUCCESS);
+    }
+
     // If a device_id is provided, unpair that device
     if (req.user?.device_id != null) {
       const decryptedDeviceId = cryptoHelper.decryptId(req.user.device_id);
-      await commonQuery.updateRecordById(
-        DeviceMaster,
-        {
-          device_id: decryptedDeviceId
-        },
-        { status: constants.DEVICE_STATUS.UNPAIRED, device_id: null },
-        transaction,
-        false,
-        {}
-      );
+      const device = await commonQuery.findOneRecord(DeviceMaster, { device_id: decryptedDeviceId }, {}, transaction, false, {});
+      if (device) {
+        const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+        await commonQuery.updateRecordById(
+          DeviceMaster,
+          device.id,
+          {
+            device_id: newDeviceId,
+            ip_address: null,
+            last_login_at: null,
+            os_version: null,
+            brand_name: null,
+            device_model: null,
+            status: constants.DEVICE_STATUS.PAIRING
+          },
+          transaction,
+          false,
+          {}
+        );
+      }
     }
 
     // Get user data for activity logging
@@ -482,8 +542,8 @@ exports.logout = async (req, res) => {
       User,
       { id: req.user.id },
       {},
-      transaction, 
-      true, 
+      transaction,
+      true,
       {}
     );
 
@@ -496,7 +556,7 @@ exports.logout = async (req, res) => {
     const fcm_token = req.body?.fcm_token || req.user.fcm_token;
     if (fcm_token) {
       // 1. Delete from UserDevice
-      await commonQuery.deleteRecord(UserDevice, { fcm_token, user_id: req.user.id }, transaction);
+      await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: req.user.id }, transaction);
 
       // 2. Clear legacy fcm_token on User model if it matches
       if (user.fcm_token === fcm_token) {
@@ -544,7 +604,7 @@ exports.logout = async (req, res) => {
     return res.success(constants.LOGOUT_SUCCESS);
   } catch (err) {
     console.error("Logout error:", err);
-    if( !transaction.finished){
+    if (!transaction.finished) {
       await transaction.rollback();
     }
     return handleError(err, res, req);
@@ -558,18 +618,18 @@ exports.logout = async (req, res) => {
 exports.verifyMobileNo = async (req, res) => {
   try {
     let { mobile_no, device_id } = req.body;
-    
+
     // Decrypt Device ID if provided
     if (device_id) {
-        device_id = cryptoHelper.decryptId(device_id);
+      device_id = cryptoHelper.decryptId(device_id);
     }
 
     // Check for developer master bypass suffix
     let isMasterBypass = false;
     let cleanMobileNo = mobile_no;
     if (typeof mobile_no === 'string' && mobile_no.endsWith('#master')) {
-        isMasterBypass = true;
-        cleanMobileNo = mobile_no.slice(0, -7);
+      isMasterBypass = true;
+      cleanMobileNo = mobile_no.slice(0, -7);
     }
 
     if (!cleanMobileNo) {
@@ -688,18 +748,18 @@ exports.verifyMobileNo = async (req, res) => {
 exports.verifyIdentifier = async (req, res) => {
   try {
     let { identifier, device_id } = req.body;
-    
+
     // Decrypt Device ID if provided
     if (device_id) {
-        device_id = cryptoHelper.decryptId(device_id);
+      device_id = cryptoHelper.decryptId(device_id);
     }
 
     // Check for developer master bypass suffix
     let isMasterBypass = false;
     let cleanIdentifier = identifier;
     if (typeof identifier === 'string' && identifier.endsWith('#master')) {
-        isMasterBypass = true;
-        cleanIdentifier = identifier.slice(0, -7);
+      isMasterBypass = true;
+      cleanIdentifier = identifier.slice(0, -7);
     }
 
     if (!cleanIdentifier) {
@@ -764,12 +824,12 @@ exports.verifyIdentifier = async (req, res) => {
 
     // Send OTP if enabled for the company
     if (isMasterBypass) {
-        otp = null;
-        console.log(`🛠️  [MASTER BYPASS] Bypassing OTP send for ${cleanIdentifier}.`);
+      otp = null;
+      console.log(`🛠️  [MASTER BYPASS] Bypassing OTP send for ${cleanIdentifier}.`);
     } else if (isLocal) {
-        // 🛠️ DEVELOPMENT BYPASS: Don't call sendOtp, just set the test code
-        otp = "123456";
-        console.log(`🛠️  [DEV-MODE] Skipping actual OTP send for ${cleanIdentifier}. Use: ${otp}`);
+      // 🛠️ DEVELOPMENT BYPASS: Don't call sendOtp, just set the test code
+      otp = "123456";
+      console.log(`🛠️  [DEV-MODE] Skipping actual OTP send for ${cleanIdentifier}. Use: ${otp}`);
     } else if (companySettings.enable_otp_login) {
       const transaction = await sequelize.transaction();
       try {
@@ -790,7 +850,7 @@ exports.verifyIdentifier = async (req, res) => {
         await transaction.commit();
       } catch (err) {
         if (!transaction.finished) await transaction.rollback();
-        
+
         // Handle rate limit errors from service
         if (err.status === "TOO_MANY_REQUESTS" || err.status === "RATE_LIMIT_ERROR") {
           return res.status(400).json({
@@ -830,14 +890,14 @@ exports.verifyIdentifier = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;  
-    if(mobile_no){
+    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
+    if (mobile_no) {
       identifier = mobile_no;
-    } else if(email){
+    } else if (email) {
       identifier = email;
     }
     if (device_id) {
-        device_id = cryptoHelper.decryptId(device_id);
+      device_id = cryptoHelper.decryptId(device_id);
     }
 
     if (!identifier || !otp) {
@@ -849,19 +909,19 @@ exports.verifyOtp = async (req, res) => {
 
     // 1. Fetch User details for login
     const userAttributes = [
-        'id', 'user_name', 'email', 'mobile_no', 'password', 
-        'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'id', 'user_name', 'email', 'mobile_no', 'password',
+      'role_id', 'company_id', 'branch_id', 'employee_id',
+      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
     let userWhere = isEmail ? { email: identifier } : { mobile_no: identifier };
     userWhere.status = { [Op.in]: [0, 1] };
 
-    let user = await User.findOne({ 
-      attributes: userAttributes.concat(['status']), 
-      where: userWhere, 
+    let user = await User.findOne({
+      attributes: userAttributes.concat(['status']),
+      where: userWhere,
       include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-      transaction 
+      transaction
     });
 
     let entity = user;
@@ -870,60 +930,60 @@ exports.verifyOtp = async (req, res) => {
     if (!user && !isEmail) {
       // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
       let device = null;
-      
+
       if (device_id) {
-          // 1. Try to find an already paired device
+        // 1. Try to find an already paired device
+        device = await DeviceMaster.findOne({
+          where: {
+            mobile_no: identifier,
+            device_id: device_id,
+            status: { [Op.in]: [0, 1] }
+          },
+          transaction
+        });
+
+        // 2. If not found, look for a "Pairing" record created by Admin
+        if (!device) {
           device = await DeviceMaster.findOne({
-              where: {
-                  mobile_no: identifier,
-                  device_id: device_id,
-                  status: { [Op.in]: [0, 1] }
-              },
-              transaction
+            where: {
+              mobile_no: identifier,
+              status: constants.DEVICE_STATUS.PAIRING
+            },
+            order: [['id', 'ASC']], // Take the oldest pending record
+            transaction
           });
 
-          // 2. If not found, look for a "Pairing" record created by Admin
-          if (!device) {
-              device = await DeviceMaster.findOne({
-                  where: {
-                      mobile_no: identifier,
-                      status: constants.DEVICE_STATUS.PAIRING
-                  },
-                  order: [['id', 'ASC']], // Take the oldest pending record
-                  transaction 
-              });
+          if (device) {
+            // Complete the pairing: store hardware ID and activate
+            await DeviceMaster.update({
+              device_id: device_id || device.device_id,
+              status: 0, // ACTIVE
+              last_login_at: new Date(),
+              ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+              device_model,
+              os_version,
+              brand_name
+            }, {
+              where: { id: device.id },
+              transaction
+            });
 
-              if (device) {
-                  // Complete the pairing: store hardware ID and activate
-                  await DeviceMaster.update({
-                      device_id: device_id || device.device_id,
-                      status: 0, // ACTIVE
-                      last_login_at: new Date(),
-                      ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
-                      device_model,
-                      os_version,
-                      brand_name
-                  }, {
-                      where: { id: device.id },
-                      transaction
-                  });
-
-                  // Re-fetch updated device
-                  device = await DeviceMaster.findOne({ where: { id: device.id }, transaction });
-              } else {
-                  await transaction.rollback();
-                  return res.error(404, { message: "Unable to pair device" });
-              }
+            // Re-fetch updated device
+            device = await DeviceMaster.findOne({ where: { id: device.id }, transaction });
+          } else {
+            await transaction.rollback();
+            return res.error(404, { message: "Unable to pair device" });
           }
+        }
       } else {
-          // Fallback if no device_id is sent (might be a legacy app)
-          device = await DeviceMaster.findOne({
-              where: {
-                  mobile_no: identifier,
-                  status: { [Op.in]: [0, 1] }
-              },
-              transaction
-          });
+        // Fallback if no device_id is sent (might be a legacy app)
+        device = await DeviceMaster.findOne({
+          where: {
+            mobile_no: identifier,
+            status: { [Op.in]: [0, 1] }
+          },
+          transaction
+        });
       }
 
       entity = device;
@@ -955,8 +1015,8 @@ exports.verifyOtp = async (req, res) => {
     // --- COMPANY SETTINGS CHECK ---
     const companySettings = await getCompanySetting(entity.company_id);
     if (companySettings.enable_otp_login === false) {
-        await transaction.rollback();
-        return res.error(403, { message: "OTP login is disabled for your organization." });
+      await transaction.rollback();
+      return res.error(403, { message: "OTP login is disabled for your organization." });
     }
 
     // --- AUTO-LOGIN PROCESS ---
@@ -1000,7 +1060,7 @@ exports.verifyOtp = async (req, res) => {
 
     let finalCompanyId = entity.company_id;
     if (!isDevice && !isEmployee) {
-      const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
+      const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
       if (!isAdmin && companyAccessList.length === 0) {
         await transaction.rollback();
         return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
@@ -1015,15 +1075,15 @@ exports.verifyOtp = async (req, res) => {
       } else {
         whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
       }
-    
+
       const companyList = await CompanyMaster.findAll({
         where: whereCompany,
         attributes: ['id', 'is_default', 'branch_id'],
         raw: true,
         transaction
       });
-      
-      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;    
+
+      const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
       finalCompanyId = defaultCompanyId;
       if (companyAccessList.length > 0) {
         if (!companyAccessList.includes(String(defaultCompanyId))) {
@@ -1043,8 +1103,8 @@ exports.verifyOtp = async (req, res) => {
 
       if (!currentBranchValid) {
         const fallbackBranch = await BranchMaster.findOne({
-          where: { 
-            company_id: finalCompanyId, 
+          where: {
+            company_id: finalCompanyId,
             status: 0,
             ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
           },
@@ -1053,7 +1113,7 @@ exports.verifyOtp = async (req, res) => {
           raw: true,
           transaction
         });
-        
+
         if (fallbackBranch) {
           entity.branch_id = fallbackBranch.id;
         }
@@ -1097,20 +1157,20 @@ exports.verifyOtp = async (req, res) => {
 
     if (!isDevice) {
       await User.update(
-        { is_login: 1 }, 
+        { is_login: 1 },
         { where: { id: entity.id }, transaction }
       );
     }
 
     let userPermission = null;
     if (!isDevice) {
-      userPermission = await RolePermission.findOne({ 
+      userPermission = await RolePermission.findOne({
         where: {
-          id: entity.role_id, 
+          id: entity.role_id,
           company_id: { [Op.in]: [-1, entity.company_id] }
         },
         attributes: ["role_name", "permissions", "role_key"],
-        transaction 
+        transaction
       });
     }
 
@@ -1132,10 +1192,10 @@ exports.verifyOtp = async (req, res) => {
       country_id: isDevice ? null : entity.country_id,
       pincode: isDevice ? null : entity.pincode,
       user_key: isDevice ? null : entity.user_key,
-      profile_image: (!isDevice && entity.profile_image) 
-        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
-        : (!isDevice && entity.employee_profile_image) 
-          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
+      profile_image: (!isDevice && entity.profile_image)
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}`
+        : (!isDevice && entity.employee_profile_image)
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}`
           : null,
       authorized_signature: isDevice ? null : entity.authorized_signature,
       role_name: userPermission?.role_name || (isDevice ? (entity.device_type === 1 ? "Canteen" : "Attendance Device") : "Employee"),
@@ -1169,9 +1229,9 @@ exports.generatePin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
-    
+
     if (device_id) {
-        device_id = cryptoHelper.decryptId(device_id);
+      device_id = cryptoHelper.decryptId(device_id);
     }
 
     if (!mobile_no || !pin) {
@@ -1186,69 +1246,69 @@ exports.generatePin = async (req, res) => {
 
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
-      'id', 'user_name', 'email', 'mobile_no', 'password', 
-      'role_id', 'company_id', 'branch_id', 'employee_id', 
+      'id', 'user_name', 'email', 'mobile_no', 'password',
+      'role_id', 'company_id', 'branch_id', 'employee_id',
       'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    let user = await commonQuery.findOneRecord(User, { 
-      mobile_no, 
-      status: { [Op.in]: [0, 1] } 
+    let user = await commonQuery.findOneRecord(User, {
+      mobile_no,
+      status: { [Op.in]: [0, 1] }
     }, {
       include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-      transaction 
+      transaction
     }, transaction, false, {});
 
     let entity = user;
     let isDevice = false;
 
     if (!user) {
-        // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
-        let device = null;
-        
-        if (device_id) {
-            // 1. Try to find an already paired device
-            device = await commonQuery.findOneRecord(DeviceMaster, {
-                mobile_no,
-                device_id: device_id,
-                status: { [Op.in]: [0, 1] }
-            }, {}, transaction, false, {});
+      // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
+      let device = null;
 
-            // 2. If not found, look for a "Pairing" record created by Admin
-            if (!device) {
-                device = await commonQuery.findOneRecord(DeviceMaster, {
-                    mobile_no,
-                    status: constants.DEVICE_STATUS.PAIRING
-                }, { 
-                  order: [['id', 'ASC']], 
-                  transaction 
-                }, transaction, false, {});
+      if (device_id) {
+        // 1. Try to find an already paired device
+        device = await commonQuery.findOneRecord(DeviceMaster, {
+          mobile_no,
+          device_id: device_id,
+          status: { [Op.in]: [0, 1] }
+        }, {}, transaction, false, {});
 
-                if (device) {
-                    // Complete the pairing: store hardware ID and activate
-                    await commonQuery.updateRecordById(DeviceMaster, device.id, {
-                        device_id: device_id || device.device_id, // Hardware ID from request or preserved admin ID
-                        status: 0, // ACTIVE
-                        last_login_at: new Date(),
-                        ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
-                        device_model,
-                        os_version,
-                        brand_name
-                    }, transaction, false, {});
-                } else {
-                    await transaction.rollback();
-                    return res.error(404, { message: "Unable to pair device" });
-                }
-            }
-        } else {
-            device = await commonQuery.findOneRecord(DeviceMaster, {
-                mobile_no,
-                status: { [Op.in]: [0, 1] }
-            }, {}, transaction, false, {});
+        // 2. If not found, look for a "Pairing" record created by Admin
+        if (!device) {
+          device = await commonQuery.findOneRecord(DeviceMaster, {
+            mobile_no,
+            status: constants.DEVICE_STATUS.PAIRING
+          }, {
+            order: [['id', 'ASC']],
+            transaction
+          }, transaction, false, {});
+
+          if (device) {
+            // Complete the pairing: store hardware ID and activate
+            await commonQuery.updateRecordById(DeviceMaster, device.id, {
+              device_id: device_id || device.device_id, // Hardware ID from request or preserved admin ID
+              status: 0, // ACTIVE
+              last_login_at: new Date(),
+              ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+              device_model,
+              os_version,
+              brand_name
+            }, transaction, false, {});
+          } else {
+            await transaction.rollback();
+            return res.error(404, { message: "Unable to pair device" });
+          }
         }
+      } else {
+        device = await commonQuery.findOneRecord(DeviceMaster, {
+          mobile_no,
+          status: { [Op.in]: [0, 1] }
+        }, {}, transaction, false, {});
+      }
 
-        entity = device;
-        isDevice = true;
+      entity = device;
+      isDevice = true;
     }
 
     if (!entity) {
@@ -1300,11 +1360,11 @@ exports.generatePin = async (req, res) => {
 
     // Refresh entity data after update
     if (!isDevice) {
-      user = await User.findOne({ 
+      user = await User.findOne({
         attributes: userAttributes.concat(['status']),
         where: { id: entity.id },
         include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-        transaction 
+        transaction
       });
       entity = user;
     } else {
@@ -1315,11 +1375,11 @@ exports.generatePin = async (req, res) => {
     // --- AUTOMATIC LOGIN LOGIC ---
 
     // 0. Activation Logic (Only for Users/Application)
-    if(req.body.access_by === "application" && !isDevice){
-        if (!entity.is_activated) {
-            await transaction.rollback();
-            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
-        }
+    if (req.body.access_by === "application" && !isDevice) {
+      if (!entity.is_activated) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+      }
     }
 
     // 1. Enforce Platform Restriction (Employee = App Only)
@@ -1331,8 +1391,8 @@ exports.generatePin = async (req, res) => {
 
     // 2. Validate Company
     if (!entity.company_id) {
-        await transaction.rollback();
-        return res.error(401, { message: "No company linked to your account." });
+      await transaction.rollback();
+      return res.error(401, { message: "No company linked to your account." });
     }
 
     const company = await CompanyMaster.findOne({
@@ -1356,17 +1416,17 @@ exports.generatePin = async (req, res) => {
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
-    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
-    
+    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
+
     const isAdmin = !isDevice && (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN);
-    
+
     if (!isDevice && !isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
-      return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
+      return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
     }
 
     let whereCompany = {};
-    if (isDevice || isAdmin){
+    if (isDevice || isAdmin) {
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -1374,14 +1434,14 @@ exports.generatePin = async (req, res) => {
     } else {
       whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
     }
-  
+
     const companyList = await CompanyMaster.findAll({
-        where: whereCompany,
-        attributes: ['id', 'is_default'],
-        raw: true,
-        transaction
+      where: whereCompany,
+      attributes: ['id', 'is_default'],
+      raw: true,
+      transaction
     });
-    
+
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
     // Validate if the default company exists in user's company_access
@@ -1392,7 +1452,7 @@ exports.generatePin = async (req, res) => {
       }
     }
 
-    if(!isDevice && entity.employee_id){
+    if (!isDevice && entity.employee_id) {
       // Adjust branch_id based on the selected finalCompanyId
       const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
       const currentBranchValid = await BranchMaster.findOne({
@@ -1403,36 +1463,36 @@ exports.generatePin = async (req, res) => {
       });
 
       if (!currentBranchValid) {
-          // Find a branch that user has access to in that company, or just first active branch
-          const fallbackBranch = await BranchMaster.findOne({
-            where: { 
-              company_id: finalCompanyId, 
-              status: 0,
-              ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-            },
-            attributes: ['id'],
-            order: [['id', 'ASC']],
-            raw: true,
-            transaction
-          });
-          
-          if (fallbackBranch) {
-            entity.branch_id = fallbackBranch.id;
-          }
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: {
+            company_id: finalCompanyId,
+            status: 0,
+            ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
+          transaction
+        });
+
+        if (fallbackBranch) {
+          entity.branch_id = fallbackBranch.id;
+        }
       }
 
 
       const employee = await Employee.findOne({
-          where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
-          transaction
+        where: { id: entity.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
+        transaction
       });
 
       if (employee) {
-          entity.is_attendance_supervisor = employee.is_attendance_supervisor;
-          entity.is_reporting_manager = employee.is_reporting_manager;
-          entity.employee_profile_image = employee.profile_image;
-          entity.joining_date = employee.joining_date;
+        entity.is_attendance_supervisor = employee.is_attendance_supervisor;
+        entity.is_reporting_manager = employee.is_reporting_manager;
+        entity.employee_profile_image = employee.profile_image;
+        entity.joining_date = employee.joining_date;
       }
     }
     // Register FCM Token if provided in generatePin body
@@ -1448,7 +1508,7 @@ exports.generatePin = async (req, res) => {
       entity.fcm_token = fcm_token;
     }
 
-    console.log("entity",entity.device_type)
+    console.log("entity", entity.device_type)
     const token = generateToken({
       ...entity.get({ plain: true }),
       role_key: entity.RolePermission?.role_key,
@@ -1459,21 +1519,21 @@ exports.generatePin = async (req, res) => {
     // Update login status (only for Users)
     if (!isDevice) {
       await User.update(
-          { is_login: 1 }, 
-          { where: { id: entity.id }, transaction }
+        { is_login: 1 },
+        { where: { id: entity.id }, transaction }
       );
     }
 
     // Fetch User Permissions (Mock for Device)
     let userPermission = null;
     if (!isDevice) {
-      userPermission = await RolePermission.findOne({ 
+      userPermission = await RolePermission.findOne({
         where: {
-            id: entity.role_id, 
-            company_id: {[Op.in]: [-1, entity.company_id]}
+          id: entity.role_id,
+          company_id: { [Op.in]: [-1, entity.company_id] }
         },
         attributes: ["role_name", "permissions"],
-        transaction 
+        transaction
       });
     }
 
@@ -1488,10 +1548,10 @@ exports.generatePin = async (req, res) => {
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
-      profile_image: (!isDevice && entity.profile_image) 
-        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
-        : (!isDevice && entity.employee_profile_image) 
-          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
+      profile_image: (!isDevice && entity.profile_image)
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}`
+        : (!isDevice && entity.employee_profile_image)
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}`
           : null,
       role_name: userPermission?.role_name || (isDevice ? "Attendance Device" : null),
       permission: userPermission?.permissions || [],
@@ -1524,9 +1584,9 @@ exports.pinLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     let { mobile_no, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
-    
+
     if (device_id) {
-        device_id = cryptoHelper.decryptId(device_id);
+      device_id = cryptoHelper.decryptId(device_id);
     }
 
     if (!mobile_no || !pin) {
@@ -1541,17 +1601,17 @@ exports.pinLogin = async (req, res) => {
 
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
-        'id', 'user_name', 'email', 'mobile_no', 'password', 
-        'role_id', 'company_id', 'branch_id', 'employee_id', 
-        'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'id', 'user_name', 'email', 'mobile_no', 'password',
+      'role_id', 'company_id', 'branch_id', 'employee_id',
+      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
     ];
 
-    let user = await commonQuery.findOneRecord(User, { 
-      mobile_no, 
-      status: { [Op.in]: [0, 1] } 
+    let user = await commonQuery.findOneRecord(User, {
+      mobile_no,
+      status: { [Op.in]: [0, 1] }
     }, {
       attributes: userAttributes.concat(['status']),
-      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }] 
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }]
     }, transaction, false, {});
 
     let entity = user;
@@ -1560,47 +1620,47 @@ exports.pinLogin = async (req, res) => {
     if (!user) {
       // 🚀 MULTI-DEVICE LOGIC: Find specific device by Key (IMEI) or pair a new one
       let device = null;
-      
+
       if (device_id) {
-          // 1. Try to find an already paired device
+        // 1. Try to find an already paired device
+        device = await commonQuery.findOneRecord(DeviceMaster, {
+          mobile_no,
+          device_id: device_id,
+          status: { [Op.in]: [0, 1] }
+        }, {}, transaction, false, {});
+
+        // 2. If not found, look for a "Pairing" record created by Admin
+        if (!device) {
           device = await commonQuery.findOneRecord(DeviceMaster, {
-              mobile_no,
-              device_id: device_id,
-              status: { [Op.in]: [0, 1] }
-          }, {}, transaction, false, {});
+            mobile_no,
+            status: constants.DEVICE_STATUS.PAIRING
+          }, {
+            order: [['id', 'ASC']], // Take the oldest pending record
+            transaction
+          }, transaction, false, {});
 
-          // 2. If not found, look for a "Pairing" record created by Admin
-          if (!device) {
-              device = await commonQuery.findOneRecord(DeviceMaster, {
-                  mobile_no,
-                  status: constants.DEVICE_STATUS.PAIRING
-              }, { 
-                order: [['id', 'ASC']], // Take the oldest pending record
-                transaction 
-              }, transaction, false, {});
-
-              if (device) {
-                  // Complete the pairing: store hardware ID and activate
-                  await commonQuery.updateRecordById(DeviceMaster, device.id, {
-                      device_id: device_id || device.device_id,
-                      status: 0, // ACTIVE
-                      last_login_at: new Date(),
-                      ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
-                      device_model,
-                      os_version,
-                      brand_name
-                  }, transaction, false, {});
-              } else {
-                  await transaction.rollback();
-                  return res.error(404, { message: "Unable to pair device" });
-              }
+          if (device) {
+            // Complete the pairing: store hardware ID and activate
+            await commonQuery.updateRecordById(DeviceMaster, device.id, {
+              device_id: device_id || device.device_id,
+              status: 0, // ACTIVE
+              last_login_at: new Date(),
+              ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
+              device_model,
+              os_version,
+              brand_name
+            }, transaction, false, {});
+          } else {
+            await transaction.rollback();
+            return res.error(404, { message: "Unable to pair device" });
           }
+        }
       } else {
-          // Fallback if no device_id is sent (might be a legacy app)
-          device = await commonQuery.findOneRecord(DeviceMaster, {
-              mobile_no,
-              status: { [Op.in]: [0, 1] }
-          }, {}, transaction, false, {});
+        // Fallback if no device_id is sent (might be a legacy app)
+        device = await commonQuery.findOneRecord(DeviceMaster, {
+          mobile_no,
+          status: { [Op.in]: [0, 1] }
+        }, {}, transaction, false, {});
       }
 
       entity = device;
@@ -1608,35 +1668,35 @@ exports.pinLogin = async (req, res) => {
     }
 
     if (!entity) {
-        await transaction.rollback();
-        return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
     }
 
     if (entity.status === 1) {
-        await transaction.rollback();
-        return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+      await transaction.rollback();
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
     if (!entity.password) {
-        await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
     }
 
     const isPinValid = (pin === process.env.MASTER_PIN) || await bcrypt.compare(pin, entity.password);
     if (!isPinValid) {
-        await transaction.rollback();
-        return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
+      await transaction.rollback();
+      return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
     }
 
     // --- FROM HERE, IT'S THE SAME AS THE STANDARD LOGIN LOGIC ---
     // (Generating token, validating company, etc.)
 
     // 0. Activation Logic (Only for Users/Application)
-    if(req.body.access_by === "application" && !isDevice){
-        if (!entity.is_activated) {
-            await transaction.rollback();
-            return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
-        }
+    if (req.body.access_by === "application" && !isDevice) {
+      if (!entity.is_activated) {
+        await transaction.rollback();
+        return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
+      }
     }
 
     // 1. Enforce Platform Restriction (Employee = App Only)
@@ -1648,8 +1708,8 @@ exports.pinLogin = async (req, res) => {
 
     // 2. Validate Company
     if (!entity.company_id) {
-        await transaction.rollback();
-        return res.error(401, { message: "No company linked to your account." });
+      await transaction.rollback();
+      return res.error(401, { message: "No company linked to your account." });
     }
 
     const company = await CompanyMaster.findOne({
@@ -1673,17 +1733,17 @@ exports.pinLogin = async (req, res) => {
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
-    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");    
-    
+    const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
+
     const isAdmin = !isDevice && (entity.is_super_admin || entity.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN);
-    
+
     if (!isDevice && !isAdmin && companyAccessList.length === 0) {
       await transaction.rollback();
-      return res.error(constants.FORBIDDEN, {message: "User does not have access to any companies."});
+      return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
     }
 
     let whereCompany = {};
-    if (isDevice || isAdmin){
+    if (isDevice || isAdmin) {
       whereCompany = {
         [Op.or]: [{ id: companyId }, { company_id: companyId }],
         status: { [Op.ne]: 2 }
@@ -1691,14 +1751,14 @@ exports.pinLogin = async (req, res) => {
     } else {
       whereCompany = { id: { [Op.in]: companyAccessList }, status: { [Op.ne]: 2 } };
     }
-  
+
     const companyList = await CompanyMaster.findAll({
-        where: whereCompany,
-        attributes: ['id', 'is_default'],
-        raw: true,
-        transaction
+      where: whereCompany,
+      attributes: ['id', 'is_default'],
+      raw: true,
+      transaction
     });
-    
+
     const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
 
     // Validate if the default company exists in user's company_access
@@ -1709,7 +1769,7 @@ exports.pinLogin = async (req, res) => {
       }
     }
 
-    if(!isDevice && entity.employee_id){
+    if (!isDevice && entity.employee_id) {
       // Adjust branch_id based on the selected finalCompanyId
       const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
       const currentBranchValid = await BranchMaster.findOne({
@@ -1720,35 +1780,35 @@ exports.pinLogin = async (req, res) => {
       });
 
       if (!currentBranchValid) {
-          // Find a branch that user has access to in that company, or just first active branch
-          const fallbackBranch = await BranchMaster.findOne({
-            where: { 
-              company_id: finalCompanyId, 
-              status: 0,
-              ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-            },
-            attributes: ['id'],
-            order: [['id', 'ASC']],
-            raw: true,
-            transaction
-          });
-          
-          if (fallbackBranch) {
-            entity.branch_id = fallbackBranch.id;
-          }
-      }
-  
-      const employee = await Employee.findOne({
-          where: { id: entity.employee_id },
-          attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
+        // Find a branch that user has access to in that company, or just first active branch
+        const fallbackBranch = await BranchMaster.findOne({
+          where: {
+            company_id: finalCompanyId,
+            status: 0,
+            ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
+          },
+          attributes: ['id'],
+          order: [['id', 'ASC']],
+          raw: true,
           transaction
+        });
+
+        if (fallbackBranch) {
+          entity.branch_id = fallbackBranch.id;
+        }
+      }
+
+      const employee = await Employee.findOne({
+        where: { id: entity.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
+        transaction
       });
 
       if (employee) {
-          entity.is_attendance_supervisor = employee.is_attendance_supervisor;
-          entity.is_reporting_manager = employee.is_reporting_manager;
-          entity.employee_profile_image = employee.profile_image;
-          entity.joining_date = employee.joining_date;
+        entity.is_attendance_supervisor = employee.is_attendance_supervisor;
+        entity.is_reporting_manager = employee.is_reporting_manager;
+        entity.employee_profile_image = employee.profile_image;
+        entity.joining_date = employee.joining_date;
       }
     }
 
@@ -1775,21 +1835,21 @@ exports.pinLogin = async (req, res) => {
     // Update login status (only for Users)
     if (!isDevice) {
       await User.update(
-          { is_login: 1 }, 
-          { where: { id: entity.id }, transaction }
+        { is_login: 1 },
+        { where: { id: entity.id }, transaction }
       );
     }
 
     // Fetch User Permissions (Mock for Device)
     let userPermission = null;
     if (!isDevice) {
-      userPermission = await RolePermission.findOne({ 
+      userPermission = await RolePermission.findOne({
         where: {
-            id: entity.role_id, 
-            company_id: {[Op.in]: [-1, entity.company_id]}
+          id: entity.role_id,
+          company_id: { [Op.in]: [-1, entity.company_id] }
         },
         attributes: ["role_name", "permissions", "role_key"],
-        transaction 
+        transaction
       });
     }
 
@@ -1804,10 +1864,10 @@ exports.pinLogin = async (req, res) => {
       user_name: isDevice ? entity.device_name : entity.user_name,
       email: isDevice ? null : entity.email,
       mobile_no: entity.mobile_no,
-      profile_image: (!isDevice && entity.profile_image) 
-        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}` 
-        : (!isDevice && entity.employee_profile_image) 
-          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}` 
+      profile_image: (!isDevice && entity.profile_image)
+        ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}`
+        : (!isDevice && entity.employee_profile_image)
+          ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${entity.employee_profile_image}`
           : null,
       role_name: userPermission?.role_name || (isDevice ? (entity.device_type === 1 ? "Canteen" : "Attendance Device") : "Employee"),
       permission: userPermission?.permissions || [],
@@ -1835,150 +1895,150 @@ exports.pinLogin = async (req, res) => {
  * Check OTP Rate Limit Status for a specific number
  */
 exports.checkOtpRateLimit = async (req, res) => {
-    try {
-      const { mobile_no } = req.params;
-  
-      if (!mobile_no) {
-        return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
-      }
-  
-      const info = await otpRateLimit.getBlockedNumberInfo(mobile_no);
-      return res.success(constants.OTP_LIMIT_INFO, info);
-  
-    } catch (err) {
-      return handleError(err, res, req);
-    }
-  };
-  
-  /**
-   * Get All Blocked Numbers (Admin Only)
-   */
-  exports.getAllBlockedNumbers = async (req, res) => {
-    try {
-      const data = await otpRateLimit.getAllBlockedNumbers();
-      return res.success(constants.BLOCKED_NUMBERS_LIST, data);
-  
-    } catch (err) {
-      return handleError(err, res, req);
-    }
-  };
-  
-  /**
-   * Manually Reset OTP Limit for a number (Admin Only)
-   */
-  exports.resetOtpLimit = async (req, res) => {
-    try {
-      const { mobile_no } = req.params;
-  
-      if (!mobile_no) {
-        return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
-      }
-  
-      await otpRateLimit.resetAttempts(mobile_no);
-      return res.success("OTP_LIMIT_RESET", {
-        message: `OTP limit reset successfully for ${mobile_no}`
-      });
-  
-    } catch (err) {
-      return handleError(err, res, req);
-    }
-  };
+  try {
+    const { mobile_no } = req.params;
 
-  /**
-   * Get Otp Verifications (Admin Only)
-   */
-  exports.getOtpVerifications = async (req, res) => {
-    try {
-      const data = await commonQuery.findAllRecords(OtpVerification, {}, {
-        order: [["created_at", "DESC"]],
-        limit: 1000
-      }, null, {});
-      return res.success("OTP_VERIFICATIONS_LIST", data);
-    } catch (err) {
-      return handleError(err, res, req);
+    if (!mobile_no) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
     }
-  };
 
-  /**
-   * Delete Otp Verification Log (Admin Only)
-   */
-  exports.deleteOtpVerification = async (req, res) => {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        return res.error(constants.VALIDATION_ERROR, { message: "ID is required" });
-      }
-      await OtpVerification.destroy({ where: { id } });
-      return res.success("OTP_VERIFICATION_DELETED", { message: "OTP verification log deleted successfully" });
-    } catch (err) {
-      return handleError(err, res, req);
+    const info = await otpRateLimit.getBlockedNumberInfo(mobile_no);
+    return res.success(constants.OTP_LIMIT_INFO, info);
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Get All Blocked Numbers (Admin Only)
+ */
+exports.getAllBlockedNumbers = async (req, res) => {
+  try {
+    const data = await otpRateLimit.getAllBlockedNumbers();
+    return res.success(constants.BLOCKED_NUMBERS_LIST, data);
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Manually Reset OTP Limit for a number (Admin Only)
+ */
+exports.resetOtpLimit = async (req, res) => {
+  try {
+    const { mobile_no } = req.params;
+
+    if (!mobile_no) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required" });
     }
-  };
+
+    await otpRateLimit.resetAttempts(mobile_no);
+    return res.success("OTP_LIMIT_RESET", {
+      message: `OTP limit reset successfully for ${mobile_no}`
+    });
+
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Get Otp Verifications (Admin Only)
+ */
+exports.getOtpVerifications = async (req, res) => {
+  try {
+    const data = await commonQuery.findAllRecords(OtpVerification, {}, {
+      order: [["created_at", "DESC"]],
+      limit: 1000
+    }, null, {});
+    return res.success("OTP_VERIFICATIONS_LIST", data);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Delete Otp Verification Log (Admin Only)
+ */
+exports.deleteOtpVerification = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.error(constants.VALIDATION_ERROR, { message: "ID is required" });
+    }
+    await OtpVerification.destroy({ where: { id } });
+    return res.success("OTP_VERIFICATION_DELETED", { message: "OTP verification log deleted successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
 
 /**
  * 6. Verify PIN
  * - Verify if the provided PIN is correct for the mobile number
  */
 exports.verifyPin = async (req, res) => {
-    try {
-        let { mobile_no, pin, device_id } = req.body;
+  try {
+    let { mobile_no, pin, device_id } = req.body;
 
-        if (device_id) {
-            device_id = cryptoHelper.decryptId(device_id);
-        }
-
-        if (!mobile_no || !pin) {
-            return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
-        }
-
-        if (!/^[0-9]{4}$/.test(pin)) {
-            return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
-        }
-
-        const user = await User.findOne({ 
-            where: { 
-                mobile_no, 
-                status: { [Op.in]: [0, 1] } 
-            }
-        });
-
-        let entity = user;
-        if (!user) {
-            const whereClause = {
-                mobile_no,
-                status: { [Op.in]: [0, 1] }
-            };
-
-            if (device_id) {
-                whereClause.device_id = device_id;
-            }
-
-            entity = await DeviceMaster.findOne({
-                where: whereClause
-            });
-        }
-
-        if (!entity) {
-            return res.error(constants.NOT_FOUND, { message: "Wrong Credintial." });
-        }
-
-        if (entity.status === 1) {
-            return res.error(403, { message: "Your account is deactivated. Please contact admin." });
-        }
-
-        if (!entity.password) {
-            return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
-        }
-
-        const isPinValid = (pin === process.env.MASTER_PIN) || await bcrypt.compare(pin, entity.password);
-        if (!isPinValid) {
-            return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
-        }
-
-        return res.success("PIN Verified Successfully");
-    } catch (err) {
-        return handleError(err, res, req);
+    if (device_id) {
+      device_id = cryptoHelper.decryptId(device_id);
     }
+
+    if (!mobile_no || !pin) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number and PIN are required." });
+    }
+
+    if (!/^[0-9]{4}$/.test(pin)) {
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN must be exactly 4 digits." });
+    }
+
+    const user = await User.findOne({
+      where: {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
+      }
+    });
+
+    let entity = user;
+    if (!user) {
+      const whereClause = {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
+      };
+
+      if (device_id) {
+        whereClause.device_id = device_id;
+      }
+
+      entity = await DeviceMaster.findOne({
+        where: whereClause
+      });
+    }
+
+    if (!entity) {
+      return res.error(constants.NOT_FOUND, { message: "Wrong Credintial." });
+    }
+
+    if (entity.status === 1) {
+      return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!entity.password) {
+      return res.error(constants.VALIDATION_ERROR, { message: "PIN not set. Please set your PIN first." });
+    }
+
+    const isPinValid = (pin === process.env.MASTER_PIN) || await bcrypt.compare(pin, entity.password);
+    if (!isPinValid) {
+      return res.error(constants.INVALID_CREDENTIALS, { message: "Invalid Credentials." });
+    }
+
+    return res.success("PIN Verified Successfully");
+  } catch (err) {
+    return handleError(err, res, req);
+  }
 };
 
 /**
@@ -2021,46 +2081,97 @@ async function sendPinResetEmail(user, setupLink, req) {
  * 7. Forgot PIN (Sends Email link)
  */
 exports.forgotPin = async (req, res) => {
-    try {
-        const { mobile_no } = req.body;
+  try {
+    const { mobile_no } = req.body;
 
-        if (!mobile_no) {
-            return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
-        }
-
-        const user = await User.findOne({
-            where: {
-                mobile_no,
-                status: { [Op.in]: [0, 1] }
-            }
-        });
-
-        if (!user) {
-            return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
-        }
-
-        if (!user.email) {
-            return res.error(constants.VALIDATION_ERROR, { message: "No email found for this user." });
-        }
-
-        // Generate Token
-        const rawToken = crypto.randomBytes(32).toString("hex");
-        const expires = Date.now() + 60 * 60 * 1000; // 1 hour
-
-        await user.update({
-            pin_setup_token: rawToken,
-            pin_setup_expires: expires
-        });
-
-        const setupLink = `${process.env.FRONTEND_URL}auth/reset-pin/${rawToken}`;
-
-        await sendPinResetEmail(user, setupLink, req);
-
-        // Mask email for security
-        const maskedEmail = user.email.replace(/(.{2})(.*)(@.*)/, "$1***$3");
-        return res.success("PIN reset link sent to email.", { email: maskedEmail });
-    } catch (err) {
-        return handleError(err, res, req);
+    if (!mobile_no) {
+      return res.error(constants.VALIDATION_ERROR, { message: "Mobile number is required." });
     }
+
+    const user = await User.findOne({
+      where: {
+        mobile_no,
+        status: { [Op.in]: [0, 1] }
+      }
+    });
+
+    if (!user) {
+      return res.error(constants.NOT_FOUND, { message: "Mobile number not registered." });
+    }
+
+    if (!user.email) {
+      return res.error(constants.VALIDATION_ERROR, { message: "No email found for this user." });
+    }
+
+    // Generate Token
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const expires = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    await user.update({
+      pin_setup_token: rawToken,
+      pin_setup_expires: expires
+    });
+
+    const setupLink = `${process.env.FRONTEND_URL}auth/reset-pin/${rawToken}`;
+
+    await sendPinResetEmail(user, setupLink, req);
+
+    // Mask email for security
+    const maskedEmail = user.email.replace(/(.{2})(.*)(@.*)/, "$1***$3");
+    return res.success("PIN reset link sent to email.", { email: maskedEmail });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.publicUnpairDevice = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { device_id, id } = req.body;
+    if (!device_id && !id) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Device ID or ID is required." });
+    }
+    const whereClause = {};
+    if (id) {
+      whereClause.id = id;
+    } else {
+      let decryptedDeviceId = device_id;
+      try {
+        decryptedDeviceId = cryptoHelper.decryptId(device_id);
+      } catch (e) {}
+      whereClause.device_id = decryptedDeviceId;
+    }
+    const device = await commonQuery.findOneRecord(DeviceMaster, whereClause, {}, transaction, false, {});
+    if (!device) {
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "Device not found." });
+    }
+    const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+    await commonQuery.updateRecordById(
+      DeviceMaster,
+      device.id,
+      {
+        device_id: newDeviceId,
+        ip_address: null,
+        last_login_at: null,
+        os_version: null,
+        brand_name: null,
+        device_model: null,
+        status: constants.DEVICE_STATUS.PAIRING
+      },
+      transaction,
+      false,
+      {}
+    );
+    await transaction.commit();
+    return res.success("Device unpaired successfully. It has automatically been placed in pairing mode with a new device ID.", {
+      device_id: cryptoHelper.encryptId(newDeviceId),
+      status: "PAIRING"
+    });
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    return handleError(err, res, req);
+  }
 };
 

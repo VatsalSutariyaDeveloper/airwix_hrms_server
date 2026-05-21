@@ -7,6 +7,8 @@ const xlsx = require("xlsx");
 const fs = require("fs");
 const { fail } = require('../../../helpers/Err');
 const { requestContext } = require("../../../utils/requestContext");
+const dayjs = require('dayjs');
+const { rebuildAttendanceDay } = require("../../../helpers/attendanceHelper");
 
 let isCancelled = false;
 let transaction = null;
@@ -306,7 +308,7 @@ const runWorker = async () => {
                 const nh = normalizeText(h);
                 return nh === "ctc" || nh === "monthly ctc" || nh === "grand ctc" || nh === "total ctc" || nh.includes("ctc") || nh.includes("cost to company");
             }),
-            effectiveDateKey: headers.find(h => normalizeText(h).includes("effective") || normalizeText(h).includes("revision date")),
+            effectiveDateKey: headers.find(h => normalizeText(h).includes("effective date") || normalizeText(h).includes("revision date")),
             calculationBasisKey: headers.find(h => {
                 const nh = normalizeText(h);
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis") || nh.includes("lwp computation") || nh.includes("lwp calculation");
@@ -823,6 +825,7 @@ const runWorker = async () => {
 
                 const template = templateMap.get(employee.id);
                 const oldCTC = template ? parseFloat(template.ctc_monthly) || 0 : 0;
+                const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
 
                 const templatePayload = {
                     employee_id: employee.id,
@@ -830,6 +833,7 @@ const runWorker = async () => {
                     staff_type: 'Regular', salary_type: 'Monthly',
                     ctc_monthly: ctcMonthly, ctc_yearly: ctcMonthly * 12,
                     lwp_calculation_basis: calculationBasis,
+                    effective_date: effectiveDate,
                     statutory_config, company_id, branch_id: employee.branch_id, user_id, status: 0
                 };
 
@@ -840,9 +844,10 @@ const runWorker = async () => {
                 }
 
                 if (template) {
-                    const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
                     revisionsToCreate.push({
                         employee_id: employee.id,
+                        previous_template_id: template.id,
+                        new_template_id: template.id,
                         previous_ctc: oldCTC,
                         new_ctc: ctcMonthly,
                         effective_date: effectiveDate,
@@ -1042,6 +1047,32 @@ const runWorker = async () => {
             // 5. Update Employees
             for (const eu of employeeUpdates) {
                 await commonQuery.updateRecordById(Employee, eu.id, eu, transaction);
+            }
+
+            // 6. Rebuild attendance days for employees affected by salary revisions
+            // Apply effective date rules:
+            // - If effective_date is in the past, clamp it to today (apply immediately)
+            // - If effective_date is in the future, skip now (will take effect later)
+            if (revisionsToCreate.length > 0) {
+                const today = dayjs().startOf('day');
+                const affectedMap = new Map();
+                revisionsToCreate.forEach(r => {
+                    if (!r.employee_id) return;
+                    const eff = r.effective_date ? dayjs(r.effective_date).startOf('day') : today;
+                    const applyDate = eff.isBefore(today) ? today : eff;
+                    if (!affectedMap.has(r.employee_id) || applyDate.isBefore(affectedMap.get(r.employee_id))) {
+                        affectedMap.set(r.employee_id, applyDate);
+                    }
+                });
+
+                for (const [empId, applyDate] of affectedMap.entries()) {
+                    if (applyDate.isAfter(today)) continue; // future revisions - handle later
+                    let cur = applyDate.clone();
+                    while (cur.isBefore(today) || cur.isSame(today, 'day')) {
+                        await rebuildAttendanceDay(empId, cur.format('YYYY-MM-DD'), { user_id, company_id, branch_id }, transaction);
+                        cur = cur.add(1, 'day');
+                    }
+                }
             }
         }
 

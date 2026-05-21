@@ -20,9 +20,9 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: "DAYS_IN_MONTH"
     },
     statutory_config: {
-        type: DataTypes.JSONB,
-        allowNull: true,
-        comment: "Stores PF, ESI, PT, LWF configuration for the template"
+      type: DataTypes.JSONB,
+      allowNull: true,
+      comment: "Stores PF, ESI, PT, LWF configuration for the template"
     },
     status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },

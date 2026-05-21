@@ -1,8 +1,22 @@
-const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, LeaveRequest, AttendanceTemplate, EmployeeAttendanceTemplate, sequelize } = require("../models");
+const { EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, LeaveRequest, AttendanceTemplate, EmployeeAttendanceTemplate, AttendanceDay, sequelize } = require("../models");
 const { commonQuery, Op } = require("../helpers");
 const { constants } = require("../helpers/constants");
 const dayjs = require("dayjs");
 // const { getDayOffInfo } = require("../helpers/attendanceHelper");
+
+/**
+ * Helper to get frequency in months for periodic accrual
+ */
+const getFrequencyMonths = (freq) => {
+    switch (freq) {
+        case 'monthly': return 1;
+        case 'quarterly': return 3;
+        case '4_monthly': return 4;
+        case 'half_yearly': return 6;
+        case 'yearly': return 12;
+        default: return 1;
+    }
+};
 
 /**
  * Service to manage employee-specific leave balances, including pro-rata calculations,
@@ -177,7 +191,163 @@ console.log("start",start,"end",end)
 
                 const accrualTypeNormalized = String(template.accrual_type || '').toUpperCase();
 
-                if (accrualTypeNormalized === 'UPFRONT') {
+                // Parse category automation rules for custom earning/accrual config
+                let earningRules = null;
+                try {
+                    const parsedRules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+                    if (parsedRules && parsedRules.earning_rules) {
+                        earningRules = parsedRules.earning_rules;
+                    }
+                } catch (err) {
+                    console.error(`[initializeBalance] Error parsing automation rules for category ${category.id}:`, err);
+                }
+
+                if (earningRules && earningRules.accrual_type === 'attendance_based') {
+                    // Attendance-based periodic earning (e.g. Y leaves per X days worked in previous period)
+                    const today = refDate;
+                    const joinDate = dayjs(employee.joining_date);
+                    const freqInMonths = getFrequencyMonths(earningRules.frequency || 'yearly');
+
+                    let totalEarned = 0;
+                    let currentPointer = start.startOf('month');
+                    if (joinDate.isAfter(currentPointer)) {
+                        currentPointer = joinDate.startOf('month');
+                    }
+
+                    const lastEarnedMonth = today.startOf('month');
+                    const isCycleStart = today.isSame(start, 'day') || today.isBefore(start);
+
+                    if (isCycleStart) {
+                        const queryStart = start.subtract(freqInMonths, 'month');
+                        const queryEnd = start.subtract(1, 'day');
+
+                        const attendanceRecords = await AttendanceDay.findAll({
+                            where: {
+                                employee_id: employeeId,
+                                attendance_date: {
+                                    [Op.between]: [queryStart.format('YYYY-MM-DD'), queryEnd.format('YYYY-MM-DD')]
+                                }
+                            },
+                            transaction: t
+                        });
+
+                        let totalPresentDays = 0;
+                        for (const record of attendanceRecords) {
+                            const statusVal = parseInt(record.status, 10);
+                            if ([0, 7, 12].includes(statusVal)) {
+                                totalPresentDays += 1.0;
+                            } else if ([1, 13].includes(statusVal)) {
+                                totalPresentDays += 0.5;
+                            }
+                        }
+
+                        const reqDays = parseFloat(earningRules.earning_ratio_present_days || 365) || 365;
+                        const earnLeaves = parseFloat(earningRules.earning_ratio_leave_value || 21);
+                        let computedAllocated = (totalPresentDays / reqDays) * earnLeaves;
+
+                        if (earningRules.max_earning_limit) {
+                            const maxLimit = parseFloat(earningRules.max_earning_limit);
+                            if (computedAllocated > maxLimit) {
+                                computedAllocated = maxLimit;
+                            }
+                        }
+                        totalEarned = computedAllocated;
+                    } else {
+                        while (!currentPointer.isAfter(lastEarnedMonth)) {
+                            if (joinDate.isAfter(currentPointer.endOf('month'))) {
+                                currentPointer = currentPointer.add(1, 'month');
+                                continue;
+                            }
+
+                            const monthsDiff = currentPointer.diff(start.startOf('month'), 'month');
+                            if (monthsDiff % freqInMonths === 0) {
+                                const queryStart = currentPointer.subtract(freqInMonths, 'month');
+                                const queryEnd = currentPointer.subtract(1, 'day');
+
+                                const attendanceRecords = await AttendanceDay.findAll({
+                                    where: {
+                                        employee_id: employeeId,
+                                        attendance_date: {
+                                            [Op.between]: [queryStart.format('YYYY-MM-DD'), queryEnd.format('YYYY-MM-DD')]
+                                        }
+                                    },
+                                    transaction: t
+                                });
+
+                                let totalPresentDays = 0;
+                                for (const record of attendanceRecords) {
+                                    const statusVal = parseInt(record.status, 10);
+                                    if ([0, 7, 12].includes(statusVal)) {
+                                        totalPresentDays += 1.0;
+                                    } else if ([1, 13].includes(statusVal)) {
+                                        totalPresentDays += 0.5;
+                                    }
+                                }
+
+                                const reqDays = parseFloat(earningRules.earning_ratio_present_days || 365) || 365;
+                                const earnLeaves = parseFloat(earningRules.earning_ratio_leave_value || 21);
+                                let periodCredit = (totalPresentDays / reqDays) * earnLeaves;
+
+                                if (earningRules.max_earning_limit) {
+                                    const maxLimit = parseFloat(earningRules.max_earning_limit);
+                                    if (totalEarned + periodCredit > maxLimit) {
+                                        periodCredit = Math.max(0, maxLimit - totalEarned);
+                                    }
+                                }
+                                totalEarned += periodCredit;
+                            }
+                            currentPointer = currentPointer.add(1, 'month');
+                        }
+                    }
+                    allocated = totalEarned;
+                } else if (earningRules && earningRules.accrual_type === 'fixed') {
+                    // Category-specific fixed periodic accrual (e.g., quarterly or every 4 months)
+                    const today = refDate;
+                    const joinDate = dayjs(employee.joining_date);
+
+                    let totalEarned = 0;
+                    let currentPointer = start.startOf('month');
+                    if (joinDate.isAfter(currentPointer)) {
+                        currentPointer = joinDate.startOf('month');
+                    }
+
+                    const lastEarnedMonth = today.startOf('month');
+                    const freqInMonths = getFrequencyMonths(earningRules.frequency);
+
+                    while (!currentPointer.isAfter(lastEarnedMonth)) {
+                        if (joinDate.isAfter(currentPointer.endOf('month'))) {
+                            currentPointer = currentPointer.add(1, 'month');
+                            continue;
+                        }
+
+                        const monthsDiff = currentPointer.diff(start.startOf('month'), 'month');
+                        if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
+                            let credit = parseFloat(earningRules.credit_value || 0);
+                            
+                            if (joinDate.isSame(currentPointer, 'month')) {
+                                const joinDay = joinDate.date();
+                                const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED')
+                                    .toUpperCase()
+                                    .replace(/ /g, '_');
+                                if (ruleNormalized === 'THRESHOLD_BASED') {
+                                    if (joinDay <= 7) credit = credit;
+                                    else if (joinDay <= 22) credit = credit / 2;
+                                    else credit = 0;
+                                } else if (ruleNormalized === 'FULL_MONTH') {
+                                    credit = credit;
+                                } else if (ruleNormalized === 'PRO_RATA_DAYS') {
+                                    const daysInMonth = currentPointer.daysInMonth();
+                                    const daysRemaining = daysInMonth - joinDay + 1;
+                                    credit = (daysRemaining / daysInMonth) * credit;
+                                }
+                            }
+                            totalEarned += credit;
+                        }
+                        currentPointer = currentPointer.add(1, 'month');
+                    }
+                    allocated = totalEarned;
+
+                } else if (accrualTypeNormalized === 'UPFRONT') {
                     const today = refDate;
                     const joinDate = dayjs(employee.joining_date);
 
@@ -397,7 +567,11 @@ console.log("start",start,"end",end)
                 } else if (oldBalancesMap) {
                     // When old balances were soft-deleted before this call (template update flow),
                     // use the preserved usage data so employees don't get extra leaves
-                    const oldBal = oldBalancesMap.get(category.id);
+                    let oldBal = oldBalancesMap.get(category.id);
+                    if (!oldBal && category.leave_category_name) {
+                        const normName = category.leave_category_name.trim().toLowerCase();
+                        oldBal = oldBalancesMap.get(normName);
+                    }
                     if (oldBal) {
                         used = parseFloat(oldBal.used_leaves || 0);
                         carryForward = parseFloat(oldBal.carry_forward_leaves || 0);
@@ -408,8 +582,24 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
 
                 // Smart update detection logic:
                 if (oldBalancesMap && meta && meta.oldMasterCategoriesMap) {
-                    const oldBal = oldBalancesMap.get(category.id);
-                    const oldMasterCat = meta.oldMasterCategoriesMap.get(category.id);
+                    let oldBal = oldBalancesMap.get(category.id);
+                    let oldMasterCat = meta.oldMasterCategoriesMap.get(category.id);
+                    
+                    if (!oldBal && category.leave_category_name) {
+                        const normName = category.leave_category_name.trim().toLowerCase();
+                        oldBal = oldBalancesMap.get(normName);
+                    }
+                    
+                    if (!oldMasterCat && category.leave_category_name && meta.oldMasterCategoriesMap) {
+                        const normName = category.leave_category_name.trim().toLowerCase();
+                        for (const [key, val] of meta.oldMasterCategoriesMap.entries()) {
+                            if (val.leave_category_name && val.leave_category_name.trim().toLowerCase() === normName) {
+                                oldMasterCat = val;
+                                break;
+                            }
+                        }
+                    }
+
                     if (oldBal && oldMasterCat) {
                         // Did the template's count change?
                         const countChanged = parseFloat(oldMasterCat.leave_count || 0) !== parseFloat(category.leave_count || 0);
@@ -484,10 +674,14 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             });
             const oldBalancesMap = new Map();
             for (const bal of oldBalances) {
-                oldBalancesMap.set(bal.leave_category_id, {
+                const usage = {
                     used_leaves: bal.used_leaves,
                     carry_forward_leaves: bal.carry_forward_leaves
-                });
+                };
+                oldBalancesMap.set(bal.leave_category_id, usage);
+                if (bal.leave_category_name) {
+                    oldBalancesMap.set(bal.leave_category_name.trim().toLowerCase(), usage);
+                }
             }
 
             // Step 2: Soft-delete ALL existing leave balances for this employee
@@ -539,11 +733,16 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                 if (!employeeOldBalancesMap.has(bal.employee_id)) {
                     employeeOldBalancesMap.set(bal.employee_id, new Map());
                 }
-                employeeOldBalancesMap.get(bal.employee_id).set(bal.leave_category_id, {
+                const oldMap = employeeOldBalancesMap.get(bal.employee_id);
+                const usage = {
                     used_leaves: bal.used_leaves,
                     carry_forward_leaves: bal.carry_forward_leaves,
                     total_allocated: bal.total_allocated
-                });
+                };
+                oldMap.set(bal.leave_category_id, usage);
+                if (bal.leave_category_name) {
+                    oldMap.set(bal.leave_category_name.trim().toLowerCase(), usage);
+                }
             }
 
             // Step 2: Soft-delete ALL existing leave balances for these employees
@@ -674,11 +873,12 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
     /**
      * Batch job to add monthly credits.
      */
-    static async processMonthlyAccruals(asOf = null, batch_id = null) {
+    static async processMonthlyAccruals(asOf = null, batch_id = null, isManual = false) {
         const refDate = asOf ? dayjs(asOf) : dayjs();
 
-        // Guard: Monthly accruals strictly run on the 1st of the month.
-        if (!asOf && refDate.date() !== 1) {
+        // Guard: Monthly accruals strictly run on the 1st of the month, unless forced manually.
+        if (!isManual && !asOf && refDate.date() !== 1) {
+            console.log('ℹ️ Skipping monthly leave accrual: Not the 1st of the month.');
             return;
         }
 
@@ -690,7 +890,6 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
         try {
             const templates = await LeaveTemplate.findAll({
                 where: {
-                    accrual_type: 'MONTHLY',
                     status: 0
                 },
                 include: [{ 
@@ -724,53 +923,159 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                     });
                     
                     for (const category of template.categories) {
-                        let monthlyRate = category.leave_count / 12; // Default for annual cycles
-                        if (template.leave_policy_cycle === 'MONTHLY') {
-                            monthlyRate = category.leave_count;
-                        } else if (template.leave_policy_cycle === 'QUARTERLY') {
-                            monthlyRate = category.leave_count / 3;
+                        // Parse automation rules for custom category level earning/accrual config
+                        let earningRules = null;
+                        try {
+                            const parsedRules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+                            if (parsedRules && parsedRules.earning_rules) {
+                                earningRules = parsedRules.earning_rules;
+                            }
+                        } catch (err) {
+                            console.error(`[processMonthlyAccruals] Error parsing automation rules for category ${category.id}:`, err);
                         }
 
                         let creditToApply = 0;
-                        if (joinDate.isSame(calculationDate, 'month')) {
-                            // Apply join month rule if this was their first month
-                            const joinDay = joinDate.date();
-                            const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED').toUpperCase().replace(/ /g, '_');
-                            if (ruleNormalized === 'THRESHOLD_BASED') {
-                                if (joinDay <= 7) creditToApply = monthlyRate;
-                                else if (joinDay <= 22) creditToApply = monthlyRate / 2;
-                                else creditToApply = 0;
-                            } else if (ruleNormalized === 'FULL_MONTH') {
-                                creditToApply = monthlyRate;
-                            } else if (ruleNormalized === 'PRO_RATA_DAYS') {
-                                const daysInMonth = joinDate.daysInMonth();
-                                const daysRemaining = daysInMonth - joinDay + 1;
-                                creditToApply = (daysRemaining / daysInMonth) * monthlyRate;
+                        let shouldProcess = false;
+
+                        if (earningRules && earningRules.accrual_type === 'fixed') {
+                            // Category-specific fixed periodic accrual (e.g. quarterly or every 4 months)
+                            const freqInMonths = getFrequencyMonths(earningRules.frequency);
+                            const nextCycleMonth = calculationDate.add(1, 'day').startOf('month');
+                            const monthsDiff = nextCycleMonth.diff(start.startOf('month'), 'month');
+                            
+                            if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
+                                shouldProcess = true;
+                                let credit = parseFloat(earningRules.credit_value || 0);
+                                if (joinDate.isSame(calculationDate, 'month')) {
+                                    // Apply join month rule
+                                    const joinDay = joinDate.date();
+                                    const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED').toUpperCase().replace(/ /g, '_');
+                                    if (ruleNormalized === 'THRESHOLD_BASED') {
+                                        if (joinDay <= 7) creditToApply = credit;
+                                        else if (joinDay <= 22) creditToApply = credit / 2;
+                                        else creditToApply = 0;
+                                    } else if (ruleNormalized === 'FULL_MONTH') {
+                                        creditToApply = credit;
+                                    } else if (ruleNormalized === 'PRO_RATA_DAYS') {
+                                        const daysInMonth = joinDate.daysInMonth();
+                                        const daysRemaining = daysInMonth - joinDay + 1;
+                                        creditToApply = (daysRemaining / daysInMonth) * credit;
+                                    }
+                                } else {
+                                    creditToApply = credit;
+                                }
                             }
-                        } else {
-                            // Full month earned
-                            creditToApply = monthlyRate;
+                        } else if (earningRules && earningRules.accrual_type === 'attendance_based') {
+                            // Category-specific attendance-based accrual with custom frequency and custom ratios
+                            const freqInMonths = getFrequencyMonths(earningRules.frequency || 'yearly');
+                            const nextCycleMonth = calculationDate.add(1, 'day').startOf('month');
+                            const monthsDiff = nextCycleMonth.diff(start.startOf('month'), 'month');
+
+                            if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
+                                shouldProcess = true;
+                                const queryStart = nextCycleMonth.subtract(freqInMonths, 'month');
+                                const queryEnd = nextCycleMonth.subtract(1, 'day');
+
+                                const attendanceRecords = await AttendanceDay.findAll({
+                                    where: {
+                                        employee_id: employee.id,
+                                        attendance_date: {
+                                            [Op.between]: [queryStart.format('YYYY-MM-DD'), queryEnd.format('YYYY-MM-DD')]
+                                        }
+                                    },
+                                    transaction
+                                });
+
+                                let totalPresentDays = 0;
+                                for (const record of attendanceRecords) {
+                                    const statusVal = parseInt(record.status, 10);
+                                    if ([0, 7, 12].includes(statusVal)) {
+                                        totalPresentDays += 1.0;
+                                    } else if ([1, 13].includes(statusVal)) {
+                                        totalPresentDays += 0.5;
+                                    }
+                                }
+
+                                const reqDays = parseFloat(earningRules.earning_ratio_present_days || 365) || 365;
+                                const earnLeaves = parseFloat(earningRules.earning_ratio_leave_value || 21);
+                                let computedCredit = (totalPresentDays / reqDays) * earnLeaves;
+
+                                const balance = await EmployeeLeaveBalance.findOne({
+                                    where: {
+                                        employee_id: employee.id,
+                                        leave_category_id: category.id,
+                                        year: end.year(),
+                                        month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
+                                        status: 0
+                                    },
+                                    transaction
+                                });
+
+                                if (balance) {
+                                    let currentAllocated = parseFloat(balance.total_allocated || 0);
+                                    if (earningRules.max_earning_limit) {
+                                        const maxLimit = parseFloat(earningRules.max_earning_limit);
+                                        if (currentAllocated + computedCredit > maxLimit) {
+                                            computedCredit = Math.max(0, maxLimit - currentAllocated);
+                                        }
+                                    }
+                                    creditToApply = computedCredit;
+                                } else {
+                                    creditToApply = computedCredit;
+                                }
+                            }
+                        } else if (template.accrual_type === 'MONTHLY') {
+                            // Standard template monthly accrual fallback
+                            shouldProcess = true;
+                            let monthlyRate = category.leave_count / 12; // Default for annual cycles
+                            if (template.leave_policy_cycle === 'MONTHLY') {
+                                monthlyRate = category.leave_count;
+                            } else if (template.leave_policy_cycle === 'QUARTERLY') {
+                                monthlyRate = category.leave_count / 3;
+                            }
+
+                            if (joinDate.isSame(calculationDate, 'month')) {
+                                // Apply join month rule if this was their first month
+                                const joinDay = joinDate.date();
+                                const ruleNormalized = String(template.join_month_rule || 'THRESHOLD_BASED').toUpperCase().replace(/ /g, '_');
+                                if (ruleNormalized === 'THRESHOLD_BASED') {
+                                    if (joinDay <= 7) creditToApply = monthlyRate;
+                                    else if (joinDay <= 22) creditToApply = monthlyRate / 2;
+                                    else creditToApply = 0;
+                                } else if (ruleNormalized === 'FULL_MONTH') {
+                                    creditToApply = monthlyRate;
+                                } else if (ruleNormalized === 'PRO_RATA_DAYS') {
+                                    const daysInMonth = joinDate.daysInMonth();
+                                    const daysRemaining = daysInMonth - joinDay + 1;
+                                    creditToApply = (daysRemaining / daysInMonth) * monthlyRate;
+                                }
+                            } else {
+                                // Full month earned
+                                creditToApply = monthlyRate;
+                            }
                         }
 
-                        const balance = await EmployeeLeaveBalance.findOne({
-                            where: {
-                                employee_id: employee.id,
-                                leave_category_id: category.id,
-                                year: end.year(),
-                                month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
-                                status: 0
-                            },
-                            transaction
-                        });
+                        if (shouldProcess) {
+                            const balance = await EmployeeLeaveBalance.findOne({
+                                where: {
+                                    employee_id: employee.id,
+                                    leave_category_id: category.id,
+                                    year: end.year(),
+                                    month: (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY') ? end.month() + 1 : null,
+                                    status: 0
+                                },
+                                transaction
+                            });
 
-                        if (balance) {
-                            const newTotal = Math.round((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
-                            const newPending = Math.round((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
-                            
-                            await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
-                                total_allocated: newTotal,
-                                pending_leaves: newPending
-                            }, transaction, false, true, batch_id);
+                            if (balance) {
+                                const newTotal = Math.round((parseFloat(balance.total_allocated || 0) + creditToApply) * 2) / 2;
+                                const newPending = Math.round((parseFloat(balance.pending_leaves || 0) + creditToApply) * 2) / 2;
+                                
+                                await commonQuery.updateRecordById(EmployeeLeaveBalance, balance.id, {
+                                    total_allocated: newTotal,
+                                    pending_leaves: newPending
+                                }, transaction, false, true, batch_id);
+                            }
                         }
                     }
                 }

@@ -750,15 +750,15 @@ exports.getById = async (req, res) => {
 exports.getProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        
+
         // Always fetch the User data first
-        const user = await commonQuery.findOneRecord(User, { id: userId, status: 0 }, { 
+        const user = await commonQuery.findOneRecord(User, { id: userId, status: 0 }, {
             attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id', 'employee_id'],
             include: {
                 model: RolePermission,
                 as: 'RolePermission',
                 attributes: ['role_name']
-            } 
+            }
         }, null, false, {});
 
         if (!user) return res.error(constants.USER_NOT_FOUND);
@@ -2547,7 +2547,13 @@ exports.inviteUser = async (req, res) => {
 
         // Check if user already exists
         let user = await commonQuery.findOneRecord(User, { employee_id }, {}, transaction);
-        let role = await commonQuery.findOneRecord(RolePermission, { role_key: constants.ROLE_KEYS.EMPLOYEE }, {}, transaction);
+
+        let role = await commonQuery.findOneRecord(RolePermission, { role_key: constants.ROLE_KEYS.EMPLOYEE }, {}, transaction, false, { company_id: true });
+        if (!role) {
+            // Fallback: search globally without company_id filter (requireTenantFields: false)
+            role = await commonQuery.findOneRecord(RolePermission, { role_key: constants.ROLE_KEYS.EMPLOYEE }, {}, transaction, false, false);
+        }
+
         if (!user && role) {
             // This case should theoretically not happen with auto-creation, but handle it for legacy employees
             user = await commonQuery.createRecord(User, {
@@ -2573,6 +2579,12 @@ exports.inviteUser = async (req, res) => {
             // }, transaction);
         }
 
+        // Safety check to prevent "Cannot read properties of null (reading 'id')"
+        if (!user) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "No user account exists for this employee, and the default Employee role could not be resolved." });
+        }
+
         // Generate PIN Setup Token
         const pin_setup_token = crypto.randomBytes(32).toString("hex");
         const pin_setup_expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
@@ -2593,28 +2605,73 @@ exports.inviteUser = async (req, res) => {
 
         // Send SMS Invitation via centralized SMS service (non-blocking)
         (async () => {
-          try {
-            const templateId = process.env.MSG91_AIRWIX_PAYROLL_INVITATION_TEMPLATE_ID;
-            const mobileNo = employee.mobile_no;
-            if (templateId && mobileNo) {
-              let companyName = process.env.EMAIL_COMPANY_NAME || "";
-              try {
-                const company = await commonQuery.findOneRecord(CompanyMaster, { id: employee.company_id }, { attributes: ["company_name"] }, null, false, { company_id: true });
-                if (company && company.company_name) companyName = company.company_name;
-              } catch (e) {
-                // ignore
-              }
+            try {
+                const templateId = process.env.MSG91_AIRWIX_PAYROLL_INVITATION_TEMPLATE_ID;
+                const mobileNo = employee.mobile_no;
+                if (templateId && mobileNo) {
+                    let companyName = process.env.EMAIL_COMPANY_NAME || "";
+                    try {
+                        const company = await commonQuery.findOneRecord(CompanyMaster, { id: employee.company_id }, { attributes: ["company_name"] }, null, false, {});
+                        if (company && company.company_name) companyName = company.company_name;
+                    } catch (e) {
+                        // ignore
+                    }
 
-              await sendTemplateSMS(mobileNo, templateId, {
-                employee_name: employee.first_name || "Employee",
-                application_name: process.env.APP_NAME || "AIRWIX PAYROLL",
-                company_name: companyName,
-              });
-              console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}`);
+                    const appName = process.env.APP_NAME || "AIRWIX PAYROLL";
+                    let empName = employee.first_name || "Employee";
+
+                    // Clean up newlines, carriage returns, tabs, and multiple spaces that might be present in names
+                    empName = empName.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+                    let compName = companyName.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+
+                    // The message layout is:
+                    // "Hi " + empName + ", your salary, leave & attendance details are available on " + appName + ": https://hrms.airwix.in/AWXTEC-PY - Team " + compName
+                    // Static text parts sum up to 105 characters.
+                    const staticLength = 3 + 59 + 42; // 105
+                    const allowedDynamicLength = 160 - staticLength - appName.length;
+
+                    const truncateToWordBoundary = (str, maxLength) => {
+                        if (!str) return "";
+                        if (str.length <= maxLength) return str;
+                        let truncated = str.slice(0, maxLength);
+                        const nextChar = str[maxLength];
+                        if (nextChar === " " || nextChar === undefined) {
+                            return truncated.trim();
+                        }
+                        const lastSpaceIdx = truncated.lastIndexOf(" ");
+                        if (lastSpaceIdx !== -1) {
+                            truncated = truncated.slice(0, lastSpaceIdx);
+                        }
+                        return truncated.trim();
+                    };
+
+                    if (empName.length + compName.length > allowedDynamicLength) {
+                        const halfAlloc = Math.floor(allowedDynamicLength / 2);
+                        if (empName.length > halfAlloc && compName.length > halfAlloc) {
+                            empName = truncateToWordBoundary(empName, halfAlloc);
+                            const remainingBudget = allowedDynamicLength - empName.length;
+                            compName = truncateToWordBoundary(compName, remainingBudget);
+                        } else if (compName.length <= halfAlloc) {
+                            empName = truncateToWordBoundary(empName, allowedDynamicLength - compName.length);
+                        } else {
+                            compName = truncateToWordBoundary(compName, allowedDynamicLength - empName.length);
+                        }
+                    }
+
+                    const actualMessage = `Hi ${empName}, your salary, leave & attendance details are available on ${appName}: https://hrms.airwix.in/AWXTEC-PY - Team ${compName}`;
+                    console.log(`[INVITE-SMS] Actual message to send: "${actualMessage}" (Length: ${actualMessage.length} chars)`);
+
+                    await sendTemplateSMS(mobileNo, templateId, {
+                        employee_name: empName,
+                        application_name: appName,
+                        company_name: compName,
+                    });
+
+                    console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}. Adjusted Name: "${empName}", Company: "${compName}"`);
+                }
+            } catch (err) {
+                console.error("[INVITE-SMS] Failed to send invitation SMS:", err?.response?.data || err.message || err);
             }
-          } catch (err) {
-            console.error("[INVITE-SMS] Failed to send invitation SMS:", err?.response?.data || err.message || err);
-          }
         })();
 
         return res.success("Invitation generated successfully", {
