@@ -187,7 +187,7 @@ exports.update = async (req, res) => {
     await Notification.destroy({
       where: {
         reference_id: id,
-        type: "announcement"
+        type: { [Op.in]: ["announcement", "ANNOUNCEMENT"] }
       },
       transaction
     });
