@@ -209,49 +209,57 @@ console.log("start",start,"end",end)
                     const freqInMonths = getFrequencyMonths(earningRules.frequency || 'yearly');
 
                     let totalEarned = 0;
-                    let currentPointer = start.startOf('month');
+                    let anchorStart = start;
+                    if (template.leave_policy_cycle === 'MONTHLY' && freqInMonths > 1) {
+                        anchorStart = refDate.startOf('year');
+                    }
+
+                    let currentPointer = anchorStart.startOf('month');
                     if (joinDate.isAfter(currentPointer)) {
                         currentPointer = joinDate.startOf('month');
                     }
 
                     const lastEarnedMonth = today.startOf('month');
-                    const isCycleStart = today.isSame(start, 'day') || today.isBefore(start);
+                    const isCycleStart = today.isSame(anchorStart, 'day') || today.isBefore(anchorStart);
 
                     if (isCycleStart) {
-                        const queryStart = start.subtract(freqInMonths, 'month');
-                        const queryEnd = start.subtract(1, 'day');
+                        const monthsDiff = today.diff(anchorStart.startOf('month'), 'month');
+                        if (monthsDiff % freqInMonths === 0) {
+                            const queryStart = anchorStart.subtract(freqInMonths, 'month');
+                            const queryEnd = anchorStart.subtract(1, 'day');
 
-                        const attendanceRecords = await AttendanceDay.findAll({
-                            where: {
-                                employee_id: employeeId,
-                                attendance_date: {
-                                    [Op.between]: [queryStart.format('YYYY-MM-DD'), queryEnd.format('YYYY-MM-DD')]
+                            const attendanceRecords = await AttendanceDay.findAll({
+                                where: {
+                                    employee_id: employeeId,
+                                    attendance_date: {
+                                        [Op.between]: [queryStart.format('YYYY-MM-DD'), queryEnd.format('YYYY-MM-DD')]
+                                    }
+                                },
+                                transaction: t
+                            });
+
+                            let totalPresentDays = 0;
+                            for (const record of attendanceRecords) {
+                                const statusVal = parseInt(record.status, 10);
+                                if ([0, 7, 12].includes(statusVal)) {
+                                    totalPresentDays += 1.0;
+                                } else if ([1, 13].includes(statusVal)) {
+                                    totalPresentDays += 0.5;
                                 }
-                            },
-                            transaction: t
-                        });
-
-                        let totalPresentDays = 0;
-                        for (const record of attendanceRecords) {
-                            const statusVal = parseInt(record.status, 10);
-                            if ([0, 7, 12].includes(statusVal)) {
-                                totalPresentDays += 1.0;
-                            } else if ([1, 13].includes(statusVal)) {
-                                totalPresentDays += 0.5;
                             }
-                        }
 
-                        const reqDays = parseFloat(earningRules.earning_ratio_present_days || 365) || 365;
-                        const earnLeaves = parseFloat(earningRules.earning_ratio_leave_value || 21);
-                        let computedAllocated = (totalPresentDays / reqDays) * earnLeaves;
+                            const reqDays = parseFloat(earningRules.earning_ratio_present_days || 365) || 365;
+                            const earnLeaves = parseFloat(earningRules.earning_ratio_leave_value || 21);
+                            let computedAllocated = (totalPresentDays / reqDays) * earnLeaves;
 
-                        if (earningRules.max_earning_limit) {
-                            const maxLimit = parseFloat(earningRules.max_earning_limit);
-                            if (computedAllocated > maxLimit) {
-                                computedAllocated = maxLimit;
+                            if (earningRules.max_earning_limit) {
+                                const maxLimit = parseFloat(earningRules.max_earning_limit);
+                                if (computedAllocated > maxLimit) {
+                                    computedAllocated = maxLimit;
+                                }
                             }
+                            totalEarned = computedAllocated;
                         }
-                        totalEarned = computedAllocated;
                     } else {
                         while (!currentPointer.isAfter(lastEarnedMonth)) {
                             if (joinDate.isAfter(currentPointer.endOf('month'))) {
@@ -259,7 +267,7 @@ console.log("start",start,"end",end)
                                 continue;
                             }
 
-                            const monthsDiff = currentPointer.diff(start.startOf('month'), 'month');
+                            const monthsDiff = currentPointer.diff(anchorStart.startOf('month'), 'month');
                             if (monthsDiff % freqInMonths === 0) {
                                 const queryStart = currentPointer.subtract(freqInMonths, 'month');
                                 const queryEnd = currentPointer.subtract(1, 'day');
@@ -304,15 +312,20 @@ console.log("start",start,"end",end)
                     // Category-specific fixed periodic accrual (e.g., quarterly or every 4 months)
                     const today = refDate;
                     const joinDate = dayjs(employee.joining_date);
+                    const freqInMonths = getFrequencyMonths(earningRules.frequency);
 
                     let totalEarned = 0;
-                    let currentPointer = start.startOf('month');
+                    let anchorStart = start;
+                    if (template.leave_policy_cycle === 'MONTHLY' && freqInMonths > 1) {
+                        anchorStart = refDate.startOf('year');
+                    }
+
+                    let currentPointer = anchorStart.startOf('month');
                     if (joinDate.isAfter(currentPointer)) {
                         currentPointer = joinDate.startOf('month');
                     }
 
                     const lastEarnedMonth = today.startOf('month');
-                    const freqInMonths = getFrequencyMonths(earningRules.frequency);
 
                     while (!currentPointer.isAfter(lastEarnedMonth)) {
                         if (joinDate.isAfter(currentPointer.endOf('month'))) {
@@ -320,7 +333,7 @@ console.log("start",start,"end",end)
                             continue;
                         }
 
-                        const monthsDiff = currentPointer.diff(start.startOf('month'), 'month');
+                        const monthsDiff = currentPointer.diff(anchorStart.startOf('month'), 'month');
                         if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
                             let credit = parseFloat(earningRules.credit_value || 0);
                             
@@ -941,7 +954,12 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                             // Category-specific fixed periodic accrual (e.g. quarterly or every 4 months)
                             const freqInMonths = getFrequencyMonths(earningRules.frequency);
                             const nextCycleMonth = calculationDate.add(1, 'day').startOf('month');
-                            const monthsDiff = nextCycleMonth.diff(start.startOf('month'), 'month');
+                            
+                            let anchorStart = start;
+                            if (template.leave_policy_cycle === 'MONTHLY' && freqInMonths > 1) {
+                                anchorStart = calculationDate.startOf('year');
+                            }
+                            const monthsDiff = nextCycleMonth.diff(anchorStart.startOf('month'), 'month');
                             
                             if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
                                 shouldProcess = true;
@@ -969,7 +987,12 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
                             // Category-specific attendance-based accrual with custom frequency and custom ratios
                             const freqInMonths = getFrequencyMonths(earningRules.frequency || 'yearly');
                             const nextCycleMonth = calculationDate.add(1, 'day').startOf('month');
-                            const monthsDiff = nextCycleMonth.diff(start.startOf('month'), 'month');
+
+                            let anchorStart = start;
+                            if (template.leave_policy_cycle === 'MONTHLY' && freqInMonths > 1) {
+                                anchorStart = calculationDate.startOf('year');
+                            }
+                            const monthsDiff = nextCycleMonth.diff(anchorStart.startOf('month'), 'month');
 
                             if (monthsDiff > 0 && monthsDiff % freqInMonths === 0) {
                                 shouldProcess = true;

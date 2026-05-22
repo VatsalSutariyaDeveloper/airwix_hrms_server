@@ -1197,11 +1197,11 @@ exports.deleteAttendanceDay = async (req, res) => {
     }, t, {});
 
     // 5. Rebuild attendance day to restore default statuses (Holiday, Weekly Off, etc.)
-    await rebuildAttendanceDay(employee_id, attendance_date, {
-      user_id: req.user.id,
-      company_id: req.user.company_id,
-      branch_id: req.body.branch_id || req.user.branch_id
-    }, t);
+    // await rebuildAttendanceDay(employee_id, attendance_date, {
+    //   user_id: req.user.id,
+    //   company_id: req.user.company_id,
+    //   branch_id: req.body.branch_id || req.user.branch_id
+    // }, t);
 
     await t.commit();
     return res.success(constants.DELETED);

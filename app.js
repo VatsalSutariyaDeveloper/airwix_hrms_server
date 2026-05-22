@@ -138,6 +138,16 @@ if (cluster.isMaster) {
   app.use("/api/system-logs", systemLogRoutes);
   app.use("/api/announcements", announcementRoutes);
   app.use("/api/notifications", notificationRoutes);
+
+  // 🔍 404 JSON Fallback Handler for undefined routes
+  app.use((req, res, next) => {
+    res.status(404).json({
+      success: false,
+      code: "NOT_FOUND",
+      message: `Cannot ${req.method} ${req.originalUrl}. Route not found.`
+    });
+  });
+
   app.use(errorHandler);
 
   app.get("/force-currency-update", async (req, res) => {

@@ -650,7 +650,7 @@ exports.verifyMobileNo = async (req, res) => {
       const deviceWhere = { mobile_no: cleanMobileNo };
       if (device_id) {
         deviceWhere.device_id = device_id;
-        deviceWhere.status = constants.DEVICE_STATUS.PAIRED;
+        deviceWhere.status = { [Op.in]: [constants.DEVICE_STATUS.PAIRED, constants.DEVICE_STATUS.PAIRING] };
       } else {
         deviceWhere.status = constants.DEVICE_STATUS.PAIRING;
       }
@@ -782,7 +782,7 @@ exports.verifyIdentifier = async (req, res) => {
       const deviceWhere = { mobile_no: cleanIdentifier };
       if (device_id) {
         deviceWhere.device_id = device_id;
-        deviceWhere.status = constants.DEVICE_STATUS.PAIRED;
+        deviceWhere.status = { [Op.in]: [constants.DEVICE_STATUS.PAIRED, constants.DEVICE_STATUS.PAIRING] };
       } else {
         deviceWhere.status = constants.DEVICE_STATUS.PAIRING;
       }
@@ -889,6 +889,23 @@ exports.verifyIdentifier = async (req, res) => {
  */
 exports.verifyOtp = async (req, res) => {
   const transaction = await sequelize.transaction();
+  const requestInfo = {
+    route: req.originalUrl || req.url,
+    method: req.method,
+    ip: req.headers["x-forwarded-for"]?.split(",")[0] || req.connection?.remoteAddress || req.ip,
+    userAgent: req.headers["user-agent"] || "unknown",
+    access_by: req.body.access_by,
+    requestTime: new Date().toISOString()
+  };
+  const authLog = (message, data = {}) => console.log(`[VERIFY OTP] ${message}`, { ...requestInfo, ...data });
+  authLog("Incoming request", {
+    body: {
+      identifier: req.body.identifier || req.body.mobile_no || req.body.email || null,
+      device_id: req.body.device_id ? "present" : "missing",
+      hasOtp: !!req.body.otp,
+      access_by: req.body.access_by
+    }
+  });
   try {
     let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
     if (mobile_no) {
@@ -901,11 +918,13 @@ exports.verifyOtp = async (req, res) => {
     }
 
     if (!identifier || !otp) {
+      authLog("Validation failed", { reason: "Missing identifier or OTP", identifier, hasOtp: !!otp });
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, { message: "Email/Mobile and OTP are required." });
     }
 
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+    authLog("Parsed login input", { identifier, isEmail, device_id: device_id || null, access_by: req.body.access_by });
 
     // 1. Fetch User details for login
     const userAttributes = [
@@ -923,6 +942,7 @@ exports.verifyOtp = async (req, res) => {
       include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
       transaction
     });
+    authLog("User lookup completed", { foundUser: !!user, userId: user?.id || null, userStatus: user?.status || null });
 
     let entity = user;
     let isDevice = false;
@@ -937,27 +957,29 @@ exports.verifyOtp = async (req, res) => {
           where: {
             mobile_no: identifier,
             device_id: device_id,
-            status: { [Op.in]: [0, 1] }
+            status: constants.DEVICE_STATUS.PAIRED
           },
           transaction
         });
 
         // 2. If not found, look for a "Pairing" record created by Admin
         if (!device) {
+          authLog("Paired device not found", { identifier, device_id });
           device = await DeviceMaster.findOne({
             where: {
               mobile_no: identifier,
+              device_id: device_id, // ⚡ Crucial: filter by specific device ID!
               status: constants.DEVICE_STATUS.PAIRING
             },
-            order: [['id', 'ASC']], // Take the oldest pending record
             transaction
           });
 
           if (device) {
+            authLog("Pairing record found", { deviceId: device.id, deviceStatus: device.status });
             // Complete the pairing: store hardware ID and activate
             await DeviceMaster.update({
               device_id: device_id || device.device_id,
-              status: 0, // ACTIVE
+              status: constants.DEVICE_STATUS.PAIRED,
               last_login_at: new Date(),
               ip_address: ip_address || req.headers["x-forwarded-for"]?.split(",")[0] || req.connection.remoteAddress || "127.0.0.1",
               device_model,
@@ -971,6 +993,7 @@ exports.verifyOtp = async (req, res) => {
             // Re-fetch updated device
             device = await DeviceMaster.findOne({ where: { id: device.id }, transaction });
           } else {
+            authLog("Unable to pair device", { identifier, device_id, reason: "No pairing record found" });
             await transaction.rollback();
             return res.error(404, { message: "Unable to pair device" });
           }
@@ -980,7 +1003,7 @@ exports.verifyOtp = async (req, res) => {
         device = await DeviceMaster.findOne({
           where: {
             mobile_no: identifier,
-            status: { [Op.in]: [0, 1] }
+            status: constants.DEVICE_STATUS.PAIRING
           },
           transaction
         });
@@ -991,11 +1014,13 @@ exports.verifyOtp = async (req, res) => {
     }
 
     if (!entity) {
+      authLog("Authentication failed", { reason: "User/device not registered", identifier, device_id });
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "User not registered." });
     }
 
     if (entity.status === 1) {
+      authLog("Authentication blocked", { reason: "Entity deactivated", entityId: entity.id, entityType: isDevice ? 'device' : 'user' });
       await transaction.rollback();
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
@@ -1003,11 +1028,14 @@ exports.verifyOtp = async (req, res) => {
     // 2. Verify OTP
     try {
       const isMasterOtp = (otp === "202626") || (process.env.NODE_ENV === 'local' && otp === "123456");
+      authLog("OTP verification started", { isMasterOtp });
       if (!isMasterOtp) {
         await otpService.verifyOtp(identifier, otp);
       }
       await otpService.cleanupOtp(identifier, transaction);
+      authLog("OTP verification succeeded", { identifier, isDevice, entityId: entity?.id || null });
     } catch (e) {
+      authLog("OTP verification failed", { reason: e.message || "Invalid OTP", identifier, device_id, isMasterOtp: otp === "202626" || (process.env.NODE_ENV === 'local' && otp === "123456") });
       await transaction.rollback();
       return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
     }
@@ -1015,6 +1043,7 @@ exports.verifyOtp = async (req, res) => {
     // --- COMPANY SETTINGS CHECK ---
     const companySettings = await getCompanySetting(entity.company_id);
     if (companySettings.enable_otp_login === false) {
+      authLog("OTP login blocked", { reason: "Company disabled OTP login", company_id: entity.company_id });
       await transaction.rollback();
       return res.error(403, { message: "OTP login is disabled for your organization." });
     }
@@ -1022,6 +1051,7 @@ exports.verifyOtp = async (req, res) => {
     // --- AUTO-LOGIN PROCESS ---
     if (req.body.access_by === "application" && !isDevice) {
       if (!entity.is_activated) {
+        authLog("Auto-login blocked", { reason: "Account not activated", entityId: entity.id });
         await transaction.rollback();
         return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
       }
@@ -1031,6 +1061,7 @@ exports.verifyOtp = async (req, res) => {
 
     // Validate Company
     if (!entity.company_id) {
+      authLog("Authentication failed", { reason: "Missing company_id on entity", entityId: entity.id, isDevice });
       await transaction.rollback();
       return res.error(401, "No company linked to your account.");
     }
@@ -1042,6 +1073,7 @@ exports.verifyOtp = async (req, res) => {
     });
 
     if (!company) {
+      authLog("Authentication failed", { reason: "Company record missing or suspended", company_id: entity.company_id, entityId: entity.id });
       await transaction.rollback();
       return res.error(401, "Your assigned company account is suspended.");
     }
@@ -1050,6 +1082,7 @@ exports.verifyOtp = async (req, res) => {
 
     // Validate Branch
     if (!entity.branch_id) {
+      authLog("Authentication failed", { reason: "Missing branch_id on entity", entityId: entity.id, company_id: entity.company_id });
       await transaction.rollback();
       return res.error(401, "No branch assigned to your profile.");
     }
@@ -1062,6 +1095,7 @@ exports.verifyOtp = async (req, res) => {
     if (!isDevice && !isEmployee) {
       const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
       if (!isAdmin && companyAccessList.length === 0) {
+        authLog("Access denied", { reason: "No company access", entityId: entity.id, companyAccessListLength: companyAccessList.length });
         await transaction.rollback();
         return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
       }
@@ -1212,6 +1246,17 @@ exports.verifyOtp = async (req, res) => {
 
     if (!isDevice) clearUserCache(entity.user_id);
 
+    authLog("Verify OTP successful", {
+      response: {
+        status: constants.LOGIN_SUCCESS,
+        login_method: "OTP",
+        entityId: entity.id,
+        isDevice,
+        company_id: entity.company_id,
+        branch_id: entity.branch_id
+      }
+    });
+
     await transaction.commit();
     return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "OTP" });
 
@@ -1278,9 +1323,9 @@ exports.generatePin = async (req, res) => {
         if (!device) {
           device = await commonQuery.findOneRecord(DeviceMaster, {
             mobile_no,
+            device_id: device_id, // ⚡ Crucial: filter by specific device ID!
             status: constants.DEVICE_STATUS.PAIRING
           }, {
-            order: [['id', 'ASC']],
             transaction
           }, transaction, false, {});
 
@@ -1633,9 +1678,9 @@ exports.pinLogin = async (req, res) => {
         if (!device) {
           device = await commonQuery.findOneRecord(DeviceMaster, {
             mobile_no,
+            device_id: device_id, // ⚡ Crucial: filter by specific device ID!
             status: constants.DEVICE_STATUS.PAIRING
           }, {
-            order: [['id', 'ASC']], // Take the oldest pending record
             transaction
           }, transaction, false, {});
 
