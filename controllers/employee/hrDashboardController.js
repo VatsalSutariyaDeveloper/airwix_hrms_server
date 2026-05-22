@@ -70,7 +70,7 @@ const getProbationCompletionData = async (companyId) => {
 
 exports.getCounts = async (req, res) => {
     try {
-        const today = dayjs().format("YYYY-MM-DD");
+        const today = req.body.date ? dayjs(req.body.date).format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD");
 
         const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] }, false);
         const employeeIds = allEmployees?.map(e => e.id) || [];
@@ -362,8 +362,8 @@ exports.getRecentLeaves = async (req, res) => {
 
 exports.getPayrollOverview = async (req, res) => {
     try {
-        const currentMonth = dayjs().month() + 1; // 1-12
-        const currentYear = dayjs().year();
+        const currentMonth = req.body.month ? parseInt(req.body.month) : dayjs().month() + 1; // 1-12
+        const currentYear = req.body.year ? parseInt(req.body.year) : dayjs().year();
 
         // Total Payout for current month (Finalized only)
         const payoutStats = await commonQuery.findAllRecords(Payslip,
