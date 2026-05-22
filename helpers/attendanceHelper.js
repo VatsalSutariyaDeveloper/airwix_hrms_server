@@ -926,7 +926,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       where: {
         employee_id: employeeId,
         attendance_date: date,
-        company_id: { [Op.in]: cleanAllowedCompanyIds },
+        // company_id: { [Op.in]: cleanAllowedCompanyIds },
         status: { [Op.ne]: 2 }
       },
       transaction
@@ -938,7 +938,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const existingDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {
     employee_id: employeeId,
     attendance_date: date,
-    company_id: { [Op.in]: cleanAllowedCompanyIds },
+    // company_id: { [Op.in]: cleanAllowedCompanyIds },
   }, {}, transaction, false, {});
 
   if (existingDay && existingDay.is_locked) {
@@ -953,13 +953,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       existingDay ? { day_id: existingDay.id } : null,
       {
         day_id: null,
-        company_id: { [Op.in]: allowedCompanyIds.filter(id => id !== undefined) },
+        // company_id: { [Op.in]: allowedCompanyIds.filter(id => id !== undefined) },
         punch_time: {
           [Op.between]: [`${date} 00:00:00`, `${date} 23:59:59`],
         }
       }
     ].filter(Boolean),
-    company_id: { [Op.in]: allowedCompanyIds.filter(id => id !== undefined) },
+    // company_id: { [Op.in]: allowedCompanyIds.filter(id => id !== undefined) },
     status: 0,
   }, {
     order: [["punch_time", "ASC"]],
@@ -1524,6 +1524,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   for (let i = 0; i < punches.length - 1; i++) {
     if (String(punches[i].punch_type || "").toUpperCase() === "IN" && String(punches[i + 1].punch_type || "").toUpperCase() === "OUT") {
       totalSpanMinutes += dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute");
+      console.log(`[Rebuild] Adding span from ${dayjs(punches[i].punch_time).format('HH:mm')} to ${dayjs(punches[i + 1].punch_time).format('HH:mm')}: ${dayjs(punches[i + 1].punch_time).diff(dayjs(punches[i].punch_time), "minute")} mins`);
     }
   }
   // [MOD] Deduct unpaid shift breaks (Scheduled Breaks) that occurred while employee was punched in.
@@ -1532,6 +1533,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   if (template && template.paid_break_duration_mins > 0) {
     breakDeduction = Math.max(0, breakDeduction - template.paid_break_duration_mins);
   }
+  console.log(`[Rebuild] Total Span Minutes: ${totalSpanMinutes}, Scheduled Breaks: ${scheduledBreaksMins}, Break Deduction after Paid Breaks: ${breakDeduction}`);
   let finalWorkedMinutes = Math.max(0, totalSpanMinutes - breakDeduction);
   // When it's a holiday or weekly off (ALLOW_NORMAL + BLOCK), set worked minutes to 0 so all time goes to overtime
   // For COMP_OFF: keep finalWorkedMinutes (all time → worked_minutes)
@@ -2425,7 +2427,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     shift_id: meta.forceShiftIdNull ? null : (shift ? shift.id : null),
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
     last_out: (template?.allow_multiple_punches && lastPunchTypeRaw === "IN") ? null : (lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null),
-    worked_minutes: (template?.require_punch_out !== false && !lastOut) ? 0 : Math.floor(Math.max(finalWorkedMinutes, totalOtMins)),
+    worked_minutes: (!lastOut) ? 0 : Math.floor(Math.max(finalWorkedMinutes, totalOtMins)),
     fine_minutes: (fineData.late_entry?.minutes || 0) + (fineData.early_exit?.minutes || 0) + (fineData.excess_breaks?.minutes || 0),
     total_break_minutes: totalBreakMinutes,
     overtime_minutes: totalOtMins,

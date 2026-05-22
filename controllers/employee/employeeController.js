@@ -2082,7 +2082,7 @@ exports.registerFace = async (req, res) => {
         const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
 
         if (req.user.access == "attendance") {
-            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.device_id, { status: 0 });
+            const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, { status: 0 });
             if (!device) {
                 await transaction.rollback();
                 return res.status(401).json({
