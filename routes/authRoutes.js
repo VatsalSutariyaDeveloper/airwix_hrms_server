@@ -45,6 +45,9 @@ router.post("/reset-pin/setup", userController.setupPin);
 router.get("/reset-password/verify/:token", userController.verifySetupToken);
 router.post("/reset-password/setup", userController.setPassword);
 
+// Device Unpairing (Public - accessible when unauthorized)
+router.post("/device/public-unpair", loginController.publicUnpairDevice);
+
 // ==========================
 // 2. PROTECTED ROUTES (Auth Required)
 // ==========================
@@ -79,7 +82,7 @@ router.post("/cron/run-all", async (req, res) => {
     try {
         const { runAllNow } = require("../jobs/cronJobs");
         const asOf = req.body?.date || null;
-        const results = await runAllNow(asOf);
+        const results = await runAllNow(asOf, true);
         return res.ok({ message: `All cron jobs executed${asOf ? ` as of ${asOf}` : ''}.`, results });
     } catch (err) {
         return res.status(500).json({ status: "ERROR", message: err.message });

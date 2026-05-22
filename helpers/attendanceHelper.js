@@ -337,8 +337,6 @@ async function punch(employeeId, meta, transaction = null) {
         // 4. Employee shift NOT assign and overtime NOT allow -> default day cutoff time
         const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
         let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
-        console.log("defaultPunchCutoffHours",defaultPunchCutoffHours)
-        console.log("cutoffTime",cutoffTime)
 
         // CHECK IF OVERTIME ALLOWED
         const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
@@ -351,11 +349,9 @@ async function punch(employeeId, meta, transaction = null) {
           const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
             attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
           }, transaction, false, {});
-          
           if (lastShift) {
             hasShift = true;
             shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
-            
             if (lastShift.is_night_shift || lastShift.end_time < lastShift.start_time) {
               shiftEnd = shiftEnd.add(1, 'day');
             }
@@ -777,15 +773,34 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let ctcMonthly = 0;
   let monthDays = 30;
 
-  const employeeSalaryTemplate = await commonQuery.findOneRecord(
+  // Fetch employee salary template(s) and pick the one applicable for this attendance `date` based on `effective_date`.
+  const templates = await commonQuery.findAllRecords(
     EmployeeSalaryTemplate,
-    {
-      employee_id: employeeId,
-      status: 0,
-    },
-    { attributes: ['ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate'] },
+    { employee_id: employeeId, status: 0 },
+    { attributes: ['id', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'daily_rate', 'hourly_rate', 'effective_date'], raw: true },
     transaction, false, {}
   );
+
+  let employeeSalaryTemplate = null;
+  if (templates && templates.length > 0) {
+    const target = dayjs(date).startOf('day');
+    // Prefer template with latest effective_date <= target
+    let chosen = null;
+    let chosenEff = null;
+    templates.forEach(t => {
+      const eff = t.effective_date ? dayjs(t.effective_date).startOf('day') : dayjs('1900-01-01');
+      if (eff.isAfter(target)) return; // template effective in future
+      if (!chosen || eff.isAfter(chosenEff)) {
+        chosen = t;
+        chosenEff = eff;
+      }
+    });
+    if (!chosen) {
+      // No template effective on/before target: fallback to the first template (or the one without effective_date)
+      chosen = templates.find(t => !t.effective_date) || templates[0];
+    }
+    employeeSalaryTemplate = chosen;
+  }
 
   if (employeeSalaryTemplate) {
     const salaryType = employeeSalaryTemplate.salary_type || "Monthly";
@@ -1204,7 +1219,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Auto-present policy check
     if (emptyStatus === null && template?.auto_mark_present) {
-    // if ((emptyStatus === null || emptyStatus === 5) && template?.auto_mark_present) {
+      // if ((emptyStatus === null || emptyStatus === 5) && template?.auto_mark_present) {
       emptyStatus = 0; // Mark as PRESENT
     }
 
@@ -1761,13 +1776,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
               fineAmount += rate;
               fineData.late_entry = { minutes: lateMinutes, amount: rate, rate, calculation_type: 3 };
               meta.forcedStatus = 1; // Mark as Half Day
-              meta.overrideAutomationNote = `Penalty: Late Entry Tier Limit reached${tierSuffix} (${lateMinutes} mins)`;
+              meta.overrideAutomationNote = `Penalty (Half Day): Late Entry Tier Limit reached${tierSuffix} (${lateMinutes} mins)`;
             } else if (rule.type === '4' || rule.type === 'FULL_DAY') {
               const rate = parseFloat(dailyWage.toFixed(2));
               fineAmount += rate;
               fineData.late_entry = { minutes: lateMinutes, amount: rate, rate, calculation_type: 4 };
               meta.forcedStatus = 5; // Mark as Absent
-              meta.overrideAutomationNote = `Penalty: Late Entry Tier Limit reached${tierSuffix} (${lateMinutes} mins)`;
+              meta.overrideAutomationNote = `Penalty (Absent): Late Entry Tier Limit reached${tierSuffix} (${lateMinutes} mins)`;
             } else if (['5', '6', '7', '8'].includes(rule.type)) {
               const res = getRateIdAndAmount(rule.type, rule.value, lateMinutes, dailyWage, hourlyWage);
               fineData.late_entry = { minutes: lateMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
@@ -3131,23 +3146,21 @@ async function recalculateMonthAbsentFines(employeeId, date, employee, transacti
 
   // Get salary info for wage-based calculations
   const salaryTemplate = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: employeeId, status: 0 }, {}, transaction);
-  
+
   if (!salaryTemplate) {
-      console.log(`[Absent Fine] No salary template found for employee ${employeeId}. Skipping wage-based fines.`);
-      return { amount: 0, data: null };
+    console.log(`[Absent Fine] No salary template found for employee ${employeeId}. Skipping wage-based fines.`);
+    return { amount: 0, data: null };
   }
 
   const ctcMonthly = parseFloat(salaryTemplate.ctc_monthly || 0);
   const daysInMonth = dayjs(date).daysInMonth();
-  
   // Default to 30 days if no specific basis is provided, consistent with payroll defaults
   let dailyWage = ctcMonthly / (salaryTemplate.lwp_calculation_basis === 'FIXED_30_DAYS' ? 30 : daysInMonth);
-  
   // If it's a daily/hourly rate employee
   if (salaryTemplate.salary_type === "Daily") {
-      dailyWage = parseFloat(salaryTemplate.daily_rate || 0);
+    dailyWage = parseFloat(salaryTemplate.daily_rate || 0);
   } else if (salaryTemplate.salary_type === "Hourly") {
-      dailyWage = parseFloat(salaryTemplate.hourly_rate || 0) * 8; // Assuming 8 unit hours
+    dailyWage = parseFloat(salaryTemplate.hourly_rate || 0) * 8; // Assuming 8 unit hours
   }
 
   let totalAbsentFineAmount = 0;

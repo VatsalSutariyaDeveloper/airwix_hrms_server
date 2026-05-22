@@ -23,6 +23,28 @@ const apiLogger = async (req, res, next) => {
         return;
       }
 
+      // Safely parse the response body
+      let parsedResponse = null;
+      if (responseBody) {
+        if (typeof responseBody === "string") {
+          try {
+            parsedResponse = JSON.parse(responseBody);
+          } catch (jsonErr) {
+            parsedResponse = { raw_response: responseBody };
+          }
+        } else {
+          parsedResponse = responseBody;
+        }
+      }
+
+      // Inject the detailed authentication error reason if it exists
+      if (req.auth_error_detail) {
+        if (!parsedResponse || typeof parsedResponse !== "object") {
+          parsedResponse = { response_data: parsedResponse };
+        }
+        parsedResponse.auth_error_detail = req.auth_error_detail;
+      }
+
       const logData = {
         company_id: store?.companyId || null,
         branch_id: store?.branchId || null,
@@ -32,9 +54,10 @@ const apiLogger = async (req, res, next) => {
         status_code: res.statusCode,
         ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
         request_body: req.method !== "GET" ? req.body : null,
-        response_body: responseBody ? (typeof responseBody === "string" ? JSON.parse(responseBody) : responseBody) : null,
+        response_body: parsedResponse,
         duration: duration,
         user_agent: req.headers["user-agent"],
+        status: res.statusCode >= 400 ? 1 : 0 // 0 = Success, 1 = Error
       };
 
       // Mask sensitive fields

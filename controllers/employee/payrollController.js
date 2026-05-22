@@ -1,7 +1,9 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType, CompanySettings } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, SalaryRevisionHistory, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType, CompanySettings } = require("../../models");
 const { commonQuery, handleError, fail, formatDateTime, constants, applyRounding } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
+const isBetween = require("dayjs/plugin/isBetween");
+dayjs.extend(isBetween);
 const pdfService = require("../../helpers/functions/pdfService");
 const path = require("path");
 const fs = require("fs");
@@ -314,7 +316,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const totalPresentDays = presentDays + (halfDays * 0.5);
 
     // Step B: Calculate Gross
-    let monthlyGross = parseFloat(template.ctc_monthly || 0);
+    const currentMonthlyGross = parseFloat(template.ctc_monthly || 0);
+    let monthlyGross = currentMonthlyGross;
     const dailyRate = parseFloat(template.daily_rate || 0);
     const hourlyRate = parseFloat(template.hourly_rate || 0);
     const salaryType = template.salary_type || "Monthly";
@@ -353,6 +356,150 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         }
     }
 
+    const employeeEffectiveDate = template.effective_date ? dayjs(template.effective_date) : null;
+    let salarySplitInfo = {
+        isActive: false,
+        effectiveDate: null,
+        oldMonthlyGross: currentMonthlyGross,
+        newMonthlyGross: currentMonthlyGross,
+        weightedMonthlyGross: currentMonthlyGross,
+        daysBefore: 0,
+        daysAfter: 0,
+        beforePayable: 0,
+        afterPayable: 0,
+        splitCounter: null
+    };
+    let splitCurrentGross = null;
+    let splitLwpDeduction = null;
+
+    const getCalculationDenominator = () => {
+        if (template.lwp_calculation_basis === "FIXED_30_DAYS") return 30;
+        if (template.lwp_calculation_basis === "WORKING_DAYS") return daysInCalculation;
+        return daysInMonth;
+    };
+
+    if (salaryType === "Monthly" && employeeEffectiveDate && employeeEffectiveDate.isValid()) {
+        const revisionCondition = {
+            employee_id,
+            effective_date: employeeEffectiveDate.format('YYYY-MM-DD'),
+            status: 1
+        };
+        if (employeeSalaryTemplate?.id) revisionCondition.new_template_id = employeeSalaryTemplate.id;
+
+        const revisionRecord = await commonQuery.findOneRecord(SalaryRevisionHistory, revisionCondition, {
+            order: [['revision_date', 'DESC']]
+        }, transaction);
+
+        const oldMonthlyGross = parseFloat(revisionRecord?.previous_ctc || currentMonthlyGross);
+        const newMonthlyGross = parseFloat(revisionRecord?.new_ctc || currentMonthlyGross);
+        salarySplitInfo.oldMonthlyGross = oldMonthlyGross;
+        salarySplitInfo.newMonthlyGross = newMonthlyGross;
+        salarySplitInfo.effectiveDate = employeeEffectiveDate.format('YYYY-MM-DD');
+
+        const startDt = dayjs(startDate);
+        const endDt = dayjs(endDate);
+        const denominator = getCalculationDenominator() || 1;
+
+        if (employeeEffectiveDate.isAfter(endDt) && revisionRecord) {
+            monthlyGross = oldMonthlyGross;
+        } else if (employeeEffectiveDate.isBetween(startDt, endDt, null, '[]') && oldMonthlyGross !== newMonthlyGross) {
+            const countWorkingDays = (fromDate, toDate) => {
+                if (!fromDate || !toDate || !fromDate.isValid() || !toDate.isValid() || fromDate.isAfter(toDate)) return 0;
+                if (template.lwp_calculation_basis !== "WORKING_DAYS") {
+                    return toDate.diff(fromDate, 'day') + 1;
+                }
+                const weeklyOffsBefore = (offDays.weeklyOffList || []).filter(off => {
+                    const offDate = dayjs(off.date);
+                    return offDate.isBetween(fromDate, toDate, null, '[]');
+                }).length;
+                return Math.max(0, toDate.diff(fromDate, 'day') + 1 - weeklyOffsBefore);
+            };
+
+            const beforeSegmentEnd = employeeEffectiveDate.subtract(1, 'day');
+            const daysBefore = countWorkingDays(startDt, beforeSegmentEnd);
+            const daysAfter = Math.max(0, denominator - daysBefore);
+            monthlyGross = ((oldMonthlyGross * daysBefore) + (newMonthlyGross * daysAfter)) / denominator;
+            salarySplitInfo.isActive = true;
+            salarySplitInfo.weightedMonthlyGross = monthlyGross;
+            salarySplitInfo.daysBefore = daysBefore;
+            salarySplitInfo.daysAfter = daysAfter;
+
+            const splitCounter = {
+                before: { present: 0, half: 0, uncategorizedHalf: 0, leave: 0, holiday: 0, absent: 0, unpaidLeave: 0 },
+                after: { present: 0, half: 0, uncategorizedHalf: 0, leave: 0, holiday: 0, absent: 0, unpaidLeave: 0 }
+            };
+            const attendanceHolidayDates = new Set();
+
+            attendanceRecords.forEach(day => {
+                const dayKey = dayjs(day.attendance_date).format('YYYY-MM-DD');
+                const segmentKey = dayjs(dayKey).isBefore(employeeEffectiveDate, 'day') ? 'before' : 'after';
+                const catInfo = day.leave_category_id ? leaveParamMap.get(day.leave_category_id) : null;
+                const status = parseInt(day.status);
+
+                const isWeeklyOff = offDays.weeklyOffList.find(wo => wo.date === dayKey);
+                const isHoliday = offDays.holidayList.find(h => dayjs(h.date).format('YYYY-MM-DD') === dayKey);
+                const lwpBasis = employeeSalaryTemplate?.lwp_calculation_basis || 'WORKING_DAYS';
+
+                switch (status) {
+                    case 0: case 12:
+                        if (lwpBasis === 'WORKING_DAYS') {
+                            if (!isWeeklyOff && !isHoliday) {
+                                splitCounter[segmentKey].present++;
+                            }
+                        } else {
+                            splitCounter[segmentKey].present++;
+                        }
+                        break;
+                    case 1: case 13:
+                        splitCounter[segmentKey].half++;
+                        if (catInfo) {
+                            if (!catInfo.is_paid) splitCounter[segmentKey].unpaidLeave += 0.5;
+                            else splitCounter[segmentKey].leave += 0.5;
+                        } else {
+                            splitCounter[segmentKey].uncategorizedHalf++;
+                        }
+                        break;
+                    case 4:
+                        splitCounter[segmentKey].holiday++;
+                        attendanceHolidayDates.add(dayKey);
+                        break;
+                    case 5:
+                        splitCounter[segmentKey].absent++;
+                        break;
+                    case 6:
+                        if (catInfo) {
+                            if (!catInfo.is_paid) splitCounter[segmentKey].unpaidLeave++;
+                            else splitCounter[segmentKey].leave++;
+                        } else {
+                            splitCounter[segmentKey].leave++;
+                        }
+                        break;
+                }
+            });
+
+            (offDays.goneHolidayList || []).forEach(h => {
+                const holidayDate = dayjs(h.date).format('YYYY-MM-DD');
+                if (attendanceHolidayDates.has(holidayDate)) return;
+                const segmentKey = dayjs(holidayDate).isBefore(employeeEffectiveDate, 'day') ? 'before' : 'after';
+                splitCounter[segmentKey].holiday++;
+            });
+
+            const beforePayable = splitCounter.before.present + (splitCounter.before.half * 0.5) + splitCounter.before.leave + splitCounter.before.holiday;
+            const afterPayable = splitCounter.after.present + (splitCounter.after.half * 0.5) + splitCounter.after.leave + splitCounter.after.holiday;
+            
+            salarySplitInfo.beforePayable = beforePayable;
+            salarySplitInfo.afterPayable = afterPayable;
+            salarySplitInfo.splitCounter = splitCounter;
+
+            const oldDaily = oldMonthlyGross / denominator;
+            const newDaily = newMonthlyGross / denominator;
+
+            splitCurrentGross = (oldDaily * beforePayable) + (newDaily * afterPayable);
+            splitLwpDeduction = (oldDaily * (splitCounter.before.absent + (splitCounter.before.uncategorizedHalf * 0.5) + splitCounter.before.unpaidLeave))
+                + (newDaily * (splitCounter.after.absent + (splitCounter.after.uncategorizedHalf * 0.5) + splitCounter.after.unpaidLeave));
+        }
+    }
+
     let perDaySalary = monthlyGross / (daysInCalculation || 1);
     let perHourSalary = perDaySalary / unitWorkingHours;
 
@@ -370,7 +517,16 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         monthlyGross = hourlyRate * (totalWorkedMins / 60);
     }
 
-    const lwpDeductionTotal = salaryType === "Monthly" ? (totalLWP * perDaySalary) : 0;
+    if (salaryType === "Monthly") {
+        if (splitCurrentGross === null) {
+            splitCurrentGross = (monthlyGross / (daysInCalculation || 1)) * payableDaysValue;
+        }
+        if (splitLwpDeduction === null) {
+            splitLwpDeduction = (totalLWP * perDaySalary);
+        }
+    }
+
+    const lwpDeductionTotal = salaryType === "Monthly" ? splitLwpDeduction : 0;
 
     // Check if Overtime should be included in total earnings based on attendance configuration
     const activeAttendanceTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
@@ -446,7 +602,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Note: Encashments are tracked separately in encashment_history, not added to earnings
 
     // Calculate current pro-rated gross/ctc base for formulas to use current amounts
-    const { roundedAmount: roundedCurrentGross } = applyRounding((monthlyGross / (daysInCalculation || 1)) * payableDaysValue, roundOffType);
+    const { roundedAmount: roundedCurrentGross } = applyRounding((splitCurrentGross !== null ? splitCurrentGross : ((monthlyGross / (daysInCalculation || 1)) * payableDaysValue)), roundOffType);
     const currentGross = roundedCurrentGross;
 
     // Values map for formula evaluation - initialize with globals
@@ -497,7 +653,28 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             // Apply Attendance/LWP Impact to Basic immediately in Pass 1
             let actualAmount = amount;
-            if (salaryType === "Hourly") {
+            if (salarySplitInfo.isActive) {
+                const oldComponentMonthlyAmount = salarySplitInfo.newMonthlyGross > 0 ? (amount * (salarySplitInfo.oldMonthlyGross / salarySplitInfo.newMonthlyGross)) : 0;
+                const newComponentMonthlyAmount = amount;
+                const oldDaily = oldComponentMonthlyAmount / (daysInCalculation || 1);
+                const newDaily = newComponentMonthlyAmount / (daysInCalculation || 1);
+
+                if (calcType === 'ATTENDANCE_BASED') {
+                    actualAmount = (oldDaily * salarySplitInfo.beforePayable) + (newDaily * salarySplitInfo.afterPayable);
+                } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted)) {
+                    const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
+                    if (!isAlreadyProRated) {
+                        const beforeLWP = salarySplitInfo.splitCounter.before.absent + (salarySplitInfo.splitCounter.before.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.before.unpaidLeave;
+                        const afterLWP = salarySplitInfo.splitCounter.after.absent + (salarySplitInfo.splitCounter.after.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.after.unpaidLeave;
+                        
+                        const oldSegmentVal = (oldComponentMonthlyAmount * (salarySplitInfo.daysBefore / (daysInCalculation || 1))) - (oldDaily * beforeLWP);
+                        const newSegmentVal = (newComponentMonthlyAmount * (salarySplitInfo.daysAfter / (daysInCalculation || 1))) - (newDaily * afterLWP);
+                        actualAmount = oldSegmentVal + newSegmentVal;
+                    }
+                } else if (calcType === 'FIXED') {
+                    actualAmount = (oldDaily * salarySplitInfo.daysBefore) + (newDaily * salarySplitInfo.daysAfter);
+                }
+            } else if (salaryType === "Hourly") {
                 const totalPossibleHours = daysInCalculation * unitWorkingHours;
                 const workedHours = totalWorkedMins / 60;
                 const hourRatio = totalPossibleHours > 0 ? workedHours / totalPossibleHours : 0;
@@ -548,7 +725,29 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         let actualAmount = amount;
         const isFoodComp = comp.component_name.toLowerCase().includes('food') || comp.component_name.toLowerCase().includes('canteen');
 
-        if (salaryType === "Hourly") {
+        if (salarySplitInfo.isActive) {
+            const oldComponentMonthlyAmount = salarySplitInfo.newMonthlyGross > 0 ? (amount * (salarySplitInfo.oldMonthlyGross / salarySplitInfo.newMonthlyGross)) : 0;
+            const newComponentMonthlyAmount = amount;
+            const oldDaily = oldComponentMonthlyAmount / (daysInCalculation || 1);
+            const newDaily = newComponentMonthlyAmount / (daysInCalculation || 1);
+
+            if (calcType === 'ATTENDANCE_BASED') {
+                actualAmount = (oldDaily * salarySplitInfo.beforePayable) + (newDaily * salarySplitInfo.afterPayable);
+            } else if (calcType !== 'FIXED' && (comp.is_lwp_impacted || plain.is_lwp_impacted) && !isFoodComp) {
+                // Only apply LWP impact if not already pro-rated via percentage/formula base
+                const isAlreadyProRated = (calcType === 'PERCENTAGE' && ['BASIC', 'GROSS', 'CTC'].includes(percentageOf)) || (calcType === 'FORMULA' && formula && (formula.includes('BASIC') || formula.includes('GROSS') || formula.includes('CTC')));
+                if (!isAlreadyProRated) {
+                    const beforeLWP = salarySplitInfo.splitCounter.before.absent + (salarySplitInfo.splitCounter.before.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.before.unpaidLeave;
+                    const afterLWP = salarySplitInfo.splitCounter.after.absent + (salarySplitInfo.splitCounter.after.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.after.unpaidLeave;
+                    
+                    const oldSegmentVal = (oldComponentMonthlyAmount * (salarySplitInfo.daysBefore / (daysInCalculation || 1))) - (oldDaily * beforeLWP);
+                    const newSegmentVal = (newComponentMonthlyAmount * (salarySplitInfo.daysAfter / (daysInCalculation || 1))) - (newDaily * afterLWP);
+                    actualAmount = oldSegmentVal + newSegmentVal;
+                }
+            } else if (calcType === 'FIXED' && !isFoodComp) {
+                actualAmount = (oldDaily * salarySplitInfo.daysBefore) + (newDaily * salarySplitInfo.daysAfter);
+            }
+        } else if (salaryType === "Hourly") {
             const totalPossibleHours = daysInCalculation * unitWorkingHours;
             const workedHours = totalWorkedMins / 60;
             const hourRatio = totalPossibleHours > 0 ? workedHours / totalPossibleHours : 0;
@@ -978,6 +1177,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             // advanceAmount: totalAdvance.toFixed(2),
             encashmentAmount: encashmentAmount,
             tdsPercentage: tdsPercentage.toFixed(2),
+            salary_split: salarySplitInfo.effectiveDate ? {
+                effective_date: salarySplitInfo.effectiveDate,
+                old_ctc_monthly: salarySplitInfo.oldMonthlyGross,
+                new_ctc_monthly: salarySplitInfo.newMonthlyGross
+            } : null,
             netPayable: roundedNetPayable,
             unroundedNetPayable: netPayable,
             roundOffAmount: roundOffAmount,
@@ -2465,7 +2669,7 @@ exports.getSalaryOverview = async (req, res) => {
             // 3. A finalized payslip already exists (very fast, no heavy calc)
             const isRequested = reqMonth == m.month && reqYear == m.year;
             const shouldLoadDetails = isRequested || isCurrentMonth;
-
+            
             // Fetch Payslip (Fast)
             const payslip = await commonQuery.findOneRecord(Payslip, {
                 employee_id,

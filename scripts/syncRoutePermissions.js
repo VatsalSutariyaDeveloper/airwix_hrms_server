@@ -127,7 +127,12 @@ async function sync() {
             const defaultAction = actionMap[route.method] || 'view';
             
             // 1. Try matching by entity_url
-            const cleanPath = route.path.startsWith('/') ? route.path.substring(1) : route.path;
+            let cleanPath = route.path.startsWith('/') ? route.path.substring(1) : route.path;
+            if (cleanPath === 'employee') {
+                cleanPath = 'employees';
+            } else if (cleanPath.startsWith('employee/')) {
+                cleanPath = 'employees/' + cleanPath.substring(9);
+            }
             
             // Find entity whose URL is a prefix of this route
             // Sort by length descending to match most specific first

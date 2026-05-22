@@ -22,9 +22,9 @@ const jobLogCleanup = async (asOf = null, batch_id = null) => {
     console.log('✅ Log cleanup completed.');
 };
 
-const jobMonthlyLeaveAccrual = async (asOf = null, batch_id = null) => {
+const jobMonthlyLeaveAccrual = async (asOf = null, batch_id = null, isManual = false) => {
     console.log('⏰ Running monthly leave accrual task...');
-    await LeaveBalanceService.processMonthlyAccruals(asOf, batch_id);
+    await LeaveBalanceService.processMonthlyAccruals(asOf, batch_id, isManual);
     console.log('✅ Monthly leave accruals completed.');
 };
 
@@ -231,7 +231,7 @@ const ALL_JOBS = [
 /**
  * Wraps a job function with tracking (logging start/end/status to CronJobRun)
  */
-const runJobWithTracking = async (job, asOf = null) => {
+const runJobWithTracking = async (job, asOf = null, isManual = false) => {
     console.log(`\n▶️  Starting: ${job.name}`);
     const start = Date.now();
 
@@ -247,7 +247,7 @@ const runJobWithTracking = async (job, asOf = null) => {
         // Execute the actual job, passing the batch_id (run.id)
         // Note: Individual services must be updated to accept and use this batch_id for logging.
         await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true, batchId: run.id }, async () => {
-            await job.fn(asOf, run.id);
+            await job.fn(asOf, run.id, isManual);
         });
 
         const duration = ((Date.now() - start) / 1000).toFixed(2);
@@ -355,13 +355,13 @@ const revertCronJobRun = async (runId) => {
 // Run all jobs immediately (for testing / manual trigger)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const runAllNow = async (asOf = null) => {
+const runAllNow = async (asOf = null, isManual = false) => {
     const label = asOf ? `[AS OF: ${asOf}]` : '[LIVE DATE]';
     console.log(`\n🚀 ===== MANUAL CRON RUN STARTED ${label} =====\n`);
     const results = [];
 
     for (const job of ALL_JOBS) {
-        const result = await runJobWithTracking(job, asOf);
+        const result = await runJobWithTracking(job, asOf, isManual);
         results.push(result);
     }
 
@@ -383,7 +383,7 @@ const runJobNow = async (jobKey, asOf = null) => {
         throw new Error(`Unknown job: "${jobKey}". Available: ${ALL_JOBS.map(j => j.name).join(', ')}`);
     }
     const label = asOf ? ` [AS OF: ${asOf}]` : ' [LIVE DATE]';
-    return await runJobWithTracking(job, asOf);
+    return await runJobWithTracking(job, asOf, true);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

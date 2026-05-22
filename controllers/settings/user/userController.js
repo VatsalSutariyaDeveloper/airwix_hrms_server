@@ -246,12 +246,56 @@ exports.create = async (req, res) => {
             // ignore
           }
 
+          const appName = process.env.APP_NAME || "AIRWIX PAYROLL";
+          let empName = newUser.user_name || "User";
+
+          // Clean up newlines, carriage returns, tabs, and multiple spaces that might be present in names
+          empName = empName.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+          let compName = companyName.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+
+          // The message layout is:
+          // "Hi " + empName + ", your salary, leave & attendance details are available on " + appName + ": https://hrms.airwix.in/AWXTEC-PY - Team " + compName
+          // Static text parts sum up to 104 characters.
+          const staticLength = 3 + 59 + 42; // 104
+          const allowedDynamicLength = 160 - staticLength - appName.length;
+
+          const truncateToWordBoundary = (str, maxLength) => {
+              if (!str) return "";
+              if (str.length <= maxLength) return str;
+              let truncated = str.slice(0, maxLength);
+              const nextChar = str[maxLength];
+              if (nextChar === " " || nextChar === undefined) {
+                  return truncated.trim();
+              }
+              const lastSpaceIdx = truncated.lastIndexOf(" ");
+              if (lastSpaceIdx !== -1) {
+                  truncated = truncated.slice(0, lastSpaceIdx);
+              }
+              return truncated.trim();
+          };
+
+          if (empName.length + compName.length > allowedDynamicLength) {
+              const halfAlloc = Math.floor(allowedDynamicLength / 2);
+              if (empName.length > halfAlloc && compName.length > halfAlloc) {
+                  empName = truncateToWordBoundary(empName, halfAlloc);
+                  const remainingBudget = allowedDynamicLength - empName.length;
+                  compName = truncateToWordBoundary(compName, remainingBudget);
+              } else if (compName.length <= halfAlloc) {
+                  empName = truncateToWordBoundary(empName, allowedDynamicLength - compName.length);
+              } else {
+                  compName = truncateToWordBoundary(compName, allowedDynamicLength - empName.length);
+              }
+          }
+
+          const actualMessage = `Hi ${empName}, your salary, leave & attendance details are available on ${appName}: https://hrms.airwix.in/AWXTEC-PY - Team ${compName}`;
+          console.log(`[INVITE-SMS] Actual message to send: "${actualMessage}" (Length: ${actualMessage.length} chars)`);
+
           await sendTemplateSMS(mobileNo, templateId, {
-            employee_name: newUser.user_name || "User",
-            application_name: process.env.APP_NAME || "AIRWIX PAYROLL",
-            company_name: companyName,
+            employee_name: empName,
+            application_name: appName,
+            company_name: compName,
           });
-          console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}`);
+          console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}. Adjusted Name: "${empName}", Company: "${compName}"`);
         }
       } catch (err) {
         console.error("[INVITE-SMS] Failed to send invitation SMS:", err?.response?.data || err.message || err);

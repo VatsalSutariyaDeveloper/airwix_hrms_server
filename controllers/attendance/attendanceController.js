@@ -1197,11 +1197,11 @@ exports.deleteAttendanceDay = async (req, res) => {
     }, t, {});
 
     // 5. Rebuild attendance day to restore default statuses (Holiday, Weekly Off, etc.)
-    await rebuildAttendanceDay(employee_id, attendance_date, {
-      user_id: req.user.id,
-      company_id: req.user.company_id,
-      branch_id: req.body.branch_id || req.user.branch_id
-    }, t);
+    // await rebuildAttendanceDay(employee_id, attendance_date, {
+    //   user_id: req.user.id,
+    //   company_id: req.user.company_id,
+    //   branch_id: req.body.branch_id || req.user.branch_id
+    // }, t);
 
     await t.commit();
     return res.success(constants.DELETED);
@@ -1447,9 +1447,11 @@ exports.getAttendanceDayDetails = async (req, res) => {
     // 3. Process AttendanceDay and add image URLs to punches
     let attendanceDayJson = null;
     let punchesWithImages = [];
+    let employeeDetails = null;
 
     if (attendanceDay) {
       attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
+      employeeDetails = attendanceDayJson.employee ? attendanceDayJson.employee : null;
 
       // Enrich with schedule flags
       const dayOfWeek = dayjs(attendance_date).day();
@@ -1510,8 +1512,16 @@ exports.getAttendanceDayDetails = async (req, res) => {
       }
     }
 
+    if (!attendanceDayJson) {
+      const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
+        attributes: ['id', 'first_name', 'employee_code']
+      });
+      employeeDetails = employee ? (employee.get ? employee.toJSON() : employee) : null;
+    }
+
     return res.ok({
       attendanceDay: attendanceDayJson,
+      employee: employeeDetails
       // punches: punchesWithImages
     });
   } catch (err) {

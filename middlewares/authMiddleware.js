@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 const { User, CompanyMaster, BranchMaster, DeviceMaster } = require("../models");
-const { constants } = require("../helpers");
+const { constants, deviceHelper } = require("../helpers");
 
 // In-memory token blacklist
 const tokenBlacklist = new Set();
@@ -29,16 +29,19 @@ async function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
+      req.auth_error_detail = "Authorization header is missing in request headers.";
       return res.status(401).json({ message: "Authorization header missing" });
     }
 
     const token = authHeader.split(" ")[1];
     if (!token) {
+      req.auth_error_detail = "Bearer token is missing in Authorization header.";
       return res.status(401).json({ message: "Token missing" });
     }
 
     // Check if token is blacklisted
     if (isTokenBlacklisted(token)) {
+      req.auth_error_detail = "The token is blacklisted (the user has logged out).";
       return res.status(401).json({ message: "Unauthorized" });
     }
 
@@ -47,17 +50,26 @@ async function authMiddleware(req, res, next) {
     // Verify User, Company, and Branch status
     if (decoded.id && !decoded.device_id) {
       const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
-      if (!user) return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
+      if (!user) {
+        req.auth_error_detail = `User with ID ${decoded.id} is inactive or does not exist.`;
+        return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
+      }
     }
 
     if (decoded.company_id) {
       const company = await CompanyMaster.findOne({ where: { id: decoded.company_id, status: 0 } });
-      if (!company) return res.status(401).json({ success: false, message: "Unauthorized - Company is inactive or not exist" });
+      if (!company) {
+        req.auth_error_detail = `Company with ID ${decoded.company_id} is inactive or suspended.`;
+        return res.status(401).json({ success: false, message: "Unauthorized - Company is inactive or not exist" });
+      }
     }
 
     if (decoded.branch_id) {
       const branch = await BranchMaster.findOne({ where: { id: decoded.branch_id, status: 0 } });
-      if (!branch) return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
+      if (!branch) {
+        req.auth_error_detail = `Branch with ID ${decoded.branch_id} is inactive or deleted.`;
+        return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
+      }
     }
 
     // 🚀 NEW: Verify Device ID if present (Multi-device security)
@@ -70,8 +82,37 @@ async function authMiddleware(req, res, next) {
         } 
       });
       if (!device) {
+        const existingDevice = await DeviceMaster.findOne({ where: { id: decoded.id } });
+        if (!existingDevice) {
+          req.auth_error_detail = `Device with ID ${decoded.id} does not exist in DeviceMaster.`;
+        } else if (existingDevice.device_id !== decoded.device_id) {
+          req.auth_error_detail = `Device ID mismatch: DB has '${existingDevice.device_id}', client sent '${decoded.device_id}'.`;
+        } else {
+          req.auth_error_detail = `Device ID '${decoded.id}' exists but status is '${existingDevice.status}' (expected 0/active).`;
+        }
+
+        try {
+          if (existingDevice && existingDevice.status !== 0 && existingDevice.status !== 3) {
+            const newDeviceId = await deviceHelper.generateUniqueDeviceId(existingDevice.company_id, existingDevice.branch_id);
+            await DeviceMaster.update({
+              device_id: newDeviceId,
+              ip_address: null,
+              last_login_at: null,
+              os_version: null,
+              brand_name: null,
+              device_model: null,
+              status: constants.DEVICE_STATUS.PAIRING
+            }, {
+              where: { id: existingDevice.id }
+            });
+            console.log(`🔌 [AUTO-UNPAIR] Device ID ${existingDevice.id} auto-switched to PAIRING mode.`);
+          }
+        } catch (unpairErr) {
+          console.error("Auto-unpair on status mismatch failed:", unpairErr.message);
+        }
         return res.status(401).json({ success: false, message: "Unauthorized - Device session is invalid or revoked" });
       }
+
 
       // 💓 Heartbeat: Update last activity for online status tracking
       DeviceMaster.update(
@@ -96,6 +137,7 @@ async function authMiddleware(req, res, next) {
       is_super_admin: decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN,
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
       access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
+      device_id: decoded.device_id || null,
       fcm_token: decoded.fcm_token || null
     };
 // console.log("req.user",req.user)
@@ -122,6 +164,16 @@ async function authMiddleware(req, res, next) {
     );
 
   } catch (err) {
+    req.auth_error_detail = `JWT validation failed: ${err.message} (${err.name}).`;
+    // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
+    console.error("🔐 [AUTH FAILED] JWT Verification Error:", {
+      message: err.message,
+      name: err.name,
+      expiredAt: err.expiredAt || null,
+      path: req.path,
+      ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip
+    });
+    
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 }
