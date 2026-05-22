@@ -1031,7 +1031,7 @@ exports.updateAttendanceDay = async (req, res) => {
       return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
     }
 
-    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, { company_id: true });
+    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, {});
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.

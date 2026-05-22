@@ -1,7 +1,7 @@
 const { commonQuery, handleError } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster, CanteenAttendance } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster, CanteenAttendance, DeviceMaster } = require("../../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -533,9 +533,71 @@ exports.getAttendanceReport = async (req, res) => {
       ["employee_code", true, true],
     ];
 
+    const reqBodyCopy = { ...req.body };
+    let allMatchingEmployeeIds = [];
+    if (req.body.search && req.body.search.trim() !== '') {
+      const searchString = req.body.search.trim();
+      const searchLike = `%${searchString}%`;
+
+      // A. Query Employee table for first_name or employee_code
+      const employeesMatchingSearch = await Employee.findAll({
+        where: {
+          [Op.or]: [
+            { first_name: { [Op.iLike]: searchLike } },
+            { employee_code: { [Op.iLike]: searchLike } }
+          ],
+          ...buildEmploymentRangeWhere(startDate, endDate)
+        },
+        attributes: ['id'],
+        raw: true
+      });
+
+      // B. Query DeviceMaster for matching device_name
+      const matchingDevices = await DeviceMaster.findAll({
+        where: {
+          device_name: {
+            [Op.iLike]: `%${searchString}%`
+          }
+        },
+        attributes: ['id'],
+        raw: true
+      });
+
+      let employeeIdsFromDevices = [];
+      if (matchingDevices.length > 0) {
+        const deviceIds = matchingDevices.map(d => d.id);
+        const devicePunches = await AttendancePunch.findAll({
+          where: {
+            device_id: { [Op.in]: deviceIds },
+            status: 0,
+            [Op.and]: [
+              sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
+            ]
+          },
+          attributes: ['employee_id'],
+          raw: true
+        });
+        employeeIdsFromDevices = devicePunches.map(p => p.employee_id).filter(Boolean);
+      }
+
+      allMatchingEmployeeIds = [...new Set([
+        ...employeesMatchingSearch.map(e => e.id),
+        ...employeeIdsFromDevices
+      ])];
+
+      if (allMatchingEmployeeIds.length === 0) {
+        employeeFilter.id = null; // Forces empty result
+      } else {
+        employeeFilter.id = { [Op.in]: allMatchingEmployeeIds };
+      }
+      
+      // Remove search term so fetchPaginatedData doesn't run redundant name search filter
+      delete reqBodyCopy.search;
+    }
+
     const employees = await commonQuery.fetchPaginatedData(
       Employee,
-      buildEmployeePaginationBody(req.body, employeeFilter),
+      buildEmployeePaginationBody(reqBodyCopy, employeeFilter),
       fieldConfig,
       {
         attributes: ['id', 'first_name', 'employee_code', 'employee_type', 'worker_type', 'holiday_template', 'weekly_off_template', 'joining_date', 'exit_date', 'branch_id', 'company_id'],
@@ -575,6 +637,9 @@ exports.getAttendanceReport = async (req, res) => {
         sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
       ]
     }, {
+      include: [
+        { model: DeviceMaster, as: 'device', attributes: ['id', 'device_name'] }
+      ],
       order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
     }, null, {});
 
@@ -619,7 +684,8 @@ exports.getAttendanceReport = async (req, res) => {
       punchesByEmployeeDate.get(key).push({
         punch_time: punch.punch_time,
         punch_type: punch.punch_type,
-        formatted_time: dayjs(punch.punch_time).format('h:mm A')
+        formatted_time: dayjs(punch.punch_time).format('h:mm A'),
+        device_name: punch.device ? punch.device.device_name : '-'
       });
     });
 
@@ -812,9 +878,10 @@ exports.getAttendanceReport = async (req, res) => {
               // Start new pair if previous IN didn't have OUT
               punchPairs.push(currentPair);
             }
-            currentPair = { in: punch.formatted_time, out: null };
+            currentPair = { in: punch.formatted_time, in_device_name: punch.device_name || '-', out: null, out_device_name: '-' };
           } else if (punch.punch_type === 'OUT' && currentPair && currentPair.in) {
             currentPair.out = punch.formatted_time;
+            currentPair.out_device_name = punch.device_name || '-';
             punchPairs.push(currentPair);
             currentPair = null;
           }
