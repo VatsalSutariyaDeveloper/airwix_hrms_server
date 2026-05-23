@@ -25,9 +25,9 @@ exports.sessionData = async (req, res) => {
 
     // 1. Validate Company (Standard Sequelize)
     const record = await CompanyMaster.findOne({
-        where: { id: company_id },
-        attributes: ['id', 'company_id', 'organization_id'],
-        transaction
+      where: { id: company_id },
+      attributes: ['id', 'company_id', 'organization_id'],
+      transaction
     });
 
     if (!record) {
@@ -41,18 +41,18 @@ exports.sessionData = async (req, res) => {
     const userData = await User.findOne({
       where: { id: user_id },
       attributes: ['id', 'user_name', 'email', 'role_id', 'is_super_admin', 'mobile_no', 'profile_image', 'company_access', 'branch_access', 'is_login', 'status', 'branch_id', 'company_id', 'employee_id'],
-      include: [{ 
-          model: RolePermission, 
-          as: "RolePermission", 
-          attributes: ["role_key", "role_name"],
-          required: false 
+      include: [{
+        model: RolePermission,
+        as: "RolePermission",
+        attributes: ["role_key", "role_name"],
+        required: false
       }],
       transaction
     });
-    
+
     if (!userData) {
-        await transaction.rollback();
-        return res.error(constants.USER_NOT_FOUND);
+      await transaction.rollback();
+      return res.error(constants.USER_NOT_FOUND);
     }
 
     const permissions = await commonQuery.findOneRecord(
@@ -67,18 +67,18 @@ exports.sessionData = async (req, res) => {
     );
 
     if (!permissions) {
-        await transaction.rollback();
-        return res.error(constants.NOT_FOUND, { message: `Your role (${userData.RolePermission.role_name}) not exist in this company. Please Contact Admin.` });
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: `Your role (${userData.RolePermission.role_name}) not exist in this company. Please Contact Admin.` });
     }
 
     // Fetch employee data if employee_id exists
     let employeeData = null;
     if (userData.employee_id) {
-        employeeData = await Employee.findOne({
-            where: { id: userData.employee_id },
-            attributes: ['id', 'profile_image', 'first_name', 'employee_code'],
-            transaction
-        });
+      employeeData = await Employee.findOne({
+        where: { id: userData.employee_id },
+        attributes: ['id', 'profile_image', 'first_name', 'employee_code'],
+        transaction
+      });
     }
 
     const isAdmin = userData.is_super_admin || userData.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
@@ -92,7 +92,7 @@ exports.sessionData = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
     }
-    
+
     // Check if user has a role assigned for this specific company/branch
     if (!permissions?.permissions && !isAdmin) {
       await transaction.rollback();
@@ -128,26 +128,26 @@ exports.sessionData = async (req, res) => {
       ModuleMaster.findAll({
         where: { status: 0 },
         attributes: ["id", "module_name", "cust_module_name", "module_icon_name", "module_url", "priority"],
-        include: [{ 
-            model: ModuleEntityMaster, 
-            as: "entities", 
-            required: false, 
-            where: { status: 0, entity_visiblity: 1 }, 
-            attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"] 
+        include: [{
+          model: ModuleEntityMaster,
+          as: "entities",
+          required: false,
+          where: { status: 0, entity_visiblity: 1 },
+          attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"]
         }],
         order: [
-            ["priority", "ASC"], 
-            [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']
+          ["priority", "ASC"],
+          [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']
         ],
         transaction
       }),
 
       // C. Configuration
       CompanyConfigration.findAll({
-          where: { company_id, status: 0 },
-          transaction
+        where: { company_id, status: 0 },
+        transaction
       }),
-      
+
       // D. Permissions
       Permission.findAll({
         attributes: ['id', 'action', 'module_id', 'entity_id'],
@@ -159,58 +159,57 @@ exports.sessionData = async (req, res) => {
       }),
 
       // E. Branch List
-      BranchMaster.findAll({ 
-          where: { 
-              status: 0,
-              company_id: {
-                  [Op.in]: sequelize.literal(
-                      isAdmin 
-                        ? `(SELECT id FROM company_master WHERE organization_id = ${orgId} AND status != 2)`
-                        : `(SELECT id FROM company_master WHERE id IN (${companyAccessList.map(Number).join(',') || 0}) AND status != 2)`
-                  )
-              },
-              ...(!isAdmin && normalizeBranchAccess(userData.branch_access).length > 0 ? {
-                  id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
-              } : {})
+      BranchMaster.findAll({
+        where: {
+          status: 0,
+          company_id: {
+            [Op.in]: sequelize.literal(
+              isAdmin
+                ? `(SELECT id FROM company_master WHERE organization_id = ${orgId} AND status != 2)`
+                : `(SELECT id FROM company_master WHERE id IN (${companyAccessList.map(Number).join(',') || 0}) AND status != 2)`
+            )
           },
-          attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id', 'company_id'],
-          order: [["id", "ASC"]],
-          transaction
+          ...(!isAdmin && normalizeBranchAccess(userData.branch_access).length > 0 ? {
+            id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
+          } : {})
+        },
+        attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id', 'company_id'],
+        order: [["id", "ASC"]],
+        transaction
       }),
 
-          // F. Employee Settings
+      // F. Employee Settings
       EmployeeSettings.findAll({
-          where: { 
-              company_id: company_id,
-              branch_id: branch_id,
-              status: 0 
-          },
-          attributes: ['id', 'settings_name', 'settings_value'],
-          transaction
+        where: {
+          company_id: company_id,
+          branch_id: branch_id,
+          status: 0
+        },
+        attributes: ['id', 'settings_name', 'settings_value'],
+        transaction
       }),
 
       // G. Total Branches Count
       BranchMaster.count({
-          where: { company_id: record.id, status: 0 },
-          transaction
+        where: { company_id: record.id, status: 0 },
+        transaction
       }),
 
       // H. Company Settings
       CompanySettings.findAll({
-          where: {
-              company_id: company_id,
-              branch_id: branch_id,
-              status: 0
-          },
-          attributes: ['id', 'settings_name', 'settings_value'],
-          transaction
+        where: {
+          company_id: company_id,
+          status: 0
+        },
+        attributes: ['id', 'settings_name', 'settings_value'],
+        transaction
       })
     ]);
 
     // Validate Data
     if (!companyList || companyList.length === 0) {
-        await transaction.rollback();
-        return res.error(constants.NOT_FOUND, { message: "No associated companies found." });
+      await transaction.rollback();
+      return res.error(constants.NOT_FOUND, { message: "No associated companies found." });
     }
 
     // Settings Object
@@ -225,28 +224,28 @@ exports.sessionData = async (req, res) => {
       const countryName = companyData.country ? companyData.country.country_name : null;
       const stateName = companyData.state ? companyData.state.state_name : null;
       delete companyData.country; delete companyData.state;
-      return { 
-          ...companyData, 
-          country_name: countryName, 
-          state_name: stateName, 
-          logo_image_url: companyData.logo_image ? `${process.env.FILE_SERVER_URL}${constants.COMPANY_LOGO_IMG_FOLDER}${companyData.logo_image}` : null 
+      return {
+        ...companyData,
+        country_name: countryName,
+        state_name: stateName,
+        logo_image_url: companyData.logo_image ? `${process.env.FILE_SERVER_URL}${constants.COMPANY_LOGO_IMG_FOLDER}${companyData.logo_image}` : null
       };
     });
 
     // Enrich User
     const userJson = userData.toJSON();
     const enrichedUserData = {
-        ...userJson,
-        permission: permissions?.permissions ?? null,
-        branch_access: userData.branch_access || "",
-        profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
-        is_attendance_supervisor : userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR? true : false,
-        is_reporting_manager : userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER? true : false,
-        role_name : permissions?.role_name
+      ...userJson,
+      permission: permissions?.permissions ?? null,
+      branch_access: userData.branch_access || "",
+      profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
+      is_attendance_supervisor: userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ? true : false,
+      is_reporting_manager: userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ? true : false,
+      role_name: permissions?.role_name
     };
 
     delete enrichedUserData.RolePermission;
-    
+
     // Find Current Company
     // Force Number conversion to fix string vs int issues
     const companyIndex = companyList.findIndex(c => Number(c.id) === Number(company_id));
@@ -256,18 +255,18 @@ exports.sessionData = async (req, res) => {
     let currencyDetails = null;
     if (currentCompany.currency_id) {
       // Standard Sequelize findOne
-      const currencyData = await CurrencyMaster.findOne({ 
-          where: { id: settingsObject.default_currency || 67 },
-          transaction
+      const currencyData = await CurrencyMaster.findOne({
+        where: { id: settingsObject.default_currency || 67 },
+        transaction
       });
-      
+
       if (currencyData) {
-        currencyDetails = { 
-            currency_id: currencyData.id, 
-            currency_name: currencyData.currency_name, 
-            currency_symbol: currencyData.currency_symbol, 
-            currency_rate: currencyData.currency_rate, 
-            currency_code: currencyData.currency_code 
+        currencyDetails = {
+          currency_id: currencyData.id,
+          currency_name: currencyData.currency_name,
+          currency_symbol: currencyData.currency_symbol,
+          currency_rate: currencyData.currency_rate,
+          currency_code: currencyData.currency_code
         };
       }
     }
@@ -279,14 +278,14 @@ exports.sessionData = async (req, res) => {
     if (allPermissions && allPermissions.length > 0) {
       allPermissions.forEach(p => {
         if (p.action && (p.action.toLowerCase() === 'view' || p.action.toLowerCase() === 'read')) {
-            const modKey = formatKey(p.module ? p.module.module_name : '');
-            const entKey = formatKey(p.entity ? (p.entity.cust_entity_name || p.entity.entity_name) : '');
-            const actKey = formatKey(p.action);
-            const permString = `${modKey}.${entKey}.${actKey}`;
-            
-            if(p.entity_id) {
-                entityPermissionMap[p.entity_id] = permString;
-            }
+          const modKey = formatKey(p.module ? p.module.module_name : '');
+          const entKey = formatKey(p.entity ? (p.entity.cust_entity_name || p.entity.entity_name) : '');
+          const actKey = formatKey(p.action);
+          const permString = `${modKey}.${entKey}.${actKey}`;
+
+          if (p.entity_id) {
+            entityPermissionMap[p.entity_id] = permString;
+          }
         }
       });
     }
@@ -295,7 +294,7 @@ exports.sessionData = async (req, res) => {
     let finalSubscriptionData = await getCompanySubscription(company_id);
     let companyAllowedEntityIds = [];
     if (finalSubscriptionData && finalSubscriptionData.allowed_module_ids) {
-        companyAllowedEntityIds = normalizeCompanyAccess(finalSubscriptionData.allowed_module_ids);
+      companyAllowedEntityIds = normalizeCompanyAccess(finalSubscriptionData.allowed_module_ids);
     }
 
     const removalEntity = [];
@@ -304,26 +303,26 @@ exports.sessionData = async (req, res) => {
     if (!toBool(settingsObject.enable_multi_godown)) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
 
     const plainSidebarModuleList = sidebarModuleList.map(item => item.get({ plain: true }));
-    
-    const filteredSidebarModuleList = plainSidebarModuleList.map(module => {
-        const filteredEntities = (module.entities || []).filter(entity => {
-            if (removalEntity.includes(entity.id)) return false;
-            return true;
-        }).map(entity => {
-            return {
-                ...entity,
-                permission: entityPermissionMap[entity.id] || null
-            };
-        });
 
-        return { ...module, entities: filteredEntities };
+    const filteredSidebarModuleList = plainSidebarModuleList.map(module => {
+      const filteredEntities = (module.entities || []).filter(entity => {
+        if (removalEntity.includes(entity.id)) return false;
+        return true;
+      }).map(entity => {
+        return {
+          ...entity,
+          permission: entityPermissionMap[entity.id] || null
+        };
+      });
+
+      return { ...module, entities: filteredEntities };
     }).filter(module => {
-        if (module.module_name === 'Administration' && process.env.NODE_ENV !== 'local') {
-            return false;
-        }
-        
-        // Keep the module if it has at least one visible entity
-        return module.entities.length > 0;
+      if (module.module_name === 'Administration' && process.env.NODE_ENV !== 'local') {
+        return false;
+      }
+
+      // Keep the module if it has at least one visible entity
+      return module.entities.length > 0;
     });
 
     let planStatus = "active";
@@ -337,7 +336,7 @@ exports.sessionData = async (req, res) => {
     //     }
     // }
     if (!finalSubscriptionData) {
-        finalSubscriptionData = {};
+      finalSubscriptionData = {};
     }
     finalSubscriptionData.status = 0;
     finalSubscriptionData.users_limit = 100000;
@@ -345,15 +344,15 @@ exports.sessionData = async (req, res) => {
 
     let currentBranch = null;
     if (branchList && branchList.length > 0) {
-        if (branch_id === 0) {
-            currentBranch = { id: 0, branch_name: "All Branches" };
-        } else if (branch_id) {
-            currentBranch = branchList.find(b => b.id === branch_id);
-        }
-        
-        if (!currentBranch) {
-            currentBranch = branchList[0];
-        }
+      if (branch_id === 0) {
+        currentBranch = { id: 0, branch_name: "All Branches" };
+      } else if (branch_id) {
+        currentBranch = branchList.find(b => b.id === branch_id);
+      }
+
+      if (!currentBranch) {
+        currentBranch = branchList[0];
+      }
     }
 
     const sessionData = {
@@ -417,9 +416,9 @@ exports.switchCompany = async (req, res) => {
 
     // 3. Validate Company (Standard Sequelize)
     const company = await CompanyMaster.findOne({
-      where: { 
-        id: company_id, 
-        status: { [Op.ne]: 2 } 
+      where: {
+        id: company_id,
+        status: { [Op.ne]: 2 }
       },
       attributes: ['id', 'organization_id'],
       transaction
@@ -434,7 +433,7 @@ exports.switchCompany = async (req, res) => {
     const branchAccessList = normalizeBranchAccess(user.branch_access || "");
 
     const defaultBranch = await BranchMaster.findOne({
-      where: { 
+      where: {
         company_id: company_id,
         status: { [Op.ne]: 2 },
         ...(!isAdminUser && branchAccessList.length > 0 ? {
@@ -456,11 +455,11 @@ exports.switchCompany = async (req, res) => {
 
     await transaction.commit();
 
-    return res.ok({ 
-      token: newToken, 
+    return res.ok({
+      token: newToken,
       message: "Switched company successfully",
       current_company_id: company_id,
-      current_branch_id: newBranchId 
+      current_branch_id: newBranchId
     });
 
   } catch (err) {
@@ -485,9 +484,9 @@ exports.switchBranch = async (req, res) => {
 
     // 1. Fetch User with Role (Standard Sequelize)
     const user = await User.findOne({
-        where: { id: user_id, status: 0 },
-        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key'] }],
-        transaction
+      where: { id: user_id, status: 0 },
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key'] }],
+      transaction
     });
 
     if (!user) {
@@ -497,31 +496,31 @@ exports.switchBranch = async (req, res) => {
 
     let finalBranchId = branch_id;
     if (branch_id == 0) {
-        finalBranchId = 0;
+      finalBranchId = 0;
     } else {
-        // 2. Validate Branch (Standard Sequelize)
-        const branch = await BranchMaster.findOne({
-            where: {
-                id: branch_id,
-                company_id: company_id, // Security check
-                status: { [Op.ne]: 2 }
-            },
-            transaction
-        });
+      // 2. Validate Branch (Standard Sequelize)
+      const branch = await BranchMaster.findOne({
+        where: {
+          id: branch_id,
+          company_id: company_id, // Security check
+          status: { [Op.ne]: 2 }
+        },
+        transaction
+      });
 
-        if (!branch) {
-          await transaction.rollback();
-          return res.error(constants.NOT_FOUND, { message: "Branch not found or does not belong to this company." });
-        }
+      if (!branch) {
+        await transaction.rollback();
+        return res.error(constants.NOT_FOUND, { message: "Branch not found or does not belong to this company." });
+      }
 
-        // 2.1 Validate Branch Access for non-super admins
-        const isBranchAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
-        const branchAccessList = normalizeBranchAccess(user.branch_access || "");
-        if (!isBranchAdmin && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
-            await transaction.rollback();
-            return res.error(constants.FORBIDDEN, { message: "You do not have access to this branch." });
-        }
-        finalBranchId = branch.id;
+      // 2.1 Validate Branch Access for non-super admins
+      const isBranchAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
+      const branchAccessList = normalizeBranchAccess(user.branch_access || "");
+      if (!isBranchAdmin && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
+        await transaction.rollback();
+        return res.error(constants.FORBIDDEN, { message: "You do not have access to this branch." });
+      }
+      finalBranchId = branch.id;
     }
 
     // 3. Generate New Token
@@ -533,8 +532,8 @@ exports.switchBranch = async (req, res) => {
 
     await transaction.commit();
 
-    return res.ok({ 
-      token: newToken, 
+    return res.ok({
+      token: newToken,
       message: "Switched branch successfully",
       current_branch_id: finalBranchId
     });
@@ -548,11 +547,11 @@ exports.switchBranch = async (req, res) => {
 exports.getCompanySettingsData = async (req, res) => {
   try {
     const user = req.user
-    
+
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['show_accuracy','punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage']
+        [Op.in]: ['show_accuracy', 'punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage']
       },
       status: 0
     }, {
@@ -585,7 +584,7 @@ exports.getCompanySettingsData = async (req, res) => {
       fines_allowed: finesAllowed,
       overtime_allowed: overtimeAllowed
     };
-    
+
     return res.ok(response);
 
   } catch (err) {

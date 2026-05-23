@@ -5,6 +5,7 @@ const { validatePhone } = require("../../helpers/phoneValidation");
 const { generateCustomFieldImageUrls, handleCustomFieldImages, handleDetailAttachments } = require("../../helpers/customFieldImageHandler");
 const { MODULES } = require("../../helpers/moduleEntitiesConstants");
 const emailService = require("../../services/emailService");
+const { where } = require('sequelize');
 
 const FILE_COLUMNS = [
     'aadhaar_doc', 'aadhaar_back_doc', 'pan_doc', 'bank_proof_doc', 'driving_license_doc', 'voter_id_doc', 'uan_doc', 'signature_doc'
@@ -185,7 +186,7 @@ exports.getDetailsByToken = async (req, res) => {
         // Process custom fields to add URL for image type default_values
         const processedCustomFields = customFields.map(field => {
             const fieldData = field.toJSON();
-            
+
             // If field type is image and has default_value, add URL and folder
             if (fieldData.field_type === 'image' && fieldData.default_value) {
                 if (!fieldData.default_value.startsWith('http')) {
@@ -196,7 +197,7 @@ exports.getDetailsByToken = async (req, res) => {
                     };
                 }
             }
-            
+
             return fieldData;
         });
 
@@ -276,12 +277,12 @@ exports.submitDetails = async (req, res) => {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
             console.log("Saved files:", savedFiles);
 
-                FILE_COLUMNS.forEach(col => {
-                    if (savedFiles[col]) {
-                        updateData[col] = savedFiles[col];
+            FILE_COLUMNS.forEach(col => {
+                if (savedFiles[col]) {
+                    updateData[col] = savedFiles[col];
                     console.log(`Updating ${col} with filename: ${savedFiles[col]}`);
-                    }
-                });
+                }
+            });
 
             // Handle experience_details attachments from savedFiles
             if (Array.isArray(updateData.experience_details)) {
@@ -525,7 +526,7 @@ exports.resendToken = async (req, res) => {
 
         // Send Email/WhatsApp with the new link
         const onboardingLink = `${process.env.FRONTEND_URL}onboarding/form/${onboarding_token}`;
-        
+
         if (employee.onboarding_status === 2) {
             await emailService.sendOnboardingRejection(employee.email, employee.first_name, employee.reject_note, onboardingLink, companyId);
         } else {
@@ -562,12 +563,16 @@ exports.getPendingList = async (req, res) => {
             POST,
             fieldConfig,
             {
-                where: { status: 3 },
                 include: [
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                     { model: Department, as: 'department', attributes: ['name'] }
                 ],
-                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "onboarding_status", "created_at"]
+                attributes: ["id", "first_name", "email", "mobile_no", "joining_date", "onboarding_step", "onboarding_status", "status_text", "created_at"]
+            },
+            true,
+            "created_at",
+            {
+                status: 3,
             }
         );
 

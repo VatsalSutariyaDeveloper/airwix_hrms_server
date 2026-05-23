@@ -22,7 +22,7 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.INTEGER,
             allowNull: true,
             comment: "Employment type: 1=Full Time, 2=Permanent, 3=Part Time, 4=Probation, 5=Intern, 6=Temporary",
-            
+
             set(value) {
                 const mapping = {
                     "Full Time": 1,
@@ -191,10 +191,10 @@ module.exports = (sequelize, DataTypes) => {
         // Resignation Related
         is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },
         exit_date: { type: DataTypes.DATEONLY, allowNull: true },
-        resignation_status: { 
-            type: DataTypes.SMALLINT, 
-            defaultValue: 0, 
-            comment: "0: Active, 1: Resigned (On Notice), 2: Exited (Inactive)" 
+        resignation_status: {
+            type: DataTypes.SMALLINT,
+            defaultValue: 0,
+            comment: "0: Active, 1: Resigned (On Notice), 2: Exited (Inactive)"
         },
         resignation_template_id: {
             type: DataTypes.INTEGER,
@@ -203,14 +203,20 @@ module.exports = (sequelize, DataTypes) => {
         },
         onboarding_token: { type: DataTypes.STRING, unique: true },
         onboarding_step: { type: DataTypes.INTEGER, defaultValue: 1 },
-        onboarding_status:{ type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Initial, 1: Onboarding, 2: Rejected, 3: Completed" },
-        reject_note: { type: DataTypes.STRING},
+        onboarding_status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Initial, 1: Onboarding, 2: Rejected, 3: Completed" },
+        status_text: {
+            type: DataTypes.VIRTUAL, get() {
+                const mapping = { 0: "Initial", 1: "Onboarding", 2: "Rejected", 3: "Completed" };
+                return mapping[this.getDataValue("onboarding_status")] || "Initial";
+            }
+        },
+        reject_note: { type: DataTypes.STRING },
         remarks: { type: DataTypes.TEXT },
         status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted, 3: Onboarding, 4:Exited" },
         user_id: { type: DataTypes.INTEGER, allowNull: true },
         branch_id: { type: DataTypes.INTEGER, allowNull: true },
         access_branches: { type: DataTypes.JSONB, defaultValue: [] },
-        company_id: { type: DataTypes.INTEGER, allowNull: true },        
+        company_id: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'employees',
         timestamps: true,
