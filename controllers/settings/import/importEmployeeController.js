@@ -41,6 +41,8 @@ exports.importData = async (req, res) => {
         workerScriptPath = "./leaveImport.js";
       } else if (req.body.entity_name === "Attendance Import") {
         workerScriptPath = "./attendanceImport.js";
+      } else if (req.body.entity_name === "Daily Attendance Import") {
+        workerScriptPath = "./dailyAttendanceImport.js";
       } else if (req.body.entity_name === "Payroll Import") {
         workerScriptPath = "./payrollImport.js";
       } else if (req.body.entity_name === "Salary Structure Import") {

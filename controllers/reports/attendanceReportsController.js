@@ -553,36 +553,36 @@ exports.getAttendanceReport = async (req, res) => {
       });
 
       // B. Query DeviceMaster for matching device_name
-      const matchingDevices = await DeviceMaster.findAll({
-        where: {
-          device_name: {
-            [Op.iLike]: `%${searchString}%`
-          }
-        },
-        attributes: ['id'],
-        raw: true
-      });
+      // const matchingDevices = await DeviceMaster.findAll({
+      //   where: {
+      //     device_name: {
+      //       [Op.iLike]: `%${searchString}%`
+      //     }
+      //   },
+      //   attributes: ['id'],
+      //   raw: true
+      // });
 
-      let employeeIdsFromDevices = [];
-      if (matchingDevices.length > 0) {
-        const deviceIds = matchingDevices.map(d => d.id);
-        const devicePunches = await AttendancePunch.findAll({
-          where: {
-            device_id: { [Op.in]: deviceIds },
-            status: 0,
-            [Op.and]: [
-              sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
-            ]
-          },
-          attributes: ['employee_id'],
-          raw: true
-        });
-        employeeIdsFromDevices = devicePunches.map(p => p.employee_id).filter(Boolean);
-      }
+      // let employeeIdsFromDevices = [];
+      // if (matchingDevices.length > 0) {
+      //   const deviceIds = matchingDevices.map(d => d.id);
+      //   const devicePunches = await AttendancePunch.findAll({
+      //     where: {
+      //       device_id: { [Op.in]: deviceIds },
+      //       status: 0,
+      //       [Op.and]: [
+      //         sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
+      //       ]
+      //     },
+      //     attributes: ['employee_id'],
+      //     raw: true
+      //   });
+      //   employeeIdsFromDevices = devicePunches.map(p => p.employee_id).filter(Boolean);
+      // }
 
       allMatchingEmployeeIds = [...new Set([
         ...employeesMatchingSearch.map(e => e.id),
-        ...employeeIdsFromDevices
+        // ...employeeIdsFromDevices
       ])];
 
       if (allMatchingEmployeeIds.length === 0) {
@@ -629,19 +629,21 @@ exports.getAttendanceReport = async (req, res) => {
       order: [['attendance_date', 'ASC']]
     }, null, {});
 
+    const attendanceDayIds = attendanceDays.map(day => day.id).filter(Boolean);
+
     // 2.1. Fetch Punch Records for detailed attendance data
-    let punchRecords = await commonQuery.findAllRecords(AttendancePunch, {
-      employee_id: { [Op.in]: employeeIds },
-      status: 0,
-      [Op.and]: [
-        sequelize.literal(`DATE(punch_time) BETWEEN '${startDate}' AND '${endDate}'`)
-      ]
-    }, {
-      include: [
-        { model: DeviceMaster, as: 'device', attributes: ['id', 'device_name'] }
-      ],
-      order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
-    }, null, {});
+    let punchRecords = [];
+    if (attendanceDayIds.length > 0) {
+      punchRecords = await commonQuery.findAllRecords(AttendancePunch, {
+        day_id: { [Op.in]: attendanceDayIds },
+        status: 0
+      }, {
+        include: [
+          { model: DeviceMaster, as: 'device', attributes: ['id', 'device_name'] }
+        ],
+        order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
+      }, null, {});
+    }
 
     // 3. Pre-fetch Holidays & Week Offs & Out Duty
     const [holidays, weeklyOffs, outDuties] = await Promise.all([
@@ -673,15 +675,15 @@ exports.getAttendanceReport = async (req, res) => {
       }
     });
 
-    // Group punch records by employee and date
-    const punchesByEmployeeDate = new Map();
+    // Group punch records by employee and attendance day if available, otherwise fallback to punch date
+    const punchesByEmployeeDay = new Map();
     punchRecords.forEach(punch => {
       const date = dayjs(punch.punch_time).format('YYYY-MM-DD');
-      const key = `${punch.employee_id}_${date}`;
-      if (!punchesByEmployeeDate.has(key)) {
-        punchesByEmployeeDate.set(key, []);
+      const key = punch.day_id ? `${punch.employee_id}_${punch.day_id}` : `${punch.employee_id}_${date}`;
+      if (!punchesByEmployeeDay.has(key)) {
+        punchesByEmployeeDay.set(key, []);
       }
-      punchesByEmployeeDate.get(key).push({
+      punchesByEmployeeDay.get(key).push({
         punch_time: punch.punch_time,
         punch_type: punch.punch_type,
         formatted_time: dayjs(punch.punch_time).format('h:mm A'),
@@ -864,9 +866,9 @@ exports.getAttendanceReport = async (req, res) => {
         empData.summary.totalOvertimeMinutes += otMins;
         empData.summary.totalBreakMinutes += breakMins;
 
-        // Get punch data for this employee and date
-        const punchKey = `${emp.id}_${d}`;
-        const punches = punchesByEmployeeDate.get(punchKey) || [];
+        // Get punch data for this employee and day record if available, otherwise fallback to date
+        const punchKey = dayRecord ? `${emp.id}_${dayRecord.id}` : `${emp.id}_${d}`;
+        const punches = punchesByEmployeeDay.get(punchKey) || [];
 
         // Group punches into IN-OUT pairs
         const punchPairs = [];
@@ -893,6 +895,7 @@ exports.getAttendanceReport = async (req, res) => {
         }
 
         empData.days[d] = {
+          day_id: dayRecord ? dayRecord.id : null,
           status,
           inTime,
           outTime,
