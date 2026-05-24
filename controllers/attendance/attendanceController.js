@@ -110,6 +110,27 @@ exports.syncPunches = async (req, res) => {
       console.log(`\n--- [Sync] Processing Punch:`, punchData);
 
       try {
+        // Check if a punch with the exact same time already exists for this employee to prevent duplicate syncs
+        const targetPunchTime = new Date(punchData.punch_time);
+        const existingPunch = await commonQuery.findOneRecord(AttendancePunch, {
+          employee_id: punchData.employee_id,
+          punch_time: targetPunchTime,
+          status: { [Op.ne]: 2 }
+        }, {}, t, false, {});
+
+        if (existingPunch) {
+          console.log(`[SyncPunches] Duplicate punch detected and skipped: Emp=${punchData.employee_id}, Time=${punchData.punch_time}`);
+          results.push({
+            employee_id: punchData.employee_id,
+            punch_time: punchData.punch_time,
+            success: true,
+            punch_id: existingPunch.id,
+            type: existingPunch.punch_type,
+            ignoredAsDuplicate: true
+          });
+          continue;
+        }
+
         // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
         if (punchData.image) {

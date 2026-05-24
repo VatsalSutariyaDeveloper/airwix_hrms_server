@@ -16,9 +16,12 @@ const {
     Notification,
     User,
     EmployeeLeaveBalance,
-    LeaveTemplateCategory
+    LeaveTemplateCategory,
+    Reimbursement,
+    ExpenseType,
+    BranchMaster
 } = require("../../models");
-const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting } = require("../../helpers");
+const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting, fileExists } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -80,10 +83,16 @@ exports.getCounts = async (req, res) => {
 
         const presentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
-            status: { [Op.in]: [0, 1] },
+            status: 0,
             ...employeeScope
         }, {}, {});
-console.log("presentToday",presentToday)
+
+        const halfDayToday = await commonQuery.countRecords(AttendanceDay, {
+            attendance_date: today,
+            status: 1,
+            ...employeeScope
+        }, {}, {});
+
         const absentToday = await commonQuery.countRecords(AttendanceDay, {
             attendance_date: today,
             status: 5,
@@ -143,6 +152,7 @@ console.log("presentToday",presentToday)
         return res.ok({
             totalEmployees,
             presentToday,
+            halfDayToday,
             absentToday,
             onLeaveToday,
             lateEntry: lateEntryCount,
@@ -272,6 +282,302 @@ exports.getPendingCount = async (req, res) => {
         const pendingGlobalCount = pendingLeaves + authorizedOutDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
 
         return res.ok({pendingCount: pendingGlobalCount});
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getPendingApprovalsDetails = async (req, res) => {
+    try {
+        const isSuperAdmin = req.user.is_super_admin;
+        const isAdmin = req.user.is_admin;
+        const roleKey = req.user.role_key;
+        const userId = req.user.id;
+
+        // Authorization checks helper (for Leaves, OutDuty, Regularization)
+        const isUserAuthorizedForRequest = (request, levelField) => {
+            if (isSuperAdmin) return true;
+            
+            const employee = request.employee;
+            if (!employee) return false;
+
+            const template = employee?.leaveTemplate;
+            const currentLevel = request[levelField];
+            const config = template ? (template.approval_config || []) : [];
+
+            let currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+
+            switch (currentStage.type) {
+                case 'REPORTING_MANAGER':
+                    return roleKey === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === userId;
+                case 'ATTENDANCE_SUPERVISOR':
+                    return roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === userId;
+                case 'ADMIN':
+                    return isAdmin;
+                case 'EMPLOYER':
+                    return true;
+                case 'ANYONE':
+                    return employee.reporting_manager === userId ||
+                           employee.attendance_supervisor === userId ||
+                           isAdmin;
+                default:
+                    return false;
+            }
+        };
+
+        // Query all tables in parallel
+        const [leavesData, outDutiesData, regularizationsData, reimbursementsData] = await Promise.all([
+            // 1. Leave & Encashment Requests
+            commonQuery.findAllRecords(LeaveRequest, {
+                approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            }, {
+                attributes: [
+                    "id", "employee_id", "leave_category_id", "start_date", "end_date",
+                    "total_days", "reason", "approval_status", "current_level",
+                    "approval_history", "approved_by", "document", "status",
+                    "request_type", "is_encashment", "start_session", "end_session", "createdAt"
+                ],
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                    },
+                    {
+                        model: LeaveTemplateCategory,
+                        as: "category",
+                        attributes: ["leave_category_name"]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    },
+                    {
+                        model: BranchMaster,
+                        as: "branch",
+                        attributes: []
+                    }
+                ],
+                order: [['created_at', 'DESC']]
+            }),
+
+            // 2. Out Duty Requests
+            commonQuery.findAllRecords(OutDutyRequest, {
+                approval_status: { [Op.in]: [constants.OUT_DUTY_STATUS.PENDING, constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            }, {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "leave_template"],
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ],
+                order: [['created_at', 'DESC']]
+            }),
+
+            // 3. Attendance Regularization Requests
+            commonQuery.findAllRecords(AttendanceRegularization, {
+                approval_status: { [Op.in]: [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING, constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            }, {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "leave_template"],
+                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ],
+                order: [['created_at', 'DESC']]
+            }),
+
+            // 4. Reimbursement Requests
+            commonQuery.findAllRecords(Reimbursement, {
+                approval_status: { [Op.in]: [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING, constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED] },
+                status: 0
+            }, {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"]
+                    },
+                    {
+                        model: ExpenseType,
+                        as: "expenseType",
+                        attributes: ["name"]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ],
+                order: [['created_at', 'DESC']]
+            })
+        ]);
+
+        // Filter and format the results in memory
+        const leaveRequests = [];
+        const leaveEncashments = [];
+        const outDuties = [];
+        const attendanceRegularizations = [];
+        const reimbursements = [];
+
+        // Helper to format tracking summary for leaves
+        const getLeaveTrackingSummary = (raw) => {
+            const statusLabels = {
+                [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
+                [constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                [constants.LEAVE_APPROVAL_STATUS.APPROVED]: "APPROVED",
+                [constants.LEAVE_APPROVAL_STATUS.REJECTED]: "REJECTED",
+                [constants.LEAVE_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+                [constants.LEAVE_APPROVAL_STATUS.DELETED]: "DELETED",
+            };
+            const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+            const total = raw.employee?.leaveTemplate?.approval_levels || 1;
+            let typeLabel = "";
+            if (raw.request_type === 'CREDIT') typeLabel = " [EARNED]";
+            else if (raw.request_type === 'ENCASHMENT') typeLabel = " [ENCASHMENT]";
+            return `${statusLabel}${typeLabel} (Stage ${raw.current_level} of ${total})`;
+        };
+
+        // Filter Leaves & Encashments
+        for (const reqObj of leavesData) {
+            if (isUserAuthorizedForRequest(reqObj, 'current_level')) {
+                const raw = reqObj.get({ plain: true });
+                raw.tracking_summary = getLeaveTrackingSummary(raw);
+
+                if (raw.document) {
+                    const exists = fileExists(constants.LEAVE_DOC_FOLDER, raw.document);
+                    raw.document_url = exists ? `${process.env.FILE_SERVER_URL}${constants.LEAVE_DOC_FOLDER}${raw.document}` : null;
+                } else {
+                    raw.document_url = null;
+                }
+
+                if (raw.is_encashment === true || raw.request_type === 'ENCASHMENT') {
+                    leaveEncashments.push(raw);
+                } else {
+                    leaveRequests.push(raw);
+                }
+            }
+        }
+
+        // Filter Out Duties
+        for (const reqObj of outDutiesData) {
+            if (isUserAuthorizedForRequest(reqObj, 'current_out_duty_level')) {
+                const raw = reqObj.get({ plain: true });
+                raw.approved_by_name = raw.approvedBy?.user_name || null;
+                outDuties.push(raw);
+            }
+        }
+
+        // Filter Attendance Regularizations
+        for (const reqObj of regularizationsData) {
+            if (isUserAuthorizedForRequest(reqObj, 'current_level')) {
+                const raw = reqObj.get({ plain: true });
+                raw.approved_by_name = raw.approvedBy?.user_name || null;
+                attendanceRegularizations.push(raw);
+            }
+        }
+
+        // Filter Reimbursements
+        for (const reqObj of reimbursementsData) {
+            const employee = reqObj.employee;
+            if (!employee) continue;
+
+            let isAuthorized = false;
+            if (isSuperAdmin) {
+                isAuthorized = true;
+            } else {
+                if (employee.reporting_manager === userId ||
+                    employee.attendance_supervisor === userId ||
+                    isAdmin) {
+                    isAuthorized = true;
+                }
+            }
+
+            if (isAuthorized) {
+                const raw = reqObj.get({ plain: true });
+                
+                const statusLabels = {
+                    [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "PENDING",
+                    [constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                    [constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED]: "APPROVED",
+                    [constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED]: "REJECTED",
+                    [constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED]: "CANCELLED",
+                };
+                const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+                raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level})`;
+
+                if (raw.bills_docs) {
+                    const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, raw.bills_docs);
+                    raw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${raw.bills_docs}` : null;
+                } else {
+                    raw.bills_docs_url = null;
+                }
+                reimbursements.push(raw);
+            }
+        }
+
+        // Search filtering
+        const search = req.body.search ? req.body.search.toLowerCase() : null;
+
+        const applySearchFilter = (list, searchFieldsFn) => {
+            if (!search) return list;
+            return list.filter(item => {
+                const searchString = searchFieldsFn(item).toLowerCase();
+                return searchString.includes(search);
+            });
+        };
+
+        const filteredLeaves = applySearchFilter(leaveRequests, item => 
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`
+        );
+
+        const filteredEncashments = applySearchFilter(leaveEncashments, item => 
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`
+        );
+
+        const filteredOutDuties = applySearchFilter(outDuties, item => 
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.reason}`
+        );
+
+        const filteredRegularizations = applySearchFilter(attendanceRegularizations, item => 
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.reason}`
+        );
+
+        const filteredReimbursements = applySearchFilter(reimbursements, item => 
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.expenseType?.name} ${item.description} ${item.tracking_summary}`
+        );
+
+        return res.ok({
+            leaveRequests: filteredLeaves,
+            leaveEncashments: filteredEncashments,
+            outDuties: filteredOutDuties,
+            attendanceRegularizations: filteredRegularizations,
+            reimbursements: filteredReimbursements
+        });
+
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -820,4 +1126,141 @@ exports.getLateEntryEmployees = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.getLeaveSummaryCounts = async (req, res) => {
+    try {
+        const startDate = req.body?.startDate;
+        const endDate = req.body?.endDate;
+
+        if (!startDate || !endDate) {
+            return res.error(constants.VALIDATION_ERROR, { message: "startDate and endDate are required." });
+        }
+
+        const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
+
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR) {
+                employeeWhere.attendance_supervisor = req.user.id;
+            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER) {
+                employeeWhere.reporting_manager = req.user.id;
+            }
+            employeeWhere[Op.or] = [
+                { attendance_supervisor: req.user.id },
+                { reporting_manager: req.user.id },
+                { id: req.user.employee_id }
+            ];
+        }
+
+        const whereClause = {
+            [Op.and]: [
+                { start_date: { [Op.lte]: dayjs(endDate).endOf('day').toDate() } },
+                { end_date: { [Op.gte]: dayjs(startDate).startOf('day').toDate() } }
+            ]
+        };
+
+        const leaves = await commonQuery.findAllRecords(LeaveRequest, whereClause, {
+            include: [
+                {
+                    model: Employee,
+                    as: "employee",
+                    attributes: ["id"],
+                    where: employeeWhere,
+                    required: true
+                }
+            ],
+            attributes: ["id", "approval_status"],
+            raw: true
+        });
+
+        let total = 0;
+        let approved = 0;
+        let pending = 0;
+        let rejected = 0;
+
+        leaves.forEach(leave => {
+            const status = Number(leave.approval_status);
+            if (status === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                approved++;
+            } else if (status === constants.LEAVE_APPROVAL_STATUS.PENDING || status === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+                pending++;
+            } else if (status === constants.LEAVE_APPROVAL_STATUS.REJECTED) {
+                rejected++;
+            }
+
+            if (status !== constants.LEAVE_APPROVAL_STATUS.DELETED && status !== constants.LEAVE_APPROVAL_STATUS.CANCELLED) {
+                total++;
+            }
+        });
+
+        return res.ok({
+            total,
+            approved,
+            pending,
+            rejected
+        });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+exports.getDepartmentEmployees = async (req, res) => {
+    try {
+        const { departmentName } = req.body;
+        if (!departmentName) {
+            return res.badRequest("Department name is required.");
+        }
+
+        let whereClause = { status: 0 };
+        if (departmentName === "Not Assign Department") {
+            whereClause.department_id = null;
+        } else {
+            const dept = await commonQuery.findOneRecord(Department, {
+                name: departmentName,
+                status: { [Op.in]: [0, 1, 2] }
+            });
+            if (!dept) {
+                return res.ok([]);
+            }
+            whereClause.department_id = dept.id;
+        }
+
+        const employees = await commonQuery.findAllRecords(Employee,
+            whereClause,
+            {
+                attributes: ['id', 'first_name', 'employee_code', 'profile_image', 'email', 'mobile_no', 'joining_date'],
+                include: [
+                    {
+                        model: DesignationMaster,
+                        as: 'designation',
+                        attributes: ['designation_name'],
+                        required: false
+                    }
+                ],
+                order: [['first_name', 'ASC']]
+            }
+        );
+
+        const formatted = employees.map(emp => {
+            const plainEmp = emp.get({ plain: true });
+            return {
+                id: plainEmp.id,
+                first_name: plainEmp.first_name,
+                employee_code: plainEmp.employee_code,
+                email: plainEmp.email,
+                mobile_no: plainEmp.mobile_no,
+                joining_date: plainEmp.joining_date,
+                designation_name: plainEmp.designation?.designation_name || "-",
+                profile_image_url: plainEmp.profile_image
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}`
+                    : null
+            };
+        });
+
+        return res.ok(formatted);
+    } catch (err) {
+        console.error("Get Department Employees Error", err);
+        return handleError(err, res, req);
+    }
+};
+
 

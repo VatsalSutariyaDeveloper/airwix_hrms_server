@@ -166,6 +166,42 @@ async function authMiddleware(req, res, next) {
   } catch (err) {
     req.auth_error_detail = `JWT validation failed: ${err.message} (${err.name}).`;
     // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const token = authHeader.split(" ")[1];
+        if (token) {
+          const decoded = jwt.decode(token);
+          if (decoded && decoded.device_id) {
+            const device = await DeviceMaster.findOne({
+              where: {
+                id: decoded.id,
+                device_id: decoded.device_id
+              }
+            });
+
+            if (device && device.status === 0) {
+              const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
+              await DeviceMaster.update({
+                device_id: newDeviceId,
+                ip_address: null,
+                last_login_at: null,
+                os_version: null,
+                brand_name: null,
+                device_model: null,
+                status: constants.DEVICE_STATUS.PAIRING
+              }, {
+                where: { id: device.id }
+              });
+              console.log(`🔌 [AUTO-UNPAIR] Device ID ${device.id} auto-unpaired and set to PAIRING mode due to invalid/expired token.`);
+            }
+          }
+        }
+      }
+    } catch (unpairErr) {
+      console.error("Auto-unpair on verification error failed:", unpairErr.message);
+    }
+    
     console.error("🔐 [AUTH FAILED] JWT Verification Error:", {
       message: err.message,
       name: err.name,
