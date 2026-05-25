@@ -157,6 +157,47 @@ exports.syncPunches = async (req, res) => {
           },
           t
         );
+
+        // Store face recognition error if flag is present
+        const isFaceError = punchData.is_face_error === true || 
+                             punchData.is_face_error === 'true' || 
+                             punchData.face_recognition_error === true || 
+                             punchData.face_recognition_error === 'true' || 
+                             punchData.face_error === true || 
+                             punchData.face_error === 'true' || 
+                             punchData.is_face_recognition_error === true || 
+                             punchData.is_face_recognition_error === 'true';
+
+        if (isFaceError) {
+          console.log(`[SyncPunches] Face Recognition Error detected for Emp=${punchData.employee_id}. Storing in FaceRecognitionError...`);
+          
+          let faceErrorImage = null;
+          if (punchData.image) {
+            faceErrorImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", t);
+          }
+
+          // Make sure the employee_id column exists
+          try {
+            await sequelize.query(`ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS employee_id INTEGER;`, { transaction: t });
+          } catch (alterErr) {
+            console.error("[SyncPunches] Failed to alter face_recognition_errors table:", alterErr.message);
+          }
+
+          await FaceRecognitionError.create({
+            image: faceErrorImage || punchImage,
+            accuracy: punchData.match_score || punchData.accuracy || null,
+            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
+            company_id: req.user.company_id || punchData.company_id || 0,
+            branch_id: resolvedDeviceId || punchData.branch_id || req.user.branch_id || 0,
+            employee_id: punchData.employee_id || null,
+            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
+            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
+            status: 1 // 1 = Resolved/Cleared
+          }, { transaction: t });
+
+          console.log(`[SyncPunches] ✅ Stored FaceRecognitionError as Resolved for Emp=${punchData.employee_id}`);
+        }
+
         results.push({
           employee_id: punchData.employee_id,
           punch_time: punchData.punch_time,
@@ -1043,7 +1084,24 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     if (is_locked !== undefined) payload.is_locked = is_locked;
-    if (note !== undefined) payload.note = note;
+    
+    // Clear system-generated note if status is changing and no new note is provided
+    const isSystemGeneratedNote = (n) => {
+      if (!n || typeof n !== 'string') return false;
+      const trimmed = n.trim();
+      return trimmed.startsWith("System:") ||
+             trimmed.startsWith("Auto Absent:") ||
+             trimmed.startsWith("Incomplete:") ||
+             trimmed.startsWith("Leave approved:") ||
+             trimmed.startsWith("Penalty:") ||
+             trimmed.startsWith("Penalty (");
+    };
+
+    if (note !== undefined) {
+      payload.note = note;
+    } else if (day && isSystemGeneratedNote(day.note)) {
+      payload.note = null;
+    }
 
     // Synchronize leave balance based on status changes (Half Day/Leave)
     const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
@@ -1274,20 +1332,19 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       // Get shift_id from employee if available
       const employee_shift_id = emp && emp.shift_template ? emp.shift_template : null;
 
-      // [USER REQUEST] Delete existing entry for this specific date first to ensure a fresh start
-      await AttendanceDay.destroy({
-        where: {
-          employee_id: employee_id,
-          attendance_date: attendance_date,
-          company_id: req.user.company_id
-        },
-        transaction: t
-      });
-
       let existingRecord = await commonQuery.findOneRecord(AttendanceDay, {
         employee_id,
         attendance_date,
       }, {}, t, false, { company_id: true });
+
+      if (existingRecord) {
+        await syncAttendanceToLeaveBalance(employee_id, existingRecord, null, t, emp);
+        await AttendanceDay.destroy({
+          where: { id: existingRecord.id },
+          transaction: t
+        });
+        existingRecord = null;
+      }
 
       // Reuse manualPunch if times are provided
       if (first_in || last_out) {
@@ -2157,7 +2214,7 @@ exports.updateAttendanceNote = async (req, res) => {
 exports.storeFaceRecognitionError = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude } = req.body;
+    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id } = req.body;
 
     if (!time) {
       await t.rollback();
@@ -2194,6 +2251,13 @@ exports.storeFaceRecognitionError = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "An error image (file or base64) is required");
     }
 
+    // Make sure the employee_id column exists
+    try {
+      await sequelize.query(`ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS employee_id INTEGER;`, { transaction: t });
+    } catch (alterErr) {
+      console.error("[storeFaceRecognitionError] Failed to alter face_recognition_errors table:", alterErr.message);
+    }
+
     // Save to database
     const faceError = await FaceRecognitionError.create({
       image: errorImage,
@@ -2201,6 +2265,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
       time: dayjs(time).toDate(),
       company_id: finalCompanyId,
       branch_id: finalBranchId,
+      employee_id: employee_id || null,
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
       status: 0 // Active
@@ -2218,6 +2283,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
         time: faceError.time,
         company_id: faceError.company_id,
         branch_id: faceError.branch_id,
+        employee_id: faceError.employee_id,
         latitude: faceError.latitude,
         longitude: faceError.longitude
       }
@@ -2278,6 +2344,12 @@ exports.getFaceRecognitionErrors = async (req, res) => {
             model: BranchMaster,
             as: "branch",
             attributes: ["id", "branch_name"]
+          },
+          {
+            model: Employee,
+            as: "employee",
+            attributes: ["id", "first_name", "employee_code", "profile_image"],
+            required: false
           }
         ],
         order: [['time', 'DESC']]
@@ -2293,6 +2365,11 @@ exports.getFaceRecognitionErrors = async (req, res) => {
         item.setDataValue('image_url', `${process.env.FILE_SERVER_URL}${constants.FACE_ERROR_FOLDER || "employee/face_errors/"}${item.image}`);
       } else {
         item.setDataValue('image_url', null);
+      }
+      if (item.employee && item.employee.profile_image) {
+        item.employee.setDataValue('profile_image_url', `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${item.employee.profile_image}`);
+      } else if (item.employee) {
+        item.employee.setDataValue('profile_image_url', null);
       }
     });
 

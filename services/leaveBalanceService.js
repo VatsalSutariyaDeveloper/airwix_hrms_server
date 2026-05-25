@@ -1303,6 +1303,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             // We search for ANY approved request that covers this date and is NOT auto-generated
             const manualRequest = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id: employeeId,
+                // request_type: 'DEBIT',
                 start_date: { [Op.lte]: date },
                 end_date: { [Op.gte]: date },
                 approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
@@ -1314,6 +1315,7 @@ console.log("allocated",allocated,"carryForward",carryForward,"used",used)
             // 2. Find existing auto-generated request for this specific date
             const existingAuto = await commonQuery.findOneRecord(LeaveRequest, {
                 employee_id: employeeId,
+                // request_type: 'DEBIT',
                 start_date: date,
                 end_date: date,
                 status: 0,

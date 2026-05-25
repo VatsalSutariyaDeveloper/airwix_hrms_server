@@ -1,4 +1,4 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -8,6 +8,108 @@ const isSameOrBefore = require("dayjs/plugin/isSameOrBefore");
 dayjs.extend(isSameOrBefore);
 const LeaveBalanceService = require("../../../services/leaveBalanceService");
 const notificationService = require("../../../services/notificationService");
+
+const getApproversForLeaveRequest = async (employeeId, currentLevel, transaction) => {
+    try {
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+
+        if (!employee) return [];
+
+        const template = employee.leaveTemplate;
+        const config = template ? (template.approval_config || []) : [];
+        const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+        const { type } = currentStage;
+
+        const userIds = new Set();
+
+        if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
+            if (employee.reporting_manager) {
+                userIds.add(employee.reporting_manager);
+            }
+        }
+
+        if (type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
+            if (employee.attendance_supervisor) {
+                userIds.add(employee.attendance_supervisor);
+            }
+        }
+
+        if (type === 'ADMIN' || type === 'ANYONE' || type === 'EMPLOYER') {
+            const adminFilters = {
+                status: 0,
+                [Op.or]: [
+                    { is_super_admin: true },
+                    { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN },
+                    { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN }
+                ]
+            };
+            const admins = await commonQuery.findAllRecords(User, adminFilters, {
+                include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+                attributes: ['id'],
+                raw: true
+            }, transaction);
+
+            admins.forEach(a => userIds.add(a.id));
+        }
+
+        return [...userIds];
+    } catch (err) {
+        console.error("Error in getApproversForLeaveRequest:", err);
+        return [];
+    }
+};
+
+const sendApprovalNotifications = async (leaveRequest, employee, actionType, transaction) => {
+    try {
+        const userIds = await getApproversForLeaveRequest(leaveRequest.employee_id, leaveRequest.current_level, transaction);
+        if (!userIds || userIds.length === 0) return;
+
+        const employeeName = employee ? employee.first_name : "An employee";
+        const startDateStr = formatDateTime(leaveRequest.start_date, 'DD MMM YYYY');
+        const endDateStr = formatDateTime(leaveRequest.end_date, 'DD MMM YYYY');
+
+        let title = "";
+        let message = "";
+        let statusCode = 0;
+
+        if (actionType === "CREATE") {
+            title = "New Leave Request Pending Approval";
+            message = `${employeeName} has requested leave from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 0;
+        } else if (actionType === "UPDATE") {
+            title = "Leave Request Updated";
+            message = `${employeeName} has updated their leave request from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 0;
+        } else if (actionType === "CANCEL") {
+            title = "Leave Request Cancelled";
+            message = `${employeeName} has cancelled their leave request from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 1; // Warning / Cancelled
+        }
+
+        for (const userId of userIds) {
+            // Avoid notifying the employee themselves about their own action
+            const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id"] }, transaction);
+            if (user && user.employee_id === leaveRequest.employee_id) {
+                continue;
+            }
+
+            await notificationService.createNotification({
+                user_id: userId,
+                title,
+                message,
+                type: "LEAVE",
+                reference_id: leaveRequest.id,
+                status_code: statusCode,
+                company_id: leaveRequest.company_id,
+                branch_id: leaveRequest.branch_id
+            }, transaction);
+        }
+    } catch (err) {
+        console.error("Error sending approval level notifications:", err);
+    }
+};
 
 /**
  * Controller for managing Leave Requests and Balance Deductions.
@@ -285,9 +387,14 @@ exports.create = async (req, res) => {
 
         // Handle File Upload
         if (req.files && Object.keys(req.files).length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.LEAVE_DOC_FOLDER, transaction);
-            if (savedFiles.document) {
-                POST.document = savedFiles.document;
+            try {
+                const savedFiles = await uploadFile(req, res, constants.LEAVE_DOC_FOLDER, transaction);
+                if (savedFiles.document) {
+                    POST.document = savedFiles.document;
+                }
+            } catch (error) {
+                if (!transaction.finished) await transaction.rollback();
+                return handleError(error, res, req);
             }
         }
 
@@ -297,6 +404,9 @@ exports.create = async (req, res) => {
             current_level: 1,
             approval_history: []
         }, transaction);
+
+        // Notify approval level users
+        await sendApprovalNotifications(leaveRequest, employee, "CREATE", transaction);
 
         await transaction.commit();
 
@@ -513,6 +623,9 @@ exports.update = async (req, res) => {
         }
 
         await commonQuery.updateRecordById(LeaveRequest, id, PUT, transaction);
+
+        // Notify approval level users
+        await sendApprovalNotifications(leaveRequest, employee, "UPDATE", transaction);
 
         await transaction.commit();
         return res.success("LEAVE_UPDATED");
@@ -815,6 +928,15 @@ exports.updateStatus = async (req, res) => {
                 }, transaction);
             }
 
+            if (updateData.approval_status === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+                // Notify the next approval level users
+                const rawRequest = leaveRequest.get ? leaveRequest.get({ plain: true }) : leaveRequest;
+                await sendApprovalNotifications({
+                    ...rawRequest,
+                    current_level: updateData.current_level
+                }, employee, "CREATE", transaction);
+            }
+
             if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
                 const start = dayjs(leaveRequest.start_date);
                 const end = dayjs(leaveRequest.end_date);
@@ -1076,13 +1198,13 @@ exports.cancelLeave = async (req, res) => {
 
         // 3.5. Prevent cancelling an already-ended approved leave
         // (system should not allow cancelling once the leave window is in the past)
-        if (
-            Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED &&
-            dayjs(leaveRequest.end_date).isBefore(dayjs().startOf('day'))
-        ) {
-            await transaction.rollback();
-            return res.error("INVALID_OPERATION", { message: "Cannot cancel a leave that has already ended." });
-        }
+        // if (
+        //     Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED &&
+        //     dayjs(leaveRequest.end_date).isBefore(dayjs().startOf('day'))
+        // ) {
+        //     await transaction.rollback();
+        //     return res.error("INVALID_OPERATION", { message: "Cannot cancel a leave that has already ended." });
+        // }
 
         // 4. Restore Balance
         // We restore balance if the leave was previously PENDING, PARTIALLY_APPROVED, or APPROVED.
@@ -1136,19 +1258,25 @@ exports.cancelLeave = async (req, res) => {
             approval_history: history
         }, transaction);
 
-        // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
-        // if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
-        //     const start = dayjs(leaveRequest.start_date);
-        //     const end = dayjs(leaveRequest.end_date);
-        //     const diff = end.diff(start, 'day');
-        //     for (let i = 0; i <= diff; i++) {
-        //         const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
-        //         await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
-        //     }
-        // }
+        // Notify approval level users about the cancellation
+        const employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {
+            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+        }, transaction);
+        await sendApprovalNotifications(leaveRequest, employee, "CANCEL", transaction);
 
         await transaction.commit();
         return res.success("LEAVE_CANCELLED");
+
+        // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
+        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
+            const start = dayjs(leaveRequest.start_date);
+            const end = dayjs(leaveRequest.end_date);
+            const diff = end.diff(start, 'day');
+            for (let i = 0; i <= diff; i++) {
+                const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+            }
+        }
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);

@@ -6,6 +6,7 @@ const readline = require('readline');
 const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const { validateRequest, handleError, constants } = require("../../../helpers");
+const { ExcelImportLog } = require("../../../models");
 
 /**
  * Controller: Import Data
@@ -79,20 +80,70 @@ exports.importData = async (req, res) => {
     req.connection?.on("close", abortImport);
 
     // 4. Handle Worker Events
-    worker.on("message", (msg) => {
+    worker.on("message", async (msg) => {
       if (msg.status === "SUCCESS") {
         const result = msg.result;
 
-        if (result.importErrors) {
-          keepErrorLog = true;
-          setTimeout(() => {
-              if (fs.existsSync(errorLogPath)) {
-                  fs.unlink(errorLogPath, (err) => {
-                      if (!err) console.log(`Auto-cleaned expired error file: ${errorKey}`);
-                  });
-              }
-          }, 300000);
+        let importStatus = 0; // Success
+        let failedCount = 0;
+        let successCount = result.count || 0;
+        let totalRecords = result.count || 0;
 
+        if (result.importErrors) {
+          importStatus = 1; // Completed with Errors
+          failedCount = result.errorCount || 0;
+          totalRecords = (result.errorCount || 0) + (result.skippedCount || 0);
+          successCount = result.successCount || 0;
+          keepErrorLog = true;
+        }
+
+        // Copy original file for download later permanently
+        if (req.file && req.file.path) {
+            const backupsDir = path.join(process.cwd(), 'uploads', 'import_backups');
+            if (!fs.existsSync(backupsDir)) {
+                fs.mkdirSync(backupsDir, { recursive: true });
+            }
+            const originalPath = path.join(backupsDir, `${errorKey}_original.xlsx`);
+            try {
+                fs.copyFileSync(req.file.path, originalPath);
+            } catch (err) {
+                console.error("Failed to back up original file:", err);
+            }
+        }
+
+        // Create Import Log record
+        try {
+          const reqData = { ...req.body };
+          delete reqData.entity_name;
+          delete reqData.user_id;
+          delete reqData.branch_id;
+          delete reqData.company_id;
+          const importParams = JSON.stringify(reqData);
+
+          await ExcelImportLog.create({
+            entity_name: req.body.entity_name,
+            file_name: req.file ? req.file.originalname : "Uploaded Excel",
+            total_records: totalRecords,
+            success_count: successCount,
+            failed_count: failedCount,
+            error_key: errorKey,
+            status: importStatus,
+            error_details: result.errors ? JSON.stringify(result.errors) : null,
+            import_parameters: importParams,
+            user_id: req.user ? req.user.id : req.body.user_id || null,
+            branch_id: req.user ? req.user.branch_id : req.body.branch_id || null,
+            company_id: req.user ? req.user.company_id : req.body.company_id || null
+          });
+        } catch (logErr) {
+          console.error("Failed to create ExcelImportLog:", logErr);
+        }
+
+        // Clean up error log file immediately (since errors are stored in the database now)
+        if (fs.existsSync(errorLogPath)) {
+          try { fs.unlinkSync(errorLogPath); } catch (e) {}
+        }
+
+        if (result.importErrors) {
           return res.error(constants.VALIDATION_ERROR,{
               errorKey: errorKey, 
               errorCount: result.errorCount,
@@ -100,10 +151,6 @@ exports.importData = async (req, res) => {
               ...result.errors,
             }
           );
-        }
-
-        if (fs.existsSync(errorLogPath)) {
-            fs.unlink(errorLogPath, () => {}); 
         }
 
         return res.success(constants.ITEM_CREATED, {
@@ -114,6 +161,29 @@ exports.importData = async (req, res) => {
         });
       } 
       else if (msg.status === "ERROR") {
+        // Log failure
+        try {
+          const reqData = { ...req.body };
+          delete reqData.entity_name;
+          delete reqData.user_id;
+          delete reqData.branch_id;
+          delete reqData.company_id;
+          const importParams = JSON.stringify(reqData);
+
+          await ExcelImportLog.create({
+            entity_name: req.body.entity_name,
+            file_name: req.file ? req.file.originalname : "Uploaded Excel",
+            total_records: 0,
+            success_count: 0,
+            failed_count: 0,
+            status: 2, // Failed/Aborted
+            import_parameters: importParams,
+            user_id: req.user ? req.user.id : req.body.user_id || null,
+            branch_id: req.user ? req.user.branch_id : req.body.branch_id || null,
+            company_id: req.user ? req.user.company_id : req.body.company_id || null
+          });
+        } catch (logErr) {}
+
         return res.error(constants.SERVER_ERROR, { message: msg.error });
       } else if (msg.status === "CANCELLED") {
         console.log("✅ Worker confirmed cancellation.");
@@ -132,10 +202,6 @@ exports.importData = async (req, res) => {
       if (cancelTimeout) clearTimeout(cancelTimeout);
       try {
         if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-        // Only delete error log if NOT waiting for user download
-        if (!keepErrorLog && fs.existsSync(errorLogPath)) {
-            fs.unlinkSync(errorLogPath); 
-        }
       } catch (cleanupErr) {
         console.error("Failed to delete temp files", cleanupErr);
       }
@@ -159,27 +225,34 @@ exports.downloadErrorFile = async (req, res) => {
   let fileStream = null;
 
   try {
-    const { key } = req.query;
+    const { key, type } = req.query;
     if (!key) {
-      return res.error(constants.VALIDATION_ERROR, { message: "Missing error key." });
+      return res.error(constants.VALIDATION_ERROR, { message: "Missing file key." });
     }
 
     const tempDir = path.join(process.cwd(), 'uploads', 'temp_imports'); 
+
+    if (type === 'original') {
+      const backupsDir = path.join(process.cwd(), 'uploads', 'import_backups');
+      tempFilePath = path.join(backupsDir, `${key}_original.xlsx`);
+      if (!fs.existsSync(tempFilePath)) {
+        return res.error(constants.NOT_FOUND, { message: "Original file expired or not found." });
+      }
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="uploaded_excel_${key}.xlsx"`);
+      return res.sendFile(tempFilePath);
+    }
+
     tempFilePath = path.join(tempDir, `${key}_errors.jsonl`);
 
     if (!fs.existsSync(tempFilePath)) {
       return res.error(constants.NOT_FOUND, { message: "Error file expired or not found." });
     }
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="rows_with_errors.xlsx"');
-
     fileStream = fs.createReadStream(tempFilePath);
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
-    const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-      stream: res, useStyles: true, useSharedStrings: true
-    });
+    const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Import Errors");
 
     let isFirstLine = true;
@@ -196,14 +269,26 @@ exports.downloadErrorFile = async (req, res) => {
           worksheet.columns = finalHeaders.map(header => ({
             header, key: header, width: header === errorHeader ? 60 : 15,
           }));
-          worksheet.getRow(1).font = { bold: true };
-          worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
           isFirstLine = false;
         }
-        worksheet.addRow(rowData).commit();
+        worksheet.addRow(rowData);
       } catch (e) {}
     }
-    await workbook.commit();
+
+    if (worksheet.getRow(1)) {
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE6E6E6' }
+      };
+    }
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="rows_with_errors.xlsx"');
+
+    await workbook.xlsx.write(res);
+    res.end();
 
   } catch (err) {
     console.error("Download Error:", err);

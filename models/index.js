@@ -56,6 +56,7 @@ function initModels(prefix) {
   const Announcement = require("./announcement")(seq, DataTypes);
   const CronJobRun = require("./cronJobRun")(seq, DataTypes);
   const UserDevice = require("./userDevice")(seq, DataTypes);
+  const ExcelImportLog = require("./excelImportLog")(seq, DataTypes);
 
   // Subscription models
   const CompanySubscription = require("./subscription/companySubscriptions")(seq, DataTypes);
@@ -176,6 +177,7 @@ function initModels(prefix) {
     Announcement,
     CronJobRun,
     UserDevice,
+    ExcelImportLog,
     CompanySubscription,
     SubscriptionPlan,
     AttendanceTemplate,
