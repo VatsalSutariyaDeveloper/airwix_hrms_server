@@ -201,9 +201,9 @@ exports.getPendingCount = async (req, res) => {
 
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        return req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id;
+                        return (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id;
                     case 'ATTENDANCE_SUPERVISOR':
-                        return req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id;
+                        return (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id;
                     case 'ADMIN':
                         return req.user.is_admin;
                     case 'EMPLOYER':
@@ -309,9 +309,9 @@ exports.getPendingApprovalsDetails = async (req, res) => {
 
             switch (currentStage.type) {
                 case 'REPORTING_MANAGER':
-                    return roleKey === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === userId;
+                    return (roleKey === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === userId;
                 case 'ATTENDANCE_SUPERVISOR':
-                    return roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === userId;
+                    return (roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === userId;
                 case 'ADMIN':
                     return isAdmin;
                 case 'EMPLOYER':
@@ -1139,9 +1139,9 @@ exports.getLeaveSummaryCounts = async (req, res) => {
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
 
         if (!req.user.is_super_admin && !req.user.is_admin) {
-            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR) {
+            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) {
                 employeeWhere.attendance_supervisor = req.user.id;
-            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER) {
+            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) {
                 employeeWhere.reporting_manager = req.user.id;
             }
             employeeWhere[Op.or] = [

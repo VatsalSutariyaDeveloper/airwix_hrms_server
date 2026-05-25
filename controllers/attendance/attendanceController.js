@@ -167,7 +167,7 @@ exports.syncPunches = async (req, res) => {
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
-        
+
         // 1. Rollback the entire transaction immediately
         await t.rollback();
 
@@ -1425,7 +1425,20 @@ exports.getAttendanceDayDetails = async (req, res) => {
         {
           model: Employee,
           as: "employee",
-          attributes: ["id", "first_name", "employee_code"]
+          attributes: ["id", "first_name", "employee_code", "attendance_setting_template"],
+          include: [
+            {
+              model: EmployeeAttendanceTemplate,
+              as: "employeeAttendanceTemplate",
+              where: { status: 0 },
+              required: false
+            },
+            {
+              model: AttendanceTemplate,
+              as: "attendanceTemplate",
+              required: false
+            }
+          ]
         },
         {
           model: LeaveTemplateCategory,
@@ -1535,14 +1548,41 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
     if (!attendanceDayJson) {
       const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-        attributes: ['id', 'first_name', 'employee_code']
+        attributes: ['id', 'first_name', 'employee_code', 'attendance_setting_template'],
+        include: [
+          {
+            model: EmployeeAttendanceTemplate,
+            as: "employeeAttendanceTemplate",
+            where: { status: 0 },
+            required: false
+          },
+          {
+            model: AttendanceTemplate,
+            as: "attendanceTemplate",
+            required: false
+          }
+        ]
       });
       employeeDetails = employee ? (employee.get ? employee.toJSON() : employee) : null;
     }
 
+    let attendanceTemplateObj = {
+      allow_multiple_punches: true
+    };
+
+    if (employeeDetails) {
+      const template = employeeDetails.employeeAttendanceTemplate || employeeDetails.attendanceTemplate;
+      if (template) {
+        attendanceTemplateObj = {
+          allow_multiple_punches: template.allow_multiple_punches !== undefined ? template.allow_multiple_punches : true
+        };
+      }
+    }
+
     return res.ok({
       attendanceDay: attendanceDayJson,
-      employee: employeeDetails
+      employee: attendanceDayJson ? undefined : employeeDetails,
+      employeeAttendanceTemplate: attendanceTemplateObj
       // punches: punchesWithImages
     });
   } catch (err) {

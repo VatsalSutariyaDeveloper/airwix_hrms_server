@@ -2358,8 +2358,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     // Override fines and worked minutes for automated approvals (e.g. Short Leave treated as Present)
     if (status === 0 || status === 1) { // 0: Present, 1: Half Day
-      const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
-      const minHalfDay = shift ? (shift.min_half_day_minutes || 240) : 240;
+      const minFullDay = shift ? (shift.min_full_day_minutes ?? 480) : 480;
+      const minHalfDay = shift ? (shift.min_half_day_minutes ?? 240) : 240;
 
       const requiresOut = template ? template.require_punch_out : true;
 

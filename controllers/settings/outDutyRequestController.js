@@ -115,6 +115,15 @@ exports.getAll = async (req, res) => {
         }
     }
 
+    const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
+
+    if (!req.user.is_super_admin && !req.user.is_admin) {
+        employeeWhere[Op.or] = [
+            { attendance_supervisor: req.user.id },
+            { reporting_manager: req.user.id }
+        ];
+    }
+
     const data = await commonQuery.fetchPaginatedData(
         OutDutyRequest, 
         {...req.body}, 
@@ -125,7 +134,8 @@ exports.getAll = async (req, res) => {
               model: Employee,
               as: "employee",
               attributes: ["id", "first_name", "employee_code"],
-              required: false
+              where: employeeWhere,
+              required: true
             },
             {
               model: User,
@@ -308,31 +318,33 @@ exports.getPendingApprovals = async (req, res) => {
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
+            const isOwnRequest = (request.employee_id === req.user.employee_id);
             
             console.log("OutDuty Request:", request.id, "Employee:", employee.id, 
                        "User ID:", req.user.id, "Role:", req.user.role_id,
                        "Stage:", currentStage.type, "Config:", currentStage);
             
-            if (req.user.is_super_admin) {
+            if (req.user.is_super_admin && !isOwnRequest) {
                 isAuthorized = true;
             } else {
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
-                        if (req.user.is_admin) isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'EMPLOYER':
-                        isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'ANYONE':
                         if (employee.reporting_manager === req.user.id ||
                             employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin) {
+                            req.user.is_admin ||
+                            req.user.is_super_admin) {
                             isAuthorized = true;
                         }
                         break;
