@@ -144,6 +144,8 @@ router.patch("/role-permission/status", rolePermissionController.updateStatus);
 // ==========================
 router.get("/download-errors", importController.downloadErrorFile);
 router.post("/import-data", uploadExcelToDisk("file"), importController.importData);
+router.get("/import-logs", importEmployeeController.getImportLogs);
+router.delete("/import-logs/:id", importEmployeeController.deleteImportLog);
 
 // ==========================
 // 24. SHIFT ROUTES

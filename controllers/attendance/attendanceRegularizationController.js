@@ -95,6 +95,15 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "DELETED",
             };
 
+            const colorMap = {
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED]: "#10B981",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED]: "#EF4444",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING]: "#F59E0B",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED]: "#6B7280",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "#9CA3AF",
+            };
+
             group.regularizations.push({
                 id: request.id,
                 date: request.attendance_date,
@@ -102,6 +111,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 reason: request.reason || "",
                 status_id: request.approval_status,
                 status: statusMap[request.approval_status],
+                status_color: colorMap[request.approval_status] || "#F59E0B",
                 approved_by: request.approvedBy?.user_name || null,
                 approval_remark: request.approval_remark || ""
             });
@@ -152,15 +162,9 @@ exports.getAll = async (req, res) => {
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
         
         if (!req.user.is_super_admin && !req.user.is_admin) {
-            if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR) {
-                employeeWhere.attendance_supervisor = req.user.id;
-            } else if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER) {
-                employeeWhere.reporting_manager = req.user.id;
-            }
             employeeWhere[Op.or] = [
                 { attendance_supervisor: req.user.id },
-                { reporting_manager: req.user.id },
-                { id: req.user.employee_id }
+                { reporting_manager: req.user.id }
             ];
         }
 
@@ -248,26 +252,29 @@ exports.getPendingApprovals = async (req, res) => {
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
-            if (req.user.is_super_admin) {
+            const isOwnRequest = (request.employee_id === req.user.employee_id);
+
+            if (req.user.is_super_admin && !isOwnRequest) {
                 isAuthorized = true;
             } else {
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
-                        if (req.user.is_admin) isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'EMPLOYER':
-                        isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'ANYONE':
                         if (employee.reporting_manager === req.user.id ||
                             employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin) {
+                            req.user.is_admin ||
+                            req.user.is_super_admin) {
                             isAuthorized = true;
                         }
                         break;

@@ -1,15 +1,124 @@
 const { validateRequest, commonQuery, handleError, Op, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { sequelize, OutDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
+const { sequelize, OutDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, RolePermission } = require("../../models");
 const dayjs = require("dayjs");
 const notificationService = require("../../services/notificationService");
 
+const getApproversForOutDutyRequest = async (employeeId, currentLevel, transaction) => {
+    try {
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        }, transaction);
+
+        if (!employee) return [];
+
+        const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+        let config = template ? (template.out_duty_approval_config || []) : [];
+        if (typeof config === 'string') {
+            try { config = JSON.parse(config); } catch (e) { config = []; }
+        }
+        if (!Array.isArray(config)) config = [];
+        const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+        const { type } = currentStage;
+
+        const userIds = new Set();
+
+        if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
+            if (employee.reporting_manager) {
+                userIds.add(employee.reporting_manager);
+            }
+        }
+
+        if (type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
+            if (employee.attendance_supervisor) {
+                userIds.add(employee.attendance_supervisor);
+            }
+        }
+
+        if (type === 'ADMIN' || type === 'ANYONE' || type === 'EMPLOYER') {
+            const adminFilters = {
+                status: 0,
+                [Op.or]: [
+                    { is_super_admin: true },
+                    { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN },
+                    { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN }
+                ]
+            };
+            const admins = await commonQuery.findAllRecords(User, adminFilters, {
+                include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+                attributes: ['id'],
+                raw: true
+            }, transaction);
+
+            admins.forEach(a => userIds.add(a.id));
+        }
+
+        return [...userIds];
+    } catch (err) {
+        console.error("Error in getApproversForOutDutyRequest:", err);
+        return [];
+    }
+};
+
+const sendApprovalNotifications = async (outDutyRequest, employee, actionType, transaction) => {
+    try {
+        const userIds = await getApproversForOutDutyRequest(outDutyRequest.employee_id, outDutyRequest.current_out_duty_level, transaction);
+        if (!userIds || userIds.length === 0) return;
+
+        const employeeName = employee ? employee.first_name : "An employee";
+        const startDateStr = formatDateTime(outDutyRequest.start_date, 'DD MMM YYYY');
+        const endDateStr = formatDateTime(outDutyRequest.end_date, 'DD MMM YYYY');
+
+        let title = "";
+        let message = "";
+        let statusCode = 0;
+
+        if (actionType === "CREATE") {
+            title = "New Out Duty Request Pending Approval";
+            message = `${employeeName} has requested out duty from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 0;
+        } else if (actionType === "UPDATE") {
+            title = "Out Duty Request Updated";
+            message = `${employeeName} has updated their out duty request from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 0;
+        } else if (actionType === "CANCEL") {
+            title = "Out Duty Request Cancelled";
+            message = `${employeeName} has cancelled their out duty request from ${startDateStr} to ${endDateStr}.`;
+            statusCode = 1; // Warning / Cancelled
+        }
+
+        for (const userId of userIds) {
+            // Avoid notifying the employee themselves about their own action
+            const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id"] }, transaction);
+            if (user && user.employee_id === outDutyRequest.employee_id) {
+                continue;
+            }
+
+            await notificationService.createNotification({
+                user_id: userId,
+                title,
+                message,
+                type: "OUT_DUTY",
+                reference_id: outDutyRequest.id,
+                status_code: statusCode,
+                company_id: outDutyRequest.company_id,
+                branch_id: outDutyRequest.branch_id
+            }, transaction);
+        }
+    } catch (err) {
+        console.error("Error sending approval level notifications:", err);
+    }
+};
+
 
 exports.create = async (req, res) => {
-const transaction = await sequelize.transaction();    
-  try{
+    const transaction = await sequelize.transaction();
+    try {
 
-     const requiredFields = {
+        const requiredFields = {
             employee_id: "Employee ID",
             start_date: "Start Date",
             end_date: "End Date",
@@ -71,105 +180,176 @@ const transaction = await sequelize.transaction();
             return res.error("OVERLAP", { message: `Selected dates overlap with an existing out-duty request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
         }
 
-        await commonQuery.createRecord(
+        const outDutyRequest = await commonQuery.createRecord(
             OutDutyRequest,
-            { ...req.body, start_session, end_session, approval_status: approvalStatus },
+            { ...req.body, start_session, end_session, approval_status: approvalStatus, current_out_duty_level: 1, approval_history: [] },
             transaction
         )
 
+        // Notify approval level users
+        await sendApprovalNotifications(outDutyRequest, employee, "CREATE", transaction);
+
         await transaction.commit();
         return res.success(constants.SUCCESS, { message: "Out Duty request created successfully" });
-  }
-  catch (err) {
-    await transaction.rollback();
-    return handleError(err, res, req);
-  }
+    }
+    catch (err) {
+        await transaction.rollback();
+        return handleError(err, res, req);
+    }
 }
 
 exports.getAll = async (req, res) => {
-  try {
+    try {
 
-    const fieldConfig = [
-    ["employee_id", true, true],
-    ["start_date", true, true],
-    ["end_date", true, true],
-    ["total_days", false, true],
-  ];
+        const fieldConfig = [
+            ["employee_id", true, true],
+            ["start_date", true, true],
+            ["end_date", true, true],
+            ["total_days", false, true],
+        ];
 
-    // Add date filtering based on payload
-    let whereClause = {};
-    const leaveFilter = req.body?.leave_filter;
-    
-    if (leaveFilter) {
-        const today = dayjs().toDate();
-        
-        switch (leaveFilter) {
-            case 'previous':
-                // Previous: ended before today
-                whereClause.end_date = { [Op.lt]: today };
-                break;
-            case 'upcoming':
-                // Upcoming: ends today or later
-                whereClause.end_date = { [Op.gte]: today };
-                break;
-        }
-    }
+        // Add date filtering based on payload
+        let whereClause = {};
+        const leaveFilter = req.body?.leave_filter;
 
-    const data = await commonQuery.fetchPaginatedData(
-        OutDutyRequest, 
-        {...req.body}, 
-        fieldConfig, 
-        {
-          include: [
-            {
-              model: Employee,
-              as: "employee",
-              attributes: ["id", "first_name", "employee_code"],
-              required: false
-            },
-            {
-              model: User,
-              as: "approvedBy",
-              attributes: ["id", "user_name"],
-              required: false
+        if (leaveFilter) {
+            const today = dayjs().toDate();
+
+            switch (leaveFilter) {
+                case 'previous':
+                    // Previous: ended before today
+                    whereClause.end_date = { [Op.lt]: today };
+                    break;
+                case 'upcoming':
+                    // Upcoming: ends today or later
+                    whereClause.end_date = { [Op.gte]: today };
+                    break;
             }
-          ]
-        },
-        true, // requireTenantFields
-        'created_at', // dateField
-        whereClause // customWhere
-    );
-    
-    return res.ok(data);
-  } catch (err) {
-    return handleError(err, res, req);
-  }
+        }
+
+        const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
+
+        if (!req.user.is_super_admin && !req.user.is_admin) {
+            employeeWhere[Op.or] = [
+                { attendance_supervisor: req.user.id },
+                { reporting_manager: req.user.id }
+            ];
+        }
+
+        const data = await commonQuery.fetchPaginatedData(
+            OutDutyRequest,
+            { ...req.body },
+            fieldConfig,
+            {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code"],
+                        where: employeeWhere,
+                        required: true
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ]
+            },
+            true, // requireTenantFields
+            'created_at', // dateField
+            whereClause // customWhere
+        );
+
+        return res.ok(data);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
 }
 
 // Get Single Request Details
 exports.getById = async (req, res) => {
     try {
         const { id } = req.params;
-        const outDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, { id },{
-          include: [
-            {
-              model: Employee,
-              as: "employee",
-              attributes: ["id", "first_name", "employee_code"],
-              required: false
-            },
-            {
-              model: User,
-              as: "approvedBy",
-              attributes: ["id", "user_name"],
-              required: false
-            }
-          ]
+        const outDutyRequest = await commonQuery.findOneRecord(OutDutyRequest, { id }, {
+            include: [
+                {
+                    model: Employee,
+                    as: "employee",
+                    attributes: ["id", "first_name", "employee_code"],
+                    include: [
+                        { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+                    ],
+                    required: false
+                },
+                {
+                    model: User,
+                    as: "approvedBy",
+                    attributes: ["id", "user_name"],
+                    required: false
+                }
+            ]
         });
 
         if (!outDutyRequest) return res.error(constants.NOT_FOUND);
 
-        return res.ok(outDutyRequest);
+        const raw = outDutyRequest.get ? outDutyRequest.get({ plain: true }) : outDutyRequest;
+
+        // Add approver name if available
+        raw.approved_by = raw.approvedBy?.user_name || null;
+
+        const employee = raw.employee || {};
+        const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+
+        const totalLevels = template ? (template.out_duty_approval_level || 1) : 1;
+        let levelConfigs = template ? (template.out_duty_approval_config || []) : [];
+        if (typeof levelConfigs === 'string') {
+            try { levelConfigs = JSON.parse(levelConfigs); } catch (e) { levelConfigs = []; }
+        }
+        if (!Array.isArray(levelConfigs)) levelConfigs = [];
+        const approvers = await commonQuery.findAllRecords(User, { status: 0 });
+
+        const history = raw.approval_history || [];
+        const timeline = [];
+
+        for (let i = 1; i <= totalLevels; i++) {
+            const levelConfig = levelConfigs.find(l => l.level === i) || {};
+            const levelHistory = history.find(h => h.level === i);
+            let stageStatus = "UPCOMING";
+            let actionPersonnel = "-";
+
+            if (i < raw.current_out_duty_level) {
+                stageStatus = "COMPLETED";
+                const user = approvers.find(u => u.id === (levelHistory?.approved_by || levelHistory?.by));
+                if (user) actionPersonnel = user.user_name;
+            } else if (i === raw.current_out_duty_level) {
+                if (raw.approval_status === constants.OUT_DUTY_STATUS.REJECTED || raw.approval_status === constants.OUT_DUTY_STATUS.CANCELLED) {
+                    stageStatus = levelHistory ? "REJECTED" : "CANCELLED";
+                } else if (raw.approval_status === constants.OUT_DUTY_STATUS.APPROVED) {
+                    stageStatus = "COMPLETED";
+                } else {
+                    stageStatus = "PENDING";
+                }
+            }
+
+            timeline.push({
+                level: i,
+                status: stageStatus,
+                required_role: levelConfig.type,
+                personnel: actionPersonnel,
+                label: levelConfig.label || `Level ${i}`,
+                history: levelHistory || null
+            });
+        }
+
+        raw.timeline = timeline;
+        raw.next_action_at_level = totalLevels === raw.current_out_duty_level &&
+            [constants.OUT_DUTY_STATUS.APPROVED, constants.OUT_DUTY_STATUS.REJECTED, constants.OUT_DUTY_STATUS.CANCELLED].includes(Number(raw.approval_status))
+            ? null : raw.current_out_duty_level;
+
+        return res.ok(raw);
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -242,13 +422,16 @@ exports.update = async (req, res) => {
             return res.error("OVERLAP", { message: `Selected dates overlap with an existing out-duty request (${formatDateTime(overlap.start_date)} to ${formatDateTime(overlap.end_date)})` });
         }
 
-        const PUT = { 
-            ...req.body, 
+        const PUT = {
+            ...req.body,
             start_session,
             end_session
         };
 
         await commonQuery.updateRecordById(OutDutyRequest, id, PUT, transaction);
+        const updatedRequest = await commonQuery.findOneRecord(OutDutyRequest, { id }, {}, transaction);
+        const employeeForNotify = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
+        await sendApprovalNotifications(updatedRequest, employeeForNotify, "UPDATE", transaction);
 
         await transaction.commit();
         return res.success("OUT_DUTY_UPDATED");
@@ -263,7 +446,7 @@ exports.getPendingApprovals = async (req, res) => {
     try {
         // Fetch all pending out-duty requests with employee and template details
         const requests = await commonQuery.fetchPaginatedData(
-            OutDutyRequest, 
+            OutDutyRequest,
             req.body,
             [
                 ["employee.first_name", true, true],
@@ -273,8 +456,11 @@ exports.getPendingApprovals = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "leave_template"],
-                        include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
+                        include: [
+                            { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                            { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+                        ]
                     },
                     {
                         model: User,
@@ -298,49 +484,54 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
-            // Get leave template if employee has one (out-duty uses same template as leave)
-            const template = employee?.leaveTemplate;
+            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
             const currentLevel = request.current_out_duty_level;
-            const config = template ? (template.approval_config || []) : [];
-
+            let parsedConfig = template ? (template.out_duty_approval_config || {}) : {};
+            if (typeof parsedConfig === 'string') {
+                try { parsedConfig = JSON.parse(parsedConfig); } catch (e) { parsedConfig = {}; }
+            }
+            let config = Array.isArray(parsedConfig) ? parsedConfig : (parsedConfig.approval_config || []);
+            if (!Array.isArray(config)) config = [];
             let currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) currentStage = { type: "ANYONE" };
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
-            
-            console.log("OutDuty Request:", request.id, "Employee:", employee.id, 
-                       "User ID:", req.user.id, "Role:", req.user.role_id,
-                       "Stage:", currentStage.type, "Config:", currentStage);
-            
-            if (req.user.is_super_admin) {
+            const isOwnRequest = (request.employee_id === req.user.employee_id);
+
+            console.log("OutDuty Request:", request.id, "Employee:", employee.id,
+                "User ID:", req.user.id, "Role:", req.user.role_id,
+                "Stage:", currentStage.type, "Config:", currentStage);
+
+            if (req.user.is_super_admin && !isOwnRequest) {
                 isAuthorized = true;
             } else {
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER && employee.reporting_manager === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) isAuthorized = true;
                         break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id) isAuthorized = true;
                         break;
                     case 'ADMIN':
-                        if (req.user.is_admin) isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'EMPLOYER':
-                        isAuthorized = true;
+                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
                         break;
                     case 'ANYONE':
                         if (employee.reporting_manager === req.user.id ||
                             employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin) {
+                            req.user.is_admin ||
+                            req.user.is_super_admin) {
                             isAuthorized = true;
                         }
                         break;
                 }
             }
-            
+
             console.log("Request", request.id, "Authorized:", isAuthorized);
-            
+
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
                 raw.approved_by_name = raw.approvedBy?.user_name || null;
@@ -377,15 +568,19 @@ exports.updateStatus = async (req, res) => {
             const employee = await commonQuery.findOneRecord(Employee, outDutyRequest.employee_id, {
                 include: [
                     { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                    { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
                 ]
             }, transaction);
 
-            const template = employee?.employeeAttendanceTemplate;
+            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
             const maxLevel = template ? (template.out_duty_approval_level || 1) : 1;
-            
+
             if (req.user.is_super_admin) {
                 newStatus = constants.OUT_DUTY_STATUS.APPROVED;
                 newLevel = maxLevel;
+                if (outDutyRequest.current_out_duty_level < maxLevel && outDutyRequest.approval_history && outDutyRequest.approval_history.length > 0) {
+                    outDutyRequest.approval_history[outDutyRequest.approval_history.length - 1].note = "Bypassed remaining levels via Super Admin";
+                }
             } else if (outDutyRequest.current_out_duty_level < maxLevel) {
                 newStatus = constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED;
                 newLevel = outDutyRequest.current_out_duty_level + 1;
@@ -415,8 +610,8 @@ exports.updateStatus = async (req, res) => {
             await notificationService.createNotification({
                 user_id: user.id,
                 title: newStatus === constants.OUT_DUTY_STATUS.APPROVED ? "Out Duty Approved" : (newStatus === constants.OUT_DUTY_STATUS.REJECTED ? "Out Duty Rejected" : "Out Duty Status Updated"),
-                message: newStatus === constants.OUT_DUTY_STATUS.APPROVED 
-                    ? `Your Out Duty request from ${formatDateTime(outDutyRequest.start_date, 'DD MMM')} to ${formatDateTime(outDutyRequest.end_date, 'DD MMM')} has been approved.` 
+                message: newStatus === constants.OUT_DUTY_STATUS.APPROVED
+                    ? `Your Out Duty request from ${formatDateTime(outDutyRequest.start_date, 'DD MMM')} to ${formatDateTime(outDutyRequest.end_date, 'DD MMM')} has been approved.`
                     : `Your Out Duty request has been ${newStatus === constants.OUT_DUTY_STATUS.REJECTED ? 'rejected' : 'updated'}. ${remarks ? 'Remarks: ' + remarks : ''}`,
                 type: "OUT_DUTY",
                 reference_id: id,
@@ -424,6 +619,14 @@ exports.updateStatus = async (req, res) => {
                 company_id: req.user.company_id,
                 branch_id: req.user.branch_id
             }, transaction);
+        }
+
+        if (newStatus === constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED) {
+            const rawRequest = outDutyRequest.get ? outDutyRequest.get({ plain: true }) : outDutyRequest;
+            await sendApprovalNotifications({
+                ...rawRequest,
+                current_out_duty_level: newLevel
+            }, outDutyRequest.employee, "CREATE", transaction);
         }
 
         await transaction.commit();
@@ -468,6 +671,10 @@ exports.cancelLeave = async (req, res) => {
             approval_status: constants.OUT_DUTY_STATUS.CANCELLED
         }, transaction);
 
+        const updatedRequest = await commonQuery.findOneRecord(OutDutyRequest, { id }, {}, transaction);
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
+        await sendApprovalNotifications(updatedRequest, employee, "CANCEL", transaction);
+
         await transaction.commit();
         return res.success(constants.UPDATED);
     } catch (err) {
@@ -481,102 +688,102 @@ exports.cancelLeave = async (req, res) => {
  * Grouped by Month for History
  */
 exports.getOutDutySummary = async (req, res) => {
-  try {
-    let { employee_id } = req.body;
-    if(!employee_id){
-      employee_id = req.user.employee_id;
-    }
-
-    if (!employee_id) {
-       return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
-    }
-
-    // 1. Fetch Out Duty Requests for History (Ordered by date)
-    const history = await commonQuery.findAllRecords(OutDutyRequest, {
-      employee_id,
-      status: 0
-    }, {
-      include: [
-        // Include approver user so we can show name in history
-        {
-          model: User,
-          as: "approvedBy",
-          attributes: ["id", "user_name"],
-          required: false
+    try {
+        let { employee_id } = req.body;
+        if (!employee_id) {
+            employee_id = req.user.employee_id;
         }
-      ],
-      order: [["start_date", "DESC"]]
-    });
 
-    // 2. Group History by Month
-    const groupedHistory = [];
-    history.forEach(outDuty => {
-      const monthYear = formatDateTime(outDuty.start_date, "MMM, YYYY");
-      let group = groupedHistory.find(g => g.month_label === monthYear);
-      
-      if (!group) {
-        group = {
-          month_label: monthYear,
-          total_days: 0,
-          out_duties: []
-        };
-        groupedHistory.push(group);
-      }
+        if (!employee_id) {
+            return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
+        }
 
-      group.total_days += parseFloat(outDuty.total_days || 0);
-      
-      const start = dayjs(outDuty.start_date);
-      const end = dayjs(outDuty.end_date);
-      const dateRange = `${formatDateTime(outDuty.start_date, "D MMM, ddd")} - ${formatDateTime(outDuty.end_date, "D MMM, ddd")}`;
+        // 1. Fetch Out Duty Requests for History (Ordered by date)
+        const history = await commonQuery.findAllRecords(OutDutyRequest, {
+            employee_id,
+            status: 0
+        }, {
+            include: [
+                // Include approver user so we can show name in history
+                {
+                    model: User,
+                    as: "approvedBy",
+                    attributes: ["id", "user_name"],
+                    required: false
+                }
+            ],
+            order: [["start_date", "DESC"]]
+        });
 
-      const statusMap = {
-        [constants.OUT_DUTY_STATUS.PENDING]: "PENDING",
-        [constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
-        [constants.OUT_DUTY_STATUS.APPROVED]: "APPROVED",
-        [constants.OUT_DUTY_STATUS.REJECTED]: "REJECTED",
-        [constants.OUT_DUTY_STATUS.CANCELLED]: "CANCELLED",
-        [constants.OUT_DUTY_STATUS.DELETED]: "DELETED",
-      };
+        // 2. Group History by Month
+        const groupedHistory = [];
+        history.forEach(outDuty => {
+            const monthYear = formatDateTime(outDuty.start_date, "MMM, YYYY");
+            let group = groupedHistory.find(g => g.month_label === monthYear);
 
-      const colorMap = {
-        [constants.OUT_DUTY_STATUS.APPROVED]: "#10B981",
-        [constants.OUT_DUTY_STATUS.REJECTED]: "#EF4444",
-        [constants.OUT_DUTY_STATUS.PENDING]: "#F59E0B",
-        [constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
-        [constants.OUT_DUTY_STATUS.CANCELLED]: "#6B7280",
-        [constants.OUT_DUTY_STATUS.DELETED]: "#9CA3AF",
-      };
+            if (!group) {
+                group = {
+                    month_label: monthYear,
+                    total_days: 0,
+                    out_duties: []
+                };
+                groupedHistory.push(group);
+            }
 
-      group.out_duties.push({
-        id: outDuty.id,
-        date_range: dateRange,
-        duration_display: `${parseFloat(outDuty.total_days).toFixed(1)} Days | Out Duty`,
-        reason: outDuty.reason || "",
-        status_id: outDuty.approval_status,
-        status: statusMap[outDuty.approval_status],
-        status_color: colorMap[outDuty.approval_status] || "#F59E0B",
-        approved_by: outDuty.approvedBy?.user_name || null,
-        approval_remark: outDuty.approval_remark || ""
-      });
-    });
+            group.total_days += parseFloat(outDuty.total_days || 0);
 
-    // Calculate totals
-    let totalUsed = 0;
-    history.forEach(outDuty => {
-      totalUsed += parseFloat(outDuty.total_days || 0);
-    });
+            const start = dayjs(outDuty.start_date);
+            const end = dayjs(outDuty.end_date);
+            const dateRange = `${formatDateTime(outDuty.start_date, "D MMM, ddd")} - ${formatDateTime(outDuty.end_date, "D MMM, ddd")}`;
 
-    return res.ok({
-      out_duty_summary: {
-        total_days_text: `${totalUsed.toFixed(1)} Days`,
-        total_requests: history.length
-      },
-      out_duty_history: groupedHistory
-    });
+            const statusMap = {
+                [constants.OUT_DUTY_STATUS.PENDING]: "PENDING",
+                [constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
+                [constants.OUT_DUTY_STATUS.APPROVED]: "APPROVED",
+                [constants.OUT_DUTY_STATUS.REJECTED]: "REJECTED",
+                [constants.OUT_DUTY_STATUS.CANCELLED]: "CANCELLED",
+                [constants.OUT_DUTY_STATUS.DELETED]: "DELETED",
+            };
 
-  } catch (err) {
-    return handleError(err, res, req);
-  }
+            const colorMap = {
+                [constants.OUT_DUTY_STATUS.APPROVED]: "#10B981",
+                [constants.OUT_DUTY_STATUS.REJECTED]: "#EF4444",
+                [constants.OUT_DUTY_STATUS.PENDING]: "#F59E0B",
+                [constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+                [constants.OUT_DUTY_STATUS.CANCELLED]: "#6B7280",
+                [constants.OUT_DUTY_STATUS.DELETED]: "#9CA3AF",
+            };
+
+            group.out_duties.push({
+                id: outDuty.id,
+                date_range: dateRange,
+                duration_display: `${parseFloat(outDuty.total_days).toFixed(1)} Days | Out Duty`,
+                reason: outDuty.reason || "",
+                status_id: outDuty.approval_status,
+                status: statusMap[outDuty.approval_status],
+                status_color: colorMap[outDuty.approval_status] || "#F59E0B",
+                approved_by: outDuty.approvedBy?.user_name || null,
+                approval_remark: outDuty.approval_remark || ""
+            });
+        });
+
+        // Calculate totals
+        let totalUsed = 0;
+        history.forEach(outDuty => {
+            totalUsed += parseFloat(outDuty.total_days || 0);
+        });
+
+        return res.ok({
+            out_duty_summary: {
+                total_days_text: `${totalUsed.toFixed(1)} Days`,
+                total_requests: history.length
+            },
+            out_duty_history: groupedHistory
+        });
+
+    } catch (err) {
+        return handleError(err, res, req);
+    }
 };
 
 // Delete Out Duty Requests

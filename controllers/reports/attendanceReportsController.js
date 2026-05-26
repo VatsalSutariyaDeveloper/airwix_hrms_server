@@ -1529,6 +1529,7 @@ exports.getLeaveReport = async (req, res) => {
     // Fetch leaves, weekoffs, holidays
     const leaves = await commonQuery.findAllRecords(LeaveRequest, {
       employee_id: { [Op.in]: employeeIds },
+      request_type: 'DEBIT',
       approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
       status: 0,
       [Op.or]: [

@@ -56,6 +56,7 @@ function initModels(prefix) {
   const Announcement = require("./announcement")(seq, DataTypes);
   const CronJobRun = require("./cronJobRun")(seq, DataTypes);
   const UserDevice = require("./userDevice")(seq, DataTypes);
+  const ExcelImportLog = require("./excelImportLog")(seq, DataTypes);
 
   // Subscription models
   const CompanySubscription = require("./subscription/companySubscriptions")(seq, DataTypes);
@@ -176,6 +177,7 @@ function initModels(prefix) {
     Announcement,
     CronJobRun,
     UserDevice,
+    ExcelImportLog,
     CompanySubscription,
     SubscriptionPlan,
     AttendanceTemplate,
@@ -230,6 +232,11 @@ function initModels(prefix) {
       db[modelName].associate(db);
     }
   });
+
+  // Self-healing migration for FaceRecognitionError 'message' column
+  seq.query("ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS message TEXT;")
+    .then(() => console.log(`[Self-healing] Checked/added 'message' column to face_recognition_errors in ${prefix || 'default'} database`))
+    .catch(err => console.error(`[Self-healing] Failed to add 'message' column in ${prefix || 'default'}:`, err.message));
 
   db.sequelize = seq;
   db.masterSequelize = masterSequelize;

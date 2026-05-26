@@ -2268,7 +2268,7 @@ exports.facePunch = async (req, res) => {
         debugLog("Punch", `Image Size: ${imageBuffer ? imageBuffer.length : 'Unknown'} bytes`);
 
         // 🚀 NEW LOGIC: We get the exact Employee ID and Match Score from Flutter
-        const { employee_id, latitude, longitude, device_id, match_score } = req.body;
+        const { employee_id, latitude, longitude, device_id, match_score, matches } = req.body;
         const matchPercentage = match_score || "100.00"; // Fallback if flutter doesn't send
 
         if (!employee_id) {
@@ -2290,7 +2290,7 @@ exports.facePunch = async (req, res) => {
             const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
             timings.upload = Date.now() - uploadStart;
 
-            const savedFilename = savedFiles.image || savedFiles['image'];
+            const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
 
             // 2. Use the robust punch helper
             const punchResult = await punch(employee.id, {
@@ -2617,7 +2617,7 @@ exports.inviteUser = async (req, res) => {
                         // ignore
                     }
 
-                    const appName = process.env.APP_NAME || "AIRWIX PAYROLL";
+                    const appName = process.env.APP_NAME || "Airwix Payroll";
                     let empName = employee.first_name || "Employee";
 
                     // Clean up newlines, carriage returns, tabs, and multiple spaces that might be present in names
@@ -2658,6 +2658,17 @@ exports.inviteUser = async (req, res) => {
                         }
                     }
 
+                    let shouldSendSms = true;
+                    try {
+                        const { getCompanySetting } = require("../../helpers/cache");
+                        const companySettings = await getCompanySetting(employee.company_id);
+                        if (companySettings && companySettings.otp_sms_send === false) {
+                            shouldSendSms = false;
+                        }
+                    } catch (e) {
+                        console.error("[OTP-SERVICE] Error checking company settings:", e.message);
+                    }
+
                     const actualMessage = `Hi ${empName}, your salary, leave & attendance details are available on ${appName}: https://hrms.airwix.in/AWXTEC-PY - Team ${compName}`;
                     console.log(`[INVITE-SMS] Actual message to send: "${actualMessage}" (Length: ${actualMessage.length} chars)`);
 
@@ -2665,7 +2676,7 @@ exports.inviteUser = async (req, res) => {
                         employee_name: empName,
                         application_name: appName,
                         company_name: compName,
-                    });
+                    }, shouldSendSms);
 
                     console.log(`[INVITE-SMS] Invitation SMS queued for ${mobileNo}. Adjusted Name: "${empName}", Company: "${compName}"`);
                 }
@@ -3096,7 +3107,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                     model: LeaveRequest,
                     as: 'leaveRequests',
                     attributes: ['id', 'start_date', 'end_date', 'start_session', 'end_session', 'approval_status'],
-                    where: { approval_status: 3 }, // 3: APPROVED
+                    where: { approval_status: 3, request_type: "DEBIT" }, // 3: APPROVED
                     required: false,
                     separate: true
                 },

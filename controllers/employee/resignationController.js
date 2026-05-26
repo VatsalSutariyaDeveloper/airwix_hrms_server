@@ -37,7 +37,7 @@ const notificationService = require("../../services/notificationService");
 /**
  * Submit Resignation (Employee Portal)
  */
-exports.submitResignation = async (req, res) => {    
+exports.submitResignation = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const employeeId = req.user.employee_id || req.body.employee_id;
@@ -64,8 +64,8 @@ exports.submitResignation = async (req, res) => {
                 { model: User, as: 'manager', attributes: ['email'] },
                 { model: User, as: 'supervisor', attributes: ['email'] }
             ]
-        }, transaction);    
-        
+        }, transaction);
+
         if (!employee) {
             await transaction.rollback();
             return res.error(constants.NOT_FOUND);
