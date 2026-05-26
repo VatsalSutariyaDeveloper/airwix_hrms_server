@@ -1096,7 +1096,6 @@ exports.getPendingApprovals = async (req, res) => {
             if (req.user.is_super_admin && !isOwnRequest) {
                 isAuthorized = true;
             } else {
-
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
                         if ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) isAuthorized = true;
@@ -1121,6 +1120,7 @@ exports.getPendingApprovals = async (req, res) => {
                         break;
                 }
             }
+
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
 

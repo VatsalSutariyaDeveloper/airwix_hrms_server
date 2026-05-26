@@ -95,6 +95,15 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "DELETED",
             };
 
+            const colorMap = {
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED]: "#10B981",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED]: "#EF4444",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING]: "#F59E0B",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED]: "#6B7280",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "#9CA3AF",
+            };
+
             group.regularizations.push({
                 id: request.id,
                 date: request.attendance_date,
@@ -102,6 +111,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 reason: request.reason || "",
                 status_id: request.approval_status,
                 status: statusMap[request.approval_status],
+                status_color: colorMap[request.approval_status] || "#F59E0B",
                 approved_by: request.approvedBy?.user_name || null,
                 approval_remark: request.approval_remark || ""
             });
