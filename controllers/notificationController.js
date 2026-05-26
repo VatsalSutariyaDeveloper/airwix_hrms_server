@@ -203,13 +203,15 @@ exports.markAllAsRead = async (req, res) => {
             if (ann.target_type === 2) {
                 // Specific roles
                 if (!ann.target || !req.user.role_id) return false;
-                const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                const targetArray = Array.isArray(ann.target) ? ann.target : String(ann.target || "").split(",");
+                const targetRoleIds = targetArray.map(t => parseInt(String(t).trim()));
                 return targetRoleIds.includes(req.user.role_id);
             }
             if (ann.target_type === 3) {
                 // Specific users
                 if (!ann.target || !userId) return false;
-                const targetUserIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
+                const targetArray = Array.isArray(ann.target) ? ann.target : String(ann.target || "").split(",");
+                const targetUserIds = targetArray.map(t => parseInt(String(t).trim()));
                 return targetUserIds.includes(userId);
             }
             return false;
@@ -317,13 +319,22 @@ exports.updateFcmToken = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "FCM token is required");
         }
 
+        // Skip FCM token storage for attendance and canteen devices
+        const isDeviceSession = req.user.access === "attendance" || req.user.access === "canteen";
+        if (isDeviceSession) {
+            // Delete FCM token if it exists in the database
+            await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, null);
+            await User.update({ fcm_token: null }, { where: { fcm_token } });
+            return res.ok({ message: "FCM token storage skipped and deleted if existing for device sessions" });
+        }
+
         // 1. Dual-register in our multi-device table
         const companyId = req.user.company_id || null;
         const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, null, false, {});
         if (!existingDevice) {
             await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
-        } else if (existingDevice.user_id !== userId || existingDevice.company_id !== companyId) {
-            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
+        } else {
+            await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: userId, company_id: companyId }, null, false, {});
         }
 
         // 2. Fallback update on User model for legacy/single-query references

@@ -373,8 +373,8 @@ exports.login = async (req, res) => {
       const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
       if (!existingDevice) {
         await commonQuery.createRecord(UserDevice, { user_id: user.id, fcm_token, company_id: companyId }, transaction, true, {});
-      } else if (existingDevice.user_id !== user.id || existingDevice.company_id !== companyId) {
-        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: user.id, company_id: companyId }, transaction, false, {});
+      } else {
+        await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: user.id, company_id: companyId }, transaction, false, {});
       }
       await commonQuery.updateRecordById(User, user.id, { fcm_token }, transaction, true, {});
       user.fcm_token = fcm_token;
@@ -1170,16 +1170,21 @@ exports.verifyOtp = async (req, res) => {
     }
 
     // Register FCM Token if provided in verifyOtp body
-    if (fcm_token && !isDevice) {
-      const companyId = entity.company_id || null;
-      const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
-      if (!existingDevice) {
-        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-      } else if (existingDevice.user_id !== entity.id || existingDevice.company_id !== companyId) {
-        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+    if (fcm_token) {
+      if (!isDevice) {
+        const companyId = entity.company_id || null;
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        if (!existingDevice) {
+          await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+        } else {
+          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        }
+        await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+        entity.fcm_token = fcm_token;
+      } else {
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, transaction);
+        await User.update({ fcm_token: null }, { where: { fcm_token }, transaction });
       }
-      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
-      entity.fcm_token = fcm_token;
     }
 
     const token = generateToken({
@@ -1541,16 +1546,21 @@ exports.generatePin = async (req, res) => {
       }
     }
     // Register FCM Token if provided in generatePin body
-    if (fcm_token && !isDevice) {
-      const companyId = entity.company_id || null;
-      const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
-      if (!existingDevice) {
-        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-      } else if (existingDevice.user_id !== entity.id || existingDevice.company_id !== companyId) {
-        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+    if (fcm_token) {
+      if (!isDevice) {
+        const companyId = entity.company_id || null;
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        if (!existingDevice) {
+          await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+        } else {
+          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        }
+        await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+        entity.fcm_token = fcm_token;
+      } else {
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, transaction);
+        await User.update({ fcm_token: null }, { where: { fcm_token }, transaction });
       }
-      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
-      entity.fcm_token = fcm_token;
     }
 
     console.log("entity", entity.device_type)
@@ -1858,16 +1868,21 @@ exports.pinLogin = async (req, res) => {
     }
 
     // Register FCM Token if provided in pinLogin body
-    if (fcm_token && !isDevice) {
-      const companyId = entity.company_id || null;
-      const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
-      if (!existingDevice) {
-        await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-      } else if (existingDevice.user_id !== entity.id || existingDevice.company_id !== companyId) {
-        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+    if (fcm_token) {
+      if (!isDevice) {
+        const companyId = entity.company_id || null;
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        if (!existingDevice) {
+          await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+        } else {
+          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        }
+        await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+        entity.fcm_token = fcm_token;
+      } else {
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, transaction);
+        await User.update({ fcm_token: null }, { where: { fcm_token }, transaction });
       }
-      await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
-      entity.fcm_token = fcm_token;
     }
 
     const token = generateToken({
