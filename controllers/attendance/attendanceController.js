@@ -1,11 +1,14 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError } = require("../../models");
+const fs = require("fs");
+const path = require("path");
 const { Op } = Sequelize;
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
+const notificationService = require("../../services/notificationService");
 dayjs.extend(customParseFormat);
 
 /**
@@ -75,12 +78,12 @@ exports.attendancePunch = async (req, res) => {
  * SYNC PUNCHES (Offline Sync)
  */
 exports.syncPunches = async (req, res) => {
-  const t = await sequelize.transaction();
+  const transaction = await sequelize.transaction();
   try {
     const { punches } = req.body;
 
     if (!punches || !Array.isArray(punches)) {
-      await t.rollback();
+      await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, "Punches array is required");
     }
 
@@ -91,7 +94,7 @@ exports.syncPunches = async (req, res) => {
     let resolvedDeviceId = null;
     console.log("req.user", req.user)
     if (['attendance', 'canteen'].includes(req.user?.access)) {
-      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
+      const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, transaction, false, {});
       resolvedDeviceId = device ? device.id : req.user.id;
       console.log(`[SyncPunches] Resolved DeviceMaster ID: ${resolvedDeviceId} from User ID: ${req.user.id}`);
     }
@@ -116,25 +119,25 @@ exports.syncPunches = async (req, res) => {
           employee_id: punchData.employee_id,
           punch_time: targetPunchTime,
           status: { [Op.ne]: 2 }
-        }, {}, t, false, {});
+        }, {}, transaction, false, {});
 
-        if (existingPunch) {
-          console.log(`[SyncPunches] Duplicate punch detected and skipped: Emp=${punchData.employee_id}, Time=${punchData.punch_time}`);
-          results.push({
-            employee_id: punchData.employee_id,
-            punch_time: punchData.punch_time,
-            success: true,
-            punch_id: existingPunch.id,
-            type: existingPunch.punch_type,
-            ignoredAsDuplicate: true
-          });
-          continue;
-        }
+        // if (existingPunch) {
+        //   console.log(`[SyncPunches] Duplicate punch detected and skipped: Emp=${punchData.employee_id}, Time=${punchData.punch_time}`);
+        //   results.push({
+        //     employee_id: punchData.employee_id,
+        //     punch_time: punchData.punch_time,
+        //     success: true,
+        //     punch_id: existingPunch.id,
+        //     type: existingPunch.punch_type,
+        //     ignoredAsDuplicate: true
+        //   });
+        //   continue;
+        // }
 
         // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
-        if (punchData.image) {
-          punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, t);
+        if (punchData.image && punchData.image.trim() !== "") {
+          punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, transaction);
         }
 
         const result = await punch(
@@ -155,48 +158,48 @@ exports.syncPunches = async (req, res) => {
             skipRebuild: false,
             access: req.user.access
           },
-          t
+          transaction
         );
 
         // Store face recognition error if flag is present
-        const isFaceError = punchData.is_face_error === true || 
-                             punchData.is_face_error === 'true' || 
-                             punchData.face_recognition_error === true || 
-                             punchData.face_recognition_error === 'true' || 
-                             punchData.face_error === true || 
-                             punchData.face_error === 'true' || 
-                             punchData.is_face_recognition_error === true || 
-                             punchData.is_face_recognition_error === 'true';
-
-        if (isFaceError) {
-          console.log(`[SyncPunches] Face Recognition Error detected for Emp=${punchData.employee_id}. Storing in FaceRecognitionError...`);
-          
-          let faceErrorImage = null;
-          if (punchData.image) {
-            faceErrorImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", t);
-          }
-
-          // Make sure the employee_id column exists
+        console.log(`[SyncPunches] Face Recognition Error detected for Emp=${punchData.employee_id}. Storing in FaceRecognitionError...`);
+        
+        let faceErrorImage = null;
+        if (punchImage) {
           try {
-            await sequelize.query(`ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS employee_id INTEGER;`, { transaction: t });
-          } catch (alterErr) {
-            console.error("[SyncPunches] Failed to alter face_recognition_errors table:", alterErr.message);
+            const srcPath = path.join(process.cwd(), "uploads", constants.ATTENDANCE_FOLDER, punchImage);
+            const destDir = path.join(process.cwd(), "uploads", constants.FACE_ERROR_FOLDER || "employee/face_errors/");
+            if (!fs.existsSync(destDir)) {
+              fs.mkdirSync(destDir, { recursive: true, mode: 0o777 });
+            }
+            const destPath = path.join(destDir, punchImage);
+            fs.copyFileSync(srcPath, destPath);
+            faceErrorImage = punchImage;
+            console.log(`[SyncPunches] Successfully copied punch image to face recognition errors folder: ${punchImage}`);
+          } catch (copyErr) {
+            console.error("[SyncPunches] Failed to copy punch image, falling back to base64 upload:", copyErr.message);
           }
-
-          await FaceRecognitionError.create({
-            image: faceErrorImage || punchImage,
-            accuracy: punchData.match_score || punchData.accuracy || null,
-            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
-            company_id: req.user.company_id || punchData.company_id || 0,
-            branch_id: resolvedDeviceId || punchData.branch_id || req.user.branch_id || 0,
-            employee_id: punchData.employee_id || null,
-            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
-            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
-            status: 1 // 1 = Resolved/Cleared
-          }, { transaction: t });
-
-          console.log(`[SyncPunches] ✅ Stored FaceRecognitionError as Resolved for Emp=${punchData.employee_id}`);
         }
+
+        if (!faceErrorImage && punchData.image && punchData.image.trim() !== "") {
+          faceErrorImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
+        }
+
+        await commonQuery.createRecord(FaceRecognitionError, {
+          image: faceErrorImage || punchImage,
+          accuracy: punchData.match_score || punchData.accuracy || null,
+          time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
+          company_id: req.user.company_id || punchData.company_id || 0,
+          branch_id: resolvedDeviceId || punchData.branch_id || req.user.branch_id || 0,
+          employee_id: punchData.employee_id || null,
+          latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
+          longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
+          status: 1,
+          matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
+          message: punchData.message || punchData.massage || null
+        }, transaction);
+
+        console.log(`[SyncPunches] ✅ Stored FaceRecognitionError as Resolved for Emp=${punchData.employee_id}`);
 
         results.push({
           employee_id: punchData.employee_id,
@@ -209,18 +212,40 @@ exports.syncPunches = async (req, res) => {
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
 
-        // 1. Rollback the entire transaction immediately
-        await t.rollback();
+        const isRecoverableSyncError = punchErr.message === "Employee not found";
+        if (isRecoverableSyncError) {
+          console.warn(`[SyncPunches] Skipping punch for missing employee ${punchData.employee_id}.`);
+          results.push({
+            employee_id: punchData.employee_id,
+            punch_time: punchData.punch_time,
+            success: false,
+            error: punchErr.message,
+            code: "EMPLOYEE_NOT_FOUND"
+          });
+          continue;
+        }
+
+        // 1. Rollback the entire transaction immediately for non-recoverable errors
+        await transaction.rollback();
 
         // 2. Alert System: Notify all admins/business admins of this company about this critical offline sync failure
         try {
-          const admins = await commonQuery.findAllRecords(User, {
-            role_key: {
-              [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
-            },
-          }, { attributes: ["id"] }, null, { company_id: true });
+          const admins = await commonQuery.findAllRecords(User, {}, {
+            include: [
+              {
+                model: RolePermission,
+                as: "RolePermission",
+                where: {
+                  role_key: {
+                    [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
+                  }
+                },
+                attributes: []
+              }
+            ],
+            attributes: ["id"]
+          }, null, { company_id: true });
 
-          const notificationService = require("../../services/notificationService");
           for (const admin of admins) {
             await notificationService.createNotification({
               user_id: admin.id,
@@ -240,7 +265,7 @@ exports.syncPunches = async (req, res) => {
       }
     }
 
-    await t.commit();
+    await transaction.commit();
     return res.success(constants.ACTION_SUCCESSFUL, {
       sync_summary: {
         total_received: punches.length,
@@ -251,7 +276,7 @@ exports.syncPunches = async (req, res) => {
       results
     });
   } catch (err) {
-    await t.rollback();
+    await transaction.rollback();
     return handleError(err, res, req);
   }
 };
@@ -2214,7 +2239,8 @@ exports.updateAttendanceNote = async (req, res) => {
 exports.storeFaceRecognitionError = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id } = req.body;
+    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
+    const finalMessage = message || massage || null;
 
     if (!time) {
       await t.rollback();
@@ -2251,13 +2277,6 @@ exports.storeFaceRecognitionError = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "An error image (file or base64) is required");
     }
 
-    // Make sure the employee_id column exists
-    try {
-      await sequelize.query(`ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS employee_id INTEGER;`, { transaction: t });
-    } catch (alterErr) {
-      console.error("[storeFaceRecognitionError] Failed to alter face_recognition_errors table:", alterErr.message);
-    }
-
     // Save to database
     const faceError = await FaceRecognitionError.create({
       image: errorImage,
@@ -2268,7 +2287,9 @@ exports.storeFaceRecognitionError = async (req, res) => {
       employee_id: employee_id || null,
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
-      status: 0 // Active
+      status: 0, // Active
+      matches: matches ? (typeof matches === 'string' ? JSON.parse(matches) : matches) : null,
+      message: finalMessage
     }, { transaction: t });
 
     await t.commit();
@@ -2285,7 +2306,9 @@ exports.storeFaceRecognitionError = async (req, res) => {
         branch_id: faceError.branch_id,
         employee_id: faceError.employee_id,
         latitude: faceError.latitude,
-        longitude: faceError.longitude
+        longitude: faceError.longitude,
+        matches: faceError.matches,
+        message: faceError.message
       }
     });
 
@@ -2300,17 +2323,8 @@ exports.storeFaceRecognitionError = async (req, res) => {
  */
 exports.getFaceRecognitionErrors = async (req, res) => {
   try {
-    const { page, limit, startDate, endDate, branch_id } = req.body;
-    const companyId = req.user.company_id;
-
-    const where = { company_id: companyId };
-
-    if (branch_id) {
-      where.branch_id = branch_id;
-    } else if (req.user.branch_id) {
-      where.branch_id = req.user.branch_id;
-    }
-
+    const { page, limit, startDate, endDate } = req.body;
+    let where = {};
     if (startDate && endDate) {
       where.time = {
         [Op.between]: [
@@ -2354,7 +2368,7 @@ exports.getFaceRecognitionErrors = async (req, res) => {
         ],
         order: [['time', 'DESC']]
       },
-      true,
+      { company_id: true },
       "time",
       where
     );

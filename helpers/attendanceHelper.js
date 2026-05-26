@@ -367,7 +367,7 @@ async function punch(employeeId, meta, transaction = null) {
             console.log(`[Punch] Overtime Allowed: Using template max overtime mins. Shift End: ${shiftEnd.format('HH:mm')}, OT Cutoff: ${otCutoff.format('HH:mm')}`);
           } else {
             // 3. Employee shift assign BUT overtime NOT allow -> Shift End Cutoff Hours
-            const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || settings.default_punch_cutoff_hours || 14);
+            const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
             cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
             console.log(`[Punch] Overtime Not Allowed: Using shift cutoff hours. Shift End: ${shiftEnd.format('HH:mm')}, Cutoff: ${cutoffTime.format('HH:mm'), shiftCutoffHours}`);
           }

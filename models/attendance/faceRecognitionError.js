@@ -16,6 +16,16 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         comment: "0: Active, 1: Resolved/Cleared",
       },
+      matches: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        comment: "Stores array of face matches (employee name and match score)"
+      },
+      message: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+        comment: "Stores details about the recognition error or failure reason"
+      },
     },
     {
       tableName: "face_recognition_errors",

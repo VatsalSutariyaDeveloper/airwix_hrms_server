@@ -2268,7 +2268,7 @@ exports.facePunch = async (req, res) => {
         debugLog("Punch", `Image Size: ${imageBuffer ? imageBuffer.length : 'Unknown'} bytes`);
 
         // 🚀 NEW LOGIC: We get the exact Employee ID and Match Score from Flutter
-        const { employee_id, latitude, longitude, device_id, match_score } = req.body;
+        const { employee_id, latitude, longitude, device_id, match_score, matches } = req.body;
         const matchPercentage = match_score || "100.00"; // Fallback if flutter doesn't send
 
         if (!employee_id) {
@@ -2290,7 +2290,7 @@ exports.facePunch = async (req, res) => {
             const savedFiles = await uploadFile(req, res, constants.ATTENDANCE_FOLDER, transaction);
             timings.upload = Date.now() - uploadStart;
 
-            const savedFilename = savedFiles.image || savedFiles['image'];
+            const savedFilename = savedFiles.image || savedFiles['image'] || Object.values(savedFiles)[0];
 
             // 2. Use the robust punch helper
             const punchResult = await punch(employee.id, {

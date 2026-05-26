@@ -222,6 +222,19 @@ exports.create = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
         }
 
+        const template = employee.leaveTemplate;
+        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+
+        // Check if the current leave template cycle ends this month/period, and restrict next month's leave to only unpaid categories.
+        const currentCycle = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs());
+        const leaveStartDate = dayjs(start_date);
+        if (currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
+            await transaction.rollback();
+            return res.error("RULE_VIOLATION", { 
+                message: "Only unpaid leaves can be applied for the next cycle/month." 
+            });
+        }
+
         // --- Automation Rules Validation ---
         const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
 
@@ -351,17 +364,39 @@ exports.create = async (req, res) => {
             }
         }
 
-        const template = employee.leaveTemplate;
-        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
-        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs(start_date));
+        const leaveTemplate = employee.leaveTemplate;
+        const leaveCycleType = leaveTemplate ? leaveTemplate.leave_policy_cycle : 'CALENDAR_YEAR';
+        const leaveCycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, leaveCycleType, dayjs(start_date));
 
-        const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+        let balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
             employee_id,
             leave_category_id,
-            year: cycleDates.end.year(),
-            month: cycleType === 'MONTHLY' ? cycleDates.end.month() + 1 : null,
+            year: leaveCycleDates.end.year(),
+            month: leaveCycleType === 'MONTHLY' ? leaveCycleDates.end.month() + 1 : null,
             status: 0
         }, {}, transaction);
+
+        // If no balance exists yet (e.g. for a future month/quarter), initialize it on-the-fly
+        if (!balance && employee.leave_template) {
+            console.log(`[LeaveRequest] Auto-initializing future balance for Emp=${employee_id}, Cat=${leave_category_id} as of ${start_date}`);
+            await LeaveBalanceService.initializeBalance(
+                employee_id,
+                employee.leave_template,
+                transaction,
+                employee,
+                null,
+                dayjs(start_date).toDate()
+            );
+
+            // Re-fetch the newly created future balance
+            balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+                employee_id,
+                leave_category_id,
+                year: leaveCycleDates.end.year(),
+                month: leaveCycleType === 'MONTHLY' ? leaveCycleDates.end.month() + 1 : null,
+                status: 0
+            }, {}, transaction);
+        }
 
         if (!balance) {
             await transaction.rollback();
@@ -603,6 +638,19 @@ exports.update = async (req, res) => {
         const employee = await commonQuery.findOneRecord(Employee, employee_id, {
             include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
         }, transaction);
+
+        const template = employee?.leaveTemplate;
+        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+
+        // Check if the current leave template cycle ends this month/period, and restrict next month's leave to only unpaid categories.
+        const currentCycle = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs());
+        const leaveStartDate = dayjs(start_date);
+        if (currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
+            await transaction.rollback();
+            return res.error("RULE_VIOLATION", { 
+                message: "Only unpaid leaves can be applied for the next cycle/month." 
+            });
+        }
 
         try {
             await LeaveBalanceService.adjustLeaveBalance(employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);

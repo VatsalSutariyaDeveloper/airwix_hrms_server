@@ -233,6 +233,11 @@ function initModels(prefix) {
     }
   });
 
+  // Self-healing migration for FaceRecognitionError 'message' column
+  seq.query("ALTER TABLE face_recognition_errors ADD COLUMN IF NOT EXISTS message TEXT;")
+    .then(() => console.log(`[Self-healing] Checked/added 'message' column to face_recognition_errors in ${prefix || 'default'} database`))
+    .catch(err => console.error(`[Self-healing] Failed to add 'message' column in ${prefix || 'default'}:`, err.message));
+
   db.sequelize = seq;
   db.masterSequelize = masterSequelize;
   db.Sequelize = Sequelize;
