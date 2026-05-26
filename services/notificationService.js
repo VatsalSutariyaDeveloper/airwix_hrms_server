@@ -41,7 +41,7 @@ const createNotification = async (payload, transaction = null) => {
         // 2. Send Firebase Push Notification to all registered devices in parallel
         try {
             // Fetch all registered devices for this user
-            const registeredDevices = await commonQuery.findAllRecords(UserDevice, { user_id: user_id }, { attributes: ["fcm_token"] }, transaction);
+            const registeredDevices = await commonQuery.findAllRecords(UserDevice, { user_id: user_id }, { attributes: ["fcm_token"] }, transaction, false);
             let tokens = registeredDevices.map(d => d.fcm_token).filter(Boolean);
 
             // Safety fallback: if no devices are registered in UserDevice yet, check the legacy User fcm_token

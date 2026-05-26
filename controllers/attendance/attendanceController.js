@@ -230,25 +230,25 @@ exports.syncPunches = async (req, res) => {
 
         // 2. Alert System: Notify all admins/business admins of this company about this critical offline sync failure
         try {
-          const admins = await commonQuery.findAllRecords(User, {}, {
-            include: [
-              {
-                model: RolePermission,
-                as: "RolePermission",
-                where: {
-                  role_key: {
-                    [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
-                  }
-                },
-                attributes: []
-              }
-            ],
-            attributes: ["id"]
-          }, null, { company_id: true });
+          // const admins = await commonQuery.findAllRecords(User, {}, {
+          //   include: [
+          //     {
+          //       model: RolePermission,
+          //       as: "RolePermission",
+          //       where: {
+          //         role_key: {
+          //           [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
+          //         }
+          //       },
+          //       attributes: []
+          //     }
+          //   ],
+          //   attributes: ["id"]
+          // }, null, { company_id: true });
 
           for (const admin of admins) {
             await notificationService.createNotification({
-              user_id: admin.id,
+              user_id: 1, // System
               title: "🚨 Critical Sync Punch Failure",
               message: `Offline punch sync failed for Employee ID: ${punchData.employee_id} at ${punchData.punch_time}. Error: ${punchErr.message}`,
               type: "CRITICAL_SYNC_ERROR",
