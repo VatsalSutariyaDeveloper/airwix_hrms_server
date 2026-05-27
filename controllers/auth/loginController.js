@@ -370,12 +370,14 @@ exports.login = async (req, res) => {
     // Register FCM Token if provided in login body
     if (fcm_token) {
       const companyId = user.company_id || null;
-      const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+      await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: user.id } }, transaction, false);
+      const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: user.id }, {}, transaction, false, {});
       if (!existingDevice) {
         await commonQuery.createRecord(UserDevice, { user_id: user.id, fcm_token, company_id: companyId }, transaction, true, {});
-      } else {
-        await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: user.id, company_id: companyId }, transaction, false, {});
+      } else if (existingDevice.company_id !== companyId) {
+        await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
       }
+      await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: user.id } }, transaction });
       await commonQuery.updateRecordById(User, user.id, { fcm_token }, transaction, true, {});
       user.fcm_token = fcm_token;
     }
@@ -556,7 +558,7 @@ exports.logout = async (req, res) => {
     const fcm_token = req.body?.fcm_token || req.user.fcm_token;
     if (fcm_token) {
       // 1. Delete from UserDevice
-      await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: req.user.id }, transaction);
+      await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: req.user.id }, transaction, false);
 
       // 2. Clear legacy fcm_token on User model if it matches
       if (user.fcm_token === fcm_token) {
@@ -641,7 +643,14 @@ exports.verifyMobileNo = async (req, res) => {
       mobile_no: cleanMobileNo,
       status: { [Op.in]: [0, 1] }
     }, {
-      attributes: ['id', 'user_name', 'password', 'status', 'company_id']
+      attributes: ['id', 'user_name', 'password', 'status', 'company_id', 'role_id', 'is_super_admin'],
+      include: [
+        {
+          model: RolePermission,
+          as: 'RolePermission',
+          attributes: ['role_key']
+        }
+      ]
     }, null, false, {});
 
     let type = "user";
@@ -664,6 +673,16 @@ exports.verifyMobileNo = async (req, res) => {
     // 2. Early Exit if not found or inactive
     if (!entity) {
       return res.error(constants.NOT_FOUND, "Mobile number not registered.");
+    }
+
+    if (type === "user") {
+      const roleKey = entity.RolePermission?.role_key;
+      const isSuperAdmin = entity.is_super_admin || roleKey === constants.ROLE_KEYS.BUSINESS_ADMIN;
+      const isAdmin = roleKey === constants.ROLE_KEYS.ADMIN;
+
+      if (isSuperAdmin || isAdmin) {
+        return res.error(403, { message: "Admin or Super Admin login is not allowed." });
+      }
     }
 
     if (entity.status === 1) {
@@ -1173,12 +1192,14 @@ exports.verifyOtp = async (req, res) => {
     if (fcm_token) {
       if (!isDevice) {
         const companyId = entity.company_id || null;
-        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: entity.id } }, transaction, false);
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: entity.id }, {}, transaction, false, {});
         if (!existingDevice) {
           await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-        } else {
-          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        } else if (existingDevice.company_id !== companyId) {
+          await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
         }
+        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: entity.id } }, transaction });
         await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
         entity.fcm_token = fcm_token;
       } else {
@@ -1549,12 +1570,14 @@ exports.generatePin = async (req, res) => {
     if (fcm_token) {
       if (!isDevice) {
         const companyId = entity.company_id || null;
-        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: entity.id } }, transaction, false);
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: entity.id }, {}, transaction, false, {});
         if (!existingDevice) {
           await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-        } else {
-          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        } else if (existingDevice.company_id !== companyId) {
+          await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
         }
+        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: entity.id } }, transaction });
         await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
         entity.fcm_token = fcm_token;
       } else {
@@ -1871,12 +1894,14 @@ exports.pinLogin = async (req, res) => {
     if (fcm_token) {
       if (!isDevice) {
         const companyId = entity.company_id || null;
-        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, transaction, false, {});
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: entity.id } }, transaction, false);
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: entity.id }, {}, transaction, false, {});
         if (!existingDevice) {
           await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
-        } else {
-          await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: entity.id, company_id: companyId }, transaction, false, {});
+        } else if (existingDevice.company_id !== companyId) {
+          await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
         }
+        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: entity.id } }, transaction });
         await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
         entity.fcm_token = fcm_token;
       } else {

@@ -854,6 +854,18 @@ exports.getFilteredAnnouncements = async (userId, roleId, models, returnCountOnl
     const today = dayjs().format("YYYY-MM-DD");
     const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
 
+    // Fetch user's role_key
+    const { User, RolePermission } = require("../../models");
+    const { constants } = require("../constants");
+    const userWithRole = await User.findByPk(userId, {
+        include: [{
+            model: RolePermission,
+            as: "RolePermission",
+            attributes: ["role_key"]
+        }]
+    });
+    const userRoleKey = userWithRole?.RolePermission?.role_key;
+
     // Fetch active announcements
     const activeAnnouncements = await commonQuery.findAllRecords(Announcement, {
         status: 0,
@@ -895,7 +907,9 @@ exports.getFilteredAnnouncements = async (userId, roleId, models, returnCountOnl
 
         // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
         if (ann.target_type === 0) return true; // All users
-        if (ann.target_type === 1) return true; // All employees
+        if (ann.target_type === 1) {
+            return userRoleKey !== constants.ROLE_KEYS.BUSINESS_ADMIN && userRoleKey !== constants.ROLE_KEYS.ADMIN;
+        }
         if (ann.target_type === 2) {
             // Specific roles - target contains role_ids like "79,80,83" or [79, 80]
             let targetArray = Array.isArray(ann.target) ? ann.target : String(ann.target || "").split(",");

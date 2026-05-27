@@ -145,7 +145,7 @@ const jobAnnouncementExpiry = async (asOf = null, batch_id = null) => {
 
     let count = 0;
     for (const ann of announcements) {
-        await commonQuery.updateRecordById({ id: ann.id }, { status: 1 }, null, false, {}, batch_id);
+        await commonQuery.updateRecordById(Announcement, ann.id, { status: 1 }, null, false, false, batch_id);
         count++;
     }
 

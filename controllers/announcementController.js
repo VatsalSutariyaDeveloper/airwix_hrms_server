@@ -74,12 +74,12 @@ exports.create = async (req, res) => {
             return;
           }
         } else if (targetType === 1) {
-          // All employees (role_key === EMPLOYEE)
+          // All employees (excluding admins)
           queryOptions.include = [
             {
               model: RolePermission,
               as: "RolePermission",
-              where: { role_key: constants.ROLE_KEYS.EMPLOYEE },
+              where: { role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
               required: true,
               attributes: []
             }
@@ -124,7 +124,7 @@ exports.create = async (req, res) => {
       }
     });
 
-    return res.success(constants.ANNOUNCEMENT_CREATED);
+    return res.success(constants.ANNOUNCEMENT_CREATED, announcement);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -232,12 +232,12 @@ exports.update = async (req, res) => {
             return;
           }
         } else if (targetType === 1) {
-          // All employees (role_key === EMPLOYEE)
+          // All employees (excluding admins)
           queryOptions.include = [
             {
               model: RolePermission,
               as: "RolePermission",
-              where: { role_key: {[Op.in]: [constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR, constants.ROLE_KEYS.REPORTING_MANAGER]} },
+              where: { role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
               required: true,
               attributes: []
             }
@@ -282,7 +282,7 @@ exports.update = async (req, res) => {
       }
     });
 
-    return res.success(constants.ANNOUNCEMENT_UPDATED);
+    return res.success(constants.ANNOUNCEMENT_UPDATED, announcement);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -305,7 +305,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DELETED);
+    return res.success(constants.ANNOUNCEMENT_DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -348,7 +348,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.STATUS_UPDATED);
+    return res.success(constants.STATUS_UPDATED, { ids, status });
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -405,7 +405,7 @@ exports.getActiveAnnouncements = async (req, res) => {
         };
 
         if (target_type === 0) return true; // Show to all
-        if (target_type === 1 && roleKey === constants.ROLE_KEYS.EMPLOYEE) return true; // Employee role
+        if (target_type === 1 && roleKey !== constants.ROLE_KEYS.BUSINESS_ADMIN && roleKey !== constants.ROLE_KEYS.ADMIN) return true;
         if (target_type === 3 && containsExactMatch(target, userId)) return true; // Specific user
         if (target_type === 2 && containsExactMatch(target, req.user.role_id?.toString())) return true; // Specific role (still uses ID for now as target column stores IDs)
         return false;

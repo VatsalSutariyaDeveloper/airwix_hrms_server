@@ -84,14 +84,13 @@ exports.update = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const settingsToUpdate = req.body.company_settings;
-
+        const company_id = req.body.company_id || req.user.company_id;
         if (!settingsToUpdate || !Array.isArray(settingsToUpdate)) {
             await transaction.rollback();
             return res.error("VALIDATION_ERROR", { message: "company_settings must be an array" });
         }
 
         for (const setting of settingsToUpdate) {
-            const company_id = req.user.company_id;
             const updated = await commonQuery.updateRecordById(
                 CompanySettings,
                 { company_id, settings_name: setting.settings_name },
@@ -115,7 +114,7 @@ exports.update = async (req, res) => {
 
         await transaction.commit();
         try {
-            reloadCompanySettingsCache(req.user.company_id);
+            reloadCompanySettingsCache(company_id);
         } catch (cacheErr) {
             console.error('Error reloading company settings cache:', cacheErr);
         }

@@ -550,9 +550,8 @@ const isUserAuthorizedForResignation = (user, employee, stage) => {
 
     switch (type) {
         case 'REPORTING_MANAGER':
-            return employee.reporting_manager === employeeId;
         case 'ATTENDANCE_SUPERVISOR':
-            return employee.attendance_supervisor === employeeId;
+            return employee.reporting_manager === employeeId || employee.attendance_supervisor === employeeId;
         case 'ADMIN':
             return isAdmin;
         case 'ANYONE':
@@ -569,14 +568,11 @@ const getResignationStakeholderEmails = async (employee, stage, transaction) => 
     const emails = [];
     const { type } = stage || { type: "ANYONE" };
 
-    if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
+    if (type === 'REPORTING_MANAGER' || type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
         if (employee.reporting_manager) {
             const manager = await commonQuery.findOneRecord(User, { id: employee.reporting_manager }, { attributes: ['email'] }, transaction);
             if (manager?.email) emails.push(manager.email);
         }
-    }
-
-    if (type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
         if (employee.attendance_supervisor) {
             const supervisor = await commonQuery.findOneRecord(User, { id: employee.attendance_supervisor }, { attributes: ['email'] }, transaction);
             if (supervisor?.email) emails.push(supervisor.email);

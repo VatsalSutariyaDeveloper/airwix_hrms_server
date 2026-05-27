@@ -20,6 +20,25 @@ const isTokenBlacklisted = (token) => {
   return tokenBlacklist.has(token);
 };
 
+// Clean up FCM token on unauthorized session
+async function cleanupFcmToken(token, transaction = null) {
+  if (!token) return;
+  try {
+    const decoded = jwt.decode(token);
+    if (decoded && decoded.fcm_token && decoded.id) {
+      const { UserDevice, User } = require("../models");
+      const { commonQuery } = require("../helpers");
+      await commonQuery.hardDeleteRecords(UserDevice, { fcm_token: decoded.fcm_token, user_id: decoded.id }, transaction, false);
+      const userRecord = await User.findByPk(decoded.id, { transaction });
+      if (userRecord && userRecord.fcm_token === decoded.fcm_token) {
+        await User.update({ fcm_token: null }, { where: { id: decoded.id }, transaction });
+      }
+    }
+  } catch (err) {
+    console.error("Failed to cleanup FCM token in middleware:", err.message);
+  }
+}
+
 async function authMiddleware(req, res, next) {
   // ✅ Skip auth for specific routes
   if (SKIP_ROUTES.includes(req.path) || req.path.startsWith("/api/onboarding/public/")) {
@@ -42,6 +61,7 @@ async function authMiddleware(req, res, next) {
     // Check if token is blacklisted
     if (isTokenBlacklisted(token)) {
       req.auth_error_detail = "The token is blacklisted (the user has logged out).";
+      await cleanupFcmToken(token);
       return res.status(401).json({ message: "Unauthorized" });
     }
 
@@ -52,6 +72,7 @@ async function authMiddleware(req, res, next) {
       const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
       if (!user) {
         req.auth_error_detail = `User with ID ${decoded.id} is inactive or does not exist.`;
+        await cleanupFcmToken(token);
         return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
       }
     }
@@ -60,6 +81,7 @@ async function authMiddleware(req, res, next) {
       const company = await CompanyMaster.findOne({ where: { id: decoded.company_id, status: 0 } });
       if (!company) {
         req.auth_error_detail = `Company with ID ${decoded.company_id} is inactive or suspended.`;
+        await cleanupFcmToken(token);
         return res.status(401).json({ success: false, message: "Unauthorized - Company is inactive or not exist" });
       }
     }
@@ -68,6 +90,7 @@ async function authMiddleware(req, res, next) {
       const branch = await BranchMaster.findOne({ where: { id: decoded.branch_id, status: 0 } });
       if (!branch) {
         req.auth_error_detail = `Branch with ID ${decoded.branch_id} is inactive or deleted.`;
+        await cleanupFcmToken(token);
         return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
       }
     }
@@ -110,6 +133,7 @@ async function authMiddleware(req, res, next) {
         } catch (unpairErr) {
           console.error("Auto-unpair on status mismatch failed:", unpairErr.message);
         }
+        await cleanupFcmToken(token);
         return res.status(401).json({ success: false, message: "Unauthorized - Device session is invalid or revoked" });
       }
 
@@ -165,6 +189,17 @@ async function authMiddleware(req, res, next) {
 
   } catch (err) {
     req.auth_error_detail = `JWT validation failed: ${err.message} (${err.name}).`;
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const token = authHeader.split(" ")[1];
+        if (token) {
+          await cleanupFcmToken(token);
+        }
+      }
+    } catch (fcmCleanupErr) {
+      console.error("FCM cleanup in verification catch failed:", fcmCleanupErr.message);
+    }
     // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
     try {
       const authHeader = req.headers.authorization;
