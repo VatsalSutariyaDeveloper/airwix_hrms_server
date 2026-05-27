@@ -58,7 +58,7 @@ const sendPushNotification = async (token, payload) => {
         return response;
     } catch (error) {
         console.error("Error sending FCM message:", error);
-        return null;
+        throw error;
     }
 };
 

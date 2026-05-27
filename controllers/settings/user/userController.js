@@ -1027,7 +1027,71 @@ exports.dropdownList = async (req, res) => {
         )
       ],
       [Op.and]: [
-        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR, constants.ROLE_KEYS.REPORTING_MANAGER] } },
+        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
+        { company_id: company_id },
+        { branch_id: req.user.branch_id }
+      ]
+    };
+    const record = await commonQuery.findAllRecords(
+      User,
+      extraFilters,
+      {
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
+        order: [["user_name", "ASC"]],
+      }
+    );
+    return res.ok(record);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.getUserEmployeeList = async (req, res) => {
+  try {
+    const company_id = req.user.company_id;
+    const extraFilters = {
+      [Op.or]: [
+        { company_id: company_id },
+        sequelize.where(
+          sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+          true
+        )
+      ],
+      [Op.and]: [
+        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.REPORTING_MANAGER, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR] } },
+        { company_id: company_id },
+        { branch_id: req.user.branch_id }
+      ]
+    };
+    const record = await commonQuery.findAllRecords(
+      User,
+      extraFilters,
+      {
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
+        order: [["user_name", "ASC"]],
+      }
+    );
+    return res.ok(record);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.getUserListForAnnouncement = async (req, res) => {
+  try {
+    const company_id = req.user.company_id;
+    const extraFilters = {
+      [Op.or]: [
+        { company_id: company_id },
+        sequelize.where(
+          sequelize.literal(`'${company_id}' = ANY(string_to_array("company_access", ','))`),
+          true
+        )
+      ],
+      [Op.and]: [
+        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] } },
         { company_id: company_id },
         { branch_id: req.user.branch_id }
       ]

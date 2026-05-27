@@ -14,8 +14,7 @@ exports.getNotifications = async (req, res) => {
             user_id: userId,
             status: { [Op.ne]: 2 } // Not deleted
         }, {
-            order: [['created_at', 'DESC']],
-            limit: 50
+            order: [['created_at', 'DESC']]
         }, null);
 
         // 2. Get filtered announcements using reusable function
@@ -126,7 +125,9 @@ exports.clearAll = async (req, res) => {
         const filteredAnnouncements = activeAnnouncements.filter(ann => {
             // target_type: 0 = all, 1 = employees, 2 = specific roles, 3 = specific users
             if (ann.target_type === 0) return true; // All users
-            if (ann.target_type === 1) return true; // All employees (assuming current user is employee)
+            if (ann.target_type === 1) {
+                return req.user.role_key !== constants.ROLE_KEYS.BUSINESS_ADMIN && req.user.role_key !== constants.ROLE_KEYS.ADMIN;
+            }
             if (ann.target_type === 2) {
                 // Specific roles - target contains role_ids like "79,80,83"
                 const targetRoleIds = (ann.target || "").split(",").map(t => parseInt(t.trim()));
@@ -199,7 +200,9 @@ exports.markAllAsRead = async (req, res) => {
             if (ann.target_type === null || ann.target_type === undefined) return false; // Skip if target_type is null/undefined (0 = All users is valid)
             
             if (ann.target_type === 0) return true; // All users
-            if (ann.target_type === 1) return true; // All employees
+            if (ann.target_type === 1) {
+                return req.user.role_key !== constants.ROLE_KEYS.BUSINESS_ADMIN && req.user.role_key !== constants.ROLE_KEYS.ADMIN;
+            }
             if (ann.target_type === 2) {
                 // Specific roles
                 if (!ann.target || !req.user.role_id) return false;
@@ -371,7 +374,7 @@ exports.removeFcmToken = async (req, res) => {
         }
 
         // 1. Remove from multi-device table
-        await commonQuery.deleteRecord(UserDevice, { user_id: userId, fcm_token }, null);
+        await commonQuery.hardDeleteRecords(UserDevice, { user_id: userId, fcm_token }, null, false);
 
         // 2. Clear legacy fcm_token on User model if it matches
         const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["id", "fcm_token"] }, null, false, {});
