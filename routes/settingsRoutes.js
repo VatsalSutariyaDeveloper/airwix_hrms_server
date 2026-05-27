@@ -117,6 +117,8 @@ router.post("/utils/fetch-pincode-details", utilsController.fetchPincodeDetails)
 // Base Path: /user
 router.post("/user/get-transactions", userController.getAll);
 router.post("/user/dropdown-list", userController.dropdownList);
+router.post("/user/employee-list", userController.getUserEmployeeList);
+router.post("/user/for-announcement", userController.getUserListForAnnouncement);
 router.post("/user/", bufferFile(["profile_image", "authorized_signature"]), userController.create);
 router.put("/user/:id", bufferFile(["profile_image", "authorized_signature"]), userController.update);
 router.get("/user/:id", userController.getById);
