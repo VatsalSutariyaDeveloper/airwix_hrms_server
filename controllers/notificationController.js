@@ -331,16 +331,28 @@ exports.updateFcmToken = async (req, res) => {
         // 1. Dual-register in our multi-device table
         const companyId = req.user.company_id || null;
         const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, null, false, {});
-        if (!existingDevice) {
-            await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: userId } }, null, false);
+        if (existingDevice) {
+            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
         } else {
-            await commonQuery.updateRecordById(UserDevice, { fcm_token }, { user_id: userId, company_id: companyId }, null, false, {});
+            await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
         }
 
         // 2. Fallback update on User model for legacy/single-query references
+        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: userId } } });
         await commonQuery.updateRecordById(User, userId, { fcm_token }, null, true, {});
 
-        return res.ok({ message: "FCM token updated successfully" });
+        const { generateToken } = require("../helpers/tokenHelper");
+        const user = await commonQuery.findOneRecord(User, { id: userId }, {
+            include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }]
+        }, null, false, {});
+
+        const newToken = generateToken({
+            ...user.toJSON(),
+            access: req.user.access
+        }, companyId, req.user.access_by || "web login");
+
+        return res.ok({ message: "FCM token updated successfully", token: newToken });
     } catch (err) {
         return handleError(err, res, req);
     }
