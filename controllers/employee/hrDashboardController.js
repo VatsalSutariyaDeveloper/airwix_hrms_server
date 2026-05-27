@@ -201,9 +201,9 @@ exports.getPendingCount = async (req, res) => {
 
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        return (req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id;
                     case 'ATTENDANCE_SUPERVISOR':
-                        return (req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id;
+                        return ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
+                               ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id);
                     case 'ADMIN':
                         return req.user.is_admin;
                     case 'EMPLOYER':
@@ -309,9 +309,9 @@ exports.getPendingApprovalsDetails = async (req, res) => {
 
             switch (currentStage.type) {
                 case 'REPORTING_MANAGER':
-                    return (roleKey === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === userId;
                 case 'ATTENDANCE_SUPERVISOR':
-                    return (roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === userId;
+                    return ((roleKey === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === userId) ||
+                           ((roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === userId);
                 case 'ADMIN':
                     return isAdmin;
                 case 'EMPLOYER':
@@ -1097,14 +1097,26 @@ exports.getLateEntryEmployees = async (req, res) => {
             if (!item.employee) return null;
             const plainEmployee = item.employee.get({ plain: true });
 
-            let lateMin = "";
+            let minutes = 0;
             if (item.late_minutes !== undefined && item.late_minutes !== null) {
-                lateMin = String(item.late_minutes);
+                minutes = Number(item.late_minutes);
             } else if (item.first_in && item.shiftTemplate?.start_time) {
                 const firstInTime = dayjs(`2000-01-01 ${item.first_in}`);
                 const shiftStartTime = dayjs(`2000-01-01 ${item.shiftTemplate.start_time}`);
                 const diff = firstInTime.diff(shiftStartTime, "minute");
-                lateMin = diff > 0 ? String(diff) : "0";
+                minutes = diff > 0 ? diff : 0;
+            }
+
+            let lateDuration = "";
+            if (minutes > 0) {
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                const parts = [];
+                if (hours > 0) parts.push(`${hours} Hr`);
+                if (mins > 0) parts.push(`${mins} M`);
+                lateDuration = parts.join(" ");
+            } else {
+                lateDuration = "0 M";
             }
 
             return {
@@ -1117,7 +1129,7 @@ exports.getLateEntryEmployees = async (req, res) => {
                 profile_image_url: plainEmployee.profile_image 
                     ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}` 
                     : null,
-                late_min: lateMin
+                late_duration: lateDuration
             };
         }).filter(Boolean);
 

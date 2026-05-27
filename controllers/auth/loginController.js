@@ -643,7 +643,14 @@ exports.verifyMobileNo = async (req, res) => {
       mobile_no: cleanMobileNo,
       status: { [Op.in]: [0, 1] }
     }, {
-      attributes: ['id', 'user_name', 'password', 'status', 'company_id']
+      attributes: ['id', 'user_name', 'password', 'status', 'company_id', 'role_id', 'is_super_admin'],
+      include: [
+        {
+          model: RolePermission,
+          as: 'RolePermission',
+          attributes: ['role_key']
+        }
+      ]
     }, null, false, {});
 
     let type = "user";
@@ -666,6 +673,16 @@ exports.verifyMobileNo = async (req, res) => {
     // 2. Early Exit if not found or inactive
     if (!entity) {
       return res.error(constants.NOT_FOUND, "Mobile number not registered.");
+    }
+
+    if (type === "user") {
+      const roleKey = entity.RolePermission?.role_key;
+      const isSuperAdmin = entity.is_super_admin || roleKey === constants.ROLE_KEYS.BUSINESS_ADMIN;
+      const isAdmin = roleKey === constants.ROLE_KEYS.ADMIN;
+
+      if (isSuperAdmin || isAdmin) {
+        return res.error(403, { message: "Admin or Super Admin login is not allowed." });
+      }
     }
 
     if (entity.status === 1) {

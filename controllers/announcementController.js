@@ -124,7 +124,7 @@ exports.create = async (req, res) => {
       }
     });
 
-    return res.success(constants.ANNOUNCEMENT_CREATED);
+    return res.success(constants.ANNOUNCEMENT_CREATED, announcement);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -282,7 +282,7 @@ exports.update = async (req, res) => {
       }
     });
 
-    return res.success(constants.ANNOUNCEMENT_UPDATED);
+    return res.success(constants.ANNOUNCEMENT_UPDATED, announcement);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -305,7 +305,7 @@ exports.delete = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.DELETED);
+    return res.success(constants.ANNOUNCEMENT_DELETED);
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);
@@ -348,7 +348,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     await transaction.commit();
-    return res.success(constants.STATUS_UPDATED);
+    return res.success(constants.STATUS_UPDATED, { ids, status });
   } catch (err) {
     await transaction.rollback();
     return handleError(err, res, req);

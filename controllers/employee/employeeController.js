@@ -389,6 +389,47 @@ exports.create = async (req, res) => {
 
             await commonQuery.bulkCreate(EmployeeFamilyMember, familyData, {}, transaction);
         }
+
+        // Send Assignment Notifications on Creation to assigned manager/supervisor
+        try {
+            const notificationService = require("../../services/notificationService");
+            const employeeName = POST.first_name || "Employee";
+
+            // A. Reporting Manager Assignment
+            if (POST.reporting_manager) {
+                const managerId = parseInt(POST.reporting_manager);
+                const managerUser = await commonQuery.findOneRecord(User, { id: managerId }, { attributes: ["user_name"] }, transaction);
+                if (managerUser) {
+                    await notificationService.createNotification({
+                        user_id: managerId,
+                        title: "New Reportee Assigned",
+                        message: `${employeeName} has been assigned to you as a reportee.`,
+                        type: "EMPLOYEE_UPDATE",
+                        company_id: employee.company_id,
+                        branch_id: employee.branch_id
+                    }, transaction);
+                }
+            }
+
+            // B. Attendance Supervisor Assignment
+            if (POST.attendance_supervisor) {
+                const supervisorId = parseInt(POST.attendance_supervisor);
+                const supervisorUser = await commonQuery.findOneRecord(User, { id: supervisorId }, { attributes: ["user_name"] }, transaction);
+                if (supervisorUser) {
+                    await notificationService.createNotification({
+                        user_id: supervisorId,
+                        title: "New Supervisee Assigned",
+                        message: `${employeeName} has been assigned to you for attendance supervision.`,
+                        type: "EMPLOYEE_UPDATE",
+                        company_id: employee.company_id,
+                        branch_id: employee.branch_id
+                    }, transaction);
+                }
+            }
+        } catch (notifErr) {
+            console.error("Error sending creation assignment notifications:", notifErr);
+        }
+
         await transaction.commit();
         return res.success(constants.EMPLOYEE_CREATED);
 
@@ -606,6 +647,79 @@ exports.update = async (req, res) => {
                 await commonQuery.createRecord(EmployeeFamilyMember, memberPayload, transaction);
             }
         }
+
+        // Send Assignment Notifications if Manager/Supervisor changed
+        try {
+            const notificationService = require("../../services/notificationService");
+            const employeeUser = await commonQuery.findOneRecord(User, { employee_id: id }, { attributes: ["id"] }, transaction);
+            const employeeUserId = employeeUser?.id;
+            const employeeName = POST.first_name || existingEmployee.first_name || "Employee";
+
+            // A. Reporting Manager Assignment
+            if (POST.reporting_manager !== undefined && String(POST.reporting_manager) !== String(existingEmployee.reporting_manager)) {
+                const newManagerId = POST.reporting_manager ? parseInt(POST.reporting_manager) : null;
+                if (newManagerId) {
+                    const managerUser = await commonQuery.findOneRecord(User, { id: newManagerId }, { attributes: ["user_name"] }, transaction);
+                    const managerName = managerUser?.user_name || "Manager";
+
+                    // Notify Employee (if User account exists)
+                    if (employeeUserId) {
+                        await notificationService.createNotification({
+                            user_id: employeeUserId,
+                            title: "Reporting Manager Assigned",
+                            message: `You have been assigned ${managerName} as your Reporting Manager.`,
+                            type: "EMPLOYEE_UPDATE",
+                            company_id: existingEmployee.company_id,
+                            branch_id: existingEmployee.branch_id
+                        }, transaction);
+                    }
+
+                    // Notify Manager
+                    await notificationService.createNotification({
+                        user_id: newManagerId,
+                        title: "New Reportee Assigned",
+                        message: `${employeeName} has been assigned to you as a reportee.`,
+                        type: "EMPLOYEE_UPDATE",
+                        company_id: existingEmployee.company_id,
+                        branch_id: existingEmployee.branch_id
+                    }, transaction);
+                }
+            }
+
+            // B. Attendance Supervisor Assignment
+            if (POST.attendance_supervisor !== undefined && String(POST.attendance_supervisor) !== String(existingEmployee.attendance_supervisor)) {
+                const newSupervisorId = POST.attendance_supervisor ? parseInt(POST.attendance_supervisor) : null;
+                if (newSupervisorId) {
+                    const supervisorUser = await commonQuery.findOneRecord(User, { id: newSupervisorId }, { attributes: ["user_name"] }, transaction);
+                    const supervisorName = supervisorUser?.user_name || "Supervisor";
+
+                    // Notify Employee (if User account exists)
+                    if (employeeUserId) {
+                        await notificationService.createNotification({
+                            user_id: employeeUserId,
+                            title: "Attendance Supervisor Assigned",
+                            message: `You have been assigned ${supervisorName} as your Attendance Supervisor.`,
+                            type: "EMPLOYEE_UPDATE",
+                            company_id: existingEmployee.company_id,
+                            branch_id: existingEmployee.branch_id
+                        }, transaction);
+                    }
+
+                    // Notify Supervisor
+                    await notificationService.createNotification({
+                        user_id: newSupervisorId,
+                        title: "New Supervisee Assigned",
+                        message: `${employeeName} has been assigned to you for attendance supervision.`,
+                        type: "EMPLOYEE_UPDATE",
+                        company_id: existingEmployee.company_id,
+                        branch_id: existingEmployee.branch_id
+                    }, transaction);
+                }
+            }
+        } catch (notifErr) {
+            console.error("Error sending assignment notifications:", notifErr);
+        }
+
         await transaction.commit();
         return res.success(constants.EMPLOYEE_UPDATED);
     } catch (err) {

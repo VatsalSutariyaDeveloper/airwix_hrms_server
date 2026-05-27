@@ -26,13 +26,10 @@ const getApproversForOutDutyRequest = async (employeeId, currentLevel, transacti
 
         const userIds = new Set();
 
-        if (type === 'REPORTING_MANAGER' || type === 'ANYONE') {
+        if (type === 'REPORTING_MANAGER' || type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
             if (employee.reporting_manager) {
                 userIds.add(employee.reporting_manager);
             }
-        }
-
-        if (type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
             if (employee.attendance_supervisor) {
                 userIds.add(employee.attendance_supervisor);
             }
@@ -508,10 +505,13 @@ exports.getPendingApprovals = async (req, res) => {
             } else {
                 switch (currentStage.type) {
                     case 'REPORTING_MANAGER':
-                        if ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) isAuthorized = true;
-                        break;
                     case 'ATTENDANCE_SUPERVISOR':
-                        if ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id) isAuthorized = true;
+                        if (
+                            ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
+                            ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id)
+                        ) {
+                            isAuthorized = true;
+                        }
                         break;
                     case 'ADMIN':
                         if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
