@@ -1985,20 +1985,37 @@ const processPayslipData = (payslips) => {
 
 exports.getPayslipEmployeeList = async (req, res) => {
     try {
-        const { year } = req.body;
+        const { year, department_id } = req.body;
         if (!year) {
             return res.error("VALIDATION_ERROR", { message: "Year is required" });
         }
 
+        const employeeWhere = {};
+        if (department_id && department_id !== 'All' && department_id !== 0 && department_id !== '0') {
+            employeeWhere.department_id = department_id;
+        }
+
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true]
+        ];
+
         const data = await commonQuery.fetchPaginatedData(
             Payslip,
-            { filter: { year } },
-            [],
+            { 
+                ...req.body, 
+                filter: { 
+                    ...req.body?.filter, 
+                    year 
+                } 
+            },
+            fieldConfig,
             {
                 include: [
                     {
                         model: Employee,
                         as: 'employee',
+                        where: employeeWhere,
                         attributes: ['id', 'employee_code', 'first_name'],
                         include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                     }
