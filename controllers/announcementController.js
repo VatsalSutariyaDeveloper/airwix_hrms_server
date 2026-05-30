@@ -337,8 +337,8 @@ exports.updateStatus = async (req, res) => {
     }
 
     const updated = await commonQuery.updateRecordById(
-      Announcement, 
-      ids, 
+      Announcement,
+      ids,
       { status },
       transaction
     );

@@ -51,7 +51,7 @@ exports.create = async (req, res) => {
 
         if (req.body.payment_type === PAYMENT_TYPE.SALARY && req.body.ref_id) {
             const payslip = await commonQuery.findOneRecord(Payslip, req.body.ref_id, {}, transaction);
-            
+
             if (!payslip) {
                 await transaction.rollback();
                 return res.error(constants.NOT_FOUND, { ref_id: "Payslip not found" });
@@ -76,11 +76,11 @@ exports.create = async (req, res) => {
 
             if ((currentTotalPaid + paymentAmount) > (netPayable + 0.01)) { // Allow 0.01 margin for float
                 await transaction.rollback();
-                return res.error(constants.VALIDATION_ERROR, { 
-                    amount: `Total payment (${currentTotalPaid + paymentAmount}) cannot exceed net payable amount (${netPayable})` 
+                return res.error(constants.VALIDATION_ERROR, {
+                    amount: `Total payment (${currentTotalPaid + paymentAmount}) cannot exceed net payable amount (${netPayable})`
                 });
             }
-        
+
             createdPayment = await commonQuery.createRecord(PaymentHistory, req.body, transaction);
             isCreated = true;
 
@@ -93,12 +93,12 @@ exports.create = async (req, res) => {
                 payment_date: req.body.payment_date,
                 payment_type: req.body.payment_type
             };
-            
+
             if (!currentPaymentHistory.salary_payments) {
                 currentPaymentHistory.salary_payments = [];
             }
             currentPaymentHistory.salary_payments.push(salaryPayment);
-            
+
             // Calculate total paid and update payslip
             const totalPaidResult = await commonQuery.findAllRecords(PaymentHistory, {
                 ref_id: req.body.ref_id,
@@ -109,7 +109,7 @@ exports.create = async (req, res) => {
             }, transaction);
 
             const totalPaid = parseFloat(totalPaidResult[0]?.total_paid || 0) + paymentAmount;
-            
+
             await commonQuery.updateRecordById(Payslip, req.body.ref_id, {
                 payment_history: currentPaymentHistory,
                 paid_amount: totalPaid,
@@ -158,7 +158,7 @@ exports.create = async (req, res) => {
                 }, transaction);
             }
 
-            // 💸 Send Notification to Employee
+            //  Send Notification to Employee
             try {
                 const targetUser = await commonQuery.findOneRecord(User, { employee_id: req.body.employee_id }, {}, transaction);
                 if (targetUser) {
@@ -182,7 +182,7 @@ exports.create = async (req, res) => {
         return res.success(constants.CREATED);
 
     } catch (err) {
-        if(err){
+        if (err) {
             await transaction.rollback();
         }
         return handleError(err, res, req);
@@ -200,7 +200,7 @@ exports.getAllPaymentHistory = async (req, res) => {
 
         const data = await commonQuery.fetchPaginatedData(
             PaymentHistory,
-            {...req.body},
+            { ...req.body },
             fieldConfig,
             {
                 include: [
@@ -208,14 +208,23 @@ exports.getAllPaymentHistory = async (req, res) => {
                 ]
             }
         );
-        return res.ok(data);
+
+        const whereCondition = { ...(req.body?.filter || {}) };
+        if (req.body?.employee_id) whereCondition.employee_id = req.body.employee_id;
+        if (req.body?.month) whereCondition.month = req.body.month;
+        if (req.body?.year) whereCondition.year = req.body.year;
+        if (req.body?.payment_type) whereCondition.payment_type = req.body.payment_type;
+
+        const total_amount = await commonQuery.sumRecords(PaymentHistory, 'amount', whereCondition);
+
+        return res.ok({ ...data, total_amount });
     } catch (err) {
         return handleError(err, res, req);
     }
 };
 
 exports.paymentHistoryView = async (req, res) => {
-    try{
+    try {
         const { payment_history_id } = req.body;
 
         if (!payment_history_id) {
@@ -223,7 +232,7 @@ exports.paymentHistoryView = async (req, res) => {
         }
 
         const paymentHistory = await commonQuery.findOneRecord(
-            PaymentHistory, 
+            PaymentHistory,
             { id: payment_history_id },
             {
                 include: [
@@ -255,8 +264,19 @@ exports.paymentHistoryView = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
+        const month = paymentHistory.month;
+        const year = paymentHistory.year;
+        const month_name = (month && year)
+            ? formatDateTime(new Date(year, parseInt(month) - 1, 1), "MMMM")
+            : null;
+
+        if (paymentHistory.dataValues) {
+            paymentHistory.dataValues.month_name = month_name;
+            paymentHistory.dataValues.year = year;
+        }
+
         return res.ok(paymentHistory);
-    }catch(err){
+    } catch (err) {
         return handleError(err, res, req);
     }
 };
