@@ -166,6 +166,7 @@ module.exports = (sequelize, DataTypes) => {
 
   CompanySubscription.associate = (models) => {
     CompanySubscription.belongsTo(models.SubscriptionPlan, {
+      as: "subscriptionPlan",
       foreignKey: "subscription_plan_id",
     });
   };

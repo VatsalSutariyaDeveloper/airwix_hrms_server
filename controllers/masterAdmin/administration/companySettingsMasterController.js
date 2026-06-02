@@ -1,5 +1,5 @@
-const { CompanySettingsMaster, CompanySettings, CompanyMaster } = require("../../models");
-const { validateRequest, commonQuery, handleError, sequelize, constants, clearAllCompaniesCache } = require("../../helpers");
+const { CompanySettingsMaster, CompanySettings, CompanyMaster } = require("../../../models");
+const { validateRequest, adminCommonQuery, handleError, sequelize, constants, clearAllCompaniesCache } = require("../../../helpers");
 
 const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL', 'PAYROLL']; // Add your groups
 
@@ -24,7 +24,7 @@ function parseDefaultValue(val, inputType) {
 
 async function syncSettingsToAllCompanies(transaction) {
     // 1. Fetch all Master Settings
-    const masterSettings = await commonQuery.findAllRecords(CompanySettingsMaster, {
+    const masterSettings = await adminCommonQuery.findAllRecords(CompanySettingsMaster, {
         status: 0
     }, {
         raw: true
@@ -33,7 +33,7 @@ async function syncSettingsToAllCompanies(transaction) {
     if (!masterSettings.length) return { count: 0, companies: 0 };
 
     // 2. Fetch all Active Companies
-    const companies = await commonQuery.findAllRecords(CompanyMaster, {
+    const companies = await adminCommonQuery.findAllRecords(CompanyMaster, {
         status: 0
     }, {
         attributes: ['id', 'user_id'],
@@ -45,7 +45,7 @@ async function syncSettingsToAllCompanies(transaction) {
     // 3. Loop companies and add missing settings
     for (const company of companies) {
         // Get current keys for this company
-        const existingConfig = await commonQuery.findAllRecords(CompanySettings, {
+        const existingConfig = await adminCommonQuery.findAllRecords(CompanySettings, {
             company_id: company.id 
         }, {
             attributes: ['settings_name'],
@@ -69,7 +69,7 @@ async function syncSettingsToAllCompanies(transaction) {
                 status: 0
             }));
 
-            await commonQuery.bulkCreate(CompanySettings, newEntries, {}, transaction);
+            await adminCommonQuery.bulkCreate(CompanySettings, newEntries, {}, transaction);
             totalAdded += newEntries.length;
         }
     }
@@ -111,7 +111,7 @@ exports.create = async (req, res) => {
         }
 
         // A. Create the Master Record
-        await commonQuery.createRecord(CompanySettingsMaster, req.body, transaction);
+        await adminCommonQuery.createRecord(CompanySettingsMaster, req.body, transaction);
 
         // B. Automatically Sync to all existing companies
         await syncSettingsToAllCompanies(transaction);
@@ -156,7 +156,7 @@ exports.getAll = async (req, res) => {
   ];
 
   // Call reusable function
-  const data = await commonQuery.fetchPaginatedData(
+  const data = await adminCommonQuery.fetchPaginatedData(
     CompanySettingsMaster,
     req.body,
     fieldConfig,
@@ -171,7 +171,7 @@ exports.getById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const result = await commonQuery.findOneRecord(
+    const result = await adminCommonQuery.findOneRecord(
         CompanySettingsMaster, 
         { id }, 
         null, 
@@ -203,7 +203,7 @@ exports.update = async (req, res) => {
     const oldKey = oldSetting.setting_key;
     const newKey = req.body.setting_key;
 
-    const result = await commonQuery.updateRecordById(
+    const result = await adminCommonQuery.updateRecordById(
         CompanySettingsMaster, 
         { id }, 
         req.body,
@@ -270,7 +270,7 @@ exports.delete = async (req, res) => {
 
     const keysToDelete = settingsToDelete.map(s => s.setting_key);
 
-    const deleted = await commonQuery.softDeleteById(CompanySettingsMaster, ids, transaction);
+    const deleted = await adminCommonQuery.softDeleteById(CompanySettingsMaster, ids, transaction);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);

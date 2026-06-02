@@ -449,7 +449,26 @@ exports.switchCompany = async (req, res) => {
     // 4. Generate New Token
     user.branch_id = newBranchId;
     user.organization_id = company.organization_id || null;
-    const newToken = generateToken(user, company_id, "web login");
+    
+    // Fetch supervisor and manager flags
+    if (user.employee_id) {
+      const employee = await Employee.findOne({
+        where: { id: user.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+        transaction
+      });
+      if (employee) {
+        user.is_attendance_supervisor = employee.is_attendance_supervisor;
+        user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const newToken = generateToken({
+      ...(user.get ? user.get({ plain: true }) : user),
+      role_key: user.RolePermission?.role_key,
+      is_attendance_supervisor: user.is_attendance_supervisor,
+      is_reporting_manager: user.is_reporting_manager
+    }, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 
@@ -526,7 +545,26 @@ exports.switchBranch = async (req, res) => {
     // 3. Generate New Token
     user.branch_id = finalBranchId;
     user.organization_id = organization_id || null;
-    const newToken = generateToken(user, company_id, "web login");
+    
+    // Fetch supervisor and manager flags
+    if (user.employee_id) {
+      const employee = await Employee.findOne({
+        where: { id: user.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+        transaction
+      });
+      if (employee) {
+        user.is_attendance_supervisor = employee.is_attendance_supervisor;
+        user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const newToken = generateToken({
+      ...(user.get ? user.get({ plain: true }) : user),
+      role_key: user.RolePermission?.role_key,
+      is_attendance_supervisor: user.is_attendance_supervisor,
+      is_reporting_manager: user.is_reporting_manager
+    }, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 

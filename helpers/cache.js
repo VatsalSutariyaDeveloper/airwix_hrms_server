@@ -104,7 +104,7 @@ const reloadCompanySubscriptionCache = async (company_id) => {
 
         const subs = await CompanySubscription.findAll({
             where: whereClause,
-            include: [{ model: SubscriptionPlan, attributes: ["subscription_type"] }],
+            include: [{ model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["subscription_type"] }],
             raw: true,
             nest: true
         });
@@ -115,7 +115,7 @@ const reloadCompanySubscriptionCache = async (company_id) => {
         }
 
         subs.sort((a, b) =>
-            a.SubscriptionPlan.subscription_type === "plan" ? -1 : 1
+            a.subscriptionPlan.subscription_type === "plan" ? -1 : 1
         );
 
         let mergedSub = { ...subs[0] };

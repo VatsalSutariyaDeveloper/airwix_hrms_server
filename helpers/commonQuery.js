@@ -93,7 +93,20 @@ function withDebug(options = {}, transaction = null, capture = null) {
  * @param {Boolean} [skipStatus=false] - When true the default status (not equal 2) check is skipped;
  *                                       useful for include queries where status should not be applied
  */
+function resolveTenantConfig(requireTenantFields, defaultApplyHierarchy) {
+  if (typeof requireTenantFields === 'object' && requireTenantFields !== null) {
+    return { applyHierarchy: defaultApplyHierarchy, ...requireTenantFields };
+  }
+  return {
+    company_id: !!requireTenantFields,
+    branch_id: !!requireTenantFields,
+    user_id: !!requireTenantFields,
+    applyHierarchy: requireTenantFields === true ? defaultApplyHierarchy : false
+  };
+}
+
 async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, model = null) {
+  console.log("DEBUG buildWhere modelName:", model?.name, "tenantConfig:", tenantConfig, "ctx:", JSON.stringify(getContext()));
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -122,20 +135,14 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
 
   const isObj = typeof tenantConfig === "object" && tenantConfig !== null;
   const isEmptyObj = isObj && Object.keys(tenantConfig).length === 0;
-
-  let ctx = {};
-  let settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
-
-  if (!isEmptyObj) {
-    ctx = getContext();
-    try {
-      if (ctx.company_id) {
-        settings = await getCompanySetting(ctx.company_id);
-      }
-    } catch (err) {
-      console.warn("⚠️ Failed to fetch company settings:", err.message);
+  const ctx = getContext();
+  try {
+    if (ctx.company_id) {
+      settings = await getCompanySetting(ctx.company_id);
     }
-  }  
+  } catch (err) {
+    console.warn("⚠️ Failed to fetch company settings:", err.message);
+  }
 
   // Temporary override if needed
   settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
@@ -252,7 +259,54 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
         }
       }
     }
-    if (tenantConfig.user_id && ctx.user_id && hasUserField) where.user_id = ctx.user_id;
+  }
+
+  // 🔒 Hierarchy Data Visibility Filter: Restriction for Attendance Supervisors and Reporting Managers
+  const applyHierarchy = typeof tenantConfig === "object" && tenantConfig !== null && tenantConfig.applyHierarchy === true;
+  if (applyHierarchy && !ctx.is_super_admin && !ctx.is_admin) {
+    const isSupervisor = ctx.is_attendance_supervisor === true;
+    const isManager = ctx.is_reporting_manager === true;
+    console.log(`Hierarchy Filter Applied - Supervisor: ${isSupervisor}, Manager: ${isManager}, User ID: ${ctx.user_id}`);
+    if (isSupervisor || isManager) {
+      const modelName = model?.name;
+      
+      // Define hierarchy conditions
+      const hierarchyConditions = [];
+      if (isSupervisor) hierarchyConditions.push({ attendance_supervisor: ctx.user_id });
+      if (isManager) hierarchyConditions.push({ reporting_manager: ctx.user_id });
+      const hierarchyWhere = hierarchyConditions.length > 1 ? { [Op.or]: hierarchyConditions } : hierarchyConditions[0]; 
+      console.log("Hierarchy Where Clause:", JSON.stringify(hierarchyWhere));
+      if (modelName === "Employee") {
+        // Restrict Employee table directly
+        if (where[Op.and]) {
+          where[Op.and].push(hierarchyWhere);
+        } else {
+          where[Op.and] = [hierarchyWhere];
+        }
+      } else if (modelName !== "User" && model.rawAttributes && model.rawAttributes.employee_id) {
+        // For records referencing Employee, restrict by employee_id subquery/Op.in
+        const employeeSubquery = {
+          modelName: "Employee",
+          where: hierarchyWhere
+        };
+        
+        // Construct the Op.in clause to limit employee_id
+        const restrictedEmployeeIdsCondition = sequelize.literal(
+          `("${modelName}"."employee_id" IN (SELECT id FROM employees WHERE status != 2 AND (${
+            [
+              isSupervisor ? `attendance_supervisor = ${ctx.user_id}` : null,
+              isManager ? `reporting_manager = ${ctx.user_id}` : null
+            ].filter(Boolean).join(" OR ")
+          })))`
+        );
+
+        if (where[Op.and]) {
+          where[Op.and].push(restrictedEmployeeIdsCondition);
+        } else {
+          where[Op.and] = [restrictedEmployeeIdsCondition];
+        }
+      }
+    }
   }
 
   return where;
@@ -473,7 +527,7 @@ module.exports = {
   updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true, batch_id = null) => {
     const caller = captureCaller();
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
-    let condition = await buildWhere(whereInput, requireTenantFields, false, model); 
+    let condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model); 
     
     let safeData = { ...data };
     let commonData = {
@@ -553,7 +607,7 @@ module.exports = {
     if (!isEmptyObj) {
       ctx = getContext();  
     }
-    const condition = await buildWhere(whereInput, requireTenantFields, false, model);
+    const condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model);
 
     const recordsToDelete = await model.findAll({
       where: condition,
@@ -563,9 +617,15 @@ module.exports = {
 
     if (!recordsToDelete.length) return 0;
 
+    const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
+    const updateData = { status: 2 };
+    if (hasUserField) {
+      updateData.user_id = ctx.user_id || 0;
+    }
+
     const capture = {};
     const [count] = await model.update(
-      { status: 2, user_id: ctx.user_id },
+      updateData,
       withDebug({ where: { id: { [Op.in]: recordsToDelete.map(r => r.id) } } }, transaction, capture)
     );
 
@@ -598,7 +658,7 @@ module.exports = {
   findAllRecords: async (model, filters = {}, options = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus, model);
+    const where = await buildWhere(filters, resolveTenantConfig(requireTenantFields, true), !!safeOptions.skipStatus, model);
 
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -628,7 +688,7 @@ module.exports = {
   countRecords: async (model, filters = {}, options = {}, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const where = await buildWhere(filters, requireTenantFields, !!safeOptions.skipStatus, model);
+    const where = await buildWhere(filters, resolveTenantConfig(requireTenantFields, false), !!safeOptions.skipStatus, model);
     
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
@@ -648,7 +708,7 @@ module.exports = {
   findOneRecord: async (model, whereInput = {}, options = {}, transaction = null, forceReload = false, requireTenantFields = true) => {
     const caller = captureCaller();
     const safeOptions = options || {};
-    const condition = await buildWhere(whereInput, requireTenantFields, !!safeOptions.skipStatus, model);
+    const condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), !!safeOptions.skipStatus, model);
     
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
@@ -672,7 +732,7 @@ module.exports = {
   hardDeleteRecords: async (model, whereInput = {}, transaction = null, requireTenantFields = true) => {
     const caller = captureCaller();
     const ctx = getContext();
-    const condition = await buildWhere(whereInput, requireTenantFields, false, model);
+    const condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model);
 
     // Fetch records before deletion to preserve data for audit log
     const recordsToDelete = await model.findAll({
@@ -739,6 +799,7 @@ module.exports = {
 
     // 10. ADVANCED PAGINATION
 async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
+    const resolvedTenant = resolveTenantConfig(requireTenantFields, true);
     if (model.name === 'Employee' && options.attributes && Array.isArray(options.attributes)) {
         if (!options.attributes.includes('company_id')) options.attributes.push('company_id');
         if (!options.attributes.includes('branch_id')) options.attributes.push('branch_id');
@@ -808,7 +869,9 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       let searchFields = reqBody?.searchFields || allowedSearchable.map(f => f.key);
       searchFields = searchFields.filter(key => allowedSearchable.some(f => f.key === key));
 
-      if (reqBody?.search && searchFields.length > 0) {
+      const normalizedSearch = reqBody?.search ? String(reqBody.search).replace(/[\u202f\u00a0]/g, " ").trim() : "";
+
+      if (normalizedSearch && searchFields.length > 0) {
         const attributeMap = new Map();
         if (options.attributes && Array.isArray(options.attributes)) {
             options.attributes.forEach(attr => {
@@ -825,7 +888,10 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
             
             // 1. Check if the key exists directly in attributeMap (handled aliases)
             if (attributeMap.has(config.key)) {
-                dbCol = attributeMap.get(config.key);
+                const mapped = attributeMap.get(config.key);
+                dbCol = (typeof mapped === 'string' && !mapped.includes('.'))
+                        ? `${model.name}.${mapped}`
+                        : mapped;
             } 
             // 2. Handle dotted notation
             else if (typeof config.key === 'string' && config.key.includes('.')) {
@@ -861,7 +927,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
                 dbCol = `${model.name}.${config.key}`;
             }
             
-            const likeVal = `%${reqBody?.search}%`;
+            const likeVal = `%${normalizedSearch}%`;
             if (typeof dbCol === 'string') {
                 const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
                 const colName = finalKey.replace(/\$/g, '');
@@ -875,9 +941,11 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
                         'MM/DD/YYYY, HH12:MI:SS AM',
                         'YYYY-MM-DD HH24:MI:SS'
                     ];
+                    // Convert timezone to Asia/Kolkata first since the UI displays in local (IST) time
+                    const tzCol = sequelize.fn('timezone', 'Asia/Kolkata', sequelize.col(colName));
                     return {
                         [Op.or]: formats.map(fmt => 
-                            sequelize.where(sequelize.fn('to_char', sequelize.col(colName), fmt), { [Op.iLike]: likeVal })
+                            sequelize.where(sequelize.fn('to_char', tzCol, fmt), { [Op.iLike]: likeVal })
                         )
                     };
                 }
@@ -938,29 +1006,30 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         filters, 
         { ...options, skip, limit, order, subQuery: false, __caller: caller, skipStatus: !!options.skipStatus },
         null,
-        requireTenantFields
+        resolvedTenant
       );
 
       // 👇 AUTO-INJECT BRANCH NAME (if branch_id=0 and model has branch_id field)
       const context = getContext();
       if (context.branch_id === 0 && Array.isArray(data) && data.length > 0 && model.rawAttributes.branch_id) {
           try {
-              const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined))];
+              const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined && Number(id) > 0))];
+              let branchMap = {};
               if (branchIds.length > 0) {
                   const branches = await sequelize.models.BranchMaster.findAll({
                       where: { id: { [Op.in]: branchIds } },
                       attributes: ['id', 'branch_name'],
                       raw: true
                   });
-                  const branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
-                  data = data.map(item => {
-                      const itemJson = item.get ? item.get({ plain: true }) : item;
-                      return {
-                          ...itemJson,
-                          branch_name: branchMap[itemJson.branch_id] || "N/A"
-                      };
-                  });
+                  branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
               }
+              data = data.map(item => {
+                  const itemJson = item.get ? item.get({ plain: true }) : item;
+                  return {
+                      ...itemJson,
+                      branch_name: branchMap[itemJson.branch_id] || "N/A"
+                  };
+              });
           } catch (err) {
               console.error("Auto branch_name enrichment failed:", err.message);
           }
@@ -975,7 +1044,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         }
         if (includeConditions.length > 0) {
             // we intentionally bypass default status filtering for include logic
-            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, requireTenantFields, true, model);
+            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, resolvedTenant, true, model);
             const extraRecords = await model.findAll({ where: stickyWhere, ...options });
             const existingIds = new Set(data.map(d => String(d.id)));
             const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));
@@ -989,7 +1058,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       delete countOptions.order;
       delete countOptions.limit;
       delete countOptions.offset;
-      const totalCount = await module.exports.countRecords(model, filters, { ...countOptions, skipStatus: !!options.skipStatus }, requireTenantFields);
+      const totalCount = await module.exports.countRecords(model, filters, { ...countOptions, skipStatus: !!options.skipStatus }, resolvedTenant);
 
       // Calculations
       let totals = {};
@@ -1017,4 +1086,4 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       throw err;
     }
   }
-  }
+};

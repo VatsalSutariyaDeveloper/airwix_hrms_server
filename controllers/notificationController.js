@@ -134,10 +134,22 @@ exports.updateFcmToken = async (req, res) => {
         const companyId = req.user.company_id || null;
         const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, null, false, {});
         await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: userId } }, null, false);
-        if (existingDevice) {
-            await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
-        } else {
-            await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
+        try {
+            if (existingDevice) {
+                await commonQuery.updateRecordById(UserDevice, existingDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
+            } else {
+                await commonQuery.createRecord(UserDevice, { user_id: userId, fcm_token, company_id: companyId }, null, true, {});
+            }
+        } catch (dbError) {
+            if (dbError.name === 'SequelizeUniqueConstraintError') {
+                console.log("[updateFcmToken] Unique constraint hit during token register. Recovering...");
+                const reFoundDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token }, {}, null, false, {});
+                if (reFoundDevice) {
+                    await commonQuery.updateRecordById(UserDevice, reFoundDevice.id, { user_id: userId, company_id: companyId }, null, false, {});
+                }
+            } else {
+                throw dbError;
+            }
         }
 
         // 2. Fallback update on User model for legacy/single-query references
@@ -145,13 +157,9 @@ exports.updateFcmToken = async (req, res) => {
         await commonQuery.updateRecordById(User, userId, { fcm_token }, null, true, {});
 
         const { generateToken } = require("../helpers/tokenHelper");
-        const user = await commonQuery.findOneRecord(User, { id: userId }, {
-            include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }]
-        }, null, false, {});
-
         const newToken = generateToken({
-            ...user.toJSON(),
-            access: req.user.access
+            ...req.user,
+            fcm_token: fcm_token
         }, companyId, req.user.access_by || "web login");
 
         return res.ok({ message: "FCM token updated successfully", token: newToken });

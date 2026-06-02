@@ -96,8 +96,28 @@ const truncateText = (text, limit) => {
 // --- EXPORTS ---
 
 
+const syncedTenants = new Set();
+
+const ensureLogsTableSynced = async () => {
+  let tenantPrefix = "DEFAULT";
+  try {
+    const { storage } = require("../../middlewares/tenantMiddleware");
+    tenantPrefix = storage.getStore() || "DEFAULT";
+  } catch (e) {}
+
+  if (!syncedTenants.has(tenantPrefix)) {
+    try {
+      await Logs.sync();
+      syncedTenants.add(tenantPrefix);
+    } catch (syncErr) {
+      console.error(`[LOGS] Failed to sync Logs table for tenant ${tenantPrefix}:`, syncErr.message);
+    }
+  }
+};
+
 // 2. Log Data Changes (CRUD) -> Goes to 'Logs' Table
 exports.logQuery = async (logData, mainTransaction = null) => {
+  await ensureLogsTableSynced();
   // ----------------------------------------------------------------
   // STEP 1: PREPARE & SANITIZE DATA
   // ----------------------------------------------------------------
@@ -207,6 +227,7 @@ exports.logQuery = async (logData, mainTransaction = null) => {
 
 // 3. Log Errors -> Goes to 'Logs' Table (Unified)
 exports.logError = async (logData, transaction = null) => {
+  await ensureLogsTableSynced();
   const timestamp = new Date().toLocaleString();
   const errorMsg = logData.error_message || "Unknown error";
   

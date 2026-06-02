@@ -433,20 +433,44 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
             false
         );
 
-        // --- 4. Initialize CompanySettings with Defaults ---
-        const { constants } = require("../constants");
-        if (constants.DEFAULT_COMPANY_SETTINGS && Array.isArray(constants.DEFAULT_COMPANY_SETTINGS)) {
-            const companySettingsPayload = constants.DEFAULT_COMPANY_SETTINGS.map(setting => ({
-                ...setting,
-                user_id: user_id,
-                branch_id: branch_id,
-                company_id: company_id,
-                status: 0
-            }));
+        // --- 4. Initialize CompanySettings from CompanySettingsMaster ---
+        const masterSettings = await commonQuery.findAllRecords(CompanySettingsMaster, {
+            status: 0
+        }, {}, transaction, false);
+
+        if (masterSettings && masterSettings.length > 0) {
+            const masterPayload = masterSettings.map(ms => {
+                let parsedVal = ms.default_value;
+                const str = ms.default_value !== null && ms.default_value !== undefined ? String(ms.default_value).trim() : "";
+                if (ms.input_type === "SWITCH") {
+                    parsedVal = str === "1" || str === "true";
+                } else if (str === "true") {
+                    parsedVal = true;
+                } else if (str === "false") {
+                    parsedVal = false;
+                } else if (!isNaN(str) && str !== "") {
+                    parsedVal = Number(str);
+                } else {
+                    try {
+                        parsedVal = JSON.parse(str);
+                    } catch (e) {
+                        parsedVal = str;
+                    }
+                }
+
+                return {
+                    settings_name: ms.setting_key,
+                    settings_value: parsedVal,
+                    user_id: user_id,
+                    branch_id: branch_id,
+                    company_id: company_id,
+                    status: 0
+                };
+            });
 
             await commonQuery.bulkCreate(
                 CompanySettings,
-                companySettingsPayload,
+                masterPayload,
                 { company_id, branch_id, user_id },
                 transaction,
                 false

@@ -59,6 +59,11 @@ module.exports = (sequelize, DataTypes) => {
       as: "addresses",
       foreignKey: "company_id",
     });
+
+    CompanyMaster.hasMany(models.CompanySubscription, {
+      as: "companySubscriptions",
+      foreignKey: "company_id",
+    });
   };
 
   return CompanyMaster;

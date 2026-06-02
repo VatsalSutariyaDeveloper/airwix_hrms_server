@@ -16,14 +16,13 @@ exports.create = async (req, res) => {
             expense_type: "Expense Type",
             amount: "Amount",
             date: "Date",
-            // payment_type: "Payment Type"
         };
 
-        if (!req.body.employee_id && req.user.employee_id) {
-            req.body.employee_id = req.user.employee_id;
+        if (!POST.employee_id && req.user.employee_id) {
+            POST.employee_id = req.user.employee_id;
         }
 
-        const errors = await validateRequest(req.body, requiredFields, {}, transaction);
+        const errors = await validateRequest(POST, requiredFields, {}, transaction);
         if (errors) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);

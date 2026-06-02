@@ -3,17 +3,17 @@ const {
   ModulePermissionTypeMaster,
   ModuleMaster,
   Permission,
-} = require("../../../models");
+} = require("../../../../models");
 const {
   sequelize,
   validateRequest,
-  commonQuery,
+  adminCommonQuery,
   handleError,
   getCompanySetting,
   constants,
-} = require("../../../helpers");
+} = require("../../../../helpers");
 const { Op } = require("sequelize");
-const { clearEntityCache } = require("../../../helpers/permissionCache");
+const { clearEntityCache } = require("../../../../helpers/permissionCache");
 
 // Create Module Entity Master Access
 exports.create = async (req, res) => {
@@ -42,7 +42,7 @@ exports.create = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, errors );
     }
-    const result = await commonQuery.createRecord(
+    const result = await adminCommonQuery.createRecord(
       ModuleEntityMaster,
       { ...POST, company_id: -1, branch_id: -1, user_id: -1 },
       transaction,
@@ -54,7 +54,7 @@ exports.create = async (req, res) => {
     const skippedActions = [];
 
     for (const action of actionList) {
-      const existingPermission = await commonQuery.findOneRecord(
+      const existingPermission = await adminCommonQuery.findOneRecord(
         Permission, 
         { module_id: POST.module_id, entity_id: result.id, action: action.action }, 
         {},
@@ -68,7 +68,7 @@ exports.create = async (req, res) => {
         continue;
       }
 
-      const newPerm = await commonQuery.createRecord(Permission, {
+      const newPerm = await adminCommonQuery.createRecord(Permission, {
         module_id: POST.module_id,
         entity_id: result.id,
         action: action.action,
@@ -94,10 +94,11 @@ exports.getAll = async (req, res) => {
     const fieldConfig = [
       ["moduleMaster.module_name", true, true],
       ["entity_name", true, true],
+      ["priority", true, true],
       ["cust_entity_name", true, true],
     ];
 
-    const data = await commonQuery.fetchPaginatedData(
+    const data = await adminCommonQuery.fetchPaginatedData(
       ModuleEntityMaster,
       req.body,
       fieldConfig,
@@ -154,7 +155,7 @@ exports.getAll = async (req, res) => {
 // Get Module Entity Master Access by ID
 exports.getById = async (req, res) => {
   try {
-    const record = await commonQuery.findOneRecord(ModuleEntityMaster, 
+    const record = await adminCommonQuery.findOneRecord(ModuleEntityMaster, 
       req.params.id,
       {
         include: [
@@ -220,7 +221,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors );
     }
 
-    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, { ...POST, company_id: -1, branch_id: -1, user_id: -1 }, transaction, false, false);
+    const updated = await adminCommonQuery.updateRecordById(ModuleEntityMaster, req.params.id, { ...POST, company_id: -1, branch_id: -1, user_id: -1 }, transaction, false, false);
 
     if (!updated || updated.status === 2) {
       await transaction.rollback();
@@ -229,7 +230,7 @@ exports.update = async (req, res) => {
 
     // If module_id is being updated, update it in the permissions table as well
     if (POST.module_id) {
-      await commonQuery.updateRecordById(Permission, { entity_id: req.params.id }, { module_id: POST.module_id }, transaction, false, false);
+      await adminCommonQuery.updateRecordById(Permission, { entity_id: req.params.id }, { module_id: POST.module_id }, transaction, false, false);
     }
 
     // Handle permissions if actions are provided
@@ -244,7 +245,7 @@ exports.update = async (req, res) => {
       for (const action of actionList) {
         if (action.id) {
           sentActionIds.push(action.id);
-          const updatedPermission = await commonQuery.updateRecordById(
+          const updatedPermission = await adminCommonQuery.updateRecordById(
             Permission,
             action.id,
             { 
@@ -264,7 +265,7 @@ exports.update = async (req, res) => {
             skippedActions.push(action);
           }
         } else {
-          const existingPermission = await commonQuery.findOneRecord(
+          const existingPermission = await adminCommonQuery.findOneRecord(
             Permission, 
             { 
               module_id: POST.module_id, 
@@ -279,7 +280,7 @@ exports.update = async (req, res) => {
             continue;
           }
 
-          const newPerm = await commonQuery.createRecord(Permission, {
+          const newPerm = await adminCommonQuery.createRecord(Permission, {
             module_id: POST.module_id,
             entity_id: req.params.id,
             action: action.action,
@@ -293,7 +294,7 @@ exports.update = async (req, res) => {
         }
       }
 
-      const existingPermissions = await commonQuery.findAllRecords(
+      const existingPermissions = await adminCommonQuery.findAllRecords(
         Permission,
         { 
           module_id: POST.module_id, 
@@ -308,7 +309,7 @@ exports.update = async (req, res) => {
       const idsToDelete = existingPermissionIds.filter(id => !sentActionIds.includes(id));
       if (idsToDelete.length > 0) {
         for (const id of idsToDelete) {
-          await commonQuery.hardDeleteRecords(
+          await adminCommonQuery.hardDeleteRecords(
             Permission,
             { id },
             transaction,
@@ -348,7 +349,7 @@ exports.delete = async (req, res) => {
       return res.error(constants.INVALID_ID);
     }
 
-    const deleted = await commonQuery.softDeleteById(
+    const deleted = await adminCommonQuery.softDeleteById(
       ModuleEntityMaster,
       ids,
       transaction,
@@ -390,7 +391,7 @@ exports.updateStatus = async (req, res) => {
     }
 
     // Update only the status field by id
-    const updated = await commonQuery.updateRecordById(
+    const updated = await adminCommonQuery.updateRecordById(
       ModuleEntityMaster,
       ids,
       { status },
@@ -415,7 +416,7 @@ exports.updateStatus = async (req, res) => {
 // Dropdown List of Module Entity Master
 exports.dropdownList = async (req, res) => {
   try {
-    const record = await commonQuery.findAllRecords(
+    const record = await adminCommonQuery.findAllRecords(
       ModuleEntityMaster,
       { status: 0 },
       { attributes: ["id", "entity_name"], order: ["entity_name"] },

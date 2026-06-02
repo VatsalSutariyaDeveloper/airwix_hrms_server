@@ -78,9 +78,12 @@ const createNotification = async (payload, transaction = null) => {
                         console.error(`[FCM Notification Device Error] Failed to send push to device:`, deviceError.message);
                         
                         // Auto-Cleanup: If token is invalid or expired, automatically delete it from database
-                        if (deviceError.message && (deviceError.message.includes("not-registered") || deviceError.message.includes("invalid"))) {
+                        const errMsg = (deviceError.message || "").toLowerCase();
+                        const errCode = (deviceError.code || deviceError.errorInfo?.code || "").toLowerCase();
+                        if (errMsg.includes("notregistered") || errMsg.includes("not-registered") || errMsg.includes("invalid") || errMsg.includes("not found") || errMsg.includes("not-found") ||
+                            errCode.includes("not-registered") || errCode.includes("invalid") || errCode.includes("not-found") || errCode.includes("notfound")) {
                             console.log(`[FCM Service] Removing invalid/expired token: ${token.substring(0, 30)}...`);
-                            await commonQuery.deleteRecord(UserDevice, { fcm_token: token }, transaction);
+                            await commonQuery.hardDeleteRecords(UserDevice, { fcm_token: token }, transaction, {});
                         }
                     }
                 }));

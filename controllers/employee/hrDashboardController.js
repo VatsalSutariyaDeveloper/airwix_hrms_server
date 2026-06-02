@@ -75,79 +75,92 @@ exports.getCounts = async (req, res) => {
     try {
         const today = req.body.date ? dayjs(req.body.date).format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD");
 
-        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] }, false);
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] });
         const employeeIds = allEmployees?.map(e => e.id) || [];
         const employeeScope = employeeIds.length > 0 ? { employee_id: { [Op.in]: employeeIds } } : {};
 
         const totalEmployees = allEmployees.length;
 
-        const presentToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 0,
-            ...employeeScope
-        }, {}, {});
+        // Initialize default values
+        let presentToday = 0;
+        let halfDayToday = 0;
+        let absentToday = 0;
+        let onLeaveToday = 0;
+        let lateEntryCount = 0;
+        let canteenPresentToday = 0;
+        let canteenAbsentToday = 0;
+        let guestCount = 0;
 
-        const halfDayToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 1,
-            ...employeeScope
-        }, {}, {});
-
-        const absentToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 5,
-            ...employeeScope
-        }, {}, {});
-
-        const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 6,
-            ...employeeScope
-        }, {}, {});
-
-        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
-            {
+        // Only call count queries if total employee count > 0
+        if (totalEmployees > 0) {
+            presentToday = await commonQuery.countRecords(AttendanceDay, {
                 attendance_date: today,
+                status: 0,
                 ...employeeScope
-            },
-            {
-                include: [{
-                    model: ShiftTemplate,
-                    as: 'shiftTemplate',
-                    required: false,
-                    attributes: ['start_time', 'grace_minutes']
-                }]
-            },
-            null,
-            {}
-        );
+            }, {}, {});
 
-        const lateEntryRecords = lateEntry.filter(record => {
-            if (!record.first_in || !record.shiftTemplate) return false;
+            halfDayToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 1,
+                ...employeeScope
+            }, {}, {});
 
-            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
-            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
-            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
-            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+            absentToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 5,
+                ...employeeScope
+            }, {}, {});
 
-            return firstInTime.isAfter(allowedTime);
-        });
+            onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 6,
+                ...employeeScope
+            }, {}, {});
+            
+            const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
+                {
+                    attendance_date: today,
+                    ...employeeScope
+                },
+                {
+                    include: [{
+                        model: ShiftTemplate,
+                        as: 'shiftTemplate',
+                        required: false,
+                        attributes: ['start_time', 'grace_minutes']
+                    }]
+                },
+                null,
+                {}
+            );
+           
+            const lateEntryRecords = lateEntry.filter(record => {
+                if (!record.first_in || !record.shiftTemplate) return false;
+                
+                const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+                const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+                const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+                const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+                
+                return firstInTime.isAfter(allowedTime);
+            });
 
-        const lateEntryCount = lateEntryRecords.length;
+            lateEntryCount = lateEntryRecords.length;
 
-        const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
-            date: today
-        }, {}, null, {});
-
-        // Separate guest and employee data
-        const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
-        const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
-
-        const guestCount = guestAttendance.length;
-        const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
-
-        const canteenPresentToday = presentEmployeeIds.length;
-        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
+            const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
+                date: today
+            }, {}, null, {});
+          
+            // Separate guest and employee data
+            const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
+            const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
+            
+            guestCount = guestAttendance.length;
+            const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
+            
+            canteenPresentToday = presentEmployeeIds.length;
+            canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
+        }
 
         return res.ok({
             totalEmployees,

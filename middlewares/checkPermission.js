@@ -48,6 +48,7 @@ module.exports = async function checkPermission(req, res, next) {
     // ✅ 2. GET CONTEXT (Only for Protected Routes)
     // -----------------------------------------------------------
     const ctx = getContext(); 
+    if (ctx.isMasterAdmin) return next();
     // This will now only run if the user IS logged in (has a token).
     
     const currentPath = normalizePath(req.originalUrl);

@@ -40,6 +40,21 @@ async function cleanupFcmToken(token, transaction = null) {
 }
 
 async function authMiddleware(req, res, next) {
+  // ✅ Bypass auth if request has valid x-master-admin-key header
+  const providedMasterKey = req.headers["x-master-admin-key"];
+  const expectedMasterKey = process.env.MASTER_ADMIN_SECRET_KEY;
+  if (providedMasterKey && expectedMasterKey && providedMasterKey === expectedMasterKey) {
+    const store = requestContext.getStore() || {};
+    requestContext.run({
+      ...store,
+      isMasterAdmin: true,
+      access: "master-admin"
+    }, () => {
+      next();
+    });
+    return;
+  }
+
   // ✅ Skip auth for specific routes
   if (SKIP_ROUTES.includes(req.path) || req.path.startsWith("/api/onboarding/public/")) {
     return next();
@@ -164,7 +179,7 @@ async function authMiddleware(req, res, next) {
       device_id: decoded.device_id || null,
       fcm_token: decoded.fcm_token || null
     };
-// console.log("req.user",req.user)
+console.log("req.user",req.user)
     requestContext.run(
       {
         userId: decoded.id,

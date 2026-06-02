@@ -15,6 +15,8 @@ router.post("/details", attendanceController.getAttendanceDayDetails);
 router.post("/monthly", attendanceController.getMonthlyAttendance);
 router.post("/update-note", attendanceController.updateAttendanceNote);
 router.post("/leave-summary", attendanceController.getLeaveSummary);
+router.post("/irregularities", attendanceController.getIrregularities);
+router.get("/irregularities-count", attendanceController.getIrregularitiesCount);
 
 // Face Recognition Errors Endpoints
 router.post("/face-recognition-error", bufferImage("image"), attendanceController.storeFaceRecognitionError);

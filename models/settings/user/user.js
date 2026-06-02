@@ -58,6 +58,10 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: "branch_id",
       as: "Branch",
     });
+    User.belongsTo(models.CompanyMaster, {
+      foreignKey: "company_id",
+      as: "Company",
+    });
   };
   return User;
 };
