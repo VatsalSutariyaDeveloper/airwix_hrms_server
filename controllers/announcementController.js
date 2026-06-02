@@ -16,12 +16,7 @@ exports.create = async (req, res) => {
       target_type: "Target Type",
     };
 
-    const errors = await validateRequest(req.body, requiredFields, {
-      uniqueCheck: {
-        model: Announcement,
-        fields: ["title"],
-      }
-    }, transaction);
+    const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -105,9 +100,9 @@ exports.create = async (req, res) => {
             title: `New Announcement: ${req.body.title}`,
             body: cleanContent || "A new company announcement has been published.",
             data: {
-              type: "announcement",
+              type: "ANNOUNCEMENT",
               reference_id: String(announcement.id || ""),
-              redirect_url: "/dashboard"
+              redirect_url: "/announcements"
             }
           });
         }
@@ -160,13 +155,7 @@ exports.update = async (req, res) => {
       target_type: "Target Type",
     };
 
-    const errors = await validateRequest(req.body, requiredFields, {
-      uniqueCheck: {
-        model: Announcement,
-        fields: ["title"],
-        excludeId: req.params.id
-      }
-    }, transaction);
+    const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -361,7 +350,7 @@ exports.getActiveAnnouncements = async (req, res) => {
             attributes: ["id", "user_name"],
           },
         ],
-        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type", "target_type", "target"],
+        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type", "target_type", "target", "createdAt"],
         order: [["announcement_date", "DESC"]]
       }, transaction);
 
