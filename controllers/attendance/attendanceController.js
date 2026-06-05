@@ -2493,12 +2493,12 @@ exports.deleteFaceRecognitionError = async (req, res) => {
  * GET ATTENDANCE IRREGULARITIES (Missing Punch In or Punch Out)
  * Supported roles logic:
  * - SuperAdmin/Admin: Show all employee irregularities within their company_id
- * - Attendance Supervisor/Reporting Manager: Show their own irregularities and their team members'
- * - Regular Employee: Show only their own irregularities for the current month
+ * - Attendance Supervisor/Reporting Manager: Show their team members' irregularities
+ * - Regular Employee: Will not return any data (should use self-irregularities)
  */
 exports.getIrregularities = async (req, res) => {
   try {
-    let { employee_id, month_year, page, limit } = req.body;
+    let { employee_id, month_year, page, limit, search } = req.body;
     page = parseInt(page) || 1;
     limit = parseInt(limit) || 15;
     const offset = (page - 1) * limit;
@@ -2541,23 +2541,10 @@ exports.getIrregularities = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      if (ownEmpId) {
-        teamEmpIds.push(ownEmpId);
-      }
       targetEmployeeIds = [...new Set(teamEmpIds)];
     } else {
-      // Regular employee: sees only their own logs and default to current month
-      const ownEmpId = req.user.employee_id;
-      if (!ownEmpId) {
-        return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
-      }
-      targetEmployeeIds = [ownEmpId];
-
-      // Enforce current month filter if not provided for regular employees
-      if (!startDate || !endDate) {
-        startDate = dayjs().startOf('month').format('YYYY-MM-DD');
-        endDate = dayjs().endOf('month').format('YYYY-MM-DD');
-      }
+      // Regular employee: shouldn't see anything here, they should use self-irregularities
+      targetEmployeeIds = [];
     }
 
     // Construct query filters
@@ -2615,6 +2602,16 @@ exports.getIrregularities = async (req, res) => {
       }
     }
 
+    let employeeWhereClause = undefined;
+    if (search && search.trim() !== '') {
+      employeeWhereClause = {
+        [Op.or]: [
+          { first_name: { [Op.iLike]: `%${search.trim()}%` } },
+          { employee_code: { [Op.iLike]: `%${search.trim()}%` } }
+        ]
+      };
+    }
+
     const { count, rows } = await AttendanceDay.findAndCountAll({
       where: whereClause,
       include: [
@@ -2622,7 +2619,8 @@ exports.getIrregularities = async (req, res) => {
           model: Employee,
           as: "employee",
           attributes: ["id", "first_name", "employee_code"],
-          required: true
+          required: true,
+          where: employeeWhereClause
         },
         {
           model: ShiftTemplate,
@@ -2650,8 +2648,8 @@ exports.getIrregularities = async (req, res) => {
  * GET ATTENDANCE IRREGULARITIES COUNT
  * Supported roles logic (matching getIrregularities):
  * - SuperAdmin/Admin: Show count of all employee irregularities within their company_id
- * - Attendance Supervisor/Reporting Manager: Show count of their own and team members' irregularities
- * - Regular Employee: Show count of only their own irregularities for the current month
+ * - Attendance Supervisor/Reporting Manager: Show count of team members' irregularities
+ * - Regular Employee: Will not return any data
  */
 exports.getIrregularitiesCount = async (req, res) => {
   try {
@@ -2687,21 +2685,14 @@ exports.getIrregularitiesCount = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      if (ownEmpId) {
-        teamEmpIds.push(ownEmpId);
-      }
       targetEmployeeIds = [...new Set(teamEmpIds)];
     } else {
-      // Regular employee: sees only their own logs
-      const ownEmpId = req.user.employee_id;
-      if (!ownEmpId) {
-        return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
-      }
-      targetEmployeeIds = [ownEmpId];
+      // Regular employee: shouldn't see anything here, they should use self-irregularities
+      targetEmployeeIds = [];
     }
 
     // Construct query filters
-    const whereClause = {
+    const baseWhereClause = {
       company_id: companyId,
       attendance_date: {
         [Op.between]: [startDate, endDate]
@@ -2725,15 +2716,173 @@ exports.getIrregularitiesCount = async (req, res) => {
       status: { [Op.notIn]: [3, 4, 6] }
     };
 
+    let count = 0;
     if (isFilteredByEmployees) {
-      if (targetEmployeeIds.length === 0) {
-        return res.ok({ count: 0 });
+      if (targetEmployeeIds.length > 0) {
+        count = await AttendanceDay.count({
+          where: { ...baseWhereClause, employee_id: { [Op.in]: targetEmployeeIds } }
+        });
       }
-      whereClause.employee_id = { [Op.in]: targetEmployeeIds };
+    } else {
+      count = await AttendanceDay.count({
+        where: baseWhereClause
+      });
     }
 
+    // Calculate selfCount
+    let selfCount = 0;
+    const currentEmpId = req.user.employee_id;
+    if (currentEmpId) {
+      selfCount = await AttendanceDay.count({
+        where: { ...baseWhereClause, employee_id: currentEmpId }
+      });
+    }
+
+    return res.ok({ count, selfCount });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET SELF ATTENDANCE IRREGULARITIES (Missing Punch In or Punch Out)
+ * Shows only own irregularities for the current month by default
+ */
+exports.getSelfIrregularities = async (req, res) => {
+  try {
+    let { month_year, page, limit, search } = req.body;
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 15;
+    const offset = (page - 1) * limit;
+
+    const companyId = req.user.company_id;
+    const ownEmpId = req.user.employee_id;
+
+    if (!ownEmpId) {
+      return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
+    }
+
+    // Date range determination
+    let startDate, endDate;
+    if (month_year) {
+      const parsedMonth = dayjs(month_year.trim(), ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
+      if (parsedMonth.isValid()) {
+        startDate = parsedMonth.startOf('month').format('YYYY-MM-DD');
+        endDate = parsedMonth.endOf('month').format('YYYY-MM-DD');
+      }
+    } else {
+      startDate = dayjs().startOf('month').format('YYYY-MM-DD');
+      endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    }
+
+    const whereClause = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    if (startDate && endDate) {
+      whereClause.attendance_date = {
+        [Op.between]: [startDate, endDate]
+      };
+    }
+
+    let employeeWhereClause = undefined;
+    if (search && search.trim() !== '') {
+      employeeWhereClause = {
+        [Op.or]: [
+          { first_name: { [Op.iLike]: `%${search.trim()}%` } },
+          { employee_code: { [Op.iLike]: `%${search.trim()}%` } }
+        ]
+      };
+    }
+
+    const { count, rows } = await AttendanceDay.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Employee,
+          as: "employee",
+          attributes: ["id", "first_name", "employee_code"],
+          required: true,
+          where: employeeWhereClause
+        },
+        {
+          model: ShiftTemplate,
+          as: "shiftTemplate",
+          attributes: ["id", "shift_name", "start_time", "end_time"]
+        }
+      ],
+      order: [["attendance_date", "DESC"]],
+      limit,
+      offset
+    });
+
+    return res.ok({
+      items: rows,
+      totalItems: count,
+      currentPage: page,
+      totalPages: Math.ceil(count / limit)
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET SELF ATTENDANCE IRREGULARITIES COUNT
+ */
+exports.getSelfIrregularitiesCount = async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const ownEmpId = req.user.employee_id;
+
+    if (!ownEmpId) {
+      return res.ok({ count: 0 });
+    }
+
+    const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+
     const count = await AttendanceDay.count({
-      where: whereClause
+      where: {
+        company_id: companyId,
+        employee_id: ownEmpId,
+        attendance_date: {
+          [Op.between]: [startDate, endDate]
+        },
+        [Op.or]: [
+          { status: { [Op.in]: [9, 10] } },
+          {
+            [Op.and]: [
+              { first_in: null },
+              { last_out: { [Op.ne]: null } }
+            ]
+          },
+          {
+            [Op.and]: [
+              { first_in: { [Op.ne]: null } },
+              { last_out: null }
+            ]
+          }
+        ],
+        status: { [Op.notIn]: [3, 4, 6] }
+      }
     });
 
     return res.ok({ count });
