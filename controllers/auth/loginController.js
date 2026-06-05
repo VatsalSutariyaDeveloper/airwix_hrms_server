@@ -133,7 +133,7 @@ exports.login = async (req, res) => {
       user = await User.findOne({
         attributes: userAttributes.concat(['status']),
         where: whereClause,
-        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name', 'allowed_clients'] }],
         transaction
       });
 
@@ -173,7 +173,7 @@ exports.login = async (req, res) => {
           mobile_no,
           status: { [Op.in]: [0, 1] }
         },
-        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name', 'allowed_clients'] }],
         transaction
       });
 
@@ -247,13 +247,24 @@ exports.login = async (req, res) => {
       // }
     }
 
-    // 1. Enforce Platform Restriction (Employee = App Only)
+    // 1. Enforce Platform Restriction (Employee = App Only, check allowed_clients)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
     const isEmployee = user.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE;
-    // if (isEmployee && access_by !== "application") {
-    //     await transaction.rollback();
-    //     return res.error(403, { message: "Use the mobile application to access this account." });
-    // }
+
+    // Resolve client login restriction against role permissions
+    if (user.RolePermission && user.RolePermission.allowed_clients) {
+      const allowedClientsList = user.RolePermission.allowed_clients.split(",").map(c => c.trim().toLowerCase());
+      const isMobileRequest = access_by === "application";
+      
+      if (isMobileRequest && !allowedClientsList.includes("mobile") && !allowedClientsList.includes("both")) {
+        await transaction.rollback();
+        return res.error(403, { message: "This account is not authorized to use the mobile application." });
+      }
+      if (!isMobileRequest && !allowedClientsList.includes("web") && !allowedClientsList.includes("both")) {
+        await transaction.rollback();
+        return res.error(403, { message: "This account is not authorized to log in via the web portal." });
+      }
+    }
     // 2. Validate Company
     if (!user.company_id) {
       await transaction.rollback();
@@ -652,7 +663,7 @@ exports.verifyMobileNo = async (req, res) => {
         {
           model: RolePermission,
           as: 'RolePermission',
-          attributes: ['role_key']
+          attributes: ['role_key', 'allowed_clients']
         }
       ]
     }, null, false, {});
@@ -683,6 +694,18 @@ exports.verifyMobileNo = async (req, res) => {
       const roleKey = entity.RolePermission?.role_key;
       const isSuperAdmin = entity.is_super_admin || roleKey === constants.ROLE_KEYS.BUSINESS_ADMIN;
       const isAdmin = roleKey === constants.ROLE_KEYS.ADMIN;
+
+      // Restrict access if login request source client does not match allowed role configuration
+      // if (entity.RolePermission && entity.RolePermission.allowed_clients) {
+      //   const allowedClients = entity.RolePermission.allowed_clients.split(",").map(c => c.trim().toLowerCase());
+      //   const isMobileRequest = req.body.access_by === "application";
+      //   if (isMobileRequest && !allowedClients.includes("mobile") && !allowedClients.includes("both")) {
+      //     return res.error(403, { message: "This account is not authorized to use the mobile application." });
+      //   }
+      //   if (!isMobileRequest && !allowedClients.includes("web") && !allowedClients.includes("both")) {
+      //     return res.error(403, { message: "This account is not authorized to log in via the web portal." });
+      //   }
+      // }
 
       if (isSuperAdmin || isAdmin) {
         return res.error(403, { message: "Admin or Super Admin login is not allowed." });
@@ -796,7 +819,14 @@ exports.verifyIdentifier = async (req, res) => {
     userWhere.status = { [Op.in]: [0, 1] };
 
     let entity = await commonQuery.findOneRecord(User, userWhere, {
-      attributes: ['id', 'user_name', 'password', 'status', 'company_id']
+      attributes: ['id', 'user_name', 'password', 'status', 'company_id', 'role_id', 'is_super_admin'],
+      include: [
+        {
+          model: RolePermission,
+          as: 'RolePermission',
+          attributes: ['role_key', 'allowed_clients']
+        }
+      ]
     }, null, false, {});
 
     let type = "user";
@@ -825,6 +855,24 @@ exports.verifyIdentifier = async (req, res) => {
 
     if (entity.status === 1) {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (type === "user") {
+      const roleKey = entity.RolePermission?.role_key;
+      const isSuperAdmin = entity.is_super_admin || roleKey === constants.ROLE_KEYS.BUSINESS_ADMIN;
+      const isAdmin = roleKey === constants.ROLE_KEYS.ADMIN;
+
+      // Restrict access if login request source client does not match allowed role configuration
+      if (entity.RolePermission && entity.RolePermission.allowed_clients) {
+        const allowedClients = entity.RolePermission.allowed_clients.split(",").map(c => c.trim().toLowerCase());
+        const isMobileRequest = req.body.access_by === "application";
+        if (isMobileRequest && !allowedClients.includes("mobile") && !allowedClients.includes("both")) {
+          return res.error(403, { message: "This account is not authorized to use the mobile application." });
+        }
+        if (!isMobileRequest && !allowedClients.includes("web") && !allowedClients.includes("both")) {
+          return res.error(403, { message: "This account is not authorized to log in via the web portal." });
+        }
+      }
     }
 
     // 3. Device Verification Logic

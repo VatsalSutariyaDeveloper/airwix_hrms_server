@@ -3349,3 +3349,49 @@ exports.availableOutDuty = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.updateProfilePhoto = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+
+        const existingEmployee = await commonQuery.findOneRecord(Employee, id, {}, transaction);
+        if (!existingEmployee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        if (!req.files || !req.files.profile_image) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { profile_image: "Profile image is required" });
+        }
+
+        const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_IMG_FOLDER, transaction, existingEmployee.profile_image);
+
+        if (!savedFiles.profile_image) {
+            await transaction.rollback();
+            return res.error(constants.FILE_UPLOAD_FAILED, { message: "Failed to upload profile image" });
+        }
+
+        await commonQuery.updateRecordById(
+            Employee,
+            id,
+            { profile_image: savedFiles.profile_image },
+            transaction,
+            false,
+            false
+        );
+
+        await transaction.commit();
+
+        const profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${savedFiles.profile_image}`;
+
+        return res.success("Profile photo updated successfully", {
+            profile_image: savedFiles.profile_image,
+            profile_image_url
+        });
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};

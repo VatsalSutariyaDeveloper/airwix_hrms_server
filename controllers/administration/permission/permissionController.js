@@ -149,7 +149,7 @@ exports.getPermissionHierarchy = async (req, res) => {
         console.log("Fetching Permission Hierarchy...");
         const [modules, permissions] = await Promise.all([
             commonQuery.findAllRecords(ModuleMaster, { status: 0 }, {
-                attributes: ['id', 'module_name', 'module_icon_name', 'priority', 'cust_module_name'],
+                attributes: ['id', 'module_name', 'module_icon_name', 'priority', 'cust_module_name', 'platform_type'],
                 include: [{
                     model: ModuleEntityMaster,
                     as: 'entities',
@@ -190,6 +190,7 @@ exports.getPermissionHierarchy = async (req, res) => {
                 name: (moduleJson.cust_module_name || moduleJson.module_name).toLowerCase().replace(/\s/g, '_'),
                 label: moduleJson.cust_module_name || moduleJson.module_name,
                 icon: moduleJson.module_icon_name,
+                platform_type: moduleJson.platform_type,
                 entities: moduleJson.entities || []
             };
         });

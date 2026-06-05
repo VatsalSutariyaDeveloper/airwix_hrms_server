@@ -13,7 +13,13 @@ module.exports = (sequelize, DataTypes) => {
     },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
+    company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    allowed_clients: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      defaultValue: "web",
+      comment: "web, mobile, both"
+    }
   }, {
     tableName: "role_permission",
     timestamps: true,
