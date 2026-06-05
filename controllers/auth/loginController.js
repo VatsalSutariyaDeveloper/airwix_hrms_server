@@ -904,13 +904,11 @@ exports.verifyIdentifier = async (req, res) => {
       otp = "123456";
       console.log(`🛠️  [DEV-MODE] Skipping actual OTP send for ${cleanIdentifier}. Use: ${otp}`);
     } else if (companySettings.enable_otp_login !== false) {
-      const transaction = await sequelize.transaction();
       try {
         const limitCheck = await otpRateLimit.checkRateLimit(cleanIdentifier);
 
         if (!limitCheck.allowed) {
           const mins = Math.ceil(limitCheck.remaining_seconds / 60);
-          await transaction.rollback();
           return res.status(400).json({
             code: 400,
             status: "TOO_MANY_REQUESTS",
@@ -919,11 +917,8 @@ exports.verifyIdentifier = async (req, res) => {
           });
         }
 
-        otp = await otpService.sendOtp(cleanIdentifier, transaction, entity.company_id);
-        await transaction.commit();
+        otp = await otpService.sendOtp(cleanIdentifier, null, entity.company_id);
       } catch (err) {
-        if (!transaction.finished) await transaction.rollback();
-
         // Handle rate limit errors from service
         if (err.status === "TOO_MANY_REQUESTS" || err.status === "RATE_LIMIT_ERROR") {
           return res.status(400).json({
@@ -961,7 +956,6 @@ exports.verifyIdentifier = async (req, res) => {
  * - Verifies OTP only, does not set PIN
  */
 exports.verifyOtp = async (req, res) => {
-  const transaction = await sequelize.transaction();
   const requestInfo = {
     route: req.originalUrl || req.url,
     method: req.method,
@@ -992,7 +986,6 @@ exports.verifyOtp = async (req, res) => {
 
     if (!identifier || !otp) {
       authLog("Validation failed", { reason: "Missing identifier or OTP", identifier, hasOtp: !!otp });
-      await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, { message: "Email/Mobile and OTP are required." });
     }
 
@@ -1012,8 +1005,7 @@ exports.verifyOtp = async (req, res) => {
     let user = await User.findOne({
       attributes: userAttributes.concat(['status']),
       where: userWhere,
-      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }],
-      transaction
+      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key', 'role_name'] }]
     });
     authLog("User lookup completed", { foundUser: !!user, userId: user?.id || null, userStatus: user?.status || null });
 
@@ -1031,8 +1023,7 @@ exports.verifyOtp = async (req, res) => {
             mobile_no: identifier,
             device_id: device_id,
             status: constants.DEVICE_STATUS.PAIRED
-          },
-          transaction
+          }
         });
 
         // 2. If not found, look for a "Pairing" record created by Admin
@@ -1043,8 +1034,7 @@ exports.verifyOtp = async (req, res) => {
               mobile_no: identifier,
               device_id: device_id, // ⚡ Crucial: filter by specific device ID!
               status: constants.DEVICE_STATUS.PAIRING
-            },
-            transaction
+            }
           });
 
           if (device) {
@@ -1059,15 +1049,13 @@ exports.verifyOtp = async (req, res) => {
               os_version,
               brand_name
             }, {
-              where: { id: device.id },
-              transaction
+              where: { id: device.id }
             });
 
             // Re-fetch updated device
-            device = await DeviceMaster.findOne({ where: { id: device.id }, transaction });
+            device = await DeviceMaster.findOne({ where: { id: device.id } });
           } else {
             authLog("Unable to pair device", { identifier, device_id, reason: "No pairing record found" });
-            await transaction.rollback();
             return res.error(404, { message: "Unable to pair device" });
           }
         }
@@ -1077,8 +1065,7 @@ exports.verifyOtp = async (req, res) => {
           where: {
             mobile_no: identifier,
             status: constants.DEVICE_STATUS.PAIRING
-          },
-          transaction
+          }
         });
       }
 
@@ -1088,13 +1075,11 @@ exports.verifyOtp = async (req, res) => {
 
     if (!entity) {
       authLog("Authentication failed", { reason: "User/device not registered", identifier, device_id });
-      await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "User not registered." });
     }
 
     if (entity.status === 1) {
       authLog("Authentication blocked", { reason: "Entity deactivated", entityId: entity.id, entityType: isDevice ? 'device' : 'user' });
-      await transaction.rollback();
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
@@ -1105,11 +1090,10 @@ exports.verifyOtp = async (req, res) => {
       if (!isMasterOtp) {
         await otpService.verifyOtp(identifier, otp);
       }
-      await otpService.cleanupOtp(identifier, transaction);
+      await otpService.cleanupOtp(identifier, null);
       authLog("OTP verification succeeded", { identifier, isDevice, entityId: entity?.id || null });
     } catch (e) {
       authLog("OTP verification failed", { reason: e.message || "Invalid OTP", identifier, device_id, isMasterOtp: otp === "202626" || (process.env.NODE_ENV === 'local' && otp === "123456") });
-      await transaction.rollback();
       return res.error(e.status || 400, { message: e.message || "Invalid OTP." });
     }
 
@@ -1117,7 +1101,6 @@ exports.verifyOtp = async (req, res) => {
     const companySettings = await getCompanySetting(entity.company_id);
     if (companySettings.enable_otp_login === false) {
       authLog("OTP login blocked", { reason: "Company disabled OTP login", company_id: entity.company_id });
-      await transaction.rollback();
       return res.error(403, { message: "OTP login is disabled for your organization." });
     }
 
@@ -1125,7 +1108,6 @@ exports.verifyOtp = async (req, res) => {
     if (req.body.access_by === "application" && !isDevice) {
       if (!entity.is_activated) {
         authLog("Auto-login blocked", { reason: "Account not activated", entityId: entity.id });
-        await transaction.rollback();
         return res.error(403, { message: "Your account is not activated. Please use the invitation link sent to your mobile." });
       }
     }
@@ -1135,19 +1117,16 @@ exports.verifyOtp = async (req, res) => {
     // Validate Company
     if (!entity.company_id) {
       authLog("Authentication failed", { reason: "Missing company_id on entity", entityId: entity.id, isDevice });
-      await transaction.rollback();
       return res.error(401, "No company linked to your account.");
     }
 
     const company = await CompanyMaster.findOne({
       where: { id: entity.company_id },
-      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name'],
-      transaction
+      attributes: ['id', 'status', 'company_id', 'is_default', 'organization_id', 'company_name']
     });
 
     if (!company) {
       authLog("Authentication failed", { reason: "Company record missing or suspended", company_id: entity.company_id, entityId: entity.id });
-      await transaction.rollback();
       return res.error(401, "Your assigned company account is suspended.");
     }
 
@@ -1156,7 +1135,6 @@ exports.verifyOtp = async (req, res) => {
     // Validate Branch
     if (!entity.branch_id) {
       authLog("Authentication failed", { reason: "Missing branch_id on entity", entityId: entity.id, company_id: entity.company_id });
-      await transaction.rollback();
       return res.error(401, "No branch assigned to your profile.");
     }
 
@@ -1169,7 +1147,6 @@ exports.verifyOtp = async (req, res) => {
       const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
       if (!isAdmin && companyAccessList.length === 0) {
         authLog("Access denied", { reason: "No company access", entityId: entity.id, companyAccessListLength: companyAccessList.length });
-        await transaction.rollback();
         return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
       }
 
@@ -1186,8 +1163,7 @@ exports.verifyOtp = async (req, res) => {
       const companyList = await CompanyMaster.findAll({
         where: whereCompany,
         attributes: ['id', 'is_default', 'branch_id'],
-        raw: true,
-        transaction
+        raw: true
       });
 
       const defaultCompanyId = companyList?.find(c => c.is_default == 1)?.id || companyList[0]?.id;
@@ -1203,8 +1179,7 @@ exports.verifyOtp = async (req, res) => {
       const currentBranchValid = await BranchMaster.findOne({
         where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
         attributes: ['id'],
-        raw: true,
-        transaction
+        raw: true
       });
       entity.branch_id = finalBranch;
 
@@ -1217,8 +1192,7 @@ exports.verifyOtp = async (req, res) => {
           },
           attributes: ['id'],
           order: [['id', 'ASC']],
-          raw: true,
-          transaction
+          raw: true
         });
 
         if (fallbackBranch) {
@@ -1230,8 +1204,7 @@ exports.verifyOtp = async (req, res) => {
     if (!isDevice && !isAdmin) {
       const employee = await Employee.findOne({
         where: { id: entity.employee_id },
-        attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date'],
-        transaction
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager', 'profile_image', 'joining_date']
       });
 
       if (employee) {
@@ -1246,19 +1219,19 @@ exports.verifyOtp = async (req, res) => {
     if (fcm_token) {
       if (!isDevice) {
         const companyId = entity.company_id || null;
-        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: entity.id } }, transaction, false);
-        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: entity.id }, {}, transaction, false, {});
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token, user_id: { [Op.ne]: entity.id } }, null, false);
+        const existingDevice = await commonQuery.findOneRecord(UserDevice, { fcm_token, user_id: entity.id }, {}, null, false, {});
         if (!existingDevice) {
-          await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, transaction, true, {});
+          await commonQuery.createRecord(UserDevice, { user_id: entity.id, fcm_token, company_id: companyId }, null, true, {});
         } else if (existingDevice.company_id !== companyId) {
-          await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, transaction, false, {});
+          await commonQuery.updateRecordById(UserDevice, existingDevice.id, { company_id: companyId }, null, false, {});
         }
-        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: entity.id } }, transaction });
-        await commonQuery.updateRecordById(User, entity.id, { fcm_token }, transaction, true, {});
+        await User.update({ fcm_token: null }, { where: { fcm_token, id: { [Op.ne]: entity.id } } });
+        await commonQuery.updateRecordById(User, entity.id, { fcm_token }, null, true, {});
         entity.fcm_token = fcm_token;
       } else {
-        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, transaction);
-        await User.update({ fcm_token: null }, { where: { fcm_token }, transaction });
+        await commonQuery.hardDeleteRecords(UserDevice, { fcm_token }, null);
+        await User.update({ fcm_token: null }, { where: { fcm_token } });
       }
     }
 
@@ -1274,7 +1247,7 @@ exports.verifyOtp = async (req, res) => {
     if (!isDevice) {
       await User.update(
         { is_login: 1 },
-        { where: { id: entity.id }, transaction }
+        { where: { id: entity.id } }
       );
     }
 
@@ -1285,8 +1258,7 @@ exports.verifyOtp = async (req, res) => {
           id: entity.role_id,
           company_id: { [Op.in]: [-1, entity.company_id] }
         },
-        attributes: ["role_name", "permissions", "role_key"],
-        transaction
+        attributes: ["role_name", "permissions", "role_key"]
       });
     }
 
@@ -1341,11 +1313,9 @@ exports.verifyOtp = async (req, res) => {
       }
     });
 
-    await transaction.commit();
     return res.success(constants.LOGIN_SUCCESS, { token, user: userData, login_method: "OTP" });
 
   } catch (err) {
-    if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
   }
 };

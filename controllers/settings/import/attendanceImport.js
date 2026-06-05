@@ -260,7 +260,7 @@ const runWorker = async () => {
         company_id: mockStore.companyId,
         status: { [Op.ne]: 2 }
       }, {
-        attributes: ['id', 'employee_code', 'first_name', 'branch_id'],
+        attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template'],
         raw: true
       }, transaction);
     });
@@ -271,20 +271,16 @@ const runWorker = async () => {
       if (emp.employee_code) {
         const normCode = normalize(emp.employee_code);
         employeeCodeMap.set(normCode, emp.id);
-        employeeDataMap.set(emp.id, { branch_id: emp.branch_id });
+        employeeDataMap.set(emp.id, { branch_id: emp.branch_id, leave_template: emp.leave_template });
       }
     });
     
-    // Fetch Leave Categories for the company
-    const categoryRecords = await LeaveTemplateCategory.findAll({
-        where: { company_id: mockStore.companyId, branch_id: mockStore.branchId, status: { [Op.ne]: 2 } },
-        transaction,
-        raw: true
-    });
-    const categoryMap = new Map();
-    categoryRecords.forEach(c => {
-        categoryMap.set(c.leave_category_name.toLowerCase(), c.id);
-    });
+    const employeeBalancesMap = new Map();
+    const getEmployeeCategory = (empId, categoryName) => {
+        const normName = String(categoryName || '').toLowerCase().trim();
+        const key = `${empId}_${normName}`;
+        return employeeBalancesMap.get(key) || null;
+    };
     const balanceCache = new Set();
 
     // --- Optimization: Pre-fetch Existing Attendance Records ---
@@ -357,12 +353,15 @@ const runWorker = async () => {
                 year: sheetYear,
                 status: 0
             },
-            attributes: ['employee_id', 'leave_category_id'],
+            attributes: ['employee_id', 'leave_category_id', 'leave_category_name'],
             transaction,
             raw: true
         });
         balances.forEach(b => {
             balanceCache.add(`${b.employee_id}_${b.leave_category_id}_${sheetYear}`);
+            const normName = String(b.leave_category_name || '').toLowerCase().trim();
+            const key = `${b.employee_id}_${normName}`;
+            employeeBalancesMap.set(key, b.leave_category_id);
         });
     }
     // ----------------------------------------------------------
@@ -385,6 +384,7 @@ const runWorker = async () => {
     // --- First Pass: Pre-Validation for Duplicates & Existence ---
     const seenCodes = new Map();
     const validationErrors = [];
+
     for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
         const row = rawRows[i];
         if (!row) continue;
@@ -404,6 +404,78 @@ const runWorker = async () => {
                     validationErrors.push(`Row ${i + 1}: Employee code '${staffIdVal}' (Name: ${staffNameVal}) does not exist in the system.`);
                 }
             }
+
+            const employeeId = employeeCodeMap.get(normCode);
+
+            // Gather all Leave Categories referenced by this employee's row(s)
+            const group = {};
+            const firstLabel = normalize(row[daysIdx]);
+            if (firstLabel) group[firstLabel] = row;
+
+            let j = i + 1;
+            while (j < rawRows.length) {
+                const nextRow = rawRows[j];
+                if (!nextRow) break;
+                
+                const nextStaffId = String(nextRow[staffIdIdx] || '').trim();
+                if (nextStaffId && normalize(nextStaffId) !== normCode) break; 
+
+                const label = normalize(nextRow[daysIdx]);
+                const labelMap = {
+                    'attendance': 'attendance', 'attendence': 'attendance', 'p': 'attendance',
+                    'hd': 'attendance', 'a': 'attendance', 'wo': 'attendance', 'hl': 'attendance', 'l': 'attendance',
+                    'in': 'in', 'inpunch': 'in', 'punchin': 'in', 'arrival': 'in', 'timein': 'in',
+                    'out': 'out', 'outpunch': 'out', 'punchout': 'out', 'departure': 'out', 'timeout': 'out',
+                    'wh': 'wh', 'workhours': 'wh', 'workinghours': 'wh', 'duration': 'wh',
+                    'ot': 'ot', 'overtime': 'ot',
+                    'f': 'f', 'fine': 'f'
+                };
+                
+                const mappedLabel = labelMap[label];
+                if (mappedLabel) {
+                    group[mappedLabel] = nextRow;
+                    j++;
+                } else {
+                    break;
+                }
+            }
+
+            const attendanceRow = group['attendance'];
+            const employeeCategories = new Set();
+            if (attendanceRow) {
+                for (const colIdx of dateHeaders) {
+                    const statusChar = String(attendanceRow[colIdx] || '').trim();
+                    if (statusChar) {
+                        const s = statusChar.toUpperCase();
+                        const parts = s.split('/');
+                        const s_base = parts[0].trim();
+
+                        const nonLeaveCodes = new Set(['P', 'A', 'HD', 'OD', 'PH', 'H', 'HL', 'R', 'WO', 'W']);
+                        if (s === 'P/2') {
+                            employeeCategories.add('Unpaid Leave');
+                        } else if (!nonLeaveCodes.has(s_base)) {
+                            const mapping = LEAVE_MAPPING[s_base];
+                            if (mapping) {
+                                employeeCategories.add(mapping.name);
+                            } else {
+                                employeeCategories.add(s_base);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Verify categories for this employee immediately if they exist in system
+            if (employeeId) {
+                employeeCategories.forEach(catName => {
+                    const catId = getEmployeeCategory(employeeId, catName);
+                    if (!catId) {
+                        validationErrors.push(`Row ${i + 1}: Leave Category '${catName}' referenced for Employee code '${staffIdVal}' (Name: ${staffNameVal}) does not exist in the system.`);
+                    }
+                });
+            }
+
+            i = j - 1;
         }
     }
 
@@ -413,7 +485,7 @@ const runWorker = async () => {
             status: "SUCCESS",
             result: {
                 importErrors: true,
-                message: "Import failed: Some employees in the Excel file do not exist in the system or are duplicated.",
+                message: "Import failed: Validation errors found.",
                 errors: validationErrors,
                 errorCount: validationErrors.length
             }
@@ -463,76 +535,7 @@ const runWorker = async () => {
     }
     */
 
-    // --- Optimization Step: Ensure All Leave Templates/Categories/Balances Exist ---
-    // Ensure Default Template
-    let defaultTemplate = await LeaveTemplate.findOne({
-        where: { company_id: mockStore.companyId, branch_id: mockStore.branchId, status: 0 },
-        transaction,
-        order: [['id', 'ASC']]
-    });
-    if (!defaultTemplate) {
-        defaultTemplate = await LeaveTemplate.create({
-            template_name: 'Default Leave Template',
-            leave_policy_cycle: 'CALENDAR_YEAR',
-            accrual_type: 'UPFRONT',
-            status: 0,
-            company_id: mockStore.companyId,
-            branch_id: mockStore.branchId,
-            user_id: mockStore.userId
-        }, { transaction });
-    }
 
-    // Ensure fixed categories from LEAVE_MAPPING + "Unpaid Leave"
-    const categoriesToEnsure = [...new Set(Object.values(LEAVE_MAPPING).map(m => m.name)), "Unpaid Leave"];
-    for (const catName of categoriesToEnsure) {
-        const normName = catName.toLowerCase();
-        if (!categoryMap.has(normName)) {
-            const mapping = Object.values(LEAVE_MAPPING).find(m => m.name === catName) || { name: 'Unpaid Leave', isPaid: false, isCompoff: false };
-            const newCat = await LeaveTemplateCategory.create({
-                leave_template_id: defaultTemplate.id,
-                leave_category_name: mapping.name,
-                is_paid: mapping.isPaid,
-                is_compoff: mapping.isCompoff,
-                company_id: mockStore.companyId,
-                branch_id: mockStore.branchId,
-                user_id: mockStore.userId
-            }, { transaction });
-            categoryMap.set(normName, newCat.id);
-        }
-    }
-
-    // Ensure Balances for ALL employees processed and ALL mentioned categories
-    const allProcessedEmpIds = Array.from(employeeCodeMap.values());
-    const allCategoryIds = Array.from(categoryMap.values());
-    const balancesToCreate = [];
-    for (const empId of allProcessedEmpIds) {
-        for (const [catName, catId] of categoryMap.entries()) {
-            const balKey = `${empId}_${catId}_${sheetYear}`;
-            if (!balanceCache.has(balKey)) {
-                const mapping = Object.values(LEAVE_MAPPING).find(m => m.name.toLowerCase() === catName) || { name: 'Unpaid Leave', isPaid: false, isCompoff: false };
-                balancesToCreate.push({
-                    employee_id: empId,
-                    leave_category_id: catId,
-                    leave_category_name: mapping.name,
-                    year: sheetYear,
-                    total_allocated: 0,
-                    used_leaves: 0,
-                    pending_leaves: 0,
-                    is_paid: mapping.isPaid,
-                    is_compoff: mapping.isCompoff,
-                    company_id: mockStore.companyId,
-                    branch_id: mockStore.branchId,
-                    user_id: mockStore.userId
-                });
-                balanceCache.add(balKey);
-            }
-        }
-    }
-    if (balancesToCreate.length > 0) {
-        await EmployeeLeaveBalance.bulkCreate(balancesToCreate, { transaction, ignoreDuplicates: true });
-    }
-    // -------------------------------------------------------------------------------
-    // -----------------------------------------------
 
     for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
         const row = rawRows[i];
@@ -612,17 +615,35 @@ const runWorker = async () => {
                     let leaveCategoryId = null;
                     let leaveSession = null;
 
-                    const s_base = s.split('/')[0];
-                    const mapping = LEAVE_MAPPING[s_base];
+                    const parts = s.split('/');
+                    const s_base = parts[0].trim();
+                    const isHalfDay = parts.length > 1 && parts[1].trim() === '2';
+
+                    let mapping = LEAVE_MAPPING[s_base];
+                    let leaveCatName = null;
+                    let markPresent = false;
 
                     if (mapping) {
-                        if (mapping.markPresent) {
+                        leaveCatName = mapping.name;
+                        markPresent = !!mapping.markPresent;
+                    } else if (s !== 'P/2') {
+                        const targetKey = `${employeeId}_${s_base.toLowerCase().trim()}`;
+                        if (employeeBalancesMap.has(targetKey)) {
+                            leaveCatName = s_base;
+                            if (s_base.toLowerCase().includes('short')) {
+                                markPresent = true;
+                            }
+                        }
+                    }
+
+                    if (leaveCatName) {
+                        if (markPresent) {
                              status = 0; // PRESENT
                         } else {
-                             status = s.includes('/2') ? 1 : 6;
+                             status = isHalfDay ? 1 : 6;
                         }
 
-                        if (status === 1 || mapping.markPresent) {
+                        if (status === 1 || markPresent) {
                             leaveSession = 1; // Default
                             if (firstIn && lastOut) {
                                 const inHr = dayjs(firstIn).hour();
@@ -632,7 +653,7 @@ const runWorker = async () => {
                             }
                         }
 
-                        leaveCategoryId = categoryMap.get(mapping.name.toLowerCase());
+                        leaveCategoryId = getEmployeeCategory(employeeId, leaveCatName);
                         importedNote = `Imported: ${statusChar}`;
                     } else if (s === 'HD') {
                         status = 1;
@@ -656,7 +677,7 @@ const runWorker = async () => {
                             if (inHr >= 12) leaveSession = 1;
                             else if (outHr <= 15) leaveSession = 2;
                         }
-                        leaveCategoryId = categoryMap.get("unpaid leave");
+                        leaveCategoryId = getEmployeeCategory(employeeId, "unpaid leave");
                         importedNote = `Imported: ${statusChar}`;
                     } else if (s === 'P') {
                         status = 0; // PRESENT
@@ -710,7 +731,10 @@ const runWorker = async () => {
                     const dayId = existingDay ? existingDay.id : null;
 
                     // Support leave balance increment sync
-                    const isShortLeave = (mapping && mapping.markPresent && leaveCategoryId);
+                    const isShortLeave = leaveCategoryId && (
+                        (mapping && mapping.markPresent) || 
+                        (leaveCatName && leaveCatName.toLowerCase().includes('short'))
+                    );
                     const isFullLeave = (status === 6);
                     const isHalfLeave = (status === 1 && leaveCategoryId);
                     
