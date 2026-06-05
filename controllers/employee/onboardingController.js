@@ -583,6 +583,21 @@ exports.getPendingList = async (req, res) => {
 };
 
 /**
+ * Get count of pending onboardings (HR Side)
+ */
+exports.getPendingCount = async (req, res) => {
+    try {
+        const count = await commonQuery.countRecords(Employee, {
+            status: 3
+        });
+        return res.ok({ count });
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+
+/**
  * Get detailed onboarding record by ID (HR Side)
  */
 exports.getOnboardingById = async (req, res) => {

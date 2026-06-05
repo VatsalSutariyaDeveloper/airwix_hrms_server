@@ -11,7 +11,7 @@ const { handleExport } = require("../../helpers/functions/excelService");
 const { ensureLatestPayslip, calculateEmployeeOffDays } = require("../../services/payrollService");
 const { calculateTDS } = require("../../helpers/functions/salaryTaxCalculator");
 const PFService = require("../../services/compliance/pfService");
-const employee = require("../../models/employee");
+const { createNotification } = require("../../services/notificationService");
 
 
 /**
@@ -486,7 +486,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
             const beforePayable = splitCounter.before.present + (splitCounter.before.half * 0.5) + splitCounter.before.leave + splitCounter.before.holiday;
             const afterPayable = splitCounter.after.present + (splitCounter.after.half * 0.5) + splitCounter.after.leave + splitCounter.after.holiday;
-            
+
             salarySplitInfo.beforePayable = beforePayable;
             salarySplitInfo.afterPayable = afterPayable;
             salarySplitInfo.splitCounter = splitCounter;
@@ -666,7 +666,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     if (!isAlreadyProRated) {
                         const beforeLWP = salarySplitInfo.splitCounter.before.absent + (salarySplitInfo.splitCounter.before.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.before.unpaidLeave;
                         const afterLWP = salarySplitInfo.splitCounter.after.absent + (salarySplitInfo.splitCounter.after.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.after.unpaidLeave;
-                        
+
                         const oldSegmentVal = (oldComponentMonthlyAmount * (salarySplitInfo.daysBefore / (daysInCalculation || 1))) - (oldDaily * beforeLWP);
                         const newSegmentVal = (newComponentMonthlyAmount * (salarySplitInfo.daysAfter / (daysInCalculation || 1))) - (newDaily * afterLWP);
                         actualAmount = oldSegmentVal + newSegmentVal;
@@ -739,7 +739,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 if (!isAlreadyProRated) {
                     const beforeLWP = salarySplitInfo.splitCounter.before.absent + (salarySplitInfo.splitCounter.before.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.before.unpaidLeave;
                     const afterLWP = salarySplitInfo.splitCounter.after.absent + (salarySplitInfo.splitCounter.after.uncategorizedHalf * 0.5) + salarySplitInfo.splitCounter.after.unpaidLeave;
-                    
+
                     const oldSegmentVal = (oldComponentMonthlyAmount * (salarySplitInfo.daysBefore / (daysInCalculation || 1))) - (oldDaily * beforeLWP);
                     const newSegmentVal = (newComponentMonthlyAmount * (salarySplitInfo.daysAfter / (daysInCalculation || 1))) - (newDaily * afterLWP);
                     actualAmount = oldSegmentVal + newSegmentVal;
@@ -1616,7 +1616,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         leave_balances: summary.leave_balances,
         status: 1, // Finalized
         user_id: req.user?.id || 0,
-        company_id: req.user?.company_id || summary.meta?.company_id,
+        company_id: summary.meta?.company_id || req.user?.company_id,
         branch_id: summary.meta?.branch_id
     };
 
@@ -1727,12 +1727,11 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         transaction
     });
 
-    // 💸 Send Notification to Employee
+    //Send Notification to Employee
     try {
         const targetUser = await commonQuery.findOneRecord(User, { employee_id: employee_id }, {}, transaction);
         if (targetUser) {
             const monthName = dayjs().month(month - 1).format('MMMM');
-            const { createNotification } = require("../../services/notificationService");
             await createNotification({
                 user_id: targetUser.id,
                 title: "Payslip Generated",
@@ -1740,7 +1739,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
                 type: "PAYROLL",
                 reference_id: finalizedPayslip.id,
                 status_code: 0,
-                company_id: req.user?.company_id || summary.meta?.company_id,
+                company_id: summary.meta?.company_id || req.user?.company_id,
                 branch_id: summary.meta?.branch_id
             }, transaction);
         }
@@ -1985,20 +1984,37 @@ const processPayslipData = (payslips) => {
 
 exports.getPayslipEmployeeList = async (req, res) => {
     try {
-        const { year } = req.body;
+        const { year, department_id } = req.body;
         if (!year) {
             return res.error("VALIDATION_ERROR", { message: "Year is required" });
         }
 
+        const employeeWhere = {};
+        if (department_id && department_id !== 'All' && department_id !== 0 && department_id !== '0') {
+            employeeWhere.department_id = department_id;
+        }
+
+        const fieldConfig = [
+            ["employee.first_name", true, true],
+            ["employee.employee_code", true, true]
+        ];
+
         const data = await commonQuery.fetchPaginatedData(
             Payslip,
-            { filter: { year } },
-            [],
+            {
+                ...req.body,
+                filter: {
+                    ...req.body?.filter,
+                    year
+                }
+            },
+            fieldConfig,
             {
                 include: [
                     {
                         model: Employee,
                         as: 'employee',
+                        where: employeeWhere,
                         attributes: ['id', 'employee_code', 'first_name'],
                         include: [{ model: DesignationMaster, as: 'designation', attributes: ['designation_name'] }]
                     }
@@ -2669,7 +2685,7 @@ exports.getSalaryOverview = async (req, res) => {
             // 3. A finalized payslip already exists (very fast, no heavy calc)
             const isRequested = reqMonth == m.month && reqYear == m.year;
             const shouldLoadDetails = isRequested || isCurrentMonth;
-            
+
             // Fetch Payslip (Fast)
             const payslip = await commonQuery.findOneRecord(Payslip, {
                 employee_id,
@@ -2915,7 +2931,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         include: [{
             model: Employee,
             as: "employee",
-            attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number'],
+            attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number', 'company_id', 'branch_id'],
             include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
         }]
     });
@@ -2923,9 +2939,78 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
     if (!payslip) return null;
 
     // Fetch company details
-    const company = await commonQuery.findOneRecord(CompanyMaster, companyId, {
-        attributes: ['company_name', 'address', 'logo_image']
-    });
+    const { StateMaster, CountryMaster } = require("../../models");
+    const resolvedBranchId = payslip.branch_id || payslip.employee?.branch_id;
+    let branch = null;
+    if (resolvedBranchId) {
+        branch = await commonQuery.findOneRecord(
+            BranchMaster,
+            resolvedBranchId,
+            {},
+            null,
+            false,
+            {}
+        );
+    }
+
+    const candidateCompanyIds = [
+        branch?.company_id,
+        payslip.employee?.company_id,
+        payslip.company_id,
+        companyId
+    ].filter(Boolean);
+    const companyQueryOptions = {
+        include: [
+            { model: StateMaster, as: "state", attributes: ["state_name"] },
+            { model: CountryMaster, as: "country", attributes: ["country_name"] }
+        ]
+    };
+
+    let company = null;
+    for (const candidateCompanyId of candidateCompanyIds) {
+        company = await commonQuery.findOneRecord(
+            CompanyMaster,
+            candidateCompanyId,
+            companyQueryOptions,
+            null, // transaction
+            false, // forceReload
+            {} // requireTenantFields
+        );
+
+        if (company?.company_name) {
+            break;
+        }
+    }
+
+    // Final fallback for older records where only company_master.branch_id matches.
+    if ((!company || !company.company_name) && resolvedBranchId) {
+        company = await commonQuery.findOneRecord(
+            CompanyMaster,
+            {
+                branch_id: resolvedBranchId,
+                status: 0
+            },
+            {
+                ...companyQueryOptions,
+                order: [["is_default", "ASC"], ["id", "DESC"]]
+            },
+            null,
+            false,
+            {}
+        );
+    }
+
+    let fullAddressParts = [];
+    if (company?.address) fullAddressParts.push(company.address);
+    if (company?.address2) fullAddressParts.push(company.address2);
+    if (company?.city) fullAddressParts.push(company.city);
+    if (company?.state?.state_name) fullAddressParts.push(company.state.state_name);
+    if (company?.country?.country_name) fullAddressParts.push(company.country.country_name);
+
+    let formattedAddress = fullAddressParts.length > 0 ? fullAddressParts.join(', ') : 'Gujarat, India';
+    if (company?.pincode) {
+        formattedAddress += ` - ${company.pincode}`;
+    }
 
     const monthName = dayjs().month(parseInt(payslip.month) - 1).format('MMMM');
 
@@ -2978,6 +3063,14 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
     const totalDeductions = fullDeductionList.reduce((sum, d) => sum + d.amount, 0);
 
     return {
+        meta: {
+            payslip_id: payslip.id,
+            employee_id: payslip.employee_id,
+            month: payslip.month,
+            year: payslip.year,
+            company_id: payslip.employee?.company_id || payslip.company_id,
+            branch_id: resolvedBranchId
+        },
         payslipData: {
             employee: {
                 name: payslip.employee?.first_name,
@@ -3011,7 +3104,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         },
         companyData: {
             company_name: company?.company_name || 'Airwix HRMS',
-            address: company?.address || 'Gujarat, India'
+            address: formattedAddress
         },
         totalEarnings,
         totalDeductions
@@ -3041,8 +3134,29 @@ exports.generatePayslipPdf = async (req, res) => {
         const outputPath = path.join(outputDir, filename);
         await pdfService.generatePdfFromTemplate(templatePath, data, outputPath);
 
-        // Construct download link
         const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
+
+        //Send Notification to Employee
+        try {
+            if (data.meta) {
+                const targetUser = await commonQuery.findOneRecord(User, { employee_id: data.meta.employee_id }, {});
+                if (targetUser) {
+                    const monthName = dayjs().month(data.meta.month - 1).format('MMMM');
+                    await createNotification({
+                        user_id: targetUser.id,
+                        title: "Payslip Generated",
+                        message: `Your payslip for ${monthName} ${data.meta.year} has been generated. You can now view and download it.`,
+                        type: "PAYROLL",
+                        reference_id: data.meta.payslip_id,
+                        status_code: 0,
+                        company_id: req.user?.company_id || data.meta.company_id,
+                        branch_id: data.meta.branch_id
+                    });
+                }
+            }
+        } catch (notifyErr) {
+            console.error("Payslip Notification Error in PDF Gen:", notifyErr.message);
+        }
 
         return res.ok({
             download_link: downloadLink,
@@ -3088,6 +3202,29 @@ exports.generateBulkPayslipPdf = async (req, res) => {
         await pdfService.generatePdfFromTemplate(templatePath, { slips }, outputPath);
 
         const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
+
+        //  Send Notification to Employees
+        try {
+            for (const data of slips) {
+                if (!data.meta) continue;
+                const targetUser = await commonQuery.findOneRecord(User, { employee_id: data.meta.employee_id }, {});
+                if (targetUser) {
+                    const monthName = dayjs().month(data.meta.month - 1).format('MMMM');
+                    await createNotification({
+                        user_id: targetUser.id,
+                        title: "Payslip Generated",
+                        message: `Your payslip for ${monthName} ${data.meta.year} has been generated. You can now view and download it.`,
+                        type: "PAYROLL",
+                        reference_id: data.meta.payslip_id,
+                        status_code: 0,
+                        company_id: req.user?.company_id || data.meta.company_id,
+                        branch_id: data.meta.branch_id
+                    });
+                }
+            }
+        } catch (notifyErr) {
+            console.error("Bulk Payslip Notification Error:", notifyErr.message);
+        }
 
         return res.ok({
             download_link: downloadLink,
@@ -3503,12 +3640,11 @@ exports.bulkPayPayroll = async (req, res) => {
 
             await commonQuery.updateRecordById(Payslip, payslip.id, payslipUpdatePayload, transaction);
 
-            // 💸 Send Paid Notification
+            //  Send Paid Notification
             if (payslipUpdatePayload.status === 3) {
                 try {
                     const targetUser = await commonQuery.findOneRecord(User, { employee_id: p.employee_id }, {}, transaction);
                     if (targetUser) {
-                        const { createNotification } = require("../../services/notificationService");
                         const monthName = dayjs().month(payslip.month - 1).format('MMMM');
                         await createNotification({
                             user_id: targetUser.id,

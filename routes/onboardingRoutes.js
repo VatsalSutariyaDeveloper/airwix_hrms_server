@@ -6,6 +6,7 @@ const { bufferFile } = require("../helpers/fileUpload");
 // HR Side (Authenticated by global authMiddleware)
 router.post("/initiate", onboardingController.initiate);
 router.post("/list", onboardingController.getPendingList);
+router.get("/onboarding-count", onboardingController.getPendingCount);
 router.get("/detailed/:id", onboardingController.getOnboardingById);
 router.post("/resend-invite", onboardingController.resendInvite);
 router.put("/approve/:id", onboardingController.approve);

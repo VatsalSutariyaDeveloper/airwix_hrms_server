@@ -308,7 +308,15 @@ exports.getById = async (req, res) => {
         if (!Array.isArray(levelConfigs)) levelConfigs = [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
 
-        const history = raw.approval_history || [];
+        raw.approval_history = (raw.approval_history || []).map(h => {
+            const user = approvers.find(u => u.id === (h.approved_by || h.by));
+            return {
+                ...h,
+                user_name: user ? user.user_name : null
+            };
+        });
+
+        const history = raw.approval_history;
         const timeline = [];
 
         for (let i = 1; i <= totalLevels; i++) {

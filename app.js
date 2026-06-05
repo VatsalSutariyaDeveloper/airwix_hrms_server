@@ -69,6 +69,7 @@ if (cluster.isMaster) {
   const announcementRoutes = require("./routes/announcementRoutes");
   const notificationRoutes = require("./routes/notificationRoutes");
   const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
+  const masterAdminRoutes = require("./routes/masterAdminRoutes");
 
   const app = express();
   const { requestContext } = require("./utils/requestContext.js");
@@ -120,6 +121,8 @@ if (cluster.isMaster) {
   app.use(apiLogger);
   app.use(responseFormatter);
   app.use("/api/auth", authRoutes);
+  // Master Admin routes — use their own authentication (X-Master-Admin-Key header)
+  app.use("/api/master-admin", masterAdminRoutes);
   app.use(authMiddleware);
   app.use(checkPermission);
 

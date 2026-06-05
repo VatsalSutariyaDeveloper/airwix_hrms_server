@@ -293,7 +293,7 @@ exports.getPermissions = async (req, res) => {
           status: 0,
         },
         {
-          attributes: ["id", "module_name", "cust_module_name", "priority"],
+          attributes: ["id", "module_name", "cust_module_name", "priority", "platform_type"],
           include: [
             {
               model: ModuleEntityMaster,

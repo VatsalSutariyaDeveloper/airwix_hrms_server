@@ -187,6 +187,11 @@ module.exports = (sequelize, DataTypes) => {
             defaultValue: null,
             comment: "Stores the [0.12, -0.45, ...] vector from DeepFace"
         },
+        registered_face_images: {
+            type: DataTypes.JSONB,
+            defaultValue: [],
+            comment: "Stores list of registered face image filenames"
+        },
 
         // Resignation Related
         is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },

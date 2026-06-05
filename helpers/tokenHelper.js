@@ -7,7 +7,9 @@ const { constants } = require("./constants");
 const generateToken = (user, companyId, access_by = "web login") => {
   // Logic to determine branch_id: use user.branch_id, or first branch from branch_access, or 0
   const branchId = user.branch_id || (user.branch_access && user.branch_access.split(',')[0] ? parseInt(user.branch_access.split(',')[0]) : 0);
+  // console.trace("generateToken called from:")
   const roleKey = user.role_key || user.RolePermission?.role_key || null;
+  const expiresIn = access_by === "application" ? "36500d" : "30d";
 
   return jwt.sign(
     {
@@ -30,7 +32,7 @@ const generateToken = (user, companyId, access_by = "web login") => {
       fcm_token: user.fcm_token || null
     },
     process.env.JWT_SECRET || "your_jwt_secret",
-    { expiresIn: "30d" }
+    { expiresIn }
   );
 };
 

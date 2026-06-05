@@ -1,7 +1,7 @@
-const { Announcement, User, RolePermission, Notification } = require("../models");
-const notificationService = require("../services/notificationService");
+const { Announcement, User, RolePermission, UserDevice } = require("../models");
 const commonQuery = require("../helpers/commonQuery");
 const { handleError, sequelize, constants, Op, formatDateTime } = require("../helpers");
+const firebaseService = require("../helpers/firebaseService");
 const validateRequest = require("../helpers/validateRequest");
 const dayjs = require("dayjs");
 
@@ -16,12 +16,7 @@ exports.create = async (req, res) => {
       target_type: "Target Type",
     };
 
-    const errors = await validateRequest(req.body, requiredFields, {
-      uniqueCheck: {
-        model: Announcement,
-        fields: ["title"],
-      }
-    }, transaction);
+    const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -39,10 +34,7 @@ exports.create = async (req, res) => {
     // Send notifications to the targeted users asynchronously in the background
     setImmediate(async () => {
       try {
-        const creatorId = req.user?.id;
         const companyId = req.user?.company_id || req.body.company_id;
-        const branchId = req.user?.branch_id || req.body.branch_id;
-
         if (!companyId) return;
 
         let whereClause = {
@@ -58,7 +50,6 @@ exports.create = async (req, res) => {
         };
 
         if (targetType === 3) {
-          // Specific users
           const userIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
           if (userIds.length > 0) {
             whereClause.id = { [Op.in]: userIds };
@@ -66,7 +57,6 @@ exports.create = async (req, res) => {
             return;
           }
         } else if (targetType === 2) {
-          // Specific roles
           const roleIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
           if (roleIds.length > 0) {
             whereClause.role_id = { [Op.in]: roleIds };
@@ -74,7 +64,6 @@ exports.create = async (req, res) => {
             return;
           }
         } else if (targetType === 1) {
-          // All employees (excluding admins)
           queryOptions.include = [
             {
               model: RolePermission,
@@ -86,41 +75,39 @@ exports.create = async (req, res) => {
           ];
         }
 
-        // Fetch target users with their FCM tokens
         const targetUsers = await commonQuery.findAllRecords(User, whereClause, queryOptions);
 
-        // Strip HTML tags for clean text content preview in notification body
         const cleanContent = (req.body.content || "")
           .replace(/<[^>]*>/g, "")
           .substring(0, 150);
 
-        const announcementType = req.body.announcement_type || "info";
-        let statusCode = 0;
-        if (announcementType === "urgent") {
-          statusCode = 2;
-        } else if (announcementType === "update") {
-          statusCode = 1;
+        // Collect all FCM tokens from target users (multi-device support)
+        let allTokens = [];
+        for (const user of targetUsers) {
+          const devices = await commonQuery.findAllRecords(UserDevice, { user_id: user.id }, { attributes: ["fcm_token"] }, null, false);
+          const deviceTokens = devices.map(d => d.fcm_token).filter(Boolean);
+          if (deviceTokens.length > 0) {
+            allTokens.push(...deviceTokens);
+          } else if (user.fcm_token) {
+            allTokens.push(user.fcm_token);
+          }
         }
 
-        for (const user of targetUsers) {
-          // Don't notify the creator
-          // if (user.id === creatorId) continue;
+        allTokens = [...new Set(allTokens)];
 
-          await notificationService.createNotification({
-            user_id: user.id,
+        if (allTokens.length > 0) {
+          await firebaseService.sendMulticastNotification(allTokens, {
             title: `New Announcement: ${req.body.title}`,
-            message: cleanContent || "A new company announcement has been published.",
-            type: "announcement",
-            is_read: 0,
-            status_code: statusCode,
-            reference_id: announcement.id,
-            redirect_url: "/dashboard",
-            company_id: companyId,
-            branch_id: branchId
+            body: cleanContent || "A new company announcement has been published.",
+            data: {
+              type: "ANNOUNCEMENT",
+              reference_id: String(announcement.id || ""),
+              redirect_url: "/announcements"
+            }
           });
         }
       } catch (notifyErr) {
-        console.error("Error generating notifications for announcement:", notifyErr);
+        console.error("Error sending FCM for announcement:", notifyErr);
       }
     });
 
@@ -168,13 +155,7 @@ exports.update = async (req, res) => {
       target_type: "Target Type",
     };
 
-    const errors = await validateRequest(req.body, requiredFields, {
-      uniqueCheck: {
-        model: Announcement,
-        fields: ["title"],
-        excludeId: req.params.id
-      }
-    }, transaction);
+    const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
     if (errors) {
       await transaction.rollback();
@@ -183,40 +164,27 @@ exports.update = async (req, res) => {
 
     const announcement = await commonQuery.updateRecordById(Announcement, id, req.body, transaction);
 
-    // 1. Delete all previous notifications associated with this announcement
-    await Notification.destroy({
-      where: {
-        reference_id: id,
-        type: { [Op.in]: ["announcement", "ANNOUNCEMENT"] }
-      },
-      transaction
-    });
-
     await transaction.commit();
 
-    // 2. Dispatch updated notifications to the target audience asynchronously in the background
+    // Send Firebase push notifications to target users (without creating Notification DB entries)
     setImmediate(async () => {
       try {
-        const creatorId = req.user?.id;
         const companyId = req.user?.company_id || req.body.company_id;
-        const branchId = req.user?.branch_id || req.body.branch_id;
-
         if (!companyId) return;
 
         let whereClause = {
           company_id: companyId,
-          status: 0 // Active users
+          status: 0
         };
 
         const targetType = parseInt(req.body.target_type);
-        const target = req.body.target; // Comma-separated values
+        const target = req.body.target;
 
         let queryOptions = {
           attributes: ["id", "fcm_token"]
         };
 
         if (targetType === 3) {
-          // Specific users
           const userIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
           if (userIds.length > 0) {
             whereClause.id = { [Op.in]: userIds };
@@ -224,7 +192,6 @@ exports.update = async (req, res) => {
             return;
           }
         } else if (targetType === 2) {
-          // Specific roles
           const roleIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
           if (roleIds.length > 0) {
             whereClause.role_id = { [Op.in]: roleIds };
@@ -232,7 +199,6 @@ exports.update = async (req, res) => {
             return;
           }
         } else if (targetType === 1) {
-          // All employees (excluding admins)
           queryOptions.include = [
             {
               model: RolePermission,
@@ -244,41 +210,39 @@ exports.update = async (req, res) => {
           ];
         }
 
-        // Fetch target users with their FCM tokens
         const targetUsers = await commonQuery.findAllRecords(User, whereClause, queryOptions);
-        console.log("targetUsers count:", targetUsers.length);
-        // Strip HTML tags for clean text content preview in notification body
+
         const cleanContent = (req.body.content || "")
           .replace(/<[^>]*>/g, "")
           .substring(0, 150);
 
-        const announcementType = req.body.announcement_type || "info";
-        let statusCode = 0;
-        if (announcementType === "urgent") {
-          statusCode = 2;
-        } else if (announcementType === "update") {
-          statusCode = 1;
+        // Collect all FCM tokens from target users (multi-device support)
+        let allTokens = [];
+        for (const user of targetUsers) {
+          const devices = await commonQuery.findAllRecords(UserDevice, { user_id: user.id }, { attributes: ["fcm_token"] }, null, false);
+          const deviceTokens = devices.map(d => d.fcm_token).filter(Boolean);
+          if (deviceTokens.length > 0) {
+            allTokens.push(...deviceTokens);
+          } else if (user.fcm_token) {
+            allTokens.push(user.fcm_token);
+          }
         }
 
-        for (const user of targetUsers) {
-          // Don't notify the creator for local testing (can uncomment in prod if preferred)
-          // if (user.id === creatorId) continue;
+        allTokens = [...new Set(allTokens)];
 
-          await notificationService.createNotification({
-            user_id: user.id,
+        if (allTokens.length > 0) {
+          await firebaseService.sendMulticastNotification(allTokens, {
             title: `Updated Announcement: ${req.body.title}`,
-            message: cleanContent || "A company announcement has been updated.",
-            type: "announcement",
-            is_read: 0,
-            status_code: statusCode,
-            reference_id: id,
-            redirect_url: "/dashboard",
-            company_id: companyId,
-            branch_id: branchId
+            body: cleanContent || "A company announcement has been updated.",
+            data: {
+              type: "announcement",
+              reference_id: String(id || ""),
+              redirect_url: "/dashboard"
+            }
           });
         }
       } catch (notifyErr) {
-        console.error("Error generating notifications for updated announcement:", notifyErr);
+        console.error("Error sending FCM for updated announcement:", notifyErr);
       }
     });
 
@@ -337,8 +301,8 @@ exports.updateStatus = async (req, res) => {
     }
 
     const updated = await commonQuery.updateRecordById(
-      Announcement, 
-      ids, 
+      Announcement,
+      ids,
       { status },
       transaction
     );
@@ -362,6 +326,7 @@ exports.getActiveAnnouncements = async (req, res) => {
     const today = dayjs().format("YYYY-MM-DD");
     const todayEnd = dayjs().endOf('day').format("YYYY-MM-DD HH:mm:ss");
     const whereClause = {
+      company_id: req.user.company_id,
       status: 0,
       announcement_date: { [Op.lte]: todayEnd },
       [Op.and]: [
@@ -385,7 +350,7 @@ exports.getActiveAnnouncements = async (req, res) => {
             attributes: ["id", "user_name"],
           },
         ],
-        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type", "target_type", "target"],
+        attributes: ["id", "title", "content", "announcement_date", "expiry_date", "announcement_type", "target_type", "target", "createdAt"],
         order: [["announcement_date", "DESC"]]
       }, transaction);
 

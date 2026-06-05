@@ -1,4 +1,4 @@
-const { CompanySettingsMaster, CompanyConfigration, CompanyMaster } = require("../../models");
+const { CompanySettingsMaster, CompanySettings, CompanyMaster } = require("../../models");
 const { validateRequest, commonQuery, handleError, sequelize, constants, clearAllCompaniesCache } = require("../../helpers");
 
 const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 'BARCODE', 'EMAIL', 'PAYROLL']; // Add your groups
@@ -6,6 +6,22 @@ const ALLOWED_GROUPS = ['GENERAL', 'PRODUCT', 'INVENTORY', 'SALES', 'PURCHASE', 
 // -------------------------------------------------------------------------
 //  INTERNAL HELPER FUNCTION (Not Exported)
 // -------------------------------------------------------------------------
+function parseDefaultValue(val, inputType) {
+  if (val === null || val === undefined) return "";
+  const str = String(val).trim();
+  if (inputType === "SWITCH") {
+    return str === "1" || str === "true";
+  }
+  if (str === "true") return true;
+  if (str === "false") return false;
+  if (!isNaN(str) && str !== "") return Number(str);
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    return str;
+  }
+}
+
 async function syncSettingsToAllCompanies(transaction) {
     // 1. Fetch all Master Settings
     const masterSettings = await commonQuery.findAllRecords(CompanySettingsMaster, {
@@ -29,14 +45,14 @@ async function syncSettingsToAllCompanies(transaction) {
     // 3. Loop companies and add missing settings
     for (const company of companies) {
         // Get current keys for this company
-        const existingConfig = await commonQuery.findAllRecords(CompanyConfigration, {
+        const existingConfig = await commonQuery.findAllRecords(CompanySettings, {
             company_id: company.id 
         }, {
-            attributes: ['setting_key'],
+            attributes: ['settings_name'],
             raw: true
         }, transaction, false);
 
-        const existingKeys = new Set(existingConfig.map(c => c.setting_key));
+        const existingKeys = new Set(existingConfig.map(c => c.settings_name));
 
         // Filter what is missing
         const missingSettings = masterSettings.filter(
@@ -48,12 +64,12 @@ async function syncSettingsToAllCompanies(transaction) {
                 company_id: company.id,
                 user_id: company.user_id,
                 branch_id: 0, // Default to 0 or Main Branch
-                setting_key: ms.setting_key,
-                setting_value: ms.default_value !== null ? ms.default_value : "",
+                settings_name: ms.setting_key,
+                settings_value: parseDefaultValue(ms.default_value, ms.input_type),
                 status: 0
             }));
 
-            await commonQuery.bulkCreate(CompanyConfigration, newEntries, {}, transaction);
+            await commonQuery.bulkCreate(CompanySettings, newEntries, {}, transaction);
             totalAdded += newEntries.length;
         }
     }
@@ -173,21 +189,49 @@ exports.getById = async (req, res) => {
 };
 
 exports.update = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { id } = req.params;
+
+    // Fetch the old setting record to get the old setting_key
+    const oldSetting = await CompanySettingsMaster.findByPk(id, { transaction });
+    if (!oldSetting) {
+      await transaction.rollback();
+      return res.error(constants.COMPANY_SETTING_MASTER_NOT_FOUND);
+    }
+
+    const oldKey = oldSetting.setting_key;
+    const newKey = req.body.setting_key;
 
     const result = await commonQuery.updateRecordById(
         CompanySettingsMaster, 
         { id }, 
-        req.body
+        req.body,
+        transaction
     );
 
-    if (!result) return res.error(constants.COMPANY_SETTING_MASTER_NOT_FOUND);
+    if (!result) {
+      await transaction.rollback();
+      return res.error(constants.COMPANY_SETTING_MASTER_NOT_FOUND);
+    }
 
+    // If setting_key has changed, update matching settings_name fields in CompanySettings
+    if (newKey && oldKey && newKey !== oldKey) {
+      await CompanySettings.update(
+        { settings_name: newKey },
+        {
+          where: { settings_name: oldKey },
+          transaction
+        }
+      );
+    }
+
+    await transaction.commit();
     clearAllCompaniesCache();
     return res.success(constants.COMPANY_SETTING_MASTER_UPDATED);
 
   } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
   }
 };
@@ -214,16 +258,42 @@ exports.delete = async (req, res) => {
       return res.error(constants.INVALID_INPUT);
     }
 
+    // Find the settings keys for the deleted IDs to sync deletion
+    const { Op } = require("sequelize");
+    const settingsToDelete = await CompanySettingsMaster.findAll({
+      where: {
+        id: { [Op.in]: ids }
+      },
+      transaction,
+      raw: true
+    });
+
+    const keysToDelete = settingsToDelete.map(s => s.setting_key);
+
     const deleted = await commonQuery.softDeleteById(CompanySettingsMaster, ids, transaction);
     if (!deleted) {
       await transaction.rollback();
       return res.error(constants.ALREADY_DELETED);
     }
+
+    // Soft delete corresponding records in CompanySettings for all companies
+    if (keysToDelete.length > 0) {
+      await CompanySettings.update(
+        { status: 2 },
+        {
+          where: {
+            settings_name: { [Op.in]: keysToDelete }
+          },
+          transaction
+        }
+      );
+    }
+
     await transaction.commit();
     clearAllCompaniesCache();
     return res.success(constants.COMPANY_SETTING_MASTER_DELETED);
   } catch (err) {
-    await transaction.rollback();
+    if (!transaction.finished) await transaction.rollback();
     return handleError(err, res, req);
   }
 };

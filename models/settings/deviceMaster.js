@@ -31,5 +31,12 @@ module.exports = (sequelize, DataTypes) => {
             underscored: true,
         }
     );
+    DeviceMaster.associate = (models) => {
+        DeviceMaster.belongsTo(models.CompanyMaster, {
+            foreignKey: "company_id",
+            as: "Company",
+        });
+    };
+    
     return DeviceMaster;
 }

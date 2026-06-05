@@ -1,6 +1,8 @@
 const { ApiLog } = require("../models");
 const { requestContext } = require("../utils/requestContext.js");
 
+const syncedApiTenants = new Set();
+
 const apiLogger = async (req, res, next) => {
   const startTime = Date.now();
   
@@ -64,6 +66,21 @@ const apiLogger = async (req, res, next) => {
       if (logData.request_body) {
         if (logData.request_body.password) logData.request_body.password = "********";
         if (logData.request_body.token) logData.request_body.token = "********";
+      }
+
+      const { storage } = require("./tenantMiddleware");
+      let tenantPrefix = "DEFAULT";
+      try {
+        tenantPrefix = storage.getStore() || "DEFAULT";
+      } catch (e) {}
+
+      if (!syncedApiTenants.has(tenantPrefix)) {
+        try {
+          await ApiLog.sync();
+          syncedApiTenants.add(tenantPrefix);
+        } catch (syncErr) {
+          console.error(`[APILOG] Failed to sync ApiLog table for tenant ${tenantPrefix}:`, syncErr.message);
+        }
       }
 
       await ApiLog.create(logData);

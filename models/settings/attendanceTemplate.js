@@ -1,7 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const AttendanceTemplate = sequelize.define("AttendanceTemplate", {
     name: { type: DataTypes.STRING, },
-    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_AND_LOCATION'), defaultValue: 'MANUAL', comment: 'Defines how the employee marks attendance' },
+    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'MANUAL', comment: 'Defines how the employee marks attendance' },
 
     // --- HOLIDAY RULES ---
     holiday_policy: { type: DataTypes.ENUM('BLOCK_ATTENDANCE', 'COMP_OFF', 'ALLOW_NORMAL'), defaultValue: 'BLOCK_ATTENDANCE', comment: 'Behavior when a user attempts to punch in on a paid holiday' },

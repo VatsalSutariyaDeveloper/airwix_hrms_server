@@ -454,15 +454,6 @@ const constants = {
     SALARY_3X: 8,
   },
 
-  DEFAULT_COMPANY_SETTINGS: [
-    { settings_name: "leave_past_datelimit", settings_value: 0 },
-    { settings_name: "company_branch_punch_config", settings_value: false },
-    { settings_name: "company_punch_config", settings_value: false },
-    { settings_name: "round_off_salary", settings_value: 1 },
-    { settings_name: "reimbursement_approval_level", settings_value: 1 },
-    { settings_name: "reimbursement_approval_config", settings_value: [] },
-    { settings_name: "probation_period_days", settings_value: null },
-  ],
   /* =======================
    * DEVICE STATUS
    * ======================= */

@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -78,6 +78,13 @@ exports.attendancePunch = async (req, res) => {
  * SYNC PUNCHES (Offline Sync)
  */
 exports.syncPunches = async (req, res) => {
+  try {
+    // Ensure FaceRecognitionError table exists in this tenant database
+    await FaceRecognitionError.sync();
+  } catch (syncErr) {
+    console.error("Failed to sync FaceRecognitionError table on syncPunches startup:", syncErr.message);
+  }
+
   const transaction = await sequelize.transaction();
   try {
     const { punches } = req.body;
@@ -190,7 +197,7 @@ exports.syncPunches = async (req, res) => {
           accuracy: punchData.match_score || punchData.accuracy || null,
           time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
           company_id: req.user.company_id || punchData.company_id || 0,
-          branch_id: resolvedDeviceId || punchData.branch_id || req.user.branch_id || 0,
+          branch_id: req.user.branch_id || punchData.branch_id || 0,
           employee_id: punchData.employee_id || null,
           latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
           longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
@@ -211,7 +218,6 @@ exports.syncPunches = async (req, res) => {
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
-
         const isRecoverableSyncError = punchErr.message === "Employee not found";
         if (isRecoverableSyncError) {
           console.warn(`[SyncPunches] Skipping punch for missing employee ${punchData.employee_id}.`);
@@ -622,7 +628,14 @@ exports.updateAttendanceDay = async (req, res) => {
         { model: EmployeeHoliday, as: "employeeHolidays", where: { status: 0, date: req.body.attendance_date }, required: false }
       ]
     }, t, false, { company_id: true });
-    const template = emp?.employeeAttendanceTemplate || emp?.attendanceTemplate;
+
+    // Check if employee exists
+    if (!emp) {
+      await t.rollback();
+      return res.error(constants.NOT_FOUND_ERROR, "Employee not found");
+    }
+
+    const template = emp.employeeAttendanceTemplate || emp.attendanceTemplate;
     const isTrackInOutOn = template ? template.track_in_out : true;
 
     // Get shift_id from employee if available
@@ -2237,6 +2250,13 @@ exports.updateAttendanceNote = async (req, res) => {
  * Store Face Recognition Error Log
  */
 exports.storeFaceRecognitionError = async (req, res) => {
+  try {
+    // Ensure FaceRecognitionError table exists in this tenant database
+    await FaceRecognitionError.sync();
+  } catch (syncErr) {
+    console.error("Failed to sync FaceRecognitionError table on storeFaceRecognitionError startup:", syncErr.message);
+  }
+
   const t = await sequelize.transaction();
   try {
     const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
@@ -2323,6 +2343,13 @@ exports.storeFaceRecognitionError = async (req, res) => {
  */
 exports.getFaceRecognitionErrors = async (req, res) => {
   try {
+    // Ensure FaceRecognitionError table exists in this tenant database
+    try {
+      await FaceRecognitionError.sync();
+    } catch (syncErr) {
+      console.error("Failed to sync FaceRecognitionError table on getFaceRecognitionErrors startup:", syncErr.message);
+    }
+
     const { page, limit, startDate, endDate } = req.body;
     let where = {};
     if (startDate && endDate) {
@@ -2364,6 +2391,12 @@ exports.getFaceRecognitionErrors = async (req, res) => {
             as: "employee",
             attributes: ["id", "first_name", "employee_code", "profile_image"],
             required: false
+          },
+          {
+            model: CompanyMaster,
+            as: "company",
+            attributes: ["id", "company_name"],
+            required: false
           }
         ],
         order: [['time', 'DESC']]
@@ -2373,19 +2406,35 @@ exports.getFaceRecognitionErrors = async (req, res) => {
       where
     );
 
-    // Format URLs for images
+    // Format URLs for images safely (handling both plain objects and Sequelize instances)
     result.items.forEach(item => {
-      if (item.image) {
-        item.setDataValue('image_url', `${process.env.FILE_SERVER_URL}${constants.FACE_ERROR_FOLDER || "employee/face_errors/"}${item.image}`);
+      const imageUrl = item.image ? `${process.env.FILE_SERVER_URL}${constants.FACE_ERROR_FOLDER || "employee/face_errors/"}${item.image}` : null;
+      if (typeof item.setDataValue === 'function') {
+        item.setDataValue('image_url', imageUrl);
       } else {
-        item.setDataValue('image_url', null);
+        item.image_url = imageUrl;
       }
-      if (item.employee && item.employee.profile_image) {
-        item.employee.setDataValue('profile_image_url', `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${item.employee.profile_image}`);
-      } else if (item.employee) {
-        item.employee.setDataValue('profile_image_url', null);
+
+      if (item.employee) {
+        const profileImageUrl = item.employee.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${item.employee.profile_image}` : null;
+        if (typeof item.employee.setDataValue === 'function') {
+          item.employee.setDataValue('profile_image_url', profileImageUrl);
+        } else {
+          item.employee.profile_image_url = profileImageUrl;
+        }
       }
     });
+
+    // Count stats for tabs safely (respecting company scoping/master admin bypass)
+    const activeStatsCount = await commonQuery.countRecords(FaceRecognitionError, { ...where, status: 0 }, {}, true);
+    const resolvedStatsCount = await commonQuery.countRecords(FaceRecognitionError, { ...where, status: 1 }, {}, true);
+    const totalStatsCount = activeStatsCount + resolvedStatsCount;
+
+    result.stats = {
+      active: activeStatsCount,
+      resolved: resolvedStatsCount,
+      total: totalStatsCount
+    };
 
     return res.ok(result);
   } catch (err) {
@@ -2439,3 +2488,406 @@ exports.deleteFaceRecognitionError = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+/**
+ * GET ATTENDANCE IRREGULARITIES (Missing Punch In or Punch Out)
+ * Supported roles logic:
+ * - SuperAdmin/Admin: Show all employee irregularities within their company_id
+ * - Attendance Supervisor/Reporting Manager: Show their team members' irregularities
+ * - Regular Employee: Will not return any data (should use self-irregularities)
+ */
+exports.getIrregularities = async (req, res) => {
+  try {
+    let { employee_id, month_year, page, limit, search } = req.body;
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 15;
+    const offset = (page - 1) * limit;
+
+    const companyId = req.user.company_id;
+
+    // Date range determination
+    let startDate, endDate;
+    if (month_year) {
+      const parsedMonth = dayjs(month_year.trim(), ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
+      if (parsedMonth.isValid()) {
+        startDate = parsedMonth.startOf('month').format('YYYY-MM-DD');
+        endDate = parsedMonth.endOf('month').format('YYYY-MM-DD');
+      }
+    }
+
+    // Determine target employee list
+    let targetEmployeeIds = [];
+    let isFilteredByEmployees = true;
+
+    const isAdmin = req.user.is_super_admin || req.user.is_admin;
+    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
+                                  req.user.is_reporting_manager || 
+                                  req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
+                                  req.user.is_attendance_supervisor;
+
+    if (isAdmin) {
+      // Admin sees everyone in their company
+      isFilteredByEmployees = false;
+    } else if (isSupervisorOrManager) {
+      // Supervisor / manager sees themselves + their team
+      const ownEmpId = req.user.employee_id;
+      const teamEmployees = await commonQuery.findAllRecords(Employee, {
+        [Op.or]: [
+          { attendance_supervisor: req.user.id },
+          { reporting_manager: req.user.id }
+        ],
+        status: { [Op.in]: [0, 1, 2] },
+        company_id: companyId
+      }, { attributes: ['id'] });
+
+      const teamEmpIds = teamEmployees.map(e => e.id);
+      targetEmployeeIds = [...new Set(teamEmpIds)];
+    } else {
+      // Regular employee: shouldn't see anything here, they should use self-irregularities
+      targetEmployeeIds = [];
+    }
+
+    // Construct query filters
+    const whereClause = {
+      company_id: companyId,
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      // Exclude Weekly Off, Holiday, and Leave status. Present/Absent/HalfDay can have irregularity
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    if (isFilteredByEmployees) {
+      if (targetEmployeeIds.length === 0) {
+        return res.ok({
+          items: [],
+          totalItems: 0,
+          currentPage: page,
+          totalPages: 0
+        });
+      }
+      whereClause.employee_id = { [Op.in]: targetEmployeeIds };
+    }
+
+    if (startDate && endDate) {
+      whereClause.attendance_date = {
+        [Op.between]: [startDate, endDate]
+      };
+    }
+
+    // If specific employee filter is requested in body (useful for manager/admin viewing single team member)
+    if (employee_id) {
+      const requestedEmpId = parseInt(employee_id);
+      if (isFilteredByEmployees) {
+        // Must be within authorized team
+        if (targetEmployeeIds.includes(requestedEmpId)) {
+          whereClause.employee_id = requestedEmpId;
+        } else {
+          return res.error(constants.UNAUTHORIZED, "Access denied to requested employee's irregularities");
+        }
+      } else {
+        whereClause.employee_id = requestedEmpId;
+      }
+    }
+
+    let employeeWhereClause = undefined;
+    if (search && search.trim() !== '') {
+      employeeWhereClause = {
+        [Op.or]: [
+          { first_name: { [Op.iLike]: `%${search.trim()}%` } },
+          { employee_code: { [Op.iLike]: `%${search.trim()}%` } }
+        ]
+      };
+    }
+
+    const { count, rows } = await AttendanceDay.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Employee,
+          as: "employee",
+          attributes: ["id", "first_name", "employee_code"],
+          required: true,
+          where: employeeWhereClause
+        },
+        {
+          model: ShiftTemplate,
+          as: "shiftTemplate",
+          attributes: ["id", "shift_name", "start_time", "end_time"]
+        }
+      ],
+      order: [["attendance_date", "DESC"]],
+      limit,
+      offset
+    });
+
+    return res.ok({
+      items: rows,
+      totalItems: count,
+      currentPage: page,
+      totalPages: Math.ceil(count / limit)
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET ATTENDANCE IRREGULARITIES COUNT
+ * Supported roles logic (matching getIrregularities):
+ * - SuperAdmin/Admin: Show count of all employee irregularities within their company_id
+ * - Attendance Supervisor/Reporting Manager: Show count of team members' irregularities
+ * - Regular Employee: Will not return any data
+ */
+exports.getIrregularitiesCount = async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    // Always get the current month date boundaries
+    const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+
+    // Determine target employee list
+    let targetEmployeeIds = [];
+    let isFilteredByEmployees = true;
+
+    const isAdmin = req.user.is_super_admin || req.user.is_admin;
+    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
+                                  req.user.is_reporting_manager || 
+                                  req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
+                                  req.user.is_attendance_supervisor;
+
+    if (isAdmin) {
+      // Admin sees everyone in their company
+      isFilteredByEmployees = false;
+    } else if (isSupervisorOrManager) {
+      // Supervisor / manager sees themselves + their team
+      const ownEmpId = req.user.employee_id;
+      const teamEmployees = await commonQuery.findAllRecords(Employee, {
+        [Op.or]: [
+          { attendance_supervisor: req.user.id },
+          { reporting_manager: req.user.id }
+        ],
+        status: { [Op.in]: [0, 1, 2] },
+        company_id: companyId
+      }, { attributes: ['id'] });
+
+      const teamEmpIds = teamEmployees.map(e => e.id);
+      targetEmployeeIds = [...new Set(teamEmpIds)];
+    } else {
+      // Regular employee: shouldn't see anything here, they should use self-irregularities
+      targetEmployeeIds = [];
+    }
+
+    // Construct query filters
+    const baseWhereClause = {
+      company_id: companyId,
+      attendance_date: {
+        [Op.between]: [startDate, endDate]
+      },
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      // Exclude Weekly Off, Holiday, and Leave status. Present/Absent/HalfDay can have irregularity
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    let count = 0;
+    if (isFilteredByEmployees) {
+      if (targetEmployeeIds.length > 0) {
+        count = await AttendanceDay.count({
+          where: { ...baseWhereClause, employee_id: { [Op.in]: targetEmployeeIds } }
+        });
+      }
+    } else {
+      count = await AttendanceDay.count({
+        where: baseWhereClause
+      });
+    }
+
+    // Calculate selfCount
+    let selfCount = 0;
+    const currentEmpId = req.user.employee_id;
+    if (currentEmpId) {
+      selfCount = await AttendanceDay.count({
+        where: { ...baseWhereClause, employee_id: currentEmpId }
+      });
+    }
+
+    return res.ok({ count, selfCount });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET SELF ATTENDANCE IRREGULARITIES (Missing Punch In or Punch Out)
+ * Shows only own irregularities for the current month by default
+ */
+exports.getSelfIrregularities = async (req, res) => {
+  try {
+    let { month_year, page, limit, search } = req.body;
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 15;
+    const offset = (page - 1) * limit;
+
+    const companyId = req.user.company_id;
+    const ownEmpId = req.user.employee_id;
+
+    if (!ownEmpId) {
+      return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
+    }
+
+    // Date range determination
+    let startDate, endDate;
+    if (month_year) {
+      const parsedMonth = dayjs(month_year.trim(), ["MMM YYYY", "MMMM YYYY", "YYYY-MM", "MM-YYYY", "YYYY-M", "M-YYYY"]);
+      if (parsedMonth.isValid()) {
+        startDate = parsedMonth.startOf('month').format('YYYY-MM-DD');
+        endDate = parsedMonth.endOf('month').format('YYYY-MM-DD');
+      }
+    } else {
+      startDate = dayjs().startOf('month').format('YYYY-MM-DD');
+      endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    }
+
+    const whereClause = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    if (startDate && endDate) {
+      whereClause.attendance_date = {
+        [Op.between]: [startDate, endDate]
+      };
+    }
+
+    let employeeWhereClause = undefined;
+    if (search && search.trim() !== '') {
+      employeeWhereClause = {
+        [Op.or]: [
+          { first_name: { [Op.iLike]: `%${search.trim()}%` } },
+          { employee_code: { [Op.iLike]: `%${search.trim()}%` } }
+        ]
+      };
+    }
+
+    const { count, rows } = await AttendanceDay.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Employee,
+          as: "employee",
+          attributes: ["id", "first_name", "employee_code"],
+          required: true,
+          where: employeeWhereClause
+        },
+        {
+          model: ShiftTemplate,
+          as: "shiftTemplate",
+          attributes: ["id", "shift_name", "start_time", "end_time"]
+        }
+      ],
+      order: [["attendance_date", "DESC"]],
+      limit,
+      offset
+    });
+
+    return res.ok({
+      items: rows,
+      totalItems: count,
+      currentPage: page,
+      totalPages: Math.ceil(count / limit)
+    });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * GET SELF ATTENDANCE IRREGULARITIES COUNT
+ */
+exports.getSelfIrregularitiesCount = async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const ownEmpId = req.user.employee_id;
+
+    if (!ownEmpId) {
+      return res.ok({ count: 0 });
+    }
+
+    const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
+    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+
+    const count = await AttendanceDay.count({
+      where: {
+        company_id: companyId,
+        employee_id: ownEmpId,
+        attendance_date: {
+          [Op.between]: [startDate, endDate]
+        },
+        [Op.or]: [
+          { status: { [Op.in]: [9, 10] } },
+          {
+            [Op.and]: [
+              { first_in: null },
+              { last_out: { [Op.ne]: null } }
+            ]
+          },
+          {
+            [Op.and]: [
+              { first_in: { [Op.ne]: null } },
+              { last_out: null }
+            ]
+          }
+        ],
+        status: { [Op.notIn]: [3, 4, 6] }
+      }
+    });
+
+    return res.ok({ count });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+

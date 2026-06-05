@@ -1105,6 +1105,7 @@ exports.getUserListForAnnouncement = async (req, res) => {
         order: [["user_name", "ASC"]],
       }
     );
+    console.log("Announcement User List:", record);
     return res.ok(record);
   } catch (err) {
     return handleError(err, res, req);

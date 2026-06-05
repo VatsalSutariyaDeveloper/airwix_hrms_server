@@ -25,6 +25,7 @@ router.post("/assign-role", employeeController.assignRole);
 router.patch("/status", employeeController.updateStatus);
 router.get("/:id", employeeController.getById);
 router.put("/:id", bufferFile(), employeeController.update);
+router.patch("/:id/profile-photo", bufferImage("profile_image"), employeeController.updateProfilePhoto);
 router.delete("/", employeeController.delete);
 router.post("/invite-user", employeeController.inviteUser);
 router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.importData);

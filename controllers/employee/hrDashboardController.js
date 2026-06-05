@@ -75,79 +75,92 @@ exports.getCounts = async (req, res) => {
     try {
         const today = req.body.date ? dayjs(req.body.date).format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD");
 
-        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] }, false);
+        const allEmployees = await commonQuery.findAllRecords(Employee, { status: 0 }, { attributes: ["id"] });
         const employeeIds = allEmployees?.map(e => e.id) || [];
         const employeeScope = employeeIds.length > 0 ? { employee_id: { [Op.in]: employeeIds } } : {};
 
         const totalEmployees = allEmployees.length;
 
-        const presentToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 0,
-            ...employeeScope
-        }, {}, {});
+        // Initialize default values
+        let presentToday = 0;
+        let halfDayToday = 0;
+        let absentToday = 0;
+        let onLeaveToday = 0;
+        let lateEntryCount = 0;
+        let canteenPresentToday = 0;
+        let canteenAbsentToday = 0;
+        let guestCount = 0;
 
-        const halfDayToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 1,
-            ...employeeScope
-        }, {}, {});
-
-        const absentToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 5,
-            ...employeeScope
-        }, {}, {});
-
-        const onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
-            attendance_date: today,
-            status: 6,
-            ...employeeScope
-        }, {}, {});
-        
-        const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
-            {
+        // Only call count queries if total employee count > 0
+        if (totalEmployees > 0) {
+            presentToday = await commonQuery.countRecords(AttendanceDay, {
                 attendance_date: today,
+                status: 0,
                 ...employeeScope
-            },
-            {
-                include: [{
-                    model: ShiftTemplate,
-                    as: 'shiftTemplate',
-                    required: false,
-                    attributes: ['start_time', 'grace_minutes']
-                }]
-            },
-            null,
-            {}
-        );
-       
-        const lateEntryRecords = lateEntry.filter(record => {
-            if (!record.first_in || !record.shiftTemplate) return false;
-            
-            const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
-            const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
-            const graceMinutes = record.shiftTemplate.grace_minutes || 0;
-            const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
-            
-            return firstInTime.isAfter(allowedTime);
-        });
+            }, {}, {});
 
-        const lateEntryCount = lateEntryRecords.length;
+            halfDayToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 1,
+                ...employeeScope
+            }, {}, {});
 
-        const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
-            date: today
-        }, {}, null, {});
-      
-        // Separate guest and employee data
-        const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
-        const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
-        
-        const guestCount = guestAttendance.length;
-        const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
-        
-        const canteenPresentToday = presentEmployeeIds.length;
-        const canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
+            absentToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 5,
+                ...employeeScope
+            }, {}, {});
+
+            onLeaveToday = await commonQuery.countRecords(AttendanceDay, {
+                attendance_date: today,
+                status: 6,
+                ...employeeScope
+            }, {}, {});
+            
+            const lateEntry = await commonQuery.findAllRecords(AttendanceDay,
+                {
+                    attendance_date: today,
+                    ...employeeScope
+                },
+                {
+                    include: [{
+                        model: ShiftTemplate,
+                        as: 'shiftTemplate',
+                        required: false,
+                        attributes: ['start_time', 'grace_minutes']
+                    }]
+                },
+                null,
+                {}
+            );
+           
+            const lateEntryRecords = lateEntry.filter(record => {
+                if (!record.first_in || !record.shiftTemplate) return false;
+                
+                const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
+                const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
+                const graceMinutes = record.shiftTemplate.grace_minutes || 0;
+                const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
+                
+                return firstInTime.isAfter(allowedTime);
+            });
+
+            lateEntryCount = lateEntryRecords.length;
+
+            const canteenAttendanceToday = await commonQuery.findAllRecords(CanteenAttendance, {
+                date: today
+            }, {}, null, {});
+          
+            // Separate guest and employee data
+            const guestAttendance = canteenAttendanceToday.filter(att => att.employee_id === null);
+            const employeeAttendance = canteenAttendanceToday.filter(att => att.employee_id !== null);
+            
+            guestCount = guestAttendance.length;
+            const presentEmployeeIds = employeeAttendance.map(att => att.employee_id);
+            
+            canteenPresentToday = presentEmployeeIds.length;
+            canteenAbsentToday = allEmployees.length - presentEmployeeIds.length - guestCount;
+        }
 
         return res.ok({
             totalEmployees,
@@ -203,15 +216,15 @@ exports.getPendingCount = async (req, res) => {
                     case 'REPORTING_MANAGER':
                     case 'ATTENDANCE_SUPERVISOR':
                         return ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
-                               ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id);
+                            ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id);
                     case 'ADMIN':
                         return req.user.is_admin;
                     case 'EMPLOYER':
                         return true;
                     case 'ANYONE':
                         return employee.reporting_manager === req.user.id ||
-                               employee.attendance_supervisor === req.user.id ||
-                               req.user.is_admin;
+                            employee.attendance_supervisor === req.user.id ||
+                            req.user.is_admin;
                     default:
                         return false;
                 }
@@ -278,10 +291,10 @@ exports.getPendingCount = async (req, res) => {
                 }
             }
         }
-        
+
         const pendingGlobalCount = pendingLeaves + authorizedOutDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
 
-        return res.ok({pendingCount: pendingGlobalCount});
+        return res.ok({ pendingCount: pendingGlobalCount });
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -297,7 +310,7 @@ exports.getPendingApprovalsDetails = async (req, res) => {
         // Authorization checks helper (for Leaves, OutDuty, Regularization)
         const isUserAuthorizedForRequest = (request, levelField) => {
             if (isSuperAdmin) return true;
-            
+
             const employee = request.employee;
             if (!employee) return false;
 
@@ -311,15 +324,15 @@ exports.getPendingApprovalsDetails = async (req, res) => {
                 case 'REPORTING_MANAGER':
                 case 'ATTENDANCE_SUPERVISOR':
                     return ((roleKey === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === userId) ||
-                           ((roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === userId);
+                        ((roleKey === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === userId);
                 case 'ADMIN':
                     return isAdmin;
                 case 'EMPLOYER':
                     return true;
                 case 'ANYONE':
                     return employee.reporting_manager === userId ||
-                           employee.attendance_supervisor === userId ||
-                           isAdmin;
+                        employee.attendance_supervisor === userId ||
+                        isAdmin;
                 default:
                     return false;
             }
@@ -518,7 +531,7 @@ exports.getPendingApprovalsDetails = async (req, res) => {
 
             if (isAuthorized) {
                 const raw = reqObj.get({ plain: true });
-                
+
                 const statusLabels = {
                     [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "PENDING",
                     [constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED]: "PARTIALLY APPROVED",
@@ -550,23 +563,23 @@ exports.getPendingApprovalsDetails = async (req, res) => {
             });
         };
 
-        const filteredLeaves = applySearchFilter(leaveRequests, item => 
+        const filteredLeaves = applySearchFilter(leaveRequests, item =>
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`
         );
 
-        const filteredEncashments = applySearchFilter(leaveEncashments, item => 
+        const filteredEncashments = applySearchFilter(leaveEncashments, item =>
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.category?.leave_category_name} ${item.reason} ${item.tracking_summary}`
         );
 
-        const filteredOutDuties = applySearchFilter(outDuties, item => 
+        const filteredOutDuties = applySearchFilter(outDuties, item =>
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.reason}`
         );
 
-        const filteredRegularizations = applySearchFilter(attendanceRegularizations, item => 
+        const filteredRegularizations = applySearchFilter(attendanceRegularizations, item =>
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.reason}`
         );
 
-        const filteredReimbursements = applySearchFilter(reimbursements, item => 
+        const filteredReimbursements = applySearchFilter(reimbursements, item =>
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.expenseType?.name} ${item.description} ${item.tracking_summary}`
         );
 
@@ -619,13 +632,13 @@ exports.getUpcomingHolidays = async (req, res) => {
 exports.getDepartmentStats = async (req, res) => {
     try {
         const stats = await commonQuery.findAllRecords(Employee,
-            { status: 0},
+            { status: 0 },
             {
                 attributes: [
                     'department_id',
                     [sequelize.fn('COUNT', sequelize.col('Employee.id')), 'count']
                 ],
-                include: [{ model: Department, as: "department", attributes: ["name"], where: { status: {[Op.in]: [0,1,2]} } }],
+                include: [{ model: Department, as: "department", attributes: ["name"], where: { status: { [Op.in]: [0, 1, 2] } } }],
                 group: ['department_id', 'department.id', 'department.name'],
                 order: [['department_id', 'ASC']]
             }
@@ -746,12 +759,12 @@ exports.getBirthdayList = async (req, res) => {
             const empDayjs = dayjs(emp.dob);
             const isToday = empDayjs.format('MM-DD') === dayjs().format('MM-DD');
             const plainEmp = emp.get({ plain: true });
-            
+
             return {
                 ...plainEmp,
                 is_today: isToday,
-                profile_image_url: plainEmp.profile_image 
-                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}` 
+                profile_image_url: plainEmp.profile_image
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmp.profile_image}`
                     : null
             };
         });
@@ -1084,12 +1097,12 @@ exports.getLateEntryEmployees = async (req, res) => {
 
         const lateEntryRecords = lateEntry.filter(record => {
             if (!record.first_in || !record.shiftTemplate) return false;
-            
+
             const firstInTime = dayjs(`2000-01-01 ${record.first_in}`);
             const shiftStartTime = dayjs(`2000-01-01 ${record.shiftTemplate.start_time}`);
             const graceMinutes = record.shiftTemplate.grace_minutes || 0;
             const allowedTime = shiftStartTime.add(graceMinutes, 'minute');
-            
+
             return firstInTime.isAfter(allowedTime);
         });
 
@@ -1126,8 +1139,8 @@ exports.getLateEntryEmployees = async (req, res) => {
                 profile_image: plainEmployee.profile_image,
                 first_in: item.first_in,
                 shift_start: item.shiftTemplate?.start_time,
-                profile_image_url: plainEmployee.profile_image 
-                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}` 
+                profile_image_url: plainEmployee.profile_image
+                    ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}`
                     : null,
                 late_duration: lateDuration
             };

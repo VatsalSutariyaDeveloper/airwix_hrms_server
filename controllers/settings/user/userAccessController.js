@@ -127,7 +127,7 @@ exports.sessionData = async (req, res) => {
       // B. Sidebar Modules (Hierarchical)
       ModuleMaster.findAll({
         where: { status: 0 },
-        attributes: ["id", "module_name", "cust_module_name", "module_icon_name", "module_url", "priority"],
+        attributes: ["id", "module_name", "cust_module_name", "module_icon_name", "module_url", "priority", "platform_type"],
         include: [{
           model: ModuleEntityMaster,
           as: "entities",
@@ -304,7 +304,21 @@ exports.sessionData = async (req, res) => {
 
     const plainSidebarModuleList = sidebarModuleList.map(item => item.get({ plain: true }));
 
+    // Get the login client type from request token context (web vs application)
+    const isMobileRequest = req.user && req.user.access_by === "application"; // access 'application' corresponds to mobile client tokens
     const filteredSidebarModuleList = plainSidebarModuleList.map(module => {
+      // Filter by platform type at the module level
+      const platform = (module.platform_type || "web").toLowerCase();
+      if (isMobileRequest) {
+        if (platform !== "mobile" && platform !== "both") {
+          return { ...module, entities: [] };
+        }
+      } else {
+        if (platform !== "web" && platform !== "both") {
+          return { ...module, entities: [] };
+        }
+      }
+
       const filteredEntities = (module.entities || []).filter(entity => {
         if (removalEntity.includes(entity.id)) return false;
         return true;
@@ -449,7 +463,26 @@ exports.switchCompany = async (req, res) => {
     // 4. Generate New Token
     user.branch_id = newBranchId;
     user.organization_id = company.organization_id || null;
-    const newToken = generateToken(user, company_id, "web login");
+    
+    // Fetch supervisor and manager flags
+    if (user.employee_id) {
+      const employee = await Employee.findOne({
+        where: { id: user.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+        transaction
+      });
+      if (employee) {
+        user.is_attendance_supervisor = employee.is_attendance_supervisor;
+        user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const newToken = generateToken({
+      ...(user.get ? user.get({ plain: true }) : user),
+      role_key: user.RolePermission?.role_key,
+      is_attendance_supervisor: user.is_attendance_supervisor,
+      is_reporting_manager: user.is_reporting_manager
+    }, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 
@@ -526,7 +559,26 @@ exports.switchBranch = async (req, res) => {
     // 3. Generate New Token
     user.branch_id = finalBranchId;
     user.organization_id = organization_id || null;
-    const newToken = generateToken(user, company_id, "web login");
+    
+    // Fetch supervisor and manager flags
+    if (user.employee_id) {
+      const employee = await Employee.findOne({
+        where: { id: user.employee_id },
+        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
+        transaction
+      });
+      if (employee) {
+        user.is_attendance_supervisor = employee.is_attendance_supervisor;
+        user.is_reporting_manager = employee.is_reporting_manager;
+      }
+    }
+
+    const newToken = generateToken({
+      ...(user.get ? user.get({ plain: true }) : user),
+      role_key: user.RolePermission?.role_key,
+      is_attendance_supervisor: user.is_attendance_supervisor,
+      is_reporting_manager: user.is_reporting_manager
+    }, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
 
@@ -578,11 +630,104 @@ exports.getCompanySettingsData = async (req, res) => {
       }
     }
 
+    // Fetch full user role details and permissions to pass to frontend
+    let userPermissions = null;
+    let isAttendanceSupervisor = false;
+    let isReportingManager = false;
+    let roleKey = user.role_key || null;
+    let allowedClients = "web";
+    let mobileModules = [];
+
+    if (user.id) {
+      const fullUserData = await User.findOne({
+        where: { id: user.id },
+        include: [{
+          model: RolePermission,
+          as: "RolePermission",
+          attributes: ["role_key", "role_name", "permissions", "allowed_clients"],
+          required: false
+        }]
+      });
+
+      if (fullUserData && fullUserData.RolePermission) {
+        userPermissions = fullUserData.RolePermission.permissions;
+        isAttendanceSupervisor = fullUserData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR;
+        isReportingManager = fullUserData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER;
+        roleKey = fullUserData.RolePermission.role_key;
+        allowedClients = fullUserData.RolePermission.allowed_clients || "web";
+      }
+
+      // If user access is 'employee' (meaning mobile client), fetch and filter modules & entities
+      if (user.access === "employee") {
+        const rawModules = await ModuleMaster.findAll({
+          where: { status: 0, platform_type: { [Op.in]: ['mobile', 'both'] } },
+          attributes: ["id", "module_name", "cust_module_name", "module_icon_name", "module_url", "priority", "platform_type"],
+          include: [{
+            model: ModuleEntityMaster,
+            as: "entities",
+            required: false,
+            where: { status: 0, entity_visiblity: 1 },
+            attributes: ["id", "entity_name", "cust_entity_name", "entity_icon_name", "entity_url", "priority"]
+          }],
+          order: [
+            ["priority", "ASC"],
+            [{ model: ModuleEntityMaster, as: 'entities' }, 'priority', 'ASC']
+          ]
+        });
+
+        // Parse permissions mapping
+        const allPermissions = await Permission.findAll({
+          attributes: ['id', 'action', 'module_id', 'entity_id'],
+          include: [
+            { model: ModuleMaster, as: 'module', attributes: ['module_name'] },
+            { model: ModuleEntityMaster, as: 'entity', attributes: ['entity_name', 'cust_entity_name'] }
+          ]
+        });
+
+        const formatKey = (str) => str ? str.toUpperCase().replace(/[^A-Z0-9]/g, '_') : 'UNKNOWN';
+        const entityPermissionMap = {};
+        allPermissions.forEach(p => {
+          if (p.action && (p.action.toLowerCase() === 'view' || p.action.toLowerCase() === 'read')) {
+            const modKey = formatKey(p.module ? p.module.module_name : '');
+            const entKey = formatKey(p.entity ? (p.entity.cust_entity_name || p.entity.entity_name) : '');
+            const actKey = formatKey(p.action);
+            if (p.entity_id) {
+              entityPermissionMap[p.entity_id] = `${modKey}.${entKey}.${actKey}`;
+            }
+          }
+        });
+
+        const plainModules = rawModules.map(item => item.get({ plain: true }));
+        mobileModules = plainModules.map(module => {
+          const platform = (module.platform_type || "web").toLowerCase();
+          if (platform !== "mobile" && platform !== "both") {
+            return { ...module, entities: [] };
+          }
+
+          const filteredEntities = (module.entities || []).map(entity => {
+            return {
+              ...entity,
+              permission: entityPermissionMap[entity.id] || null
+            };
+          });
+          return { ...module, entities: filteredEntities };
+        }).filter(module => module.entities.length > 0);
+      }
+    }
+
     const response = {
       settings: settings,
       enble_out_duty: enableOutDuty,
       fines_allowed: finesAllowed,
-      overtime_allowed: overtimeAllowed
+      overtime_allowed: overtimeAllowed,
+      mobile_modules: mobileModules,
+      user_permission: {
+        permissions: userPermissions,
+        is_attendance_supervisor: isAttendanceSupervisor || !!user.is_attendance_supervisor,
+        is_reporting_manager: isReportingManager || !!user.is_reporting_manager,
+        role_key: roleKey,
+        allowed_clients: allowedClients
+      }
     };
 
     return res.ok(response);

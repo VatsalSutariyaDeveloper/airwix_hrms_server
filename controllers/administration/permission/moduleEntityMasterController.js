@@ -96,15 +96,6 @@ exports.getAll = async (req, res) => {
       ["entity_name", true, true],
       ["cust_entity_name", true, true],
     ];
-    const { enable_multi_branch, enable_multi_godown } = await getCompanySetting(req.user.company_id);
-
-    // const removalEntity = [];
-    // if (!enable_multi_branch) removalEntity.push(constants.BRANCH_ENTITY_ID);
-    // if (!enable_multi_godown) removalEntity.push(constants.GODOWN_ENTITY_ID, constants.ADMINISATOR_GODOWN_ENTITY_ID);
-    // if (!req.body.filter) {
-    //   req.body.filter = {};
-    // }
-    // req.body.filter.id = { [Op.notIn]: removalEntity };
 
     const data = await commonQuery.fetchPaginatedData(
       ModuleEntityMaster,

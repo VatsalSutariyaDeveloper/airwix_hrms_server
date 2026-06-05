@@ -2,6 +2,7 @@ const { sequelize } = require("../models");
 const Op = require("sequelize").Op;
 const validateRequest = require("./validateRequest");
 const commonQuery = require("./commonQuery");
+const adminCommonQuery = require("./adminCommonQuery");
 const { uploadFile, uploadBase64File, deleteFile, fileExists } = require("./fileUpload");
 const { handleError } = require("./functions/errorFunctions");
 const { getExpDateByItem, convertStock } = require("./functions/helperFunction");
@@ -21,6 +22,7 @@ module.exports = {
   Op,
   validateRequest,
   commonQuery,
+  adminCommonQuery,
   uploadFile,
   uploadBase64File,
   deleteFile,

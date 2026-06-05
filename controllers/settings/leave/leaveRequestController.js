@@ -851,7 +851,15 @@ exports.getById = async (req, res) => {
         const levelConfigs = template ? (template.approval_config || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });
 
-        const history = raw.approval_history || [];
+        raw.approval_history = (raw.approval_history || []).map(h => {
+            const user = approvers.find(u => u.id === (h.approved_by || h.by));
+            return {
+                ...h,
+                user_name: user ? user.user_name : null
+            };
+        });
+
+        const history = raw.approval_history;
         const timeline = [];
 
         for (let i = 1; i <= totalLevels; i++) {
@@ -1380,17 +1388,6 @@ exports.calculateLeaveDays = async (req, res) => {
             const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
             if (category) {
                 rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
-                if (rules.allow_half_day === false && (start_session !== 0 || end_session !== 0)) {
-                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
-                }
-                if (rules.allow_full_day === false) {
-                    if (calendarDays > 1) {
-                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
-                    }
-                    if (calendarDays === 1 && start_session === 0) {
-                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
-                    }
-                }
             }
         }
 

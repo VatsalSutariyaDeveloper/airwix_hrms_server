@@ -206,6 +206,88 @@ const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
     console.log(`✅ Face audit cleanup completed. ${recordIds.length} records and ${deletedFiles} images removed.`);
 };
 
+const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
+    console.log('⏰ Running daily attendance irregularity alert task...');
+    const { AttendanceDay, User, Notification } = require("../models");
+
+    // Yesterday's date relative to reference/asOf date
+    const refDate = asOf ? dayjs(asOf) : dayjs();
+    const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+
+    console.log(`[Cron] Checking attendance irregularities for target date: ${targetDate}...`);
+
+    // Fetch all irregularity records for targetDate
+    const irregularities = await AttendanceDay.findAll({
+        where: {
+            attendance_date: targetDate,
+            [Op.or]: [
+                { status: { [Op.in]: [0, 1, 9, 10, 12, 13] } },
+                {
+                    [Op.and]: [
+                        { first_in: null },
+                        { last_out: { [Op.ne]: null } }
+                    ]
+                },
+                {
+                    [Op.and]: [
+                        { first_in: { [Op.ne]: null } },
+                        { last_out: null }
+                    ]
+                }
+            ],
+            status: { [Op.notIn]: [3, 4, 6] }
+        }
+    });
+
+    console.log(`[Cron] Found ${irregularities.length} irregularities for ${targetDate}. Sending notifications...`);
+
+    let sentCount = 0;
+    for (const record of irregularities) {
+        try {
+            // Find active User linked to this employee
+            const user = await User.findOne({
+                where: {
+                    employee_id: record.employee_id,
+                    status: 0
+                }
+            });
+
+            if (!user) {
+                console.log(`[Cron] No active user found for employee_id: ${record.employee_id}`);
+                continue;
+            }
+
+            // Check if notification already exists
+            const existingNotification = await Notification.findOne({
+                where: {
+                    user_id: user.id,
+                    reference_id: record.id,
+                    type: "ATTENDANCE_IRREGULARITY"
+                }
+            });
+
+            if (!existingNotification) {
+                await Notification.create({
+                    user_id: user.id,
+                    company_id: record.company_id || user.company_id,
+                    branch_id: record.branch_id || user.branch_id,
+                    title: "Missing Punch Alert",
+                    message: `You have a missing punch-in or punch-out on ${dayjs(targetDate).format("DD MMM YYYY")}. Please review and regularize.`,
+                    type: "ATTENDANCE_IRREGULARITY",
+                    reference_id: record.id,
+                    status_code: 1,
+                    redirect_url: "/dashboard"
+                });
+                sentCount++;
+            }
+        } catch (err) {
+            console.error(`[Cron] Failed to send notification for irregularity ${record.id}:`, err.message);
+        }
+    }
+
+    console.log(`✅ Sent ${sentCount} attendance irregularity notifications.`);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // All jobs registry (used by runAllNow)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +304,7 @@ const ALL_JOBS = [
     { name: 'Device Health Check', fn: jobDeviceHealthCheck },
     { name: 'Holiday & Birthday Notifications', fn: jobHolidayAndBirthdayNotifications },
     { name: 'Face Audit Cleanup', fn: jobFaceAuditCleanup },
+    { name: 'Attendance Irregularity Alert', fn: jobAttendanceIrregularityAlert },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -423,6 +506,7 @@ module.exports = {
     jobDeviceHealthCheck,
     jobHolidayAndBirthdayNotifications,
     jobFaceAuditCleanup,
+    jobAttendanceIrregularityAlert,
     revertCronJobRun,
 };
 
