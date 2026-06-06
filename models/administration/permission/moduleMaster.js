@@ -5,6 +5,7 @@ module.exports = (sequelize, DataTypes) => {
     priority: { type: DataTypes.INTEGER, defaultValue: 0 },
     module_icon_name: { type: DataTypes.STRING(100), allowNull: true },
     module_url: { type: DataTypes.TEXT, allowNull: true },
+    module_visiblity: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1: Yes, 2: No" },
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,

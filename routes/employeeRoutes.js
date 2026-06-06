@@ -32,6 +32,7 @@ router.post("/import-data", uploadExcelToDisk("file"), importEmployeeController.
 router.post('/export-data', employeeController.exportData)
 
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
+router.post("/:id/delete-face-image", employeeController.deleteFaceImage);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
 
 // Employee Salary Template Routes

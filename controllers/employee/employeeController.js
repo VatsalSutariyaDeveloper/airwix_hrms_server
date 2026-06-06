@@ -2252,7 +2252,7 @@ exports.registerFace = async (req, res) => {
             res,
             constants.EMPLOYEE_IMG_FOLDER,
             transaction,
-            employee.profile_image
+            null // Do NOT delete old profile image!
         );
 
         const filename = savedFiles.image;
@@ -2262,9 +2262,53 @@ exports.registerFace = async (req, res) => {
             return res.error(constants.SERVER_ERROR, { message: "File upload failed" });
         }
 
-        // Delete old profile picture if it exists
-        if (employee.profile_image) {
-            await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, employee.profile_image);
+        // Maintain array of registered face images, limiting to 5
+        let faceImages = [];
+        if (employee.registered_face_images) {
+            try {
+                const parsed = typeof employee.registered_face_images === 'string'
+                    ? JSON.parse(employee.registered_face_images)
+                    : employee.registered_face_images;
+                if (Array.isArray(parsed)) {
+                    faceImages = [...parsed];
+                }
+            } catch (e) {
+                faceImages = [];
+            }
+        }
+
+        // Maintain array of registered face descriptors, limiting to 5
+        let faceDescriptors = [];
+        if (employee.face_descriptor) {
+            try {
+                const parsed = typeof employee.face_descriptor === 'string'
+                    ? JSON.parse(employee.face_descriptor)
+                    : employee.face_descriptor;
+                if (Array.isArray(parsed)) {
+                    if (Array.isArray(parsed[0])) {
+                        faceDescriptors = [...parsed];
+                    } else {
+                        faceDescriptors = [parsed];
+                    }
+                }
+            } catch (e) {
+                faceDescriptors = [];
+            }
+        }
+
+        faceImages.push(filename);
+        faceDescriptors.push(faceDescriptor);
+
+        if (faceImages.length > 5) {
+            const oldestFile = faceImages.shift();
+            faceDescriptors.shift();
+            if (oldestFile) {
+                try {
+                    await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, oldestFile);
+                } catch (e) {
+                    console.log('Failed to delete oldest face image file:', e);
+                }
+            }
         }
 
         const fullFilePath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
@@ -2295,19 +2339,33 @@ exports.registerFace = async (req, res) => {
             }
             if (!Array.isArray(storedVector)) continue;
 
-            const dist = calculateCosineDistance(faceDescriptor, storedVector);
+            // Support both 1D (legacy single face) and 2D arrays (multiple faces)
+            const vectorsToCheck = Array.isArray(storedVector[0]) ? storedVector : [storedVector];
 
-            // Convert distance back to a readable 0-100% format
-            const similarityPercentage = ((1 - dist) * 100).toFixed(2);
+            let collisionDetected = false;
+            let matchedDist = 1.0;
+            let matchedPercentage = "0.00";
+
+            for (const vector of vectorsToCheck) {
+                const dist = calculateCosineDistance(faceDescriptor, vector);
+                const similarityPercentage = ((1 - dist) * 100).toFixed(2);
+                if (dist < matchedDist) {
+                    matchedDist = dist;
+                    matchedPercentage = similarityPercentage;
+                }
+                if (dist < threshold) {
+                    collisionDetected = true;
+                }
+            }
 
             // 🚀 THE NEW CONSOLE LOG FOR LIVE MONITORING
-            console.log(`👤 Checked vs ${emp.first_name}: Match = ${similarityPercentage}% (Distance: ${dist.toFixed(4)})`);
+            console.log(`👤 Checked vs ${emp.first_name}: Best Match = ${matchedPercentage}% (Distance: ${matchedDist.toFixed(4)})`);
 
-            if (dist < threshold) {
+            if (collisionDetected) {
                 const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
                 const branchName = branch?.branch_name || "N/A";
 
-                console.log(`🚨 COLLISION DETECTED! ${emp.first_name} is a ${similarityPercentage}% match! Rejecting registration.`);
+                console.log(`🚨 COLLISION DETECTED! ${emp.first_name} is a ${matchedPercentage}% match! Rejecting registration.`);
 
                 await transaction.rollback();
                 // Clean up the uploaded file since validation failed
@@ -2320,11 +2378,47 @@ exports.registerFace = async (req, res) => {
         }
         console.log(`✅ NO COLLISIONS. Face is unique.\n`);
 
+        const updateData = {
+            registered_face_images: faceImages,
+            face_descriptor: JSON.stringify(faceDescriptors) // Store as 2D array matching images
+        };
+
+        const updateProfileImg = !employee.profile_image;
+        if (updateProfileImg) {
+            updateData.profile_image = filename;
+        }
+
+        // Explicitly flag JSONB fields as changed to force Sequelize UPDATE
+        employee.changed('registered_face_images', true);
+        employee.changed('face_descriptor', true);
+
         // 5. Save the new vector directly into the database!
-        await employee.update({
-            profile_image: filename,
-            face_descriptor: JSON.stringify(faceDescriptor) // 🚀 Stores the array directly
-        }, { transaction });
+        await employee.update(updateData, { transaction });
+
+        if (updateProfileImg) {
+            // Synchronize with associated User
+            const associatedUser = await commonQuery.findOneRecord(User, { employee_id: employeeId }, {}, transaction);
+            if (associatedUser && !associatedUser.profile_image) {
+                // Copy photo to USER_IMG_FOLDER to keep both URLs functional
+                const srcPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
+                const destDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+                const destPath = path.join(destDir, filename);
+                if (fs.existsSync(srcPath)) {
+                    if (!fs.existsSync(destDir)) {
+                        fs.mkdirSync(destDir, { recursive: true });
+                    }
+                    fs.copyFileSync(srcPath, destPath);
+                }
+
+                await commonQuery.updateRecordById(
+                    User,
+                    associatedUser.id,
+                    { profile_image: filename },
+                    transaction,
+                    true
+                );
+            }
+        }
 
         await transaction.commit();
 
@@ -3394,4 +3488,129 @@ exports.updateProfilePhoto = async (req, res) => {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
-};
+};
+
+exports.deleteFaceImage = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const { filename } = req.body;
+
+        if (!filename) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Filename is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, id, {}, transaction);
+        if (!employee || employee.status === 2) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND);
+        }
+
+        // Parse registered images
+        let faceImages = [];
+        if (employee.registered_face_images) {
+            try {
+                const parsed = typeof employee.registered_face_images === 'string'
+                    ? JSON.parse(employee.registered_face_images)
+                    : employee.registered_face_images;
+                if (Array.isArray(parsed)) {
+                    faceImages = [...parsed];
+                }
+            } catch (e) {
+                faceImages = [];
+            }
+        }
+
+        // Parse face descriptors
+        let faceDescriptors = [];
+        if (employee.face_descriptor) {
+            try {
+                const parsed = typeof employee.face_descriptor === 'string'
+                    ? JSON.parse(employee.face_descriptor)
+                    : employee.face_descriptor;
+                if (Array.isArray(parsed)) {
+                    if (Array.isArray(parsed[0])) {
+                        faceDescriptors = [...parsed];
+                    } else {
+                        faceDescriptors = [parsed];
+                    }
+                }
+            } catch (e) {
+                faceDescriptors = [];
+            }
+        }
+
+        const index = faceImages.indexOf(filename);
+        if (index === -1) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Face image not found in registration records" });
+        }
+
+        // Remove from both arrays
+        faceImages.splice(index, 1);
+        if (faceDescriptors[index] !== undefined) {
+            faceDescriptors.splice(index, 1);
+        }
+
+        // Delete physical file
+        await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, filename);
+
+        const updateData = {
+            registered_face_images: faceImages,
+            face_descriptor: JSON.stringify(faceDescriptors)
+        };
+
+        // If the deleted image was the active profile image, clear it or set to the next available
+        let profileImageCleared = false;
+        if (employee.profile_image === filename) {
+            updateData.profile_image = faceImages.length > 0 ? faceImages[faceImages.length - 1] : null;
+            profileImageCleared = true;
+        }
+
+        employee.changed('registered_face_images', true);
+        employee.changed('face_descriptor', true);
+
+        await employee.update(updateData, { transaction });
+
+        if (profileImageCleared) {
+            // Sync with User profile image
+            const associatedUser = await commonQuery.findOneRecord(User, { employee_id: id }, {}, transaction);
+            if (associatedUser && associatedUser.profile_image === filename) {
+                const nextUserImage = updateData.profile_image;
+                if (nextUserImage) {
+                    // Copy next image to users folder
+                    const srcPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, nextUserImage);
+                    const destDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+                    const destPath = path.join(destDir, nextUserImage);
+                    if (fs.existsSync(srcPath)) {
+                        if (!fs.existsSync(destDir)) {
+                            fs.mkdirSync(destDir, { recursive: true });
+                        }
+                        fs.copyFileSync(srcPath, destPath);
+                    }
+                } else {
+                    // Delete user photo
+                    await deleteFile(req, res, constants.USER_IMG_FOLDER, filename);
+                }
+
+                await commonQuery.updateRecordById(
+                    User,
+                    associatedUser.id,
+                    { profile_image: nextUserImage },
+                    transaction,
+                    true
+                );
+            }
+        }
+
+        await transaction.commit();
+        return res.success(constants.DELETED, {
+            registered_face_images: faceImages,
+            profile_image: updateData.profile_image || employee.profile_image
+        });
+    } catch (err) {
+        await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
