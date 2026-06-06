@@ -67,6 +67,8 @@ exports.getAll = async (req, res) => {
             ["employee.employee_code", true, false],
         ];
 
+        let isOwnRequest = req.body.employee_id && (req.body.employee_id == req.user.employee_id);
+
         const data = await commonQuery.fetchPaginatedData(
             Reimbursement,
             req.body,
@@ -85,7 +87,8 @@ exports.getAll = async (req, res) => {
                     }
                 ],
                 order: [['created_at', 'DESC']]
-            }
+            },
+            isOwnRequest ? { applyHierarchy: false } : true // requireTenantFields
         );
 
         // Add document URL
@@ -467,6 +470,8 @@ exports.getReimbursementSummary = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
         }
 
+        let isOwnRequest = employee_id == req.user.employee_id;
+
         // 1. Fetch Reimbursement Requests for History (Ordered by date)
         const history = await commonQuery.findAllRecords(Reimbursement, {
             employee_id,
@@ -487,7 +492,7 @@ exports.getReimbursementSummary = async (req, res) => {
                 }
             ],
             order: [["date", "DESC"]]
-        });
+        }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
         // 2. Group History by Month
         const groupedHistory = [];
@@ -524,6 +529,7 @@ exports.getReimbursementSummary = async (req, res) => {
 
             group.reimbursements.push({
                 id: reimbursement.id,
+                applied_date: reimbursement.createdAt,
                 date: formatDateTime(reimbursement.date, "D MMM, ddd"),
                 amount_display: `${parseFloat(reimbursement.amount).toFixed(2)}`,
                 expense_type: reimbursement.expenseType?.name || "",

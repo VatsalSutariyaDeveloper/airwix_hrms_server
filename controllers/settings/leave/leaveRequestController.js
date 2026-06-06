@@ -745,7 +745,9 @@ exports.getAll = async (req, res) => {
 
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
 
-        if (!req.user.is_super_admin && !req.user.is_admin) {
+        let isOwnRequest = req.body.employee_id && (req.body.employee_id == req.user.employee_id);
+
+        if (!req.user.is_super_admin && !req.user.is_admin && !isOwnRequest) {
             employeeWhere[Op.or] = [
                 { attendance_supervisor: req.user.id },
                 { reporting_manager: req.user.id }
@@ -773,7 +775,7 @@ exports.getAll = async (req, res) => {
                 // removed where from options as it must be passed as customWhere (Arg 7)
                 order: [['created_at', 'DESC']]
             },
-            true, // requireTenantFields
+            isOwnRequest ? { applyHierarchy: false } : true, // requireTenantFields
             'created_at', // dateField
             whereClause // customWhere
         );

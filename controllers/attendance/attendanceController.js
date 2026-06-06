@@ -2086,7 +2086,8 @@ exports.getLeaveSummary = async (req, res) => {
       }
     }
 
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
+    let isOwnRequest = employee_id == req.user.employee_id;
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria, {}, null, isOwnRequest ? { applyHierarchy: false } : true);
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {
@@ -2109,7 +2110,7 @@ exports.getLeaveSummary = async (req, res) => {
         }
       ],
       order: [["start_date", "DESC"]]
-    });
+    }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
     // 3. Format Balances
     let totalUsed = 0;

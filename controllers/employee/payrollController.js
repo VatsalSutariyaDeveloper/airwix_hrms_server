@@ -1907,7 +1907,7 @@ exports.getEmployeePayslip = async (req, res) => {
                 month: p.month,
                 year: p.year,
                 month_year_string: `${monthName} ${p.year}`,
-                ctc: p.paid_gross || p.fixed_gross,
+                ctc: p.fixed_gross || p.paid_gross,
                 net_payable: p.net_salary || p.net_payable,
                 status: p.status,
                 status_text: p.status === 1 ? "Finalized" : "Paid"

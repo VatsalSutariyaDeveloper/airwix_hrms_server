@@ -226,7 +226,9 @@ exports.getAll = async (req, res) => {
 
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
 
-        if (!req.user.is_super_admin && !req.user.is_admin) {
+        let isOwnRequest = req.body.employee_id && (req.body.employee_id == req.user.employee_id);
+
+        if (!req.user.is_super_admin && !req.user.is_admin && !isOwnRequest) {
             employeeWhere[Op.or] = [
                 { attendance_supervisor: req.user.id },
                 { reporting_manager: req.user.id }
@@ -254,7 +256,7 @@ exports.getAll = async (req, res) => {
                     }
                 ]
             },
-            true, // requireTenantFields
+            isOwnRequest ? { applyHierarchy: false } : true, // requireTenantFields
             'created_at', // dateField
             whereClause // customWhere
         );
@@ -706,6 +708,8 @@ exports.getOutDutySummary = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
         }
 
+        let isOwnRequest = employee_id == req.user.employee_id;
+
         // 1. Fetch Out Duty Requests for History (Ordered by date)
         const history = await commonQuery.findAllRecords(OutDutyRequest, {
             employee_id,
@@ -721,7 +725,7 @@ exports.getOutDutySummary = async (req, res) => {
                 }
             ],
             order: [["start_date", "DESC"]]
-        });
+        }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
         // 2. Group History by Month
         const groupedHistory = [];
@@ -764,6 +768,7 @@ exports.getOutDutySummary = async (req, res) => {
 
             group.out_duties.push({
                 id: outDuty.id,
+                applied_date: outDuty.createdAt,
                 date_range: dateRange,
                 duration_display: `${parseFloat(outDuty.total_days).toFixed(1)} Days | Out Duty`,
                 reason: outDuty.reason || "",
