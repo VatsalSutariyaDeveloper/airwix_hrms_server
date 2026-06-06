@@ -16,6 +16,8 @@ router.get("/companies/:id", ctrl.getCompanyDetail);
 router.post("/companies/update-status", ctrl.updateCompanyStatus);
 router.post("/companies/update-settings", ctrl.updateCompanySettings);
 router.post("/companies/impersonate", ctrl.impersonateCompany);
+router.post("/companies/assign-plan", ctrl.assignCompanyPlan);
+router.post("/companies/update-subscription", ctrl.updateCompanySubscription);
 
 // --- Organizations ---
 router.get("/organizations/list", ctrl.getOrganizations);
@@ -25,6 +27,7 @@ router.post("/subscriptions/list", ctrl.getAllSubscriptions);
 
 // --- Subscription Plans ---
 router.get("/plans/list", ctrl.getPlans);
+router.get("/plans/modules-entities", ctrl.getModulesAndEntities);
 router.post("/plans/create", ctrl.createPlan);
 router.post("/plans/update", ctrl.updatePlan);
 router.post("/plans/delete", ctrl.deletePlan);
@@ -42,5 +45,8 @@ router.post("/system-logs/database", ctrl.getDatabaseLogs);
 router.post("/system-logs/api", ctrl.getApiLogs);
 router.get("/system-logs/files", ctrl.getLogFiles);
 router.get("/system-logs/file-content", ctrl.getLogFileContent);
+
+// --- Cache ---
+router.post("/clear-cache", ctrl.clearCache);
 
 module.exports = router;

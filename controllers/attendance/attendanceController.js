@@ -1557,7 +1557,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
             }
           ],
           required: false,
-          order: [["id", "ASC"]]
+          order: [["punch_time", "ASC"]]
         }
       ]
     }, null, false, {});
@@ -1638,6 +1638,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
         // Re-assign processed punches to the day object
         attendanceDayJson.attendancePunches = punchesWithImages;
+        attendanceDayJson.attendancePunches.sort((a, b) => new Date(a.punch_time) - new Date(b.punch_time));
       }
     }
 
@@ -1784,7 +1785,7 @@ exports.getMonthlyAttendance = async (req, res) => {
               attributes: ['id', 'branch_name']
             }
           ],
-          order: [["id", "ASC"]]
+          order: [["punch_time", "ASC"]]
         },
         {
           model: ShiftTemplate,

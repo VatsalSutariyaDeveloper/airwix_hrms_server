@@ -2,6 +2,7 @@ const { Op } = require("sequelize");
 const { CompanyMaster, CompanySubscription, SubscriptionPlan, User, Organization } = require("../../models");
 const { createConnectionByPrefix } = require("../../config/database");
 const { handleError } = require("../../helpers");
+const subscriptionController = require("../subscription/subscriptionController");
 
 /**
  * Helper: get the root (non-tenant) sequelize instance
@@ -147,13 +148,7 @@ exports.getCompanies = async (req, res) => {
     const { count, rows } = await CompanyMaster.findAndCountAll({
       where,
       include: [
-        { model: Organization, as: "organization", attributes: ["name", "code"] }, 
-        { 
-          model: CompanySubscription, as: "companySubscriptions",
-          include: [{ model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["name", "subscription_type", "price"] }],
-          where: { status: 0 },
-          required: false
-        }
+        { model: Organization, as: "organization", attributes: ["name", "code"] }
       ],
       attributes: [
         "id", "company_name", "email", "mobile_no",
@@ -165,12 +160,31 @@ exports.getCompanies = async (req, res) => {
       offset,
     });
 
+    const orgIds = rows.map(r => r.organization_id).filter(Boolean);
+    const compIds = rows.map(r => r.id);
+
+    const activeSubscriptions = await CompanySubscription.findAll({
+      where: {
+        status: 0,
+        [Op.or]: [
+          { organization_id: { [Op.in]: orgIds } },
+          { company_id: { [Op.in]: compIds } }
+        ]
+      },
+      include: [{ model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["name", "subscription_type", "price"] }]
+    });
+
     const companies = rows.map((c) => {
       const data = c.toJSON ? c.toJSON() : c;
+      const sub = activeSubscriptions.find(s => 
+        (data.organization_id && s.organization_id === data.organization_id) || 
+        (s.company_id === data.id)
+      ) || null;
+
       return {
         ...data,
         organization_name: data.organization?.name || "",
-        subscription: data.companySubscriptions?.[0] || null,
+        subscription: sub,
       };
     });
 
@@ -206,9 +220,18 @@ exports.getCompanyDetail = async (req, res) => {
 
     const companyData = company.get({ plain: true });
 
-    // All subscriptions for this company
+    // All subscriptions for this company / organization
+    let subWhere = { company_id: id };
+    if (company.organization_id) {
+      subWhere = {
+        [Op.or]: [
+          { organization_id: company.organization_id },
+          { company_id: id }
+        ]
+      };
+    }
     const subscriptions = await CompanySubscription.findAll({
-      where: { company_id: id },
+      where: subWhere,
       include: [{ model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["name", "subscription_type", "price", "duration_days"] }],
       order: [["created_at", "DESC"]],
       raw: true,
@@ -329,11 +352,17 @@ exports.getAllSubscriptions = async (req, res) => {
     const { count, rows } = await CompanySubscription.findAndCountAll({
       where,
       include: [
-        { model: SubscriptionPlan, attributes: ["name", "subscription_type", "price"] },
+        { model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["name", "subscription_type", "price"] },
         {
           model: CompanyMaster,
+          as: "company",
           attributes: ["company_name", "email"],
           ...(search ? { where: { company_name: { [Op.like]: `%${search}%` } } } : {}),
+        },
+        {
+          model: Organization,
+          as: "organization",
+          attributes: ["name"],
         },
       ],
       order: [["created_at", "DESC"]],
@@ -496,7 +525,26 @@ exports.getOrganizations = async (req, res) => {
       order: [["name", "ASC"]],
       raw: true,
     });
-    return res.ok({ organizations: rows, total: count });
+
+    const orgIds = rows.map(r => r.id);
+    const activeSubscriptions = await CompanySubscription.findAll({
+      where: {
+        status: 0,
+        organization_id: { [Op.in]: orgIds },
+        subscription_type: 'plan'
+      },
+      include: [{ model: SubscriptionPlan, as: "subscriptionPlan", attributes: ["id", "name", "price"] }]
+    });
+
+    const organizations = rows.map(org => {
+      const sub = activeSubscriptions.find(s => s.organization_id === org.id) || null;
+      return {
+        ...org,
+        subscription: sub
+      };
+    });
+
+    return res.ok({ organizations, total: count });
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -873,4 +921,73 @@ exports.getLogFileContent = async (req, res) => {
     return handleError(err, res, req);
   }
 };
+
+exports.clearCache = async (req, res) => {
+  try {
+    const cache = require("../../helpers/cache");
+    const permissionCache = require("../../helpers/permissionCache");
+
+    if (cache.clearAllCaches) {
+      cache.clearAllCaches();
+    }
+    if (permissionCache.clearAllPermissionsCache) {
+      permissionCache.clearAllPermissionsCache();
+    }
+
+    return res.success("CACHE_CLEARED", { message: "System-wide cache successfully flushed." });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.assignCompanyPlan = subscriptionController.assignSubscription;
+
+exports.updateCompanySubscription = async (req, res) => {
+  try {
+    const { id, ...updateData } = req.body;
+    if (!id) {
+      return res.error("BAD_REQUEST", "Subscription ID is required");
+    }
+
+    const sub = await CompanySubscription.findOne({ where: { id } });
+    if (!sub) {
+      return res.error("NOT_FOUND", "Company subscription record not found");
+    }
+
+    // Update the record with matching fields from body
+    await sub.update(updateData);
+
+    const { reloadCompanySubscriptionCache } = require("../../helpers");
+    await reloadCompanySubscriptionCache(sub.organization_id || sub.company_id);
+
+    return res.success("SUB_UPDATED", sub);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.getModulesAndEntities = async (req, res) => {
+  try {
+    const { ModuleMaster, ModuleEntityMaster } = require("../../models");
+    const data = await ModuleMaster.findAll({
+      where: { status: 0 },
+      attributes: ["id", "module_name", "cust_module_name"],
+      include: [{
+        model: ModuleEntityMaster,
+        as: "entities",
+        where: { status: 0 },
+        attributes: ["id", "entity_name", "cust_entity_name"],
+        required: false,
+      }],
+      order: [
+        // ordering can be done by ID since priority might not always exist or we default to ASC
+        ["id", "ASC"]
+      ]
+    });
+    return res.ok(data);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
 

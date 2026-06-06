@@ -94,7 +94,7 @@ exports.getAll = async (req, res) => {
     const fieldConfig = [
       ["moduleMaster.module_name", true, true],
       ["entity_name", true, true],
-      ["priority", true, true],
+      ["ModuleEntityMaster.priority", true, true],
       ["cust_entity_name", true, true],
     ];
 
