@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -2529,7 +2529,12 @@ exports.getIrregularities = async (req, res) => {
 
     if (isAdmin) {
       // Admin sees everyone in their company
-      isFilteredByEmployees = false;
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true },
+        attributes: ['employee_id']
+      });
+      targetEmployeeIds = trackedEmployees.map(e => e.employee_id);
+      isFilteredByEmployees = true;
     } else if (isSupervisorOrManager) {
       // Supervisor / manager sees themselves + their team
       const ownEmpId = req.user.employee_id;
@@ -2543,7 +2548,14 @@ exports.getIrregularities = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      targetEmployeeIds = [...new Set(teamEmpIds)];
+      
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
+        attributes: ['employee_id']
+      });
+      const validTrackedEmpIds = trackedEmployees.map(t => t.employee_id);
+
+      targetEmployeeIds = [...new Set(validTrackedEmpIds)];
     } else {
       // Regular employee: shouldn't see anything here, they should use self-irregularities
       targetEmployeeIds = [];
@@ -2554,6 +2566,13 @@ exports.getIrregularities = async (req, res) => {
       company_id: companyId,
       [Op.or]: [
         { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
         {
           [Op.and]: [
             { first_in: null },
@@ -2583,9 +2602,19 @@ exports.getIrregularities = async (req, res) => {
       whereClause.employee_id = { [Op.in]: targetEmployeeIds };
     }
 
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
     if (startDate && endDate) {
+      const finalEndDate = endDate > yesterday ? yesterday : endDate;
+      if (startDate > finalEndDate) {
+        return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+      }
       whereClause.attendance_date = {
-        [Op.between]: [startDate, endDate]
+        [Op.between]: [startDate, finalEndDate]
+      };
+    } else {
+      whereClause.attendance_date = {
+        [Op.lte]: yesterday
       };
     }
 
@@ -2659,7 +2688,16 @@ exports.getIrregularitiesCount = async (req, res) => {
 
     // Always get the current month date boundaries
     const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
-    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+    
+    if (endDate > yesterday) {
+      endDate = yesterday;
+    }
+
+    if (startDate > endDate) {
+      return res.ok({ count: 0, selfCount: 0 });
+    }
 
     // Determine target employee list
     let targetEmployeeIds = [];
@@ -2673,10 +2711,14 @@ exports.getIrregularitiesCount = async (req, res) => {
 
     if (isAdmin) {
       // Admin sees everyone in their company
-      isFilteredByEmployees = false;
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true },
+        attributes: ['employee_id']
+      });
+      targetEmployeeIds = trackedEmployees.map(e => e.employee_id);
+      isFilteredByEmployees = true;
     } else if (isSupervisorOrManager) {
       // Supervisor / manager sees themselves + their team
-      const ownEmpId = req.user.employee_id;
       const teamEmployees = await commonQuery.findAllRecords(Employee, {
         [Op.or]: [
           { attendance_supervisor: req.user.id },
@@ -2687,7 +2729,14 @@ exports.getIrregularitiesCount = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      targetEmployeeIds = [...new Set(teamEmpIds)];
+      
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
+        attributes: ['employee_id']
+      });
+      const validTrackedEmpIds = trackedEmployees.map(t => t.employee_id);
+
+      targetEmployeeIds = [...new Set(validTrackedEmpIds)];
     } else {
       // Regular employee: shouldn't see anything here, they should use self-irregularities
       targetEmployeeIds = [];
@@ -2701,6 +2750,13 @@ exports.getIrregularitiesCount = async (req, res) => {
       },
       [Op.or]: [
         { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
         {
           [Op.and]: [
             { first_in: null },
@@ -2717,6 +2773,34 @@ exports.getIrregularitiesCount = async (req, res) => {
       // Exclude Weekly Off, Holiday, and Leave status. Present/Absent/HalfDay can have irregularity
       status: { [Op.notIn]: [3, 4, 6] }
     };
+
+    const regWhere = {
+      company_id: companyId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0,
+      attendance_date: {
+        [Op.gte]: dayjs(startDate).startOf('day').toDate(),
+        [Op.lte]: dayjs(endDate).endOf('day').toDate()
+      }
+    };
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      baseWhereClause[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
+    }
 
     let count = 0;
     if (isFilteredByEmployees) {
@@ -2764,6 +2848,15 @@ exports.getSelfIrregularities = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
     }
 
+    const hasTracking = await EmployeeAttendanceTemplate.findOne({
+      where: { employee_id: ownEmpId, status: 0, track_in_out: true },
+      attributes: ['id']
+    });
+
+    if (!hasTracking) {
+      return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+    }
+
     // Date range determination
     let startDate, endDate;
     if (month_year) {
@@ -2784,6 +2877,13 @@ exports.getSelfIrregularities = async (req, res) => {
         { status: { [Op.in]: [9, 10] } },
         {
           [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
+        {
+          [Op.and]: [
             { first_in: null },
             { last_out: { [Op.ne]: null } }
           ]
@@ -2798,10 +2898,58 @@ exports.getSelfIrregularities = async (req, res) => {
       status: { [Op.notIn]: [3, 4, 6] }
     };
 
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
     if (startDate && endDate) {
+      const finalEndDate = endDate > yesterday ? yesterday : endDate;
+      if (startDate > finalEndDate) {
+        return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+      }
       whereClause.attendance_date = {
-        [Op.between]: [startDate, endDate]
+        [Op.between]: [startDate, finalEndDate]
       };
+    } else {
+      whereClause.attendance_date = {
+        [Op.lte]: yesterday
+      };
+    }
+
+    const regWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0
+    };
+    if (whereClause.attendance_date) {
+      if (whereClause.attendance_date[Op.between]) {
+        regWhere.attendance_date = {
+          [Op.gte]: dayjs(whereClause.attendance_date[Op.between][0]).startOf('day').toDate(),
+          [Op.lte]: dayjs(whereClause.attendance_date[Op.between][1]).endOf('day').toDate()
+        };
+      } else if (whereClause.attendance_date[Op.lte]) {
+        regWhere.attendance_date = {
+          [Op.lte]: dayjs(whereClause.attendance_date[Op.lte]).endOf('day').toDate()
+        };
+      }
+    }
+
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      whereClause[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
     }
 
     let employeeWhereClause = undefined;
@@ -2858,33 +3006,89 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
       return res.ok({ count: 0 });
     }
 
+    const hasTracking = await EmployeeAttendanceTemplate.findOne({
+      where: { employee_id: ownEmpId, status: 0, track_in_out: true },
+      attributes: ['id']
+    });
+
+    if (!hasTracking) {
+      return res.ok({ count: 0 });
+    }
+
     const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
-    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+    if (endDate > yesterday) {
+      endDate = yesterday;
+    }
+
+    if (startDate > endDate) {
+      return res.ok({ count: 0 });
+    }
+
+    const baseWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      attendance_date: {
+        [Op.between]: [startDate, endDate]
+      },
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    const regWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0,
+      attendance_date: {
+        [Op.gte]: dayjs(startDate).startOf('day').toDate(),
+        [Op.lte]: dayjs(endDate).endOf('day').toDate()
+      }
+    };
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      baseWhere[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
+    }
 
     const count = await AttendanceDay.count({
-      where: {
-        company_id: companyId,
-        employee_id: ownEmpId,
-        attendance_date: {
-          [Op.between]: [startDate, endDate]
-        },
-        [Op.or]: [
-          { status: { [Op.in]: [9, 10] } },
-          {
-            [Op.and]: [
-              { first_in: null },
-              { last_out: { [Op.ne]: null } }
-            ]
-          },
-          {
-            [Op.and]: [
-              { first_in: { [Op.ne]: null } },
-              { last_out: null }
-            ]
-          }
-        ],
-        status: { [Op.notIn]: [3, 4, 6] }
-      }
+      where: baseWhere
     });
 
     return res.ok({ count });
