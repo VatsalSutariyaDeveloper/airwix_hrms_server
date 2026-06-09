@@ -745,7 +745,9 @@ exports.getAll = async (req, res) => {
 
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
 
-        if (!req.user.is_super_admin && !req.user.is_admin) {
+        let isOwnRequest = req.body.employee_id && (req.body.employee_id == req.user.employee_id);
+
+        if (!req.user.is_super_admin && !req.user.is_admin && !isOwnRequest) {
             employeeWhere[Op.or] = [
                 { attendance_supervisor: req.user.id },
                 { reporting_manager: req.user.id }
@@ -773,7 +775,7 @@ exports.getAll = async (req, res) => {
                 // removed where from options as it must be passed as customWhere (Arg 7)
                 order: [['created_at', 'DESC']]
             },
-            true, // requireTenantFields
+            isOwnRequest ? { applyHierarchy: false } : true, // requireTenantFields
             'created_at', // dateField
             whereClause // customWhere
         );
@@ -990,15 +992,28 @@ exports.updateStatus = async (req, res) => {
                 }, employee, "CREATE", transaction);
             }
 
-            if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
-                const start = dayjs(leaveRequest.start_date);
-                const end = dayjs(leaveRequest.end_date);
-                const diff = end.diff(start, 'day');
-                const todayStr = dayjs().format('YYYY-MM-DD');
-                for (let i = 0; i <= diff; i++) {
-                    const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
-                    if (targetDate <= todayStr) {
-                        await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+            if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                if (leaveRequest.request_type === 'CREDIT') {
+                    const error = await LeaveBalanceService.adjustLeaveBalance(
+                        leaveRequest.employee_id,
+                        leaveRequest.leave_category_id,
+                        -parseFloat(leaveRequest.total_days),
+                        transaction,
+                        dayjs(leaveRequest.start_date),
+                        employee,
+                        true
+                    );
+                    if (error) throw new Error(error.message || error);
+                } else if (!leaveRequest.is_encashment) {
+                    const start = dayjs(leaveRequest.start_date);
+                    const end = dayjs(leaveRequest.end_date);
+                    const diff = end.diff(start, 'day');
+                    const todayStr = dayjs().format('YYYY-MM-DD');
+                    for (let i = 0; i <= diff; i++) {
+                        const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                        if (targetDate <= todayStr) {
+                            await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                        }
                     }
                 }
             }
@@ -1021,7 +1036,28 @@ exports.updateStatus = async (req, res) => {
             }, {}, transaction);
 
             if (balance) {
-                await LeaveBalanceService.adjustLeaveBalance(leaveRequest.employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
+                if (leaveRequest.request_type === 'CREDIT') {
+                    if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                        await LeaveBalanceService.adjustLeaveBalance(
+                            leaveRequest.employee_id,
+                            leaveRequest.leave_category_id,
+                            parseFloat(leaveRequest.total_days),
+                            transaction,
+                            dayjs(leaveRequest.start_date),
+                            employee,
+                            true
+                        );
+                    }
+                } else {
+                    await LeaveBalanceService.adjustLeaveBalance(
+                        leaveRequest.employee_id,
+                        leaveRequest.leave_category_id,
+                        -parseFloat(leaveRequest.total_days),
+                        transaction,
+                        dayjs(leaveRequest.start_date),
+                        employee
+                    );
+                }
             }
 
             const actionStr = (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? "REJECTED" : "CANCELLED";
@@ -1286,17 +1322,31 @@ exports.cancelLeave = async (req, res) => {
             }, {}, transaction);
 
             if (balance) {
-                // To restore balance, we pass a negative total_days value to adjustLeaveBalance
-                // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
-                // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
-                await LeaveBalanceService.adjustLeaveBalance(
-                    leaveRequest.employee_id,
-                    leaveRequest.leave_category_id,
-                    -parseFloat(leaveRequest.total_days),
-                    transaction,
-                    dayjs(leaveRequest.start_date),
-                    employee
-                );
+                if (leaveRequest.request_type === 'CREDIT') {
+                    if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                        await LeaveBalanceService.adjustLeaveBalance(
+                            leaveRequest.employee_id,
+                            leaveRequest.leave_category_id,
+                            parseFloat(leaveRequest.total_days),
+                            transaction,
+                            dayjs(leaveRequest.start_date),
+                            employee,
+                            true
+                        );
+                    }
+                } else {
+                    // To restore balance, we pass a negative total_days value to adjustLeaveBalance
+                    // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
+                    // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
+                    await LeaveBalanceService.adjustLeaveBalance(
+                        leaveRequest.employee_id,
+                        leaveRequest.leave_category_id,
+                        -parseFloat(leaveRequest.total_days),
+                        transaction,
+                        dayjs(leaveRequest.start_date),
+                        employee
+                    );
+                }
             }
         }
 

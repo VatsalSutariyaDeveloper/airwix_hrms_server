@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -1152,70 +1152,70 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
-    if (emp.leave_template) {
-      // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
-      const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+    // if (emp.leave_template) {
+    //   // Refresh day record to get latest recalculated values (from manualPunch/rebuildAttendanceDay)
+    //   const currentDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
 
-      const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
-        leave_template_id: emp.leave_template,
-        leave_category_name: "Short Leave",
-        status: 0
-      }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
+    //   const shortLeaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+    //     leave_template_id: emp.leave_template,
+    //     leave_category_name: "Short Leave",
+    //     status: 0
+    //   }, {}, t, false, false); // requireTenantFields: false to find company-wide categories
 
-      if (shortLeaveCategory && currentDay) {
-        const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
-        const currentFineMinutes = currentDay.fine_minutes || 0;
-        const currentLastOut = currentDay.last_out;
+    //   if (shortLeaveCategory && currentDay) {
+    //     const AUTO_REASON_LATE = "Auto-generated Short Leave (Late Check)";
+    //     const currentFineMinutes = currentDay.fine_minutes || 0;
+    //     const currentLastOut = currentDay.last_out;
 
-        const totalMissedMinutes = currentFineMinutes;
-        const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
+    //     const totalMissedMinutes = currentFineMinutes;
+    //     const isLateForShortLeave = currentLastOut && totalMissedMinutes >= 120;
 
-        const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
-          employee_id: employee_id,
-          start_date: attendance_date,
-          leave_category_id: shortLeaveCategory.id,
-          reason: AUTO_REASON_LATE,
-          status: 0
-        }, {}, t);
+    //     const existingShortLeave = await commonQuery.findOneRecord(LeaveRequest, {
+    //       employee_id: employee_id,
+    //       start_date: attendance_date,
+    //       leave_category_id: shortLeaveCategory.id,
+    //       reason: AUTO_REASON_LATE,
+    //       status: 0
+    //     }, {}, t);
 
-        if (isLateForShortLeave) {
-          if (!existingShortLeave) {
-            // Check balance before deducting
-            const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
-              employee_id: employee_id,
-              leave_category_id: shortLeaveCategory.id,
-              status: 0
-            }, {}, t, false, { company_id: true });
+    //     if (isLateForShortLeave) {
+    //       if (!existingShortLeave) {
+    //         // Check balance before deducting
+    //         const balance = await commonQuery.findOneRecord(EmployeeLeaveBalance, {
+    //           employee_id: employee_id,
+    //           leave_category_id: shortLeaveCategory.id,
+    //           status: 0
+    //         }, {}, t, false, { company_id: true });
 
 
-            if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
-              const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
-              if (leaveError) {
-                console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
-                await t.rollback();
-                return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-              }
-              await LeaveRequest.update({ reason: AUTO_REASON_LATE }, {
-                where: {
-                  employee_id: employee_id,
-                  start_date: attendance_date,
-                  leave_category_id: shortLeaveCategory.id,
-                  reason: "Auto-generated from Attendance"
-                },
-                transaction: t
-              });
-            }
-          }
-        } else if (existingShortLeave) {
-          // Reverse deduction if conditions are no longer met
-          const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
-          if (leaveError) {
-            await t.rollback();
-            return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
-          }
-        }
-      }
-    }
+    //         if (balance && parseFloat(balance.pending_leaves || 0) >= 1) {
+    //           const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 1.0, t, emp);
+    //           if (leaveError) {
+    //             console.error(`[ShortLeaveLog] syncLeaveRecord Error: ${leaveError}`);
+    //             await t.rollback();
+    //             return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+    //           }
+    //           await LeaveRequest.update({ reason: AUTO_REASON_LATE }, {
+    //             where: {
+    //               employee_id: employee_id,
+    //               start_date: attendance_date,
+    //               leave_category_id: shortLeaveCategory.id,
+    //               reason: "Auto-generated from Attendance"
+    //             },
+    //             transaction: t
+    //           });
+    //         }
+    //       }
+    //     } else if (existingShortLeave) {
+    //       // Reverse deduction if conditions are no longer met
+    //       const leaveError = await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, shortLeaveCategory.id, 0, t, emp);
+    //       if (leaveError) {
+    //         await t.rollback();
+    //         return res.error(constants.LEAVE_BALANCE_ERROR, leaveError);
+    //       }
+    //     }
+    //   }
+    // }
 
     await t.commit();
     return res.success(constants.ATTENDANCE_UPDATED, result);
@@ -1506,6 +1506,9 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
     const { employee_id, attendance_date } = req.body;
 
+    let isOwnRequest = employee_id == req.user?.employee_id;
+    const tenantOptionsEmpty = isOwnRequest ? { applyHierarchy: false } : {};
+
     // 1. Fetch the AttendanceDay record
     const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id,
@@ -1560,7 +1563,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
           order: [["punch_time", "ASC"]]
         }
       ]
-    }, null, false, {});
+    }, null, false, tenantOptionsEmpty);
 
     // 2. Fetch all raw punches for this day
     // const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1712,6 +1715,10 @@ exports.getMonthlyAttendance = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
     }
 
+    let isOwnRequest = employee_id == req.user?.employee_id;
+    const tenantOptions = isOwnRequest ? { company_id: true, branch_id: true, user_id: true, applyHierarchy: false } : true;
+    const tenantOptionsEmpty = isOwnRequest ? { applyHierarchy: false } : {};
+
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")
     const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
 
@@ -1733,7 +1740,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    });
+    }, null, false, tenantOptions);
 
     if (!employee) {
       return res.error(constants.NOT_FOUND, "Employee not found");
@@ -1753,7 +1760,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       end_date: { [Op.gte]: todayStr },
       approval_status: 3, // APPROVED
       status: 0
-    });
+    }, {}, null, false, tenantOptions);
 
     // 2. Fetch AttendanceDay records for the month
     const attendanceDays = await commonQuery.findAllRecords(AttendanceDay, {
@@ -1802,21 +1809,21 @@ exports.getMonthlyAttendance = async (req, res) => {
         }
       ],
       order: [["attendance_date", "ASC"]]
-    }, null, {});
+    }, null, tenantOptionsEmpty);
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
       date: { [Op.between]: [startDate, endDate] },
       status: 0
-    });
+    }, {}, null, tenantOptions);
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
       employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
         template_id: employee.holiday_template,
         date: { [Op.between]: [startDate, endDate] },
         status: 0
-      });
+      }, {}, null, tenantOptions);
     }
 
     // 2.2 Fetch Weekly Offs for the employee
@@ -1824,14 +1831,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       employee_id,
       status: 0,
       is_off: true
-    });
+    }, {}, null, tenantOptions);
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
       employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
         template_id: employee.weekly_off_template,
         is_off: true,
         status: 0
-      });
+      }, {}, null, tenantOptions);
     }
     const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
       employee_id,
@@ -1839,7 +1846,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       start_date: { [Op.lte]: endDate },
       end_date: { [Op.gte]: startDate },
       status: 0
-    });
+    }, {}, null, tenantOptions);
 
     const summary = {
       present: 0,
@@ -2086,7 +2093,8 @@ exports.getLeaveSummary = async (req, res) => {
       }
     }
 
-    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria);
+    let isOwnRequest = employee_id == req.user.employee_id;
+    const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, balanceCriteria, {}, null, isOwnRequest ? { applyHierarchy: false } : true);
 
     // 2. Fetch Leave Requests for History (Ordered by date)
     const history = await commonQuery.findAllRecords(LeaveRequest, {
@@ -2109,7 +2117,7 @@ exports.getLeaveSummary = async (req, res) => {
         }
       ],
       order: [["start_date", "DESC"]]
-    });
+    }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
     // 3. Format Balances
     let totalUsed = 0;
@@ -2528,7 +2536,12 @@ exports.getIrregularities = async (req, res) => {
 
     if (isAdmin) {
       // Admin sees everyone in their company
-      isFilteredByEmployees = false;
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true },
+        attributes: ['employee_id']
+      });
+      targetEmployeeIds = trackedEmployees.map(e => e.employee_id);
+      isFilteredByEmployees = true;
     } else if (isSupervisorOrManager) {
       // Supervisor / manager sees themselves + their team
       const ownEmpId = req.user.employee_id;
@@ -2542,7 +2555,14 @@ exports.getIrregularities = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      targetEmployeeIds = [...new Set(teamEmpIds)];
+      
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
+        attributes: ['employee_id']
+      });
+      const validTrackedEmpIds = trackedEmployees.map(t => t.employee_id);
+
+      targetEmployeeIds = [...new Set(validTrackedEmpIds)];
     } else {
       // Regular employee: shouldn't see anything here, they should use self-irregularities
       targetEmployeeIds = [];
@@ -2553,6 +2573,13 @@ exports.getIrregularities = async (req, res) => {
       company_id: companyId,
       [Op.or]: [
         { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
         {
           [Op.and]: [
             { first_in: null },
@@ -2582,9 +2609,19 @@ exports.getIrregularities = async (req, res) => {
       whereClause.employee_id = { [Op.in]: targetEmployeeIds };
     }
 
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
     if (startDate && endDate) {
+      const finalEndDate = endDate > yesterday ? yesterday : endDate;
+      if (startDate > finalEndDate) {
+        return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+      }
       whereClause.attendance_date = {
-        [Op.between]: [startDate, endDate]
+        [Op.between]: [startDate, finalEndDate]
+      };
+    } else {
+      whereClause.attendance_date = {
+        [Op.lte]: yesterday
       };
     }
 
@@ -2658,7 +2695,16 @@ exports.getIrregularitiesCount = async (req, res) => {
 
     // Always get the current month date boundaries
     const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
-    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+    
+    if (endDate > yesterday) {
+      endDate = yesterday;
+    }
+
+    if (startDate > endDate) {
+      return res.ok({ count: 0, selfCount: 0 });
+    }
 
     // Determine target employee list
     let targetEmployeeIds = [];
@@ -2672,10 +2718,14 @@ exports.getIrregularitiesCount = async (req, res) => {
 
     if (isAdmin) {
       // Admin sees everyone in their company
-      isFilteredByEmployees = false;
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true },
+        attributes: ['employee_id']
+      });
+      targetEmployeeIds = trackedEmployees.map(e => e.employee_id);
+      isFilteredByEmployees = true;
     } else if (isSupervisorOrManager) {
       // Supervisor / manager sees themselves + their team
-      const ownEmpId = req.user.employee_id;
       const teamEmployees = await commonQuery.findAllRecords(Employee, {
         [Op.or]: [
           { attendance_supervisor: req.user.id },
@@ -2686,7 +2736,14 @@ exports.getIrregularitiesCount = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      targetEmployeeIds = [...new Set(teamEmpIds)];
+      
+      const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
+        where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
+        attributes: ['employee_id']
+      });
+      const validTrackedEmpIds = trackedEmployees.map(t => t.employee_id);
+
+      targetEmployeeIds = [...new Set(validTrackedEmpIds)];
     } else {
       // Regular employee: shouldn't see anything here, they should use self-irregularities
       targetEmployeeIds = [];
@@ -2700,6 +2757,13 @@ exports.getIrregularitiesCount = async (req, res) => {
       },
       [Op.or]: [
         { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
         {
           [Op.and]: [
             { first_in: null },
@@ -2716,6 +2780,34 @@ exports.getIrregularitiesCount = async (req, res) => {
       // Exclude Weekly Off, Holiday, and Leave status. Present/Absent/HalfDay can have irregularity
       status: { [Op.notIn]: [3, 4, 6] }
     };
+
+    const regWhere = {
+      company_id: companyId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0,
+      attendance_date: {
+        [Op.gte]: dayjs(startDate).startOf('day').toDate(),
+        [Op.lte]: dayjs(endDate).endOf('day').toDate()
+      }
+    };
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      baseWhereClause[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
+    }
 
     let count = 0;
     if (isFilteredByEmployees) {
@@ -2763,6 +2855,15 @@ exports.getSelfIrregularities = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "No employee profile linked to user");
     }
 
+    const hasTracking = await EmployeeAttendanceTemplate.findOne({
+      where: { employee_id: ownEmpId, status: 0, track_in_out: true },
+      attributes: ['id']
+    });
+
+    if (!hasTracking) {
+      return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+    }
+
     // Date range determination
     let startDate, endDate;
     if (month_year) {
@@ -2783,6 +2884,13 @@ exports.getSelfIrregularities = async (req, res) => {
         { status: { [Op.in]: [9, 10] } },
         {
           [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
+        {
+          [Op.and]: [
             { first_in: null },
             { last_out: { [Op.ne]: null } }
           ]
@@ -2797,10 +2905,58 @@ exports.getSelfIrregularities = async (req, res) => {
       status: { [Op.notIn]: [3, 4, 6] }
     };
 
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
     if (startDate && endDate) {
+      const finalEndDate = endDate > yesterday ? yesterday : endDate;
+      if (startDate > finalEndDate) {
+        return res.ok({ items: [], totalItems: 0, currentPage: page, totalPages: 0 });
+      }
       whereClause.attendance_date = {
-        [Op.between]: [startDate, endDate]
+        [Op.between]: [startDate, finalEndDate]
       };
+    } else {
+      whereClause.attendance_date = {
+        [Op.lte]: yesterday
+      };
+    }
+
+    const regWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0
+    };
+    if (whereClause.attendance_date) {
+      if (whereClause.attendance_date[Op.between]) {
+        regWhere.attendance_date = {
+          [Op.gte]: dayjs(whereClause.attendance_date[Op.between][0]).startOf('day').toDate(),
+          [Op.lte]: dayjs(whereClause.attendance_date[Op.between][1]).endOf('day').toDate()
+        };
+      } else if (whereClause.attendance_date[Op.lte]) {
+        regWhere.attendance_date = {
+          [Op.lte]: dayjs(whereClause.attendance_date[Op.lte]).endOf('day').toDate()
+        };
+      }
+    }
+
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      whereClause[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
     }
 
     let employeeWhereClause = undefined;
@@ -2857,33 +3013,89 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
       return res.ok({ count: 0 });
     }
 
+    const hasTracking = await EmployeeAttendanceTemplate.findOne({
+      where: { employee_id: ownEmpId, status: 0, track_in_out: true },
+      attributes: ['id']
+    });
+
+    if (!hasTracking) {
+      return res.ok({ count: 0 });
+    }
+
     const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
-    const endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    let endDate = dayjs().endOf('month').format('YYYY-MM-DD');
+    const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+    if (endDate > yesterday) {
+      endDate = yesterday;
+    }
+
+    if (startDate > endDate) {
+      return res.ok({ count: 0 });
+    }
+
+    const baseWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      attendance_date: {
+        [Op.between]: [startDate, endDate]
+      },
+      [Op.or]: [
+        { status: { [Op.in]: [9, 10] } },
+        {
+          [Op.and]: [
+            { status: 0 },
+            { first_in: null },
+            { last_out: null }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: null },
+            { last_out: { [Op.ne]: null } }
+          ]
+        },
+        {
+          [Op.and]: [
+            { first_in: { [Op.ne]: null } },
+            { last_out: null }
+          ]
+        }
+      ],
+      status: { [Op.notIn]: [3, 4, 6] }
+    };
+
+    const regWhere = {
+      company_id: companyId,
+      employee_id: ownEmpId,
+      approval_status: { [Op.in]: [0, 1, 3] },
+      status: 0,
+      attendance_date: {
+        [Op.gte]: dayjs(startDate).startOf('day').toDate(),
+        [Op.lte]: dayjs(endDate).endOf('day').toDate()
+      }
+    };
+    const activeRegularizations = await AttendanceRegularization.findAll({
+      where: regWhere,
+      attributes: ['employee_id', 'attendance_date']
+    });
+
+    if (activeRegularizations.length > 0) {
+      const exclusionConditions = activeRegularizations.map(reg => ({
+        employee_id: reg.employee_id,
+        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+      }));
+      baseWhere[Op.and] = [
+        {
+          [Op.not]: {
+            [Op.or]: exclusionConditions
+          }
+        }
+      ];
+    }
 
     const count = await AttendanceDay.count({
-      where: {
-        company_id: companyId,
-        employee_id: ownEmpId,
-        attendance_date: {
-          [Op.between]: [startDate, endDate]
-        },
-        [Op.or]: [
-          { status: { [Op.in]: [9, 10] } },
-          {
-            [Op.and]: [
-              { first_in: null },
-              { last_out: { [Op.ne]: null } }
-            ]
-          },
-          {
-            [Op.and]: [
-              { first_in: { [Op.ne]: null } },
-              { last_out: null }
-            ]
-          }
-        ],
-        status: { [Op.notIn]: [3, 4, 6] }
-      }
+      where: baseWhere
     });
 
     return res.ok({ count });

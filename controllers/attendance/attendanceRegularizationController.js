@@ -51,6 +51,8 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
         }
 
+        let isOwnRequest = employee_id == req.user.employee_id;
+
         // Fetch Requests for History (Ordered by date)
         const history = await commonQuery.findAllRecords(AttendanceRegularization , {
             employee_id,
@@ -65,7 +67,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 }
             ],
             order: [["attendance_date", "DESC"]]
-        });
+        }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
         // Group History by Month
         const groupedHistory = [];
@@ -106,6 +108,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
 
             group.regularizations.push({
                 id: request.id,
+                applied_date: request.createdAt,
                 date: request.attendance_date,
                 date_display: dateStr,
                 reason: request.reason || "",
@@ -161,13 +164,14 @@ exports.getAll = async (req, res) => {
 
         const employeeWhere = { status: { [Op.in]: [0, 1, 2] } };
         
-        if (!req.user.is_super_admin && !req.user.is_admin) {
+        let isOwnRequest = req.body.employee_id && (req.body.employee_id == req.user.employee_id);
+
+        if (!req.user.is_super_admin && !req.user.is_admin && !isOwnRequest) {
             employeeWhere[Op.or] = [
                 { attendance_supervisor: req.user.id },
                 { reporting_manager: req.user.id }
             ];
         }
-
 
         const data = await commonQuery.fetchPaginatedData(
             AttendanceRegularization , 
@@ -190,7 +194,7 @@ exports.getAll = async (req, res) => {
                     }
                 ]
             },
-            true, // requireTenantFields
+            isOwnRequest ? { applyHierarchy: false } : true, // requireTenantFields
             'created_at', // dateField
             whereClause // customWhere
         );

@@ -83,10 +83,14 @@ exports.getByEmployeeId = async (req, res) => {
                     : { month: null }),        // annual cycles always have month = null in DB
         };
 
+        let isOwnRequest = employeeId == req.user.employee_id;
+
         const leaveBalances = await commonQuery.findAllRecords(
             EmployeeLeaveBalance,
             whereClause,
-            { order: [['id', 'ASC']] }
+            { order: [['id', 'ASC']] },
+            null,
+            isOwnRequest ? { applyHierarchy: false } : true
         );
 
         if (!leaveBalances || leaveBalances.length === 0) {

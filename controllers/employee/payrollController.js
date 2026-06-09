@@ -1795,10 +1795,10 @@ exports.deletePayslip = async (req, res) => {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
 
-        if (payslip.status === 3) {
-            await transaction.rollback();
-            return res.error("NOT_ALLOWED", { message: "Cannot delete a paid payslip." });
-        }
+        // if (payslip.status === 3) {
+        //     await transaction.rollback();
+        //     return res.error("NOT_ALLOWED", { message: "Cannot delete a paid payslip." });
+        // }
 
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
@@ -1907,7 +1907,7 @@ exports.getEmployeePayslip = async (req, res) => {
                 month: p.month,
                 year: p.year,
                 month_year_string: `${monthName} ${p.year}`,
-                ctc: p.paid_gross || p.fixed_gross,
+                ctc: p.fixed_gross || p.paid_gross,
                 net_payable: p.net_salary || p.net_payable,
                 status: p.status,
                 status_text: p.status === 1 ? "Finalized" : "Paid"

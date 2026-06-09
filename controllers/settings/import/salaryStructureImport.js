@@ -1,6 +1,6 @@
 const { parentPort, workerData } = require("worker_threads");
 const { sequelize, commonQuery } = require("../../../helpers");
-const { Employee, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, SalaryComponent, SalaryRevisionHistory } = require("../../../models");
+const { Employee, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, SalaryComponent, SalaryRevisionHistory, CompanyMaster, SalaryTemplate } = require("../../../models");
 const { transformRows } = require("../../../helpers/functions/excelService");
 const { Op } = require("sequelize");
 const xlsx = require("xlsx");
@@ -187,6 +187,42 @@ const runWorker = async () => {
             }
         });
 
+        const normalizeCompanyAccess = (access) => {
+            if (Array.isArray(access)) return access.map(String);
+            if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
+            return [];
+        };
+        let companyAccessList = [];
+        if (workerData.is_super_admin) {
+            let orgId = workerData.organization_id;
+            if (!orgId && company_id) {
+                const currentCompany = await CompanyMaster.findOne({
+                    where: { id: company_id },
+                    attributes: ['organization_id'],
+                    transaction,
+                    raw: true
+                });
+                if (currentCompany) {
+                    orgId = currentCompany.organization_id;
+                }
+            }
+
+            if (orgId) {
+                const orgCompanies = await CompanyMaster.findAll({
+                    where: { organization_id: orgId, status: { [Op.ne]: 2 } },
+                    attributes: ['id'],
+                    transaction,
+                    raw: true
+                });
+                companyAccessList = orgCompanies.map(c => String(c.id));
+            }
+        } else {
+            companyAccessList = normalizeCompanyAccess(workerData.company_access || "");
+        }
+        if (company_id && !companyAccessList.includes(String(company_id))) {
+            companyAccessList.push(String(company_id));
+        }
+
         // 3. Fetch all employees to map code to ID
         const empCodeKey = headers.find(h => normalizeText(h).includes("code"));
         const empNameKey = headers.find(h => normalizeText(h).includes("name of employee") || normalizeText(h).includes("employee name"));
@@ -194,22 +230,35 @@ const runWorker = async () => {
         const employeeCodesInFile = [...new Set(originalRows.map(r => String(r[empCodeKey] || "").trim()).filter(Boolean))];
         const existingEmployees = await commonQuery.findAllRecords(Employee, {
             employee_code: { [Op.in]: employeeCodesInFile },
-            company_id,
+            company_id: { [Op.in]: companyAccessList.map(Number) },
             status: { [Op.ne]: 2 }
-        }, { attributes: ['id', 'employee_code', 'first_name', 'branch_id'], raw: true }, transaction, { company_id: true });
+        }, { attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'company_id', 'salary_template_id'], raw: true }, transaction, { company_id: true });
 
         const employeeMap = new Map();
         existingEmployees.forEach(emp => {
-            employeeMap.set(normalizeText(emp.employee_code), emp);
+            const code = normalizeText(emp.employee_code);
+            // Prioritize the active company_id in case there are identical employee codes across companies
+            if (!employeeMap.has(code) || String(emp.company_id) === String(company_id)) {
+                employeeMap.set(code, emp);
+            }
         });
 
         // 4. Pre-fetch existing templates for these employees
         const existingTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, {
             employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
-        }, { raw: true }, transaction);
+        }, { raw: true }, transaction, {});
 
         const templateMap = new Map();
         existingTemplates.forEach(t => templateMap.set(t.employee_id, t));
+
+        // Pre-fetch assigned master templates if applicable
+        const masterTemplateIds = [...new Set(existingEmployees.map(e => e.salary_template_id).filter(id => id && id > 0))];
+        const masterTemplates = masterTemplateIds.length > 0 ? await commonQuery.findAllRecords(SalaryTemplate, {
+            id: { [Op.in]: masterTemplateIds }
+        }, { raw: true }, transaction, {}) : [];
+
+        const masterTemplateMap = new Map();
+        masterTemplates.forEach(mt => masterTemplateMap.set(mt.id, mt));
 
         // 5. Pre-fetch statutory header keys
         const cleanStr = (s) => normalizeText(s).replace(/[^a-z0-9]/g, '');
@@ -312,6 +361,10 @@ const runWorker = async () => {
             calculationBasisKey: headers.find(h => {
                 const nh = normalizeText(h);
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis") || nh.includes("lwp computation") || nh.includes("lwp calculation");
+            }),
+            payrollCycleKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh === "payroll cycle" || nh.includes("payroll cycle");
             }),
             netSalaryKey: headers.find(h => {
                 const nh = normalizeText(h);
@@ -416,7 +469,7 @@ const runWorker = async () => {
                         percentage_of: comp.percentage_of,
                         percentage_value: comp.percentage_value,
 
-                        company_id,
+                        company_id: employee.company_id,
                         branch_id: employee.branch_id,
                         user_id
                     };
@@ -508,7 +561,7 @@ const runWorker = async () => {
                             yearly_amount: amt * 12,
                             included_in_ctc: true,
                             is_employer_contribution: false,
-                            company_id,
+                            company_id: employee.company_id,
                             branch_id: employee.branch_id,
                             user_id
                         });
@@ -574,7 +627,7 @@ const runWorker = async () => {
                             percentage_of: pfComp?.percentage_of,
                             percentage_value: pfComp?.percentage_value,
 
-                            company_id,
+                            company_id: employee.company_id,
                             branch_id: employee.branch_id,
                             user_id
                         });
@@ -640,7 +693,7 @@ const runWorker = async () => {
                                 formula: comp.formula,
                                 percentage_of: comp.percentage_of,
                                 percentage_value: comp.percentage_value,
-                                company_id, 
+                                company_id: employee.company_id, 
                                 branch_id: employee.branch_id, 
                                 user_id
                             });
@@ -673,7 +726,7 @@ const runWorker = async () => {
                                 formula: comp.formula,
                                 percentage_of: comp.percentage_of,
                                 percentage_value: comp.percentage_value,
-                                company_id, 
+                                company_id: employee.company_id, 
                                 branch_id: employee.branch_id, 
                                 user_id
                             });
@@ -703,7 +756,7 @@ const runWorker = async () => {
                                 formula: comp.formula,
                                 percentage_of: comp.percentage_of,
                                 percentage_value: comp.percentage_value,
-                                company_id, 
+                                company_id: employee.company_id, 
                                 branch_id: employee.branch_id, 
                                 user_id
                             });
@@ -731,7 +784,7 @@ const runWorker = async () => {
                             rowTransactions.push({
                                 employee_id: employee.id, component_id: compId, component_category: 'STATUTORY',
                                 monthly_amount: amt, yearly_amount: amt * 12, included_in_ctc: true, is_employer_contribution: true,
-                                company_id, branch_id: employee.branch_id, user_id
+                                company_id: employee.company_id, branch_id: employee.branch_id, user_id
                             });
                         }
                     }
@@ -794,7 +847,7 @@ const runWorker = async () => {
                             included_in_ctc: true,
                             is_employer_contribution: false,
                             calculation_type: 'FIXED',
-                            company_id,
+                            company_id: employee.company_id,
                             branch_id: employee.branch_id,
                             user_id
                         });
@@ -824,22 +877,50 @@ const runWorker = async () => {
                 }
 
                 const template = templateMap.get(employee.id);
+                const assignedMasterTemplateId = employee.salary_template_id;
+                const masterTemplate = assignedMasterTemplateId ? masterTemplateMap.get(assignedMasterTemplateId) : null;
+
                 const oldCTC = template ? parseFloat(template.ctc_monthly) || 0 : 0;
                 const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
 
+                let salaryType = 'Monthly';
+                if (statHeaderKeys.payrollCycleKey && row[statHeaderKeys.payrollCycleKey]) {
+                    const cycleVal = String(row[statHeaderKeys.payrollCycleKey]).trim().toLowerCase();
+                    if (cycleVal.includes('daily')) salaryType = 'Daily';
+                    else if (cycleVal.includes('hourly')) salaryType = 'Hourly';
+                }
+
                 const templatePayload = {
                     employee_id: employee.id,
-                    template_name: `Imported Template - ${employee.first_name}`,
-                    staff_type: 'Regular', salary_type: 'Monthly',
                     ctc_monthly: ctcMonthly, ctc_yearly: ctcMonthly * 12,
                     lwp_calculation_basis: calculationBasis,
                     effective_date: effectiveDate,
-                    statutory_config, company_id, branch_id: employee.branch_id, user_id, status: 0
+                    statutory_config, company_id: employee.company_id, branch_id: employee.branch_id, user_id, status: 0
                 };
 
                 if (template) {
+                    templatePayload.template_name = template.template_name;
+                    templatePayload.staff_type = template.staff_type;
+                    templatePayload.salary_type = template.salary_type;
+                    templatePayload.template_id = template.template_id || assignedMasterTemplateId || null;
+                    templatePayload.template_code = template.template_code || null;
+
                     templatesToUpdate.push({ id: template.id, ...templatePayload });
+                } else if (assignedMasterTemplateId && assignedMasterTemplateId > 0) {
+                    templatePayload.template_name = masterTemplate ? masterTemplate.template_name : 'Assigned Template';
+                    templatePayload.staff_type = masterTemplate ? masterTemplate.staff_type : 'Regular';
+                    templatePayload.salary_type = masterTemplate ? masterTemplate.salary_type : 'Monthly';
+                    templatePayload.template_id = assignedMasterTemplateId;
+                    templatePayload.template_code = masterTemplate ? masterTemplate.template_code : null;
+
+                    templatesToCreate.push(templatePayload);
                 } else {
+                    templatePayload.template_name = `Imported Template - ${employee.first_name}`;
+                    templatePayload.staff_type = 'Regular';
+                    templatePayload.salary_type = 'Monthly';
+                    templatePayload.template_id = null;
+                    templatePayload.template_code = null;
+
                     templatesToCreate.push(templatePayload);
                 }
 
@@ -856,7 +937,7 @@ const runWorker = async () => {
                         remarks: "Salary Revised via Excel Import",
                         status: 1,
                         approved_by: user_id,
-                        company_id,
+                        company_id: employee.company_id,
                         branch_id: employee.branch_id
                     });
                 }
@@ -1012,7 +1093,7 @@ const runWorker = async () => {
             // 2. Refresh Template Map and Prep Transactions
             const finalTemplates = await commonQuery.findAllRecords(EmployeeSalaryTemplate, {
                 employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
-            }, { raw: true }, transaction);
+            }, { raw: true }, transaction, {});
             const finalTemplateMap = new Map();
             finalTemplates.forEach(t => finalTemplateMap.set(t.employee_id, t));
 
@@ -1067,9 +1148,12 @@ const runWorker = async () => {
 
                 for (const [empId, applyDate] of affectedMap.entries()) {
                     if (applyDate.isAfter(today)) continue; // future revisions - handle later
+                    const empObj = existingEmployees.find(e => e.id === empId);
+                    const empCompanyId = empObj ? empObj.company_id : company_id;
+                    const empBranchId = empObj ? empObj.branch_id : branch_id;
                     let cur = applyDate.clone();
                     while (cur.isBefore(today) || cur.isSame(today, 'day')) {
-                        await rebuildAttendanceDay(empId, cur.format('YYYY-MM-DD'), { user_id, company_id, branch_id }, transaction);
+                        await rebuildAttendanceDay(empId, cur.format('YYYY-MM-DD'), { user_id, company_id: empCompanyId, branch_id: empBranchId }, transaction);
                         cur = cur.add(1, 'day');
                     }
                 }

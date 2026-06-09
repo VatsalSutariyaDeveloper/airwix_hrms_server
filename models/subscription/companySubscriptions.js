@@ -169,6 +169,16 @@ module.exports = (sequelize, DataTypes) => {
       as: "subscriptionPlan",
       foreignKey: "subscription_plan_id",
     });
+
+    CompanySubscription.belongsTo(models.CompanyMaster, { 
+      as: "company", 
+      foreignKey: "company_id" 
+    });
+
+    CompanySubscription.belongsTo(models.Organization, { 
+      as: "organization", 
+      foreignKey: "organization_id" 
+    });
   };
 
   return CompanySubscription;
