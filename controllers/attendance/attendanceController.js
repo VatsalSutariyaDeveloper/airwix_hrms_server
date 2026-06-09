@@ -1506,6 +1506,9 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
     const { employee_id, attendance_date } = req.body;
 
+    let isOwnRequest = employee_id == req.user?.employee_id;
+    const tenantOptionsEmpty = isOwnRequest ? { applyHierarchy: false } : {};
+
     // 1. Fetch the AttendanceDay record
     const attendanceDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id,
@@ -1560,7 +1563,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
           order: [["punch_time", "ASC"]]
         }
       ]
-    }, null, false, {});
+    }, null, false, tenantOptionsEmpty);
 
     // 2. Fetch all raw punches for this day
     // const punches = await commonQuery.findAllRecords(AttendancePunch, {
@@ -1712,6 +1715,10 @@ exports.getMonthlyAttendance = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
     }
 
+    let isOwnRequest = employee_id == req.user?.employee_id;
+    const tenantOptions = isOwnRequest ? { company_id: true, branch_id: true, user_id: true, applyHierarchy: false } : true;
+    const tenantOptionsEmpty = isOwnRequest ? { applyHierarchy: false } : {};
+
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")
     const normalizedMonthYear = month_year.trim().replace(/\b[a-z]/g, l => l.toUpperCase());
 
@@ -1733,7 +1740,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
         { model: ShiftTemplate, as: "shiftTemplate", required: false }
       ]
-    });
+    }, null, false, tenantOptions);
 
     if (!employee) {
       return res.error(constants.NOT_FOUND, "Employee not found");
@@ -1753,7 +1760,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       end_date: { [Op.gte]: todayStr },
       approval_status: 3, // APPROVED
       status: 0
-    });
+    }, {}, null, false, tenantOptions);
 
     // 2. Fetch AttendanceDay records for the month
     const attendanceDays = await commonQuery.findAllRecords(AttendanceDay, {
@@ -1802,21 +1809,21 @@ exports.getMonthlyAttendance = async (req, res) => {
         }
       ],
       order: [["attendance_date", "ASC"]]
-    }, null, {});
+    }, null, tenantOptionsEmpty);
 
     // 2.1 Fetch Holidays for the month
     let employeeHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
       employee_id,
       date: { [Op.between]: [startDate, endDate] },
       status: 0
-    });
+    }, {}, null, tenantOptions);
     // Fallback to Master Template
     if (employeeHolidays.length === 0 && employee.holiday_template) {
       employeeHolidays = await commonQuery.findAllRecords(HolidayTransaction, {
         template_id: employee.holiday_template,
         date: { [Op.between]: [startDate, endDate] },
         status: 0
-      });
+      }, {}, null, tenantOptions);
     }
 
     // 2.2 Fetch Weekly Offs for the employee
@@ -1824,14 +1831,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       employee_id,
       status: 0,
       is_off: true
-    });
+    }, {}, null, tenantOptions);
     // Fallback to Master Template
     if (employeeWeeklyOffs.length === 0 && employee.weekly_off_template) {
       employeeWeeklyOffs = await commonQuery.findAllRecords(WeeklyOffTemplateDay, {
         template_id: employee.weekly_off_template,
         is_off: true,
         status: 0
-      });
+      }, {}, null, tenantOptions);
     }
     const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
       employee_id,
@@ -1839,7 +1846,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       start_date: { [Op.lte]: endDate },
       end_date: { [Op.gte]: startDate },
       status: 0
-    });
+    }, {}, null, tenantOptions);
 
     const summary = {
       present: 0,

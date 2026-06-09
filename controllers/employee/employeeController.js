@@ -1731,7 +1731,8 @@ exports.getEmployeesByTemplate = async (req, res) => {
 
         // 4. Base filter
         const filter = {
-            status: 0
+            status: 0,
+            company_id: req.user.company_id
         };
 
         const accessFlag = is_access === true || is_access === "true";
@@ -1744,8 +1745,8 @@ exports.getEmployeesByTemplate = async (req, res) => {
         }
 
         // 6. Fetch counts in parallel
-        const assignFilter = { status: 0, [field_name]: value };
-        const notAssignFilter = { status: 0, [field_name]: { [Op.or]: [0, null] } };
+        const assignFilter = { status: 0, company_id: req.user.company_id, [field_name]: value };
+        const notAssignFilter = { status: 0, company_id: req.user.company_id, [field_name]: { [Op.or]: [0, null] } };
 
         const [assignedCount, notAssignedCount] = await Promise.all([
             commonQuery.countRecords(Employee, assignFilter, {}, false),

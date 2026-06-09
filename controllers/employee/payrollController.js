@@ -1795,10 +1795,6 @@ exports.deletePayslip = async (req, res) => {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
 
-        if (payslip.status === 3) {
-            await transaction.rollback();
-            return res.error("NOT_ALLOWED", { message: "Cannot delete a paid payslip." });
-        }
 
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');

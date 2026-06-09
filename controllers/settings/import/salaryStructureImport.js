@@ -313,6 +313,10 @@ const runWorker = async () => {
                 const nh = normalizeText(h);
                 return nh.includes("calculation days") || nh.includes("calculation type") || nh.includes("calculation basis") || nh.includes("lwp computation") || nh.includes("lwp calculation");
             }),
+            payrollCycleKey: headers.find(h => {
+                const nh = normalizeText(h);
+                return nh === "payroll cycle" || nh.includes("payroll cycle");
+            }),
             netSalaryKey: headers.find(h => {
                 const nh = normalizeText(h);
                 return nh === "net salary" || nh === "net pay" || nh === "take home" || nh.includes("net salary");
@@ -827,10 +831,17 @@ const runWorker = async () => {
                 const oldCTC = template ? parseFloat(template.ctc_monthly) || 0 : 0;
                 const effectiveDate = parseExcelDate(row[statHeaderKeys.effectiveDateKey], rowIndex, "Effective Date") || new Date();
 
+                let salaryType = 'Monthly';
+                if (statHeaderKeys.payrollCycleKey && row[statHeaderKeys.payrollCycleKey]) {
+                    const cycleVal = String(row[statHeaderKeys.payrollCycleKey]).trim().toLowerCase();
+                    if (cycleVal.includes('daily')) salaryType = 'Daily';
+                    else if (cycleVal.includes('hourly')) salaryType = 'Hourly';
+                }
+
                 const templatePayload = {
                     employee_id: employee.id,
                     template_name: `Imported Template - ${employee.first_name}`,
-                    staff_type: 'Regular', salary_type: 'Monthly',
+                    staff_type: 'Regular', salary_type: salaryType,
                     ctc_monthly: ctcMonthly, ctc_yearly: ctcMonthly * 12,
                     lwp_calculation_basis: calculationBasis,
                     effective_date: effectiveDate,
