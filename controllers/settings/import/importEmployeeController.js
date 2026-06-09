@@ -72,6 +72,8 @@ exports.importData = async (req, res) => {
           company_id: req.user ? req.user.company_id : req.body.company_id,
           is_super_admin: req.user ? req.user.is_super_admin : false,
           branch_access: req.user ? req.user.branch_access : "",
+          company_access: req.user ? req.user.company_access : "",
+          organization_id: req.user ? req.user.organization_id : null,
         }
       });
 

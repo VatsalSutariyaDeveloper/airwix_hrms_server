@@ -533,10 +533,48 @@ exports.update = async (req, res) => {
         }
 
         // 1. Handle File Uploads & Cleanup
+        // Handle profile image separately
+        let newProfileImage = existingEmployee.profile_image;
+        let profileImageChanged = false;
+
+        if (req.files?.profile_image) {
+            const profileReq = {
+                ...req,
+                files: {
+                    profile_image: Array.isArray(req.files.profile_image)
+                        ? req.files.profile_image
+                        : [req.files.profile_image],
+                },
+            };
+            const result = await uploadFile(
+                profileReq,
+                res,
+                constants.EMPLOYEE_IMG_FOLDER,
+                transaction,
+                existingEmployee.profile_image
+            );
+            if (result.profile_image) {
+                newProfileImage = result.profile_image;
+                profileImageChanged = true;
+            }
+        } else if (POST.profile_image === "" || POST.profile_image === null) {
+            if (existingEmployee.profile_image) {
+                await deleteFile(req, res, constants.EMPLOYEE_IMG_FOLDER, existingEmployee.profile_image);
+                await deleteFile(req, res, constants.EMPLOYEE_DOC_FOLDER, existingEmployee.profile_image);
+                newProfileImage = null;
+                profileImageChanged = true;
+            }
+        }
+
+        if (profileImageChanged) {
+            POST.profile_image = newProfileImage;
+        }
+
         if (req.files && (Array.isArray(req.files) ? req.files.length > 0 : Object.keys(req.files).length > 0)) {
             const savedFiles = await uploadFile(req, res, constants.EMPLOYEE_DOC_FOLDER, transaction);
 
             for (const col of FILE_COLUMNS) {
+                if (col === 'profile_image') continue; // Handled separately
                 // If new file uploaded for this column
                 if (savedFiles[col]) {
                     // Delete old file from disk if it exists
@@ -552,6 +590,35 @@ exports.update = async (req, res) => {
         // 2. Update Employee Record
         // Note: 'education_details' is in POST and will be updated automatically as it's a JSONB column
         const updatedEmployee = await commonQuery.updateRecordById(Employee, id, POST, transaction, false, false);
+
+        // Synchronize with associated User
+        if (profileImageChanged) {
+            const associatedUser = await commonQuery.findOneRecord(User, { employee_id: id }, {}, transaction);
+            if (associatedUser) {
+                if (newProfileImage) {
+                    const srcPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, newProfileImage);
+                    const destDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+                    const destPath = path.join(destDir, newProfileImage);
+                    if (fs.existsSync(srcPath)) {
+                        if (!fs.existsSync(destDir)) {
+                            fs.mkdirSync(destDir, { recursive: true });
+                        }
+                        fs.copyFileSync(srcPath, destPath);
+                    }
+                } else {
+                    if (associatedUser.profile_image) {
+                        await deleteFile(req, res, constants.USER_IMG_FOLDER, associatedUser.profile_image);
+                    }
+                }
+                await commonQuery.updateRecordById(
+                    User,
+                    associatedUser.id,
+                    { profile_image: newProfileImage },
+                    transaction,
+                    true
+                );
+            }
+        }
 
         // Sync specific templates if they were updated in POST
         const templateFields = [
@@ -708,7 +775,7 @@ exports.update = async (req, res) => {
                     // Notify Supervisor
                     await notificationService.createNotification({
                         user_id: newSupervisorId,
-                        title: "New Supervisee Assigned",
+                        title: "New Attendance Supervisor Assigned",
                         message: `${employeeName} has been assigned to you for attendance supervision.`,
                         type: "EMPLOYEE_UPDATE",
                         company_id: existingEmployee.company_id,
@@ -824,6 +891,26 @@ exports.getById = async (req, res) => {
                 plainRecord[field + '_url'] = null;
             }
         });
+
+        if (plainRecord.registered_face_images) {
+            let faceImages = [];
+            try {
+                faceImages = typeof plainRecord.registered_face_images === 'string'
+                    ? JSON.parse(plainRecord.registered_face_images)
+                    : plainRecord.registered_face_images;
+            } catch (e) {
+                faceImages = [];
+            }
+            if (Array.isArray(faceImages)) {
+                plainRecord.registered_face_images_urls = faceImages.map(img => {
+                    return `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${img}`;
+                });
+            } else {
+                plainRecord.registered_face_images_urls = [];
+            }
+        } else {
+            plainRecord.registered_face_images_urls = [];
+        }
 
         // Parse JSON fields (Sequelize usually returns object for JSONB, but safety first)
         const jsonFields = ["education_details", "custom_fields", "experience_details", "professional_reference"];
@@ -1731,8 +1818,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
 
         // 4. Base filter
         const filter = {
-            status: 0,
-            company_id: req.user.company_id
+            status: 0
         };
 
         const accessFlag = is_access === true || is_access === "true";
@@ -1745,12 +1831,12 @@ exports.getEmployeesByTemplate = async (req, res) => {
         }
 
         // 6. Fetch counts in parallel
-        const assignFilter = { status: 0, company_id: req.user.company_id, [field_name]: value };
-        const notAssignFilter = { status: 0, company_id: req.user.company_id, [field_name]: { [Op.or]: [0, null] } };
+        const assignFilter = { status: 0, [field_name]: value };
+        const notAssignFilter = { status: 0, [field_name]: { [Op.or]: [0, null] } };
 
         const [assignedCount, notAssignedCount] = await Promise.all([
-            commonQuery.countRecords(Employee, assignFilter, {}, false),
-            commonQuery.countRecords(Employee, notAssignFilter, {}, false)
+            commonQuery.countRecords(Employee, assignFilter, {}),
+            commonQuery.countRecords(Employee, notAssignFilter, {})
         ]);
 
         // 7. Fetch employees
@@ -1760,8 +1846,7 @@ exports.getEmployeesByTemplate = async (req, res) => {
             fieldConfig,
             {
                 attributes: ["id", "first_name", "employee_code", field_name]
-            },
-            false
+            }
         );
 
         // 8. Add computed flag
@@ -3612,6 +3697,134 @@ exports.deleteFaceImage = async (req, res) => {
         });
     } catch (err) {
         await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.transfer = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const {
+            employee_id,
+            target_company_id,
+            target_branch_id,
+            joining_date,
+            exit_date,
+            target_employee_code,
+            target_department_id,
+            target_designation_id,
+            target_reporting_manager,
+            target_attendance_supervisor
+        } = req.body;
+
+        if (!employee_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
+        }
+        if (!target_company_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Target Company ID is required" });
+        }
+        if (!target_branch_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Target Branch ID is required" });
+        }
+
+        // 1. Fetch Source Employee
+        const sourceEmployee = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
+        if (!sourceEmployee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Source employee not found" });
+        }
+
+        if (Number(sourceEmployee.company_id) === Number(target_company_id)) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee is already in the target company" });
+        }
+
+        // 2. Verify Companies belong to the same Organization
+        const companyA = await commonQuery.findOneRecord(CompanyMaster, sourceEmployee.company_id, {}, transaction);
+        const companyC = await commonQuery.findOneRecord(CompanyMaster, target_company_id, {}, transaction);
+        if (!companyA || !companyC) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Invalid source or target company" });
+        }
+        if (!companyA.organization_id || companyA.organization_id !== companyC.organization_id) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: "Companies must belong to the same organization" });
+        }
+
+        // 3. Verify target employee code uniqueness
+        const codeToCheck = target_employee_code || sourceEmployee.employee_code;
+        const codeExists = await commonQuery.findOneRecord(Employee, {
+            employee_code: codeToCheck,
+            company_id: target_company_id,
+            status: { [Op.ne]: 2 }
+        }, {}, transaction);
+
+        if (codeExists) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { message: `Employee Code "${codeToCheck}" already exists in the target company` });
+        }
+
+        // 4. Clone Employee Details
+        const plainEmployee = sourceEmployee.get({ plain: true });
+
+        // Remove identity, timestamps, company-specific templates/settings
+        const excludeFields = [
+            'id', 'created_at', 'updated_at',
+            'weekly_off_template', 'holiday_template', 'leave_template',
+            'shift_template', 'salary_template_id', 'attendance_weekly_off_template',
+            'geofence_template', 'attendance_setting_template', 'resignation_template_id'
+        ];
+        excludeFields.forEach(f => delete plainEmployee[f]);
+
+        const today = dayjs().format("YYYY-MM-DD");
+
+        const newEmployeePayload = {
+            ...plainEmployee,
+            company_id: Number(target_company_id),
+            branch_id: Number(target_branch_id),
+            employee_code: codeToCheck,
+            joining_date: joining_date || today,
+            exit_date: null,
+            resignation_status: 0,
+            status: 0, // Active
+            department_id: target_department_id || null,
+            designation_id: target_designation_id || null,
+            reporting_manager: target_reporting_manager || null,
+            attendance_supervisor: target_attendance_supervisor || null
+        };
+
+        // Create the new Employee record
+        const newEmployee = await commonQuery.createRecord(Employee, newEmployeePayload, transaction);
+
+        // 5. Update Source Employee Status to Exited
+        await commonQuery.updateRecordById(Employee, employee_id, {
+            status: constants.STATUS_EMPLOYEE_EXIT, // 4
+            exit_date: exit_date || today,
+            resignation_status: 2 // Exited
+        }, transaction);
+
+        // 6. Transfer Linked User Account if exists
+        const linkedUser = await commonQuery.findOneRecord(User, { employee_id: employee_id }, {}, transaction);
+        if (linkedUser) {
+            await commonQuery.updateRecordById(User, linkedUser.id, {
+                employee_id: newEmployee.id,
+                company_id: Number(target_company_id),
+                branch_id: Number(target_branch_id),
+                company_access: String(target_company_id)
+            }, transaction);
+        }
+
+        await transaction.commit();
+        return res.success("Employee transferred successfully", {
+            new_employee_id: newEmployee.id,
+            new_employee_code: newEmployee.employee_code
+        });
+
+    } catch (err) {
+        if (transaction && !transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };

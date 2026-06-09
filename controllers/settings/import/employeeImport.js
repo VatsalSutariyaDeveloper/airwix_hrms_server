@@ -1,6 +1,6 @@
 const { parentPort, workerData } = require("worker_threads");
 const { sequelize, commonQuery, constants } = require("../../../helpers");
-const { Employee, Department, DesignationMaster, StateMaster, CustomField, BranchMaster } = require("../../../models");
+const { Employee, Department, DesignationMaster, StateMaster, CustomField, BranchMaster, CompanyMaster } = require("../../../models");
 const { transformRows } = require("../../../helpers/functions/excelService");
 const { Op } = require("sequelize");
 const xlsx = require("xlsx");
@@ -301,30 +301,67 @@ const runWorker = async () => {
         });
     }
 
+    const normalizeCompanyAccess = (access) => {
+        if (Array.isArray(access)) return access.map(String);
+        if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
+        return [];
+    };
+    let companyAccessList = [];
+    if (workerData.is_super_admin) {
+        let orgId = workerData.organization_id;
+        if (!orgId && company_id) {
+            const currentCompany = await CompanyMaster.findOne({
+                where: { id: company_id },
+                attributes: ['organization_id'],
+                raw: true
+            });
+            if (currentCompany) {
+                orgId = currentCompany.organization_id;
+            }
+        }
+
+        if (orgId) {
+            const orgCompanies = await CompanyMaster.findAll({
+                where: { organization_id: orgId, status: { [Op.ne]: 2 } },
+                attributes: ['id'],
+                raw: true
+            });
+            companyAccessList = orgCompanies.map(c => String(c.id));
+        }
+    } else {
+        companyAccessList = normalizeCompanyAccess(workerData.company_access || "");
+    }
+    if (company_id && !companyAccessList.includes(String(company_id))) {
+        companyAccessList.push(String(company_id));
+    }
+
     const activeCustomFields = await commonQuery.findAllRecords(
         CustomField,
         {
-            company_id,
+            company_id: { [Op.in]: companyAccessList.map(Number) },
             entity_id: constants.EMPLOYEE_ENTITY_ID,
             status: 0
         },
         { attributes: ['id', 'field_name', 'field_label', 'field_type'], raw: true },null,{}
     );
 
-    // Fetch all active branches for the company - direct query to avoid tenant filtering
+    // Fetch all active branches for allowed companies
+    const branchWhere = { status: 0 };
+    if (companyAccessList.length > 0) {
+        branchWhere.company_id = { [Op.in]: companyAccessList.map(Number) };
+    } else {
+        branchWhere.company_id = company_id;
+    }
     const branches = await commonQuery.findAllRecords(
         BranchMaster,
-        {
-            company_id,
-            status: 0
-        },
-        {attributes: ['id', 'branch_name']},null,{}
+        branchWhere,
+        {attributes: ['id', 'branch_name', 'company_id']},null, { company_id: true }
     );
 
-    // Create branch name to ID mapping for quick lookup
-    const branchNameToIdMap = {};
+    // Create branch name to branch object mapping for quick lookup
+    const branchNameToBranchMap = {};
     branches.forEach(branch => {
-        branchNameToIdMap[normalizeHeader(branch.branch_name)] = branch.id;
+        branchNameToBranchMap[normalizeHeader(branch.branch_name)] = branch;
     });
 
     activeCustomFields.forEach(cf => {
@@ -347,6 +384,37 @@ const runWorker = async () => {
 
         transaction = await sequelize.transaction();
 
+        // Pre-resolve company and branch for each row
+        const resolvedRows = rows.map((record, index) => {
+            const originalRecord = originalRows[index] || {};
+            let rowBranchId = branch_id;
+            let rowCompanyId = company_id;
+
+            const workLocationKey = Object.keys(originalRecord).find(k => 
+                normalizeHeader(k) === "worklocation" || 
+                normalizeHeader(k) === "workrelatedlocation" ||
+                normalizeHeader(k) === "location" ||
+                normalizeHeader(k) === "branch" ||
+                normalizeHeader(k) === "branchname"
+            );
+            
+            if (workLocationKey && originalRecord[workLocationKey]) {
+                const workLocation = String(originalRecord[workLocationKey]).trim();
+                const normalizedWorkLocation = normalizeHeader(workLocation);
+                
+                if (branchNameToBranchMap[normalizedWorkLocation]) {
+                    rowBranchId = branchNameToBranchMap[normalizedWorkLocation].id;
+                    rowCompanyId = branchNameToBranchMap[normalizedWorkLocation].company_id;
+                }
+            }
+            return {
+                record,
+                originalRecord,
+                rowBranchId,
+                rowCompanyId
+            };
+        });
+
         // Initialize error tracking variables before use
         let errorCount = 0;
         const errorSample = [];
@@ -363,7 +431,8 @@ const runWorker = async () => {
         const voterIdsSet = new Set();
         const bankAccountNumbersSet = new Set();
 
-        rows.forEach((r,index) => {
+        resolvedRows.forEach((item) => {
+            const r = item.record;
             if (r.employee_code) employeeCodeSet.add(String(r.employee_code).trim());
             if (r.mobile_no) mobileNoSet.add(String(r.mobile_no).trim());
             if (r.email) emailsSet.add(String(r.email).trim().toLowerCase());
@@ -382,10 +451,10 @@ const runWorker = async () => {
         // orConditions will store conditions that will be checked in a single query using Op.or
         const orConditions = [];
 
-        // employee_code check is always company specific
+        // employee_code check is always company specific, queried across all allowed companies
         if (employeeCodeSet.size > 0) {
             orConditions.push({
-                company_id,
+                company_id: { [Op.in]: companyAccessList.map(Number) },
                 employee_code: { [Op.in]: Array.from(employeeCodeSet) }
             });
         }
@@ -420,8 +489,8 @@ const runWorker = async () => {
 
             fileTrackingEmployeeMap: new Map(),
             
-            // Map to track existing employees by employee_code for updates
-            existingEmployeeMap: new Map() // employee_code -> employee record
+            // Map to track existing employees by employee_code for updates (keyed by `${company_id}_${code}`)
+            existingEmployeeMap: new Map()
         };
 
         if (orConditions.length > 0) {
@@ -440,13 +509,14 @@ const runWorker = async () => {
             );
 
             existingInDb.forEach(emp => {
-                // employee_code is specifically company-bound; we only record it if it belongs to the target company
-                if (String(emp.company_id) === String(company_id)) {
+                // employee_code is specifically company-bound; we only record it if it belongs to one of allowed companies
+                if (companyAccessList.includes(String(emp.company_id))) {
                     if (emp.employee_code) {
                         const normalizedCode = String(emp.employee_code).trim().toLowerCase();
-                        employeeData.dbEmpCodeSet.add(normalizedCode);
+                        const key = `${emp.company_id}_${normalizedCode}`;
+                        employeeData.dbEmpCodeSet.add(key);
                         // Store full employee record for updates
-                        employeeData.existingEmployeeMap.set(normalizedCode, emp);
+                        employeeData.existingEmployeeMap.set(key, emp);
                     }
                 }
 
@@ -463,10 +533,9 @@ const runWorker = async () => {
         }
 
         // 3. Check for conflicts (within Excel AND against Database) - Only block actual conflicts
-        for (let i = 0; i < rows.length; i++) {
-            const record = rows[i];
+        for (let i = 0; i < resolvedRows.length; i++) {
+            const { record, originalRecord, rowBranchId, rowCompanyId } = resolvedRows[i];
             const rowIndex = i + 2;
-            const originalRecord = originalRows[i];
 
             const trimmedEmpCode = record.employee_code ? String(record.employee_code).trim() : null;
             const empCode = trimmedEmpCode ? trimmedEmpCode.toLowerCase() : null;
@@ -481,21 +550,22 @@ const runWorker = async () => {
 
             const conflicts = [];
             
-            // Check Excel-to-Excel duplicates
-            if (empCode && rows.filter((r, idx) => idx !== i && r.employee_code && String(r.employee_code).trim().toLowerCase() === empCode).length > 0) conflicts.push(`Employee Code '${trimmedEmpCode}' (Excel Duplicate)`);
-            if (mobile && rows.filter((r, idx) => idx !== i && r.mobile_no && String(r.mobile_no).trim() === mobile).length > 0) conflicts.push(`Mobile '${mobile}' (Excel Duplicate)`);
-            if (email && rows.filter((r, idx) => idx !== i && r.email && String(r.email).trim().toLowerCase() === email).length > 0) conflicts.push(`Email '${email}' (Excel Duplicate)`);
-            if (pan && rows.filter((r, idx) => idx !== i && r.pan_number && String(r.pan_number).trim().toUpperCase() === pan).length > 0) conflicts.push(`PAN '${pan}' (Excel Duplicate)`);
-            if (uan && rows.filter((r, idx) => idx !== i && r.uan_number && String(r.uan_number).trim() === uan).length > 0) conflicts.push(`UAN '${uan}' (Excel Duplicate)`);
-            if (aadhaar && rows.filter((r, idx) => idx !== i && r.aadhaar_number && String(r.aadhaar_number).replace(/\s/g, '') === aadhaar).length > 0) conflicts.push(`Aadhaar '${record.aadhaar_number}' (Excel Duplicate)`);
-            if (drivingLicense && rows.filter((r, idx) => idx !== i && r.driving_license_number && String(r.driving_license_number).trim().toUpperCase() === drivingLicense).length > 0) conflicts.push(`Driving License '${drivingLicense}' (Excel Duplicate)`);
-            if (voterId && rows.filter((r, idx) => idx !== i && r.voter_id_number && String(r.voter_id_number).trim().toUpperCase() === voterId).length > 0) conflicts.push(`Voter ID '${voterId}' (Excel Duplicate)`);
-            if (bankAccount && rows.filter((r, idx) => idx !== i && r.bank_account_number && String(r.bank_account_number).trim() === bankAccount).length > 0) conflicts.push(`Bank Account '${bankAccount}' (Excel Duplicate)`);
+            // Check Excel-to-Excel duplicates scoped to company
+            if (empCode && resolvedRows.filter((item, idx) => idx !== i && item.record.employee_code && String(item.record.employee_code).trim().toLowerCase() === empCode && item.rowCompanyId === rowCompanyId).length > 0) conflicts.push(`Employee Code '${trimmedEmpCode}' (Excel Duplicate within company)`);
+            if (mobile && resolvedRows.filter((item, idx) => idx !== i && item.record.mobile_no && String(item.record.mobile_no).trim() === mobile).length > 0) conflicts.push(`Mobile '${mobile}' (Excel Duplicate)`);
+            if (email && resolvedRows.filter((item, idx) => idx !== i && item.record.email && String(item.record.email).trim().toLowerCase() === email).length > 0) conflicts.push(`Email '${email}' (Excel Duplicate)`);
+            if (pan && resolvedRows.filter((item, idx) => idx !== i && item.record.pan_number && String(item.record.pan_number).trim().toUpperCase() === pan).length > 0) conflicts.push(`PAN '${pan}' (Excel Duplicate)`);
+            if (uan && resolvedRows.filter((item, idx) => idx !== i && item.record.uan_number && String(item.record.uan_number).trim() === uan).length > 0) conflicts.push(`UAN '${uan}' (Excel Duplicate)`);
+            if (aadhaar && resolvedRows.filter((item, idx) => idx !== i && item.record.aadhaar_number && String(item.record.aadhaar_number).replace(/\s/g, '') === aadhaar).length > 0) conflicts.push(`Aadhaar '${record.aadhaar_number}' (Excel Duplicate)`);
+            if (drivingLicense && resolvedRows.filter((item, idx) => idx !== i && item.record.driving_license_number && String(item.record.driving_license_number).trim().toUpperCase() === drivingLicense).length > 0) conflicts.push(`Driving License '${drivingLicense}' (Excel Duplicate)`);
+            if (voterId && resolvedRows.filter((item, idx) => idx !== i && item.record.voter_id_number && String(item.record.voter_id_number).trim().toUpperCase() === voterId).length > 0) conflicts.push(`Voter ID '${voterId}' (Excel Duplicate)`);
+            if (bankAccount && resolvedRows.filter((item, idx) => idx !== i && item.record.bank_account_number && String(item.record.bank_account_number).trim() === bankAccount).length > 0) conflicts.push(`Bank Account '${bankAccount}' (Excel Duplicate)`);
 
             // Check against Database for conflicts with OTHER employees
             // Employee code existing in DB is OK (will trigger update), but check if it belongs to same company
-            if (empCode && employeeData.dbEmpCodeSet.has(empCode)) {
-                const existingEmp = employeeData.existingEmployeeMap.get(empCode);
+            const empCodeKey = `${rowCompanyId}_${empCode}`;
+            if (empCode && employeeData.dbEmpCodeSet.has(empCodeKey)) {
+                const existingEmp = employeeData.existingEmployeeMap.get(empCodeKey);
                 if (!existingEmp) {
                     // Employee code exists but in different company - this is a conflict
                     conflicts.push(`Employee Code '${trimmedEmpCode}' (Exists in another company)`);
@@ -505,8 +575,8 @@ const runWorker = async () => {
             // For mobile and email, check if they exist in OTHER employees (not the one being updated)
             if (mobile && employeeData.dbEmpMobileSet.has(mobile)) {
                 // If this is an update, check if the mobile belongs to the same employee
-                if (empCode && employeeData.existingEmployeeMap.has(empCode)) {
-                    const existingEmp = employeeData.existingEmployeeMap.get(empCode);
+                if (empCode && employeeData.existingEmployeeMap.has(empCodeKey)) {
+                    const existingEmp = employeeData.existingEmployeeMap.get(empCodeKey);
                     if (String(existingEmp.mobile_no).trim() !== mobile) {
                         conflicts.push(`Mobile '${mobile}' (Exists in another employee)`);
                     }
@@ -518,8 +588,8 @@ const runWorker = async () => {
             
             if (email && employeeData.dbEmailSet.has(email)) {
                 // If this is an update, check if the email belongs to the same employee
-                if (empCode && employeeData.existingEmployeeMap.has(empCode)) {
-                    const existingEmp = employeeData.existingEmployeeMap.get(empCode);
+                if (empCode && employeeData.existingEmployeeMap.has(empCodeKey)) {
+                    const existingEmp = employeeData.existingEmployeeMap.get(empCodeKey);
                     if (String(existingEmp.email).trim().toLowerCase() !== email) {
                         conflicts.push(`Email '${email}' (Exists in another employee)`);
                     }
@@ -563,84 +633,92 @@ const runWorker = async () => {
         }
 
 
-        // Create/find departments, designations, and states first using bulk operations
-        const departmentMap = new Map();
-        const designationMap = new Map();
-        const stateMap = new Map();
-        const uniqueDepartments = [...new Set(rows.map(r => r.department_id).filter(Boolean))];
-        const uniqueDesignations = [...new Set(rows.map(r => r.designation_id).filter(Boolean))];
-        const uniqueStates = [...new Set([
-            ...rows.map(r => r.present_state_id).filter(Boolean),
-            ...rows.map(r => r.permanent_state_id).filter(Boolean)
-        ])];
+        const deptCompanyKeys = new Set();
+        const desigCompanyKeys = new Set();
+        resolvedRows.forEach(item => {
+            if (item.record.department_id) {
+                deptCompanyKeys.add(`${item.rowCompanyId}_${String(item.record.department_id).trim().toLowerCase()}`);
+            }
+            if (item.record.designation_id) {
+                desigCompanyKeys.add(`${item.rowCompanyId}_${String(item.record.designation_id).trim().toLowerCase()}`);
+            }
+        });
 
-        // Bulk create/find departments
+        // Bulk create/find departments scoped to company
         const existingDepartments = await commonQuery.findAllRecords(
             Department,
             {
                 status: 0,
-                name: { [Op.in]: uniqueDepartments.map(dept => String(dept).trim()) }
+                company_id: { [Op.in]: companyAccessList.map(Number) }
             },
-            { attributes: ['id', 'name'], raw: true },
+            { attributes: ['id', 'name', 'company_id'], raw: true },
             transaction
         );
-        
-        // Map existing departments
+        const departmentMap = new Map();
         existingDepartments.forEach(dept => {
-            departmentMap.set(String(dept.name).toLowerCase(), dept.id);
+            departmentMap.set(`${dept.company_id}_${String(dept.name).toLowerCase()}`, dept.id);
         });
-        
-        // Find departments that need to be created
-        const departmentsToCreate = uniqueDepartments.filter(dept => 
-            !departmentMap.has(String(dept).trim().toLowerCase())
-        ).map(deptName => ({
-            name: String(deptName).trim(),
-            company_id,
-            branch_id,
-            user_id,
-            status: 0
-        }));
-        
-        // Bulk create new departments
-        if (departmentsToCreate.length > 0) {
-            const createdDepts = await commonQuery.bulkCreate(Department, departmentsToCreate, {}, transaction);
+
+        const deptsToCreate = [];
+        deptCompanyKeys.forEach(key => {
+            if (!departmentMap.has(key)) {
+                const parts = key.split('_');
+                const compId = Number(parts[0]);
+                const deptName = parts.slice(1).join('_');
+                const branchObj = branches.find(b => b.company_id === compId) || { id: branch_id };
+                deptsToCreate.push({
+                    name: deptName,
+                    company_id: compId,
+                    branch_id: branchObj.id,
+                    user_id,
+                    status: 0
+                });
+            }
+        });
+
+        if (deptsToCreate.length > 0) {
+            const createdDepts = await commonQuery.bulkCreate(Department, deptsToCreate, {}, transaction);
             createdDepts.forEach(dept => {
-                departmentMap.set(String(dept.name).toLowerCase(), dept.id);
+                departmentMap.set(`${dept.company_id}_${String(dept.name).toLowerCase()}`, dept.id);
             });
         }
 
-        // Bulk create/find designations
+        // Bulk create/find designations scoped to company
         const existingDesignations = await commonQuery.findAllRecords(
             DesignationMaster,
             {
                 status: 0,
-                designation_name: { [Op.in]: uniqueDesignations.map(desig => String(desig).trim()) }
+                company_id: { [Op.in]: companyAccessList.map(Number) }
             },
-            { attributes: ['id', 'designation_name'], raw: true },
+            { attributes: ['id', 'designation_name', 'company_id'], raw: true },
             transaction
         );
-        
-        // Map existing designations
+        const designationMap = new Map();
         existingDesignations.forEach(desig => {
-            designationMap.set(String(desig.designation_name).toLowerCase(), desig.id);
+            designationMap.set(`${desig.company_id}_${String(desig.designation_name).toLowerCase()}`, desig.id);
         });
-        
-        // Find designations that need to be created
-        const designationsToCreate = uniqueDesignations.filter(desig => 
-            !designationMap.has(String(desig).trim().toLowerCase())
-        ).map(desigName => ({
-            designation_name: String(desigName).trim(),
-            company_id,
-            branch_id,
-            user_id,
-            status: 0
-        }));
-        
-        // Bulk create new designations
-        if (designationsToCreate.length > 0) {
-            const createdDesigs = await commonQuery.bulkCreate(DesignationMaster, designationsToCreate, {}, transaction);
+
+        const desigsToCreate = [];
+        desigCompanyKeys.forEach(key => {
+            if (!designationMap.has(key)) {
+                const parts = key.split('_');
+                const compId = Number(parts[0]);
+                const desigName = parts.slice(1).join('_');
+                const branchObj = branches.find(b => b.company_id === compId) || { id: branch_id };
+                desigsToCreate.push({
+                    designation_name: desigName,
+                    company_id: compId,
+                    branch_id: branchObj.id,
+                    user_id,
+                    status: 0
+                });
+            }
+        });
+
+        if (desigsToCreate.length > 0) {
+            const createdDesigs = await commonQuery.bulkCreate(DesignationMaster, desigsToCreate, {}, transaction);
             createdDesigs.forEach(desig => {
-                designationMap.set(String(desig.designation_name).toLowerCase(), desig.id);
+                designationMap.set(`${desig.company_id}_${String(desig.designation_name).toLowerCase()}`, desig.id);
             });
         }
 
@@ -667,12 +745,11 @@ const runWorker = async () => {
         const updateEmployees = []; // For existing employees to update
 
         // First validate all rows and collect valid employees
-        for (let i = 0; i < rows.length; i++) {
+        for (let i = 0; i < resolvedRows.length; i++) {
             if (i % 500 === 0 && i > 0) await new Promise(resolve => setImmediate(resolve));
             if (isCancelled) fail("IMPORT_CANCELLED");
 
-            const record = rows[i];
-            const originalRecord = originalRows[i];
+            const { record, originalRecord, rowBranchId, rowCompanyId } = resolvedRows[i];
             const rowIndex = i + 2;
 
             try {
@@ -699,20 +776,16 @@ const runWorker = async () => {
                 }
 
                 if (!firstName) fail("First Name is required");
-                // if (!mobile) fail("Mobile Number is required");
                 const exitDate = parseExcelDate(record.exit_date, rowIndex, "Exit Date");
                 const joiningDate = parseExcelDate(record.joining_date, rowIndex, "Joining Date");
                 const dob = parseExcelDate(record.dob, rowIndex, "DOB");
                 const gender = getGenderValue(record.gender);
 
-                // Optional: You could fail here if you MUST have them, 
-                // but let's see if providing what we HAVE helps.
-                // if (!joiningDate) fail("Joining Date is required");
-                // if (!dob) fail("Date of Birth is required");
-                // if (!gender) fail("Gender is required");
-
                 // Prepare employee data
                 const typeDetails = getEmployeeTypeDetails(record.employee_type, trimmedEmpCode);
+
+                const deptKey = record.department_id ? `${rowCompanyId}_${String(record.department_id).trim().toLowerCase()}` : null;
+                const desigKey = record.designation_id ? `${rowCompanyId}_${String(record.designation_id).trim().toLowerCase()}` : null;
 
                 const prepareData = {
                     employee_code: trimmedEmpCode,
@@ -720,8 +793,8 @@ const runWorker = async () => {
                     mobile_no: mobile,
                     employee_type: typeDetails.employee_type,
                     worker_type: typeDetails.worker_type || getWorkerTypeValue(record.worker_type),
-                    department_id: record.department_id ? departmentMap.get(String(record.department_id).trim().toLowerCase()) : null,
-                    designation_id: record.designation_id ? designationMap.get(String(record.designation_id).trim().toLowerCase()) : null,
+                    department_id: deptKey ? departmentMap.get(deptKey) : null,
+                    designation_id: desigKey ? designationMap.get(desigKey) : null,
                     attendance_supervisor: record.attendance_supervisor,
                     is_attendance_supervisor: record.is_attendance_supervisor,
                     reporting_manager: record.reporting_manager,
@@ -747,18 +820,18 @@ const runWorker = async () => {
                     permanent_city: record.permanent_city,
                     permanent_pincode: record.permanent_pincode,
                     permanent_state_id: record.permanent_state_id ? (() => {
-                    const stateId = stateMap.get(String(record.permanent_state_id).trim().toLowerCase());
-                    return stateId || null;
-                })() : null,
+                        const stateId = stateMap.get(String(record.permanent_state_id).trim().toLowerCase());
+                        return stateId || null;
+                    })() : null,
                     permanent_country_id: record.permanent_country_id,
                     present_address1: record.present_address1,
                     present_address2: record.present_address2,
                     present_city: record.present_city,
                     present_pincode: record.present_pincode,
                     present_state_id: record.present_state_id ? (() => {
-                    const stateId = stateMap.get(String(record.present_state_id).trim().toLowerCase());
-                    return stateId || null;
-                })() : null,
+                        const stateId = stateMap.get(String(record.present_state_id).trim().toLowerCase());
+                        return stateId || null;
+                    })() : null,
                     present_country_id: record.present_country_id,
 
                     uan_number: uan,
@@ -793,16 +866,12 @@ const runWorker = async () => {
                     education_details: record.education_details ? (Array.isArray(record.education_details) ? record.education_details : [{ education: record.education_details }]) : [],
                     custom_fields: (() => {
                         const cfArray = [];
-                        // System expects: [{ field_name, field_label, field_type, value }, ...]
                         activeCustomFields.forEach(cf => {
                             let value = undefined;
-
-                            // 1. Check for prefixed keys in transformed 'record'
                             const prefixedKey = `CUSTOM_FIELD_${cf.field_name}`;
                             if (record[prefixedKey] !== undefined) {
                                 value = record[prefixedKey];
                             } else {
-                                // 2. Fallback: Search originalRecord case-insensitively
                                 const matchedKey = Object.keys(originalRecord).find(k => 
                                     normalizeHeader(k) === normalizeHeader(cf.field_name) || 
                                     normalizeHeader(k) === normalizeHeader(cf.field_label)
@@ -825,29 +894,8 @@ const runWorker = async () => {
                         const gradeKey = Object.keys(originalRecord).find(k => normalizeHeader(k) === "grade" || normalizeHeader(k) === "employeegrade");
                         return gradeKey ? originalRecord[gradeKey] : null;
                     })(),
-                    branch_id: (() => {
-                        const workLocationKey = Object.keys(originalRecord).find(k => 
-                            normalizeHeader(k) === "worklocation" || 
-                            normalizeHeader(k) === "workrelatedlocation" ||
-                            normalizeHeader(k) === "location" ||
-                            normalizeHeader(k) === "branch" ||
-                            normalizeHeader(k) === "branchname"
-                        );
-                        
-                        if (workLocationKey && originalRecord[workLocationKey]) {
-                            const workLocation = String(originalRecord[workLocationKey]).trim();
-                            const normalizedWorkLocation = normalizeHeader(workLocation);
-                            
-                            if (branchNameToIdMap[normalizedWorkLocation]) {
-                                return branchNameToIdMap[normalizedWorkLocation];
-                            } else {
-                                return branch_id;
-                            }
-                        }
-                        
-                        return branch_id;
-                    })(),
-                    company_id,
+                    branch_id: rowBranchId,
+                    company_id: rowCompanyId,
                     user_id
                 };
 
@@ -856,17 +904,16 @@ const runWorker = async () => {
                     prepareData.status = 4; // Exited
                 }
 
-                // Check if this is an update or create (by employee_code only)
-                if (empCode && employeeData.existingEmployeeMap.has(empCode)) {
+                // Check if this is an update or create (by employee_code only scoped to company)
+                const empCodeKey = `${rowCompanyId}_${empCode}`;
+                if (empCode && employeeData.existingEmployeeMap.has(empCodeKey)) {
                     // This is an existing employee - prepare for update
-                    const existingEmp = employeeData.existingEmployeeMap.get(empCode);
+                    const existingEmp = employeeData.existingEmployeeMap.get(empCodeKey);
                     
-                    // Only include fields that are provided in the Excel (not null/undefined)
                     const updateData = {
                         id: existingEmp.id
                     };
                     
-                    // Add only non-null fields from prepareData
                     Object.keys(prepareData).forEach(key => {
                         if (key !== 'id' && prepareData[key] !== null && prepareData[key] !== undefined && prepareData[key] !== '') {
                             updateData[key] = prepareData[key];
@@ -876,7 +923,6 @@ const runWorker = async () => {
                     updateEmployees.push(updateData);
                     updatedCount++;
                 } else {
-                    // This is a new employee
                     validEmployees.push(prepareData);
                     createdCount++;
                 }

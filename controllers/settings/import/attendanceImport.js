@@ -8,7 +8,8 @@ const {
   LeaveTemplate,
   LeaveTemplateCategory,
   EmployeeLeaveBalance,
-  LeaveRequest
+  LeaveRequest,
+  CompanyMaster
 } = require("../../../models");
 const { Op } = require("sequelize");
 const xlsx = require("xlsx");
@@ -241,12 +242,51 @@ const runWorker = async () => {
 
     transaction = await sequelize.transaction();
 
+    const normalizeCompanyAccess = (access) => {
+        if (Array.isArray(access)) return access.map(String);
+        if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
+        return [];
+    };
+    let companyAccessList = [];
+    if (workerData.is_super_admin) {
+        let orgId = workerData.organization_id;
+        if (!orgId && workerData.company_id) {
+            const currentCompany = await CompanyMaster.findOne({
+                where: { id: workerData.company_id },
+                attributes: ['organization_id'],
+                transaction,
+                raw: true
+            });
+            if (currentCompany) {
+                orgId = currentCompany.organization_id;
+            }
+        }
+
+        if (orgId) {
+            const orgCompanies = await CompanyMaster.findAll({
+                where: { organization_id: orgId, status: { [Op.ne]: 2 } },
+                attributes: ['id'],
+                transaction,
+                raw: true
+            });
+            companyAccessList = orgCompanies.map(c => String(c.id));
+        }
+    } else {
+        companyAccessList = normalizeCompanyAccess(workerData.company_access || "");
+    }
+    if (workerData.company_id && !companyAccessList.includes(String(workerData.company_id))) {
+        companyAccessList.push(String(workerData.company_id));
+    }
+
     // Fetch branches for mapping
     const branches = await requestContext.run(mockStore, async () => {
-        return await commonQuery.findAllRecords(BranchMaster, {
-            company_id: mockStore.companyId,
-            status: { [Op.ne]: 2 }
-        }, { raw: true }, transaction);
+        const branchWhere = { status: { [Op.ne]: 2 } };
+        if (companyAccessList.length > 0) {
+            branchWhere.company_id = { [Op.in]: companyAccessList.map(Number) };
+        } else {
+            branchWhere.company_id = mockStore.companyId;
+        }
+        return await commonQuery.findAllRecords(BranchMaster, branchWhere, { raw: true }, transaction, { company_id: true });
     });
 
     const branchNameMap = new Map();
@@ -256,13 +296,16 @@ const runWorker = async () => {
 
     // Fetch employees for lookup
     const employeesList = await requestContext.run(mockStore, async () => {
-      return await commonQuery.findAllRecords(Employee, {
-        company_id: mockStore.companyId,
-        status: { [Op.ne]: 2 }
-      }, {
-        attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template'],
+      const empWhere = { status: { [Op.ne]: 2 } };
+      if (companyAccessList.length > 0) {
+          empWhere.company_id = { [Op.in]: companyAccessList.map(Number) };
+      } else {
+          empWhere.company_id = mockStore.companyId;
+      }
+      return await commonQuery.findAllRecords(Employee, empWhere, {
+        attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template', 'company_id'],
         raw: true
-      }, transaction);
+      }, transaction, { company_id: true });
     });
 
     const employeeCodeMap = new Map();
@@ -271,7 +314,11 @@ const runWorker = async () => {
       if (emp.employee_code) {
         const normCode = normalize(emp.employee_code);
         employeeCodeMap.set(normCode, emp.id);
-        employeeDataMap.set(emp.id, { branch_id: emp.branch_id, leave_template: emp.leave_template });
+        employeeDataMap.set(emp.id, { 
+          branch_id: emp.branch_id, 
+          leave_template: emp.leave_template,
+          company_id: emp.company_id 
+        });
       }
     });
     
@@ -770,7 +817,7 @@ const runWorker = async () => {
                             reason: "Auto-generated from Attendance Import",
                             approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
                             approved_by: mockStore.userId,
-                            company_id: mockStore.companyId,
+                            company_id: employeeCachedData?.company_id || mockStore.companyId,
                             branch_id: mockStore.branchId || (branchIdx !== -1 ? branchNameMap.get(normalize(row[branchIdx])) : null),
                             user_id: mockStore.userId,
                             status: 0
@@ -793,7 +840,7 @@ const runWorker = async () => {
                         leave_category_id: leaveCategoryId,
                         leave_session: leaveSession,
                         user_id: mockStore.userId,
-                        company_id: mockStore.companyId,
+                        company_id: employeeCachedData?.company_id || mockStore.companyId,
                         branch_id: employeeCachedData?.branch_id || mockStore.branchId,
                     };
 
