@@ -98,12 +98,12 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
             };
 
             const colorMap = {
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED]: "#10B981",
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED]: "#EF4444",
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING]: "#F59E0B",
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED]: "#3B82F6",
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED]: "#6B7280",
-                [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "#9CA3AF",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED]: "#52c41a",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED]: "#ff4d4f",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING]: "#faad14",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED]: "#1677ff",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED]: "#fa8c16",
+                [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "#8c8c8c",
             };
 
             group.regularizations.push({

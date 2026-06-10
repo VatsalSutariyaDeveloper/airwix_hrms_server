@@ -184,13 +184,23 @@ exports.dropdownList = async (req, res) => {
             ["designation_name", true, true],
         ];
 
+        const filters = { ...req.body, status: 0 };
+        const requireTenantFields = { company_id: true, branch_id: true };
+
+        if (req.body.company_id) {
+            filters.company_id = req.body.company_id;
+            requireTenantFields.company_id = false;
+            requireTenantFields.branch_id = false;
+        }
+
         const result = await commonQuery.fetchPaginatedData(
             DesignationMaster,
-            { ...req.body, status: 0 },
+            filters,
             fieldConfig,
             {
                 attributes: ['id', 'designation_name']
-            }
+            },
+            requireTenantFields
         );
 
         return res.ok(result);
