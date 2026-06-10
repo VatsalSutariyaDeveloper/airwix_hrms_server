@@ -97,7 +97,25 @@ exports.getById = async (req, res) => {
 
 exports.dropdownList = async (req, res) => {
   try {
-    const result = await commonQuery.findAllRecords(Department, { status: 0 }, { attributes: ['id', 'name'], order: [['id', 'DESC']] });
+    const filters = { status: 0 };
+    const requireTenantFields = { company_id: true, branch_id: true };
+
+    if (req.body.company_id) {
+      filters.company_id = req.body.company_id;
+      requireTenantFields.company_id = false;
+      requireTenantFields.branch_id = false;
+    }
+
+    const result = await commonQuery.findAllRecords(
+      Department,
+      filters,
+      {
+        attributes: ['id', 'name'],
+        order: [['id', 'DESC']]
+      },
+      null,
+      requireTenantFields
+    );
     return res.ok(result);
   } catch (err) {
     return handleError(err, res, req);

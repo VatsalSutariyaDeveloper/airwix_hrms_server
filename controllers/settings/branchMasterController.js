@@ -155,11 +155,18 @@ exports.getAll = async (req, res) => {
 // Get list of all active Data for dropdowns.
 exports.dropdownList = async (req, res) => {
   try {
+    const filters = { status: 0 };
+    const requireTenantFields = { company_id: true, branch_id: true };
+
+    if (req.body.company_id) {
+      filters.company_id = req.body.company_id;
+      requireTenantFields.company_id = false;
+      requireTenantFields.branch_id = false;
+    }
+
     const record = await commonQuery.findAllRecords(
       BranchMaster,
-      {
-        status: 0
-      },
+      filters,
       {
         attributes: ["id", "branch_name"],
         order: [
@@ -167,7 +174,7 @@ exports.dropdownList = async (req, res) => {
         ]
       },
       null,
-      { company_id: true }
+      requireTenantFields
     );
     return res.success("FETCH", record);
   } catch (err) {

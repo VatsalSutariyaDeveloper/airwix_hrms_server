@@ -3743,8 +3743,8 @@ exports.transfer = async (req, res) => {
         }
 
         // 2. Verify Companies belong to the same Organization
-        const companyA = await commonQuery.findOneRecord(CompanyMaster, sourceEmployee.company_id, {}, transaction);
-        const companyC = await commonQuery.findOneRecord(CompanyMaster, target_company_id, {}, transaction);
+        const companyA = await commonQuery.findOneRecord(CompanyMaster, sourceEmployee.company_id, {}, transaction, false, {});
+        const companyC = await commonQuery.findOneRecord(CompanyMaster, target_company_id, {}, transaction, false, {});
         if (!companyA || !companyC) {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Invalid source or target company" });
@@ -3760,7 +3760,7 @@ exports.transfer = async (req, res) => {
             employee_code: codeToCheck,
             company_id: target_company_id,
             status: { [Op.ne]: 2 }
-        }, {}, transaction);
+        }, {}, transaction, false, { company_id: true });
 
         if (codeExists) {
             await transaction.rollback();
