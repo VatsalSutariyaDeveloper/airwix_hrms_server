@@ -29,44 +29,62 @@
         }
 
         /* Header */
-        .company-header {
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #cbd5e1;
+            margin-bottom: 20px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .company-logo {
+            max-height: 60px;
+            max-width: 160px;
+            object-fit: contain;
+        }
+
+        .company-info {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            margin-bottom: 20px;
         }
 
         .company-name {
-            font-size: 18px;
-            font-weight: 700;
+            font-size: 24px;
+            font-weight: 800;
             margin: 0;
-            color: #111827;
+            color: #1f2937;
         }
 
         .company-location {
-            font-size: 9px;
-            color: #6b7280;
+            font-size: 12px;
+            color: #4b5563;
             margin-top: 2px;
-            text-transform: uppercase;
-            font-weight: 700;
         }
 
-        /* Title Bar */
-        .title-bar {
-            border-top: 1px solid #e5e7eb;
-            border-bottom: 1px solid #e5e7eb;
-            padding: 6px 0;
-            margin-bottom: 20px;
-            text-align: center;
+        .header-right {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
         }
 
-        .title-text {
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            color: #374151;
-            margin: 0;
+        .payslip-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            margin-bottom: 4px;
+        }
+
+        .payslip-month {
+            font-size: 16px;
+            font-weight: 800;
+            color: #111827;
         }
 
         /* Summary Box */
@@ -291,14 +309,21 @@
         %>
         
         <div class="page-break">
-            <div class="company-header">
-                <h1 class="company-name"><%= companyData.company_name || 'Airwix HRMS' %></h1>
-                <div class="company-location"><%= companyData.address || 'Gujarat, India' %></div>
+            <div class="header-container">
+            <div class="header-left">
+                <% if (companyData.company_logo_url) { %>
+                    <img class="company-logo" src="<%= companyData.company_logo_url %>" alt="Logo" />
+                <% } %>
+                <div class="company-info">
+                    <h1 class="company-name"><%= companyData.company_name || 'Airwix HRMS' %></h1>
+                    <div class="company-location"><%= companyData.address || 'Gujarat, India' %></div>
+                </div>
             </div>
-
-            <div class="title-bar">
-                <div class="title-text">Payslip for the month of <%= payslipData.period.label %></div>
+            <div class="header-right">
+                <div class="payslip-title">Payslip For the Month</div>
+                <div class="payslip-month"><%= payslipData.period.label %></div>
             </div>
+        </div>
 
             <div class="summary-container">
                 <div class="summary-left">
