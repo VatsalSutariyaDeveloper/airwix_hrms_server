@@ -60,12 +60,16 @@ exports.create = async (req, res) => {
             const netPayable = parseFloat(payslip.net_salary || 0);
             const paymentAmount = parseFloat(req.body.amount || 0);
 
-            // Fetch existing payments to check remaining balance
+            // Fetch existing SALARY payments only to check remaining balance.
+            // Advance payments are excluded because they are already deducted
+            // from net_salary during payslip finalization — counting them here
+            // would cause a double-deduction error.
             const existingPaidResult = await PaymentHistory.findAll({
                 where: {
                     employee_id: req.body.employee_id,
                     month: req.body.month,
                     year: req.body.year,
+                    payment_type: PAYMENT_TYPE.SALARY,
                     status: { [Op.ne]: 2 }
                 },
                 attributes: [[sequelizeInstance.fn('SUM', sequelizeInstance.col('amount')), 'total_paid']],

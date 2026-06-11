@@ -1803,7 +1803,36 @@ exports.deletePayslip = async (req, res) => {
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
 
-        // Reset employee advances that were adjusted in this payslip
+        // ── 1. Delete salary PaymentHistory entries linked to this payslip ──────────
+        // These are created when HR records a salary payment against the payslip.
+        await PaymentHistory.destroy({
+            where: {
+                ref_id: payslip.id,
+                payment_type: "Salary"
+            },
+            transaction
+        });
+
+        // ── 2. Delete Reimbursement PaymentHistory entries included in this payslip ─
+        // Reimbursements with payment_type = "Reimbursement" that fall in this month
+        // were included in the payslip's reimbursement_details. We delete their
+        // payment history records so they can be re-processed if the payslip is
+        // re-generated.
+        const reimbursementsInPayslip = payslip.reimbursement_details || [];
+        if (reimbursementsInPayslip.length > 0) {
+            const reimbursementIds = reimbursementsInPayslip.map(r => r.id).filter(Boolean);
+            if (reimbursementIds.length > 0) {
+                await PaymentHistory.destroy({
+                    where: {
+                        ref_id: { [Op.in]: reimbursementIds },
+                        payment_type: "Reimbursement"
+                    },
+                    transaction
+                });
+            }
+        }
+
+        // ── 3. Reset advance adjustments that were included in this payslip ─────────
         const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
         if (advancesAdjusted.length > 0) {
             const advanceIds = advancesAdjusted.map(a => a.advance_id);
@@ -1816,7 +1845,23 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // Reset leave request encashments that were settled in this payslip
+        // ── 4. Reset incentives that were baked into this payslip ───────────────────
+        // EmployeeIncentives matched by employee + month + year are marked
+        // adjusted_in_payroll = true when finalized; reverse that here.
+        await EmployeeIncentive.update(
+            { adjusted_in_payroll: false },
+            {
+                where: {
+                    employee_id: payslip.employee_id,
+                    month: payslip.month,
+                    year: payslip.year,
+                    adjusted_in_payroll: true
+                },
+                transaction
+            }
+        );
+
+        // ── 5. Reset leave request encashments that were settled in this payslip ────
         const encashmentsSettled = payslip.encashment_details?.history || [];
         if (encashmentsSettled.length > 0) {
             const encashmentIds = encashmentsSettled.map(e => e.id);
@@ -1828,7 +1873,7 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // Unlock Attendance
+        // ── 6. Unlock Attendance ─────────────────────────────────────────────────────
         await AttendanceDay.update({ is_locked: false }, {
             where: {
                 employee_id: payslip.employee_id,
@@ -3104,7 +3149,8 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         },
         companyData: {
             company_name: company?.company_name || 'Airwix HRMS',
-            address: formattedAddress
+            address: formattedAddress,
+            company_logo_url: company?.logo_image ? `${process.env.FILE_SERVER_URL}${constants.COMPANY_LOGO_IMG_FOLDER}${company.logo_image}` : null
         },
         totalEarnings,
         totalDeductions

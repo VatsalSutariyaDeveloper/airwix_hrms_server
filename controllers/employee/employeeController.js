@@ -537,13 +537,20 @@ exports.update = async (req, res) => {
         let newProfileImage = existingEmployee.profile_image;
         let profileImageChanged = false;
 
-        if (req.files?.profile_image) {
+        let profileImageFiles = [];
+        if (req.files) {
+            if (Array.isArray(req.files)) {
+                profileImageFiles = req.files.filter(f => f.fieldname === 'profile_image');
+            } else if (req.files.profile_image) {
+                profileImageFiles = Array.isArray(req.files.profile_image) ? req.files.profile_image : [req.files.profile_image];
+            }
+        }
+
+        if (profileImageFiles.length > 0) {
             const profileReq = {
                 ...req,
                 files: {
-                    profile_image: Array.isArray(req.files.profile_image)
-                        ? req.files.profile_image
-                        : [req.files.profile_image],
+                    profile_image: profileImageFiles,
                 },
             };
             const result = await uploadFile(
@@ -556,6 +563,12 @@ exports.update = async (req, res) => {
             if (result.profile_image) {
                 newProfileImage = result.profile_image;
                 profileImageChanged = true;
+            }
+            
+            if (Array.isArray(req.files)) {
+                req.files = req.files.filter(f => f.fieldname !== 'profile_image');
+            } else {
+                delete req.files.profile_image;
             }
         } else if (POST.profile_image === "" || POST.profile_image === null) {
             if (existingEmployee.profile_image) {
