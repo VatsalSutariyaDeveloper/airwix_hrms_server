@@ -1580,6 +1580,8 @@ exports.getAttendanceDayDetails = async (req, res) => {
     let attendanceDayJson = null;
     let punchesWithImages = [];
     let employeeDetails = null;
+    let isHolidayAllowed = false;
+    let isWeeklyOffAllowed = false;
 
     if (attendanceDay) {
       attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
@@ -1624,6 +1626,10 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
       attendanceDayJson.is_scheduled_weekly_off = !!isWeeklyOff;
+      attendanceDayJson.isHolidayAllowed = !!isHoliday;
+      attendanceDayJson.isWeeklyOff = !!isWeeklyOff;
+      isHolidayAllowed = !!isHoliday;
+      isWeeklyOffAllowed = !!isWeeklyOff;
 
       if (attendanceDayJson.attendancePunches) {
         punchesWithImages = attendanceDayJson.attendancePunches.map(punch => {
@@ -1673,7 +1679,10 @@ exports.getAttendanceDayDetails = async (req, res) => {
       const template = employeeDetails.employeeAttendanceTemplate || employeeDetails.attendanceTemplate;
       if (template) {
         attendanceTemplateObj = {
-          allow_multiple_punches: template.allow_multiple_punches !== undefined ? template.allow_multiple_punches : true
+          allow_multiple_punches: template.allow_multiple_punches !== undefined ? template.allow_multiple_punches : true,
+          isAllowedOutDuty: template.enble_out_duty !== undefined ? template.enble_out_duty : true,
+          isFineAllowed: template.fines_allowed !== undefined ? template.fines_allowed : true,
+          isOvertimeAllowed: template.overtime_allowed !== undefined ? template.overtime_allowed : true,
         };
       }
     }
@@ -1681,7 +1690,9 @@ exports.getAttendanceDayDetails = async (req, res) => {
     return res.ok({
       attendanceDay: attendanceDayJson,
       employee: attendanceDayJson ? undefined : employeeDetails,
-      employeeAttendanceTemplate: attendanceTemplateObj
+      employeeAttendanceTemplate: attendanceTemplateObj,
+      isHolidayAllowed,
+      isWeeklyOffAllowed
       // punches: punchesWithImages
     });
   } catch (err) {

@@ -361,6 +361,24 @@ const runWorker = async () => {
         return d.isValid() ? d.format('YYYY-MM-DD') : null;
     };
 
+    // Fetch all existing payslips for these employees to identify duplicates and set the IDs
+    const processedEmployeeIds = [...employeeCodeMap.values()];
+    const existingPayslips = await Payslip.findAll({
+        where: {
+            employee_id: { [Op.in]: processedEmployeeIds },
+            status: [0, 1, 2, 3]
+        },
+        attributes: ['id', 'employee_id', 'month', 'year', 'status'],
+        transaction,
+        raw: true
+    });
+
+    const existingPayslipsMap = new Map();
+    existingPayslips.forEach(ps => {
+        const key = `${ps.employee_id}_${ps.month}_${ps.year}_${ps.status}`;
+        existingPayslipsMap.set(key, ps.id);
+    });
+
     for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
         const row = rawRows[i];
         if (!row || row.length === 0) continue;
@@ -463,6 +481,12 @@ const runWorker = async () => {
             break_down: breakdown
         };
 
+        const key = `${employeeId}_${month}_${year}_3`;
+        const existingId = existingPayslipsMap.get(key);
+        if (existingId) {
+            payload.id = existingId;
+        }
+
         payslipPayloads.push(payload);
     }
     if (payslipPayloads.length > 0) {
@@ -492,10 +516,18 @@ const runWorker = async () => {
     });
 
   } catch (error) {
+    console.error("Payroll Import Error:", error);
+    if (error.errors) {
+      console.error("Sequelize Validation Errors:", JSON.stringify(error.errors, null, 2));
+    }
     if (transaction && !transaction.finished) {
       try { await transaction.rollback(); } catch (e) { }
     }
-    parentPort.postMessage({ status: "ERROR", error: error.message });
+    let errorMessage = error.message;
+    if (error.errors && Array.isArray(error.errors)) {
+      errorMessage = error.errors.map(err => `${err.path}: ${err.message}`).join(" | ");
+    }
+    parentPort.postMessage({ status: "ERROR", error: errorMessage });
   } finally {
     if (errorFileStream) errorFileStream.end();
   }
