@@ -56,5 +56,6 @@ router.put("/attendance-setting/:employeeId", employeeAttendanceController.updat
 
 router.get("/employee-holidays-by-id/:employeeId", employeeController.getEmployeeHolidays);
 
+router.post("/team-employees", employeeController.getTeamEmployees);
 
 module.exports = router;

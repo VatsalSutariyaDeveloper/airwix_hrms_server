@@ -564,7 +564,7 @@ exports.update = async (req, res) => {
                 newProfileImage = result.profile_image;
                 profileImageChanged = true;
             }
-            
+
             if (Array.isArray(req.files)) {
                 req.files = req.files.filter(f => f.fieldname !== 'profile_image');
             } else {
@@ -3838,6 +3838,70 @@ exports.transfer = async (req, res) => {
 
     } catch (err) {
         if (transaction && !transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Retrieves Paginated List of Team Employees
+ */
+exports.getTeamEmployees = async (req, res) => {
+    try {
+        const POST = req.body || {};
+        const userId = req.user.id;
+
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["employee_code", true, true],
+            ["mobile_no", true, false],
+            ["email", true, false],
+        ];
+
+        POST.filter = POST.filter || {};
+        if (POST.filter.status === undefined) {
+            POST.filter.status = 0;
+        }
+        POST.filter[Op.or] = [
+            { reporting_manager: userId },
+            { attendance_supervisor: userId }
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            POST,
+            fieldConfig,
+            {
+                attributes: [
+                    "id",
+                    "first_name",
+                    "employee_code",
+                    "mobile_no",
+                    "email",
+                    "profile_image",
+                ],
+                order: [["first_name", "ASC"]]
+            },
+            true,
+            "created_at"
+        );
+
+        if (data.items && data.items.length > 0) {
+            data.items = data.items.map(item => {
+                const plain = item.get ? item.get({ plain: true }) : item;
+                if (plain.profile_image) {
+                    plain.profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plain.profile_image}`;
+                } else {
+                    plain.profile_image_url = null;
+                }
+                return plain;
+            });
+        }
+
+        console.log("=== TEAM EMPLOYEES RESPONSE DATA ===");
+        console.log(JSON.stringify(data, null, 2));
+
+        return res.ok(data);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };
