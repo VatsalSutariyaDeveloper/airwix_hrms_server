@@ -99,14 +99,13 @@ function resolveTenantConfig(requireTenantFields, defaultApplyHierarchy) {
   }
   return {
     company_id: !!requireTenantFields,
-    branch_id: !!requireTenantFields,
     user_id: !!requireTenantFields,
     applyHierarchy: requireTenantFields === true ? defaultApplyHierarchy : false
   };
 }
 
 async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, model = null) {
-  console.log("DEBUG buildWhere modelName:", model?.name, "tenantConfig:", tenantConfig, "ctx:", JSON.stringify(getContext()));
+  // console.log("DEBUG buildWhere modelName:", model?.name, "tenantConfig:", tenantConfig, "ctx:", JSON.stringify(getContext()));
   let where = {};
 
   // --- 1. Normalize Input ---
@@ -135,6 +134,7 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
 
   const isObj = typeof tenantConfig === "object" && tenantConfig !== null;
   const isEmptyObj = isObj && Object.keys(tenantConfig).length === 0;
+  let settings;
   const ctx = getContext();
   try {
     if (ctx.company_id) {
@@ -145,18 +145,26 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
   }
 
   // Temporary override if needed
-  settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
-  const { enable_user_wise_data, enable_branch_wise_data } = settings;
+  settings = { enable_user_wise_data: false };
+  const { enable_user_wise_data } = settings;
 
+
+  const isDropdown = ctx.isDropdown === true;
+  const isIdLookup = where.id !== undefined;
+  const targetCompanies = ((isDropdown || isIdLookup) ? ctx.company_access_list : ctx.selected_company_ids) || (ctx.company_id ? [ctx.company_id] : []);
+  const primaryCompany = ctx.company_id;
 
   const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
-  const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
   const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
 
   if (tenantConfig === true) {
-    if (ctx.company_id && hasCompanyField) {
+    if (primaryCompany && hasCompanyField) {
       if (where.company_id === undefined) {
-        where.company_id = ctx.company_id;
+        if (targetCompanies && targetCompanies.length > 0) {
+          where.company_id = { [Op.in]: targetCompanies };
+        } else {
+          where.company_id = primaryCompany;
+        }
       } else if (!ctx.is_super_admin) {
         let requested = [];
         if (Array.isArray(where.company_id)) {
@@ -166,54 +174,29 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
         } else {
           requested = [where.company_id];
         }
-        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
-        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
+        const filterList = (targetCompanies && targetCompanies.length > 0) ? targetCompanies : [primaryCompany];
+        const intersected = requested.filter(id => filterList.includes(Number(id)));
+        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : (targetCompanies && targetCompanies.length > 0 ? { [Op.in]: targetCompanies } : primaryCompany);
       }
     }
-    if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
-      if (hasBranchField) {
-        if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
-          if (where.branch_id === undefined) {
-            where.branch_id = ctx.branch_id;
-          } else {
-            where.branch_id = ctx.branch_id;
-          }
-        } else if (!ctx.is_super_admin && ctx.branch_access) {
-          let allowedBranches = [];
-          if (typeof ctx.branch_access === 'string') {
-            allowedBranches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-          } else if (Array.isArray(ctx.branch_access)) {
-            allowedBranches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
-          }
-          if (allowedBranches.length > 0) {
-            if (where.branch_id === undefined) {
-              where.branch_id = { [Op.in]: allowedBranches };
-            } else {
-              let requested = [];
-              if (Array.isArray(where.branch_id)) {
-                requested = where.branch_id;
-              } else if (where.branch_id && typeof where.branch_id === 'object' && where.branch_id[Op.in]) {
-                requested = where.branch_id[Op.in];
-              } else {
-                requested = [where.branch_id];
-              }
-              const intersected = requested.filter(id => allowedBranches.includes(Number(id)));
-              where.branch_id = intersected.length > 0 ? { [Op.in]: intersected } : { [Op.in]: [-1] };
-            }
-          }
-        }
-      }
-    }
+    // Branch filtering is disabled as branches are now companies.
     if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id && hasUserField) where.user_id = ctx.user_id;
   } else if (tenantConfig === false) {
-    if (ctx.company_id && hasCompanyField) where.company_id = { [Op.or]: [-1, ctx.company_id] };
-    if ((enable_branch_wise_data === "true" || enable_branch_wise_data === true) && ctx.branch_id && hasBranchField) where.branch_id = { [Op.or]: [-1, ctx.branch_id] };
+    if (primaryCompany && hasCompanyField) {
+      const accessList = (ctx.company_access_list && ctx.company_access_list.length > 0) ? ctx.company_access_list : [primaryCompany];
+      where.company_id = { [Op.in]: [-1, ...accessList] };
+    }
+    // Branch filtering is disabled as branches are now companies.
     if ((enable_user_wise_data === "true" || enable_user_wise_data === true) && ctx.user_id && hasUserField) where.user_id = { [Op.or]: [-1, ctx.user_id] };
   } else if (isObj && !isEmptyObj) {
     // --- EXPLICIT TOGGLES ---
-    if (tenantConfig.company_id && ctx.company_id && hasCompanyField) {
+    if (tenantConfig.company_id && primaryCompany && hasCompanyField) {
       if (where.company_id === undefined) {
-        where.company_id = ctx.company_id;
+        if (targetCompanies && targetCompanies.length > 0) {
+          where.company_id = { [Op.in]: targetCompanies };
+        } else {
+          where.company_id = primaryCompany;
+        }
       } else if (!ctx.is_super_admin) {
         let requested = [];
         if (Array.isArray(where.company_id)) {
@@ -223,42 +206,12 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
         } else {
           requested = [where.company_id];
         }
-        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
-        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
+        const filterList = (targetCompanies && targetCompanies.length > 0) ? targetCompanies : [primaryCompany];
+        const intersected = requested.filter(id => filterList.includes(Number(id)));
+        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : (targetCompanies && targetCompanies.length > 0 ? { [Op.in]: targetCompanies } : primaryCompany);
       }
     }
-    if (tenantConfig.branch_id && hasBranchField) {
-      if (ctx.branch_id && ctx.branch_id !== 0 && ctx.branch_id !== "0") {
-        if (where.branch_id === undefined) {
-          where.branch_id = ctx.branch_id;
-        } else {
-          where.branch_id = ctx.branch_id;
-        }
-      } else if (!ctx.is_super_admin && ctx.branch_access) {
-        let allowedBranches = [];
-        if (typeof ctx.branch_access === 'string') {
-          allowedBranches = ctx.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-        } else if (Array.isArray(ctx.branch_access)) {
-          allowedBranches = ctx.branch_access.map(id => parseInt(id)).filter(id => !isNaN(id));
-        }
-        if (allowedBranches.length > 0) {
-          if (where.branch_id === undefined) {
-            where.branch_id = { [Op.in]: allowedBranches };
-          } else {
-            let requested = [];
-            if (Array.isArray(where.branch_id)) {
-              requested = where.branch_id;
-            } else if (where.branch_id && typeof where.branch_id === 'object' && where.branch_id[Op.in]) {
-              requested = where.branch_id[Op.in];
-            } else {
-              requested = [where.branch_id];
-            }
-            const intersected = requested.filter(id => allowedBranches.includes(Number(id)));
-            where.branch_id = intersected.length > 0 ? { [Op.in]: intersected } : { [Op.in]: [-1] };
-          }
-        }
-      }
-    }
+    // Branch filtering is disabled as branches are now companies.
   }
 
   // 🔒 Hierarchy Data Visibility Filter: Restriction for Attendance Supervisors and Reporting Managers
@@ -398,7 +351,6 @@ module.exports = {
     let commonData = {
       user_id: data.user_id,
       company_id: data.company_id,
-      branch_id: data.branch_id,
     };
 
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
@@ -410,17 +362,14 @@ module.exports = {
     }
 
     const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
-    const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
     const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
 
     if (requireTenantFields === true) {
       if (ctx.company_id && enrichedData.company_id === undefined && hasCompanyField) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
       if (ctx.user_id && enrichedData.user_id === undefined && hasUserField) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (ctx.branch_id && enrichedData.branch_id === undefined && hasBranchField) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     } else if (isObj && !isEmptyObj) {
       if (requireTenantFields.company_id && ctx.company_id && enrichedData.company_id === undefined && hasCompanyField) { enrichedData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
       if (requireTenantFields.user_id && ctx.user_id && enrichedData.user_id === undefined && hasUserField) { enrichedData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (requireTenantFields.branch_id && ctx.branch_id && enrichedData.branch_id === undefined && hasBranchField) { enrichedData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
     const capture = {};
@@ -455,7 +404,6 @@ module.exports = {
     let commonData = {
       user_id: extraFields.user_id,
       company_id: extraFields.company_id,
-      branch_id: extraFields.branch_id,
     };
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
     const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
@@ -465,35 +413,30 @@ module.exports = {
       ctx = getContext();  
     }
 
-    let attachCompany = false, attachUser = false, attachBranch = false;
+    let attachCompany = false, attachUser = false;
     
     const hasCompanyField = !Model || !Model.rawAttributes || !!Model.rawAttributes.company_id;
-    const hasBranchField = !Model || !Model.rawAttributes || !!Model.rawAttributes.branch_id;
     const hasUserField = !Model || !Model.rawAttributes || !!Model.rawAttributes.user_id;
 
     if (requireTenantFields === true) {
       attachCompany = !!ctx.company_id && hasCompanyField;
       attachUser = !!ctx.user_id && hasUserField;
-      attachBranch = !!ctx.branch_id && hasBranchField;
     } else if (isObj && !isEmptyObj) {
       attachCompany = !!(requireTenantFields.company_id && ctx.company_id) && hasCompanyField;
       attachUser = !!(requireTenantFields.user_id && ctx.user_id) && hasUserField;
-      attachBranch = !!(requireTenantFields.branch_id && ctx.branch_id) && hasBranchField;
     }
 
-    if (attachCompany || attachUser || attachBranch) {
+    if (attachCompany || attachUser) {
       enriched = dataArray.map((item) => {
         let newItem = { ...item, ...extraFields };
         // 🚀 ONLY INJECT IF UNDEFINED
         if (attachCompany && newItem.company_id === undefined) newItem.company_id = ctx.company_id;
         if (attachUser && newItem.user_id === undefined) newItem.user_id = ctx.user_id;
-        if (attachBranch && newItem.branch_id === undefined) newItem.branch_id = ctx.branch_id;
         return newItem;
       });
 
       if (attachCompany && commonData.company_id === undefined) commonData.company_id = ctx.company_id;
       if (attachUser && commonData.user_id === undefined) commonData.user_id = ctx.user_id;
-      if (attachBranch && commonData.branch_id === undefined) commonData.branch_id = ctx.branch_id;
     }
 
     const capture = {};
@@ -533,7 +476,6 @@ module.exports = {
     let commonData = {
       user_id: data.user_id,
       company_id: data.company_id,
-      branch_id: data.branch_id,
     };
     
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
@@ -545,17 +487,14 @@ module.exports = {
     }
 
     const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
-    const hasBranchField = !model || !model.rawAttributes || !!model.rawAttributes.branch_id;
     const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
 
     if (requireTenantFields === true) {
       if (ctx.company_id && safeData.company_id === undefined && hasCompanyField) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
       if (ctx.user_id && safeData.user_id === undefined && hasUserField) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (ctx.branch_id && safeData.branch_id === undefined && hasBranchField) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     } else if (isObj && !isEmptyObj) {
       if (requireTenantFields.company_id && ctx.company_id && safeData.company_id === undefined && hasCompanyField) { safeData.company_id = ctx.company_id; commonData.company_id = ctx.company_id; }
       if (requireTenantFields.user_id && ctx.user_id && safeData.user_id === undefined && hasUserField) { safeData.user_id = ctx.user_id; commonData.user_id = ctx.user_id; }
-      if (requireTenantFields.branch_id && ctx.branch_id && safeData.branch_id === undefined && hasBranchField) { safeData.branch_id = ctx.branch_id; commonData.branch_id = ctx.branch_id; }
     }
 
     let oldRecord = null;
@@ -641,7 +580,6 @@ module.exports = {
           caller: caller,
           user_id: ctx.user_id,
           company_id: ctx.company_id,
-          branch_id: ctx.branch_id,
           ip_address: ctx.ip,
           batch_id: batch_id
         }, transaction);
@@ -663,6 +601,22 @@ module.exports = {
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
+    // Auto-include company details if the model has a "company" association,
+    // unless explicitly disabled for aggregate queries or other queries where joins are unwanted.
+    if (!safeOptions.skipAutoCompanyInclude && model.associations && model.associations.company) {
+      const alreadyIncluded = includeOption.some(inc => 
+        (inc === 'company' || inc.as === 'company' || (inc && inc.model === model.associations.company.target))
+      );
+      if (!alreadyIncluded) {
+        includeOption.push({
+          model: model.associations.company.target,
+          as: 'company',
+          attributes: ['id', 'company_name', 'company_code', 'logo_image'],
+          required: false
+        });
+      }
+    }
+
     const queryOptions = withDebug({
       __caller: caller,
       where,
@@ -680,8 +634,46 @@ module.exports = {
       ...(safeOptions.raw && { raw: safeOptions.raw }),
       ...(safeOptions.nest && { nest: safeOptions.nest }),
     }, transaction);
+    const data = await model.findAll(queryOptions);
 
-    return model.findAll(queryOptions);
+    if (Array.isArray(data) && data.length > 0 && model.rawAttributes && model.rawAttributes.company_id) {
+      try {
+        const companyIds = [...new Set(data.map(item => {
+          if (item && typeof item === 'object') {
+            return item.get ? item.get('company_id') : item.company_id;
+          }
+          return null;
+        }).filter(id => id !== null && id !== undefined && Number(id) > 0))];
+
+        if (companyIds.length > 0) {
+          const companies = await model.sequelize.models.CompanyMaster.findAll({
+            where: { id: { [Sequelize.Op.in]: companyIds } },
+            attributes: ['id', 'company_name'],
+            raw: true,
+            transaction
+          });
+          const companyMap = Object.fromEntries(companies.map(c => [c.id, c.company_name]));
+
+          data.forEach(item => {
+            if (item && typeof item === 'object') {
+              const coId = item.get ? item.get('company_id') : item.company_id;
+              const coName = companyMap[coId] || "N/A";
+              if (item.setDataValue) {
+                item.setDataValue('company_name', coName);
+                item.setDataValue('branch_name', coName);
+              } else {
+                item.company_name = coName;
+                item.branch_name = coName;
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.error("[commonQuery.findAllRecords] company enrichment failed:", err.message);
+      }
+    }
+
+    return data;
   },
 
   // 6. Count
@@ -712,6 +704,21 @@ module.exports = {
     
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
+
+    // Auto-include company details if the model has a "company" association
+    if (model.associations && model.associations.company) {
+      const alreadyIncluded = includeOption.some(inc => 
+        (inc === 'company' || inc.as === 'company' || (inc && inc.model === model.associations.company.target))
+      );
+      if (!alreadyIncluded) {
+        includeOption.push({
+          model: model.associations.company.target,
+          as: 'company',
+          attributes: ['id', 'company_name', 'company_code', 'logo_image'],
+          required: false
+        });
+      }
+    }
 
     const result = await model.findOne(withDebug({
       __caller: caller,
@@ -758,7 +765,6 @@ module.exports = {
           caller: caller,
           user_id: ctx.user_id,
           company_id: ctx.company_id,
-          branch_id: ctx.branch_id,
           ip_address: ctx.ip,
         }, transaction);
       }
@@ -802,7 +808,6 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
     const resolvedTenant = resolveTenantConfig(requireTenantFields, true);
     if (model.name === 'Employee' && options.attributes && Array.isArray(options.attributes)) {
         if (!options.attributes.includes('company_id')) options.attributes.push('company_id');
-        if (!options.attributes.includes('branch_id')) options.attributes.push('branch_id');
     }
     const caller = captureCaller();
     try {
@@ -849,11 +854,6 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
 
       // C. Explicit Tenant overrides
       if (reqBody?.company_id) filters.company_id = reqBody?.company_id;
-      if (reqBody?.branch_id !== undefined && reqBody?.branch_id !== null && reqBody?.branch_id !== "") {
-        if (reqBody.branch_id !== "All" && reqBody.branch_id !== "all" && reqBody.branch_id !== 0 && reqBody.branch_id !== "0") {
-          filters.branch_id = reqBody.branch_id;
-        }
-      }
       if (reqBody?.user_id) filters.user_id = reqBody?.user_id;
 
       // D. Date Range
@@ -1009,31 +1009,7 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
         resolvedTenant
       );
 
-      // 👇 AUTO-INJECT BRANCH NAME (if branch_id=0 and model has branch_id field)
-      const context = getContext();
-      if (context.branch_id === 0 && Array.isArray(data) && data.length > 0 && model.rawAttributes.branch_id) {
-          try {
-              const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined && Number(id) > 0))];
-              let branchMap = {};
-              if (branchIds.length > 0) {
-                  const branches = await sequelize.models.BranchMaster.findAll({
-                      where: { id: { [Op.in]: branchIds } },
-                      attributes: ['id', 'branch_name'],
-                      raw: true
-                  });
-                  branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
-              }
-              data = data.map(item => {
-                  const itemJson = item.get ? item.get({ plain: true }) : item;
-                  return {
-                      ...itemJson,
-                      branch_name: branchMap[itemJson.branch_id] || "N/A"
-                  };
-              });
-          } catch (err) {
-              console.error("Auto branch_name enrichment failed:", err.message);
-          }
-      }
+
 
       // Sticky Includes (Logic preserved)
       if (reqBody?.include && typeof reqBody?.include === "object") {

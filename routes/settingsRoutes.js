@@ -3,7 +3,7 @@ const router = express.Router();
 const { uploadExcelToDisk, bufferFile, bufferImage } = require("../helpers/fileUpload");
 
 // --- Import Controllers ---
-const branchMasterController = require("../controllers/settings/branchMasterController");
+
 const companyMasterController = require("../controllers/settings/company/companyMasterController");
 const companyCofigrationController = require("../controllers/settings/company/companyConfigrationController");
 const userController = require("../controllers/settings/user/userController");
@@ -39,21 +39,10 @@ const employeeController = require("../controllers/employee/employeeController")
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
 router.get("/switch-company", userAccessController.switchCompany);
-router.get("/switch-branch", userAccessController.switchBranch);
+
 router.get("/device-data", userAccessController.getCompanySettingsData);
 
 
-// ==========================
-// 2. BRANCH MASTER
-// ==========================
-// Base Path: /branch
-router.post("/branch/", branchMasterController.create);
-router.post("/branch/get-transactions", branchMasterController.getAll);
-router.post("/branch/dropdown-list", branchMasterController.dropdownList);
-router.get("/branch/:id", branchMasterController.getById);
-router.put("/branch/:id", branchMasterController.update);
-router.delete("/branch/", branchMasterController.delete);
-router.patch("/branch/status", branchMasterController.updateStatus);
 
 
 // ==========================

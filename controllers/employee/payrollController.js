@@ -1,4 +1,4 @@
-const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, SalaryRevisionHistory, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, BranchMaster, User, Reimbursement, ExpenseType, CompanySettings } = require("../../models");
+const { AttendanceDay, Employee, SalaryTemplate, SalaryTemplateTransaction, SalaryComponent, Payslip, EmployeeIncentive, EmployeeAdvance, EmployeeSalaryTemplate, EmployeeSalaryTemplateTransaction, SalaryRevisionHistory, sequelize, IncentiveType, DesignationMaster, CanteenAttendance, CompanyMaster, LeaveRequest, PaymentHistory, EmployeeWeeklyOff, EmployeeHoliday, ShiftTemplate, EmployeeLeaveBalance, LeaveTemplateCategory, LeaveTemplate, AttendanceTemplate, EmployeeAttendanceTemplate, Department, User, Reimbursement, ExpenseType, CompanySettings, StateMaster, CountryMaster } = require("../../models");
 const { commonQuery, handleError, fail, formatDateTime, constants, applyRounding } = require("../../helpers");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -1252,7 +1252,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 balance: balanceRecord ? balanceRecord.pending_leaves : 0
             };
         }),
-        meta: { branch_id: employee.branch_id, company_id: employee.company_id }
+        meta: { company_id: employee.company_id }
     };
 };
 
@@ -1615,8 +1615,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         leave_balances: summary.leave_balances,
         status: 1, // Finalized
         user_id: req.user?.id || 0,
-        company_id: summary.meta?.company_id || req.user?.company_id,
-        branch_id: summary.meta?.branch_id
+        company_id: summary.meta?.company_id || req.user?.company_id
     };
 
     // Check for existing draft (for later use)
@@ -1738,8 +1737,7 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
                 type: "PAYROLL",
                 reference_id: finalizedPayslip.id,
                 status_code: 0,
-                company_id: summary.meta?.company_id || req.user?.company_id,
-                branch_id: summary.meta?.branch_id
+                company_id: summary.meta?.company_id || req.user?.company_id
             }, transaction);
         }
     } catch (notifyErr) {
@@ -2678,7 +2676,7 @@ exports.getSalaryOverview = async (req, res) => {
 
         // 1. Fetch Employee for joining date & Salary Template for computation basis
         const employee = await commonQuery.findOneRecord(Employee, employee_id, {
-            attributes: ['id', 'joining_date', 'branch_id', 'company_id'],
+            attributes: ['id', 'joining_date', 'company_id'],
             include: [{
                 model: EmployeeSalaryTemplate,
                 as: 'employeeSalaryTemplate',
@@ -2971,30 +2969,14 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         include: [{
             model: Employee,
             as: "employee",
-            attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number', 'company_id', 'branch_id'],
+            attributes: ['id', 'first_name', 'employee_code', 'department_id', 'joining_date', 'uan_number', 'pan_number', 'bank_name', 'bank_account_number', 'company_id'],
             include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
         }]
     });
 
     if (!payslip) return null;
 
-    // Fetch company details
-    const { StateMaster, CountryMaster } = require("../../models");
-    const resolvedBranchId = payslip.branch_id || payslip.employee?.branch_id;
-    let branch = null;
-    if (resolvedBranchId) {
-        branch = await commonQuery.findOneRecord(
-            BranchMaster,
-            resolvedBranchId,
-            {},
-            null,
-            false,
-            {}
-        );
-    }
-
     const candidateCompanyIds = [
-        branch?.company_id,
         payslip.employee?.company_id,
         payslip.company_id,
         companyId
@@ -3022,12 +3004,11 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
         }
     }
 
-    // Final fallback for older records where only company_master.branch_id matches.
-    if ((!company || !company.company_name) && resolvedBranchId) {
+    // Final fallback for older records where only matches.
+    if (!company || !company.company_name) {
         company = await commonQuery.findOneRecord(
             CompanyMaster,
             {
-                branch_id: resolvedBranchId,
                 status: 0
             },
             {
@@ -3109,7 +3090,6 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
             month: payslip.month,
             year: payslip.year,
             company_id: payslip.employee?.company_id || payslip.company_id,
-            branch_id: resolvedBranchId
         },
         payslipData: {
             employee: {
@@ -3190,8 +3170,7 @@ exports.generatePayslipPdf = async (req, res) => {
                         type: "PAYROLL",
                         reference_id: data.meta.payslip_id,
                         status_code: 0,
-                        company_id: req.user?.company_id || data.meta.company_id,
-                        branch_id: data.meta.branch_id
+                        company_id: req.user?.company_id || data.meta.company_id
                     });
                 }
             }
@@ -3258,8 +3237,7 @@ exports.generateBulkPayslipPdf = async (req, res) => {
                         type: "PAYROLL",
                         reference_id: data.meta.payslip_id,
                         status_code: 0,
-                        company_id: req.user?.company_id || data.meta.company_id,
-                        branch_id: data.meta.branch_id
+                        company_id: req.user?.company_id || data.meta.company_id
                     });
                 }
             }
@@ -3449,7 +3427,7 @@ exports.getEmployeesByMonthYear = async (req, res) => {
  */
 exports.getMonthlyPayrollListing = async (req, res) => {
     try {
-        const { month, year, branch_id, department_id, search, staff_type, show_inactive } = req.body;
+        const { month, year, department_id, search, staff_type, show_inactive } = req.body;
         const company_id = req.user.company_id;
 
         if (!month || !year) {
@@ -3461,7 +3439,6 @@ exports.getMonthlyPayrollListing = async (req, res) => {
 
         // 1. Fetch All Applicable Employees
         const employeeWhere = { company_id, status: 1 };
-        if (branch_id) employeeWhere.branch_id = branch_id;
         if (department_id) employeeWhere.department_id = department_id;
         if (staff_type) employeeWhere.staff_type = staff_type;
         if (show_inactive === true || show_inactive === 'true') delete employeeWhere.status;
@@ -3649,8 +3626,7 @@ exports.bulkPayPayroll = async (req, res) => {
                 payment_mode: p.payment_mode || 'Bank',
                 status: 1,
                 user_id: req.user.id,
-                company_id: req.user.company_id,
-                branch_id: payslip.branch_id
+                company_id: req.user.company_id
             }, transaction);
 
             // Update payslip payment_history JSON (Mirroring paymentHistoryController logic)
@@ -3694,8 +3670,7 @@ exports.bulkPayPayroll = async (req, res) => {
                             type: "PAYROLL",
                             reference_id: payslip.id,
                             status_code: 0,
-                            company_id: req.user.company_id,
-                            branch_id: payslip.branch_id
+                            company_id: req.user.company_id
                         }, transaction);
                     }
                 } catch (notifyErr) {

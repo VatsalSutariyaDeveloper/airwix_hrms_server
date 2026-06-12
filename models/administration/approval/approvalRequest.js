@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
     current_level_sequence: { type: DataTypes.INTEGER, defaultValue: 1 },
     status: { type: DataTypes.STRING(20), defaultValue: 'PENDING', comment: "PENDING, APPROVED, REJECTED" },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "approval_requests",

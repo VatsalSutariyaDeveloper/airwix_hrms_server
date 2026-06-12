@@ -66,7 +66,7 @@ exports.getAll = async (req, res) => {
 // Get a list of states for dropdowns with pagination and search
 exports.dropdownList = async (req, res) => {
     try {
-        await requestContext.run({ userId: 0, companyId: 0, branchId: 0 }, async () => {
+        await requestContext.run({ userId: 0, companyId: 0 }, async () => {
             // key, isSearchable, isSortable
             const fieldConfig = [
                 ["state_name", true, true],

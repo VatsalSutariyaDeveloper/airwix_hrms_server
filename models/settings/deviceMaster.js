@@ -13,7 +13,7 @@ module.exports = (sequelize, DataTypes) => {
             },
             password: { type: DataTypes.STRING, allowNull: true },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            
             company_id: { type: DataTypes.INTEGER, allowNull: true },
             last_login_at: { type: DataTypes.DATE, allowNull: true },
             device_type: {
@@ -23,10 +23,9 @@ module.exports = (sequelize, DataTypes) => {
             },
             device_model: { type: DataTypes.STRING, allowNull: true },
             os_version: { type: DataTypes.STRING, allowNull: true },
-            brand_name: { type: DataTypes.STRING, allowNull: true },
-        },
-        {                           
-            tableName: "device_master",
+            brand_name: { type: DataTypes.STRING, allowNull: true }
+  }, {
+    tableName: "device_master",
             timestamps: true,
             underscored: true,
         }

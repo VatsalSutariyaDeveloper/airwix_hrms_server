@@ -35,7 +35,7 @@ module.exports = (sequelize, DataTypes) => {
             approval_remark: { type: DataTypes.TEXT, allowNull: true },
             document: { type: DataTypes.STRING, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             is_encashment: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -67,7 +67,7 @@ module.exports = (sequelize, DataTypes) => {
         LeaveRequest.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
         LeaveRequest.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "category" });
         LeaveRequest.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
-        LeaveRequest.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
+        
     };
 
     return LeaveRequest;

@@ -20,11 +20,10 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "0: Active, 1: Inactive, 2: Deleted"
             },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
-            user_id: { type: DataTypes.INTEGER, allowNull: true },
-        },
-        {
-            tableName: "reimbursements",
+            
+            user_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
+    tableName: "reimbursements",
             timestamps: true,
             underscored: true,
         }

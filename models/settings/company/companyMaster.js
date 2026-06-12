@@ -28,9 +28,9 @@ module.exports = (sequelize, DataTypes) => {
       comment: "0: Active, 1: Inactive, 2: Deleted, 3: Suspended",
     },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    
     company_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
-    organization_id: { type: DataTypes.INTEGER, allowNull: true },
+    organization_id: { type: DataTypes.INTEGER, allowNull: true }
   }, {
     tableName: "company_master",
     timestamps: true,
@@ -62,6 +62,15 @@ module.exports = (sequelize, DataTypes) => {
 
     CompanyMaster.hasMany(models.CompanySubscription, {
       as: "companySubscriptions",
+      foreignKey: "company_id",
+    });
+
+    CompanyMaster.belongsTo(models.CompanyMaster, {
+      as: "parentCompany",
+      foreignKey: "company_id",
+    });
+    CompanyMaster.hasMany(models.CompanyMaster, {
+      as: "branches",
       foreignKey: "company_id",
     });
   };

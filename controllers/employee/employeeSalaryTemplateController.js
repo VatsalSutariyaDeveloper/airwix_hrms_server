@@ -169,7 +169,6 @@ const employeeSalaryTemplateController = {
                 daily_rate: parseFloat(daily_rate) || 0,
                 hourly_rate: parseFloat(hourly_rate) || 0,
                 company_id: req.user?.company_id || 0,
-                branch_id: req.user?.branch_id || 0,
                 user_id: req.user?.id || 0
             };
 
@@ -194,7 +193,6 @@ const employeeSalaryTemplateController = {
                     status: 1, // Auto-approved for this manual update
                     approved_by: req.user?.id || 0,
                     company_id: req.user?.company_id || 0,
-                    branch_id: req.user?.branch_id || 0,
                 }, transaction);
             }
 
@@ -262,8 +260,7 @@ const employeeSalaryTemplateController = {
                     while (cur.isBefore(today) || cur.isSame(today, 'day')) {
                         await rebuildAttendanceDay(employeeId, cur.format('YYYY-MM-DD'), {
                             user_id: req.user?.id || 0,
-                            company_id: req.user?.company_id || 0,
-                            branch_id: req.user?.branch_id || 0
+                            company_id: req.user?.company_id || 0
                         }, transaction);
                         cur = cur.add(1, 'day');
                     }

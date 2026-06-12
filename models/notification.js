@@ -41,13 +41,9 @@ module.exports = (sequelize, DataTypes) => {
         company_id: {
             type: DataTypes.INTEGER,
             allowNull: false
-        },
-        branch_id: {
-            type: DataTypes.INTEGER,
-            allowNull: true
         }
-    }, {
-        tableName: "notifications",
+  }, {
+    tableName: "notifications",
         underscored: true,
         timestamps: true
     });

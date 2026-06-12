@@ -579,7 +579,7 @@ exports.createCompany = async (req, res) => {
     } = req.body;
 
     const bcrypt = require("bcrypt");
-    const { BranchMaster, RolePermission, User } = require("../../models");
+    const { RolePermission, User } = require("../../models");
     const { initializeCompanySettings, initializeCompanyRoles, constants } = require("../../helpers");
 
     // 1. Resolve Organization
@@ -739,35 +739,7 @@ exports.createCompany = async (req, res) => {
       { transaction }
     );
 
-    // 5. Create default Branch
-    const newBranch = await BranchMaster.create(
-      {
-        branch_name: "Main Branch",
-        country_id: country_id ? parseInt(country_id) : null,
-        state_id: state_id ? parseInt(state_id) : null,
-        city: city || null,
-        pincode: pincode || null,
-        is_main_branch: 1,
-        company_id: newCompany.id,
-        user_id: newUser.id,
-        status: 0,
-      },
-      { transaction }
-    );
-
-    // 6. Update User and Company with Branch IDs
-    await User.update(
-      { branch_id: newBranch.id },
-      { where: { id: newUser.id }, transaction }
-    );
-
-    await CompanyMaster.update(
-      { branch_id: newBranch.id },
-      { where: { id: newCompany.id }, transaction }
-    );
-
-    // 7. Initialize Settings
-    await initializeCompanySettings(newCompany.id, newBranch.id, newUser.id, transaction);
+    await initializeCompanySettings(newCompany.id, newUser.id, transaction);
 
     await transaction.commit();
     return res.success("COMPANY_CREATED", newCompany);

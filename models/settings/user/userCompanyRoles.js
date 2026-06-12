@@ -3,14 +3,14 @@ module.exports = (sequelize, DataTypes) => {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     user_id: { type: DataTypes.INTEGER, allowNull: false },
     role_id: { type: DataTypes.INTEGER, allowNull: false },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false },
+    
     company_id: { type: DataTypes.INTEGER, allowNull: false },
     permissions: { type: DataTypes.TEXT, allowNull: true },
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,
       comment: "0: Active, 1: Inactive, 2: Deleted"
-    },
+    }
   }, {
     tableName: "user_company_roles",
     timestamps: true,

@@ -118,8 +118,7 @@ const employeeAttendanceController = {
             // Sync past attendance data for the current month
             await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
                 user_id: req.user.id,
-                company_id: req.user.company_id,
-                branch_id: req.user.branch_id
+                company_id: req.user.company_id
             });
 
             await transaction.commit();
@@ -193,8 +192,7 @@ const employeeAttendanceController = {
             // Sync past attendance data for the current month
             await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
                 user_id: req.user.id,
-                company_id: req.user.company_id,
-                branch_id: req.user.branch_id
+                company_id: req.user.company_id
             });
 
             await transaction.commit();

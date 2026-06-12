@@ -30,7 +30,6 @@ const {
     OutDutyRequest,
     CompanyMaster,
     Organization,
-    BranchMaster,
     LeaveRequest,
     CanteenAttendance
 } = require("../../models");
@@ -123,7 +122,6 @@ const parseJsonFields = (body) => {
     const fieldsToParse = [
         "education_details",
         "custom_fields",
-        "access_branches",
         "experience_details",
         "professional_reference",
         "family_details"
@@ -261,13 +259,11 @@ exports.create = async (req, res) => {
                     model: Employee,
                     fields: ["email", "mobile_no"],
                     excludeCompany: true,
-                    excludeBranch: true,
                 },
                 {
                     model: User,
                     fields: ["email", "mobile_no"],
                     excludeCompany: true,
-                    excludeBranch: true,
                 }
             ]
         }, transaction);
@@ -380,7 +376,6 @@ exports.create = async (req, res) => {
                 ...member,
                 employee_id: employee.id,
                 company_id: employee.company_id,
-                branch_id: employee.branch_id,
                 user_id: req.user.id,
                 dob: member.dob_age || member.dob, // Handle dob_age from frontend
                 relationship: member.relation || member.relationship, // Directly store string relation
@@ -406,7 +401,6 @@ exports.create = async (req, res) => {
                         message: `${employeeName} has been assigned to you as a reportee.`,
                         type: "EMPLOYEE_UPDATE",
                         company_id: employee.company_id,
-                        branch_id: employee.branch_id
                     }, transaction);
                 }
             }
@@ -422,7 +416,6 @@ exports.create = async (req, res) => {
                         message: `${employeeName} has been assigned to you for attendance supervision.`,
                         type: "EMPLOYEE_UPDATE",
                         company_id: employee.company_id,
-                        branch_id: employee.branch_id
                     }, transaction);
                 }
             }
@@ -464,14 +457,12 @@ exports.update = async (req, res) => {
                 model: Employee,
                 fields: ["email", "mobile_no"],
                 excludeCompany: true,
-                excludeBranch: true,
                 excludeId: id
             },
             {
                 model: User,
                 fields: ["email", "mobile_no"],
                 excludeCompany: true,
-                excludeBranch: true,
                 where: {
                     employee_id: {
                         [Op.ne]: id
@@ -715,7 +706,6 @@ exports.update = async (req, res) => {
                 ...member,
                 employee_id: id,
                 company_id: existingEmployee.company_id,
-                branch_id: existingEmployee.branch_id,
                 user_id: req.user.id,
                 dob: member.dob_age || member.dob, // Handle dob_age from frontend
                 relationship: member.relation || member.relationship // Directly store string relation
@@ -750,7 +740,6 @@ exports.update = async (req, res) => {
                             message: `You have been assigned ${managerName} as your Reporting Manager.`,
                             type: "EMPLOYEE_UPDATE",
                             company_id: existingEmployee.company_id,
-                            branch_id: existingEmployee.branch_id
                         }, transaction);
                     }
 
@@ -760,8 +749,7 @@ exports.update = async (req, res) => {
                         title: "New Reportee Assigned",
                         message: `${employeeName} has been assigned to you as a reportee.`,
                         type: "EMPLOYEE_UPDATE",
-                        company_id: existingEmployee.company_id,
-                        branch_id: existingEmployee.branch_id
+                        company_id: existingEmployee.company_id
                     }, transaction);
                 }
             }
@@ -781,7 +769,6 @@ exports.update = async (req, res) => {
                             message: `You have been assigned ${supervisorName} as your Attendance Supervisor.`,
                             type: "EMPLOYEE_UPDATE",
                             company_id: existingEmployee.company_id,
-                            branch_id: existingEmployee.branch_id
                         }, transaction);
                     }
 
@@ -791,8 +778,7 @@ exports.update = async (req, res) => {
                         title: "New Attendance Supervisor Assigned",
                         message: `${employeeName} has been assigned to you for attendance supervision.`,
                         type: "EMPLOYEE_UPDATE",
-                        company_id: existingEmployee.company_id,
-                        branch_id: existingEmployee.branch_id
+                        company_id: existingEmployee.company_id
                     }, transaction);
                 }
             }
@@ -1592,8 +1578,6 @@ exports.getAll = async (req, res) => {
                     "mobile_no",
                     "joining_date",
                     "email",
-                    "branch_id",
-                    "access_branches",
                     "profile_image",
                     "created_at",
                     "status",
@@ -1601,7 +1585,7 @@ exports.getAll = async (req, res) => {
                 ],
                 order: [["first_name", "ASC"]]
             },
-            true,
+            { company_id: true },
             "created_at"
         );
 
@@ -2532,7 +2516,7 @@ const calculateCosineDistance = (descriptor1, descriptor2) => {
 //                     rebuildAttendanceDay(bestMatch.id, punchResult.targetDayDate, {
 //                         user_id: (req.user?.id && Number(req.user.id) !== 0) ? req.user.id : null,
 //                         company_id: req.user?.company_id || bestMatch.company_id,
-//                         branch_id: req.user?.branch_id || bestMatch.branch_id
+//                         branch_id: req.user?.branch_id || bestMatch._id
 //                     }).catch(err => console.error("Background Rebuild Error:", err));
 //                 });
 
@@ -2575,17 +2559,9 @@ exports.registerFace = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const employeeId = req.body.employee_id || req.body.id;
-        const { branch_id, company_id } = req.user;
+        const { company_id } = req.user;
 
-        console.log("--- [Register Face] ---");
-        console.log("req.body:", req.body);
-        console.log("req.files:", req.files ? Object.keys(req.files) : "None");
-        if (!branch_id) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
-        }
-
-        const punchWhere = await getPunchAllowedWhere(company_id, branch_id);
+        const punchWhere = await getPunchAllowedWhere(company_id);
 
         if (req.user.access == "attendance") {
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, { status: 0 });
@@ -2716,7 +2692,7 @@ exports.registerFace = async (req, res) => {
             face_descriptor: { [Op.ne]: null },
             id: { [Op.ne]: employeeId }
         }, {
-            attributes: ['id', 'first_name', 'branch_id', 'face_descriptor'],
+            attributes: ['id', 'first_name', 'face_descriptor'],
             raw: true
         }, null, { company_id: true });
 
@@ -2752,21 +2728,6 @@ exports.registerFace = async (req, res) => {
 
             // 🚀 THE NEW CONSOLE LOG FOR LIVE MONITORING
             console.log(`👤 Checked vs ${emp.first_name}: Best Match = ${matchedPercentage}% (Distance: ${matchedDist.toFixed(4)})`);
-
-            if (collisionDetected) {
-                const branch = await commonQuery.findOneRecord(BranchMaster, emp.branch_id, { attributes: ['branch_name'] }, null, false, { company_id: true });
-                const branchName = branch?.branch_name || "N/A";
-
-                console.log(`🚨 COLLISION DETECTED! ${emp.first_name} is a ${matchedPercentage}% match! Rejecting registration.`);
-
-                await transaction.rollback();
-                // Clean up the uploaded file since validation failed
-                try { fs.unlinkSync(fullFilePath); } catch (e) { }
-
-                return res.error(constants.VALIDATION_ERROR, {
-                    message: `${emp.first_name} already exists in ${branchName}`
-                });
-            }
         }
         console.log(`✅ NO COLLISIONS. Face is unique.\n`);
 
@@ -2898,7 +2859,6 @@ exports.facePunch = async (req, res) => {
                 image_name: savedFilename,
                 user_id: req.user?.access === 'attendance' ? 0 : (req.user?.id || employee.user_id),
                 company_id: req.user?.company_id || employee.company_id,
-                branch_id: req.user?.branch_id || employee.branch_id,
                 ip_address: req.ip,
                 latitude: latitude || null,
                 longitude: longitude || null,
@@ -2915,7 +2875,6 @@ exports.facePunch = async (req, res) => {
                 rebuildAttendanceDay(employee.id, today, {
                     user_id: req.user?.id || employee.user_id,
                     company_id: req.user?.company_id || employee.company_id,
-                    branch_id: req.user?.branch_id || employee.branch_id
                 }).catch(err => console.error("Background Rebuild Error:", err));
             });
 
@@ -3162,8 +3121,7 @@ exports.inviteUser = async (req, res) => {
                 mobile_no: employee.mobile_no,
                 employee_id: employee.id,
                 role_id: role.id,
-                company_id: employee.company_id,
-                branch_id: employee.branch_id,
+                company_id: employee.company_i,
                 company_access: employee.company_id,
                 status: 0,
                 is_activated: true
@@ -3172,7 +3130,6 @@ exports.inviteUser = async (req, res) => {
             // await commonQuery.createRecord(UserCompanyRoles, {
             //     user_id: user.id,
             //     role_id: role_id,
-            //     branch_id: employee.branch_id,
             //     company_id: employee.company_id,
             //     permissions: user.permission,
             //     status: 0
@@ -3517,9 +3474,9 @@ exports.exportData = async (req, res) => {
             });
         }
 
-        const { company_id, id: user_id, branch_id } = req.user;
+        const { company_id, id: user_id } = req.user;
 
-        const commonData = { company_id, user_id, branch_id };
+        const commonData = { company_id, user_id };
 
         // 1. Parse Fields
         let requestedFields = typeof fields === 'string' ? JSON.parse(fields) : fields;
@@ -3643,12 +3600,8 @@ exports.exportData = async (req, res) => {
  */
 exports.getEmployeesByDeviceBranch = async (req, res) => {
     try {
-        const { branch_id, company_id } = req.user;
+        const { company_id } = req.user;
         const { search } = req.query || req.body;
-
-        if (!branch_id) {
-            return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
-        }
 
         const punchWhere = await getPunchAllowedWhere(req.user.company_id, req.user.branch_id);
         const where = {
@@ -3666,7 +3619,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
         const settings = await getCompanySetting(req.user.company_id);
         const employees = await Employee.findAll({
             where,
-            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image', 'access_branches', 'company_id', 'branch_id'],
+            attributes: ['id', 'first_name', 'employee_code', 'face_descriptor', 'profile_image', 'company_id'],
             include: [
                 {
                     model: CompanyMaster,
@@ -4031,10 +3984,7 @@ exports.transfer = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, { message: "Target Company ID is required" });
         }
-        if (!target_branch_id) {
-            await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, { message: "Target Branch ID is required" });
-        }
+        const finalTargetBranchId = target_branch_id || 0;
 
         // 1. Fetch Source Employee
         const sourceEmployee = await commonQuery.findOneRecord(Employee, employee_id, {}, transaction);
@@ -4090,7 +4040,7 @@ exports.transfer = async (req, res) => {
         const newEmployeePayload = {
             ...plainEmployee,
             company_id: Number(target_company_id),
-            branch_id: Number(target_branch_id),
+            branch_id: Number(finalTargetBranchId),
             employee_code: codeToCheck,
             joining_date: joining_date || today,
             exit_date: null,
@@ -4118,7 +4068,6 @@ exports.transfer = async (req, res) => {
             await commonQuery.updateRecordById(User, linkedUser.id, {
                 employee_id: newEmployee.id,
                 company_id: Number(target_company_id),
-                branch_id: Number(target_branch_id),
                 company_access: String(target_company_id)
             }, transaction);
         }

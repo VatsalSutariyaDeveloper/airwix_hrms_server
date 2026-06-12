@@ -8,11 +8,9 @@ exports.create = async (req, res) => {
   try {
     const requiredFields = {
       bank_id: "Bank",
-      branch_name: "Branch Name",
       account_number: "A/C Number",
       ifsc_code: "IFSC Code",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company",
     };
 
@@ -64,11 +62,9 @@ exports.update = async (req, res) => {
   try {
     const requiredFields = {
       bank_name: "Bank Name",
-      branch_name: "Branch Name",
       account_number: "A/C Number",
       ifsc_code: "IFSC Code",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company",
     };
 

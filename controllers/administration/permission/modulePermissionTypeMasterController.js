@@ -27,7 +27,6 @@ exports.create = async (req, res) => {
     const requiredFields = {
       permission_type_name: "Permission Type Name",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company"
     };
 
@@ -86,7 +85,6 @@ exports.update = async (req, res) => {
     const requiredFields = {
       permission_type_name: "Permission Type Name",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company"
     };
 

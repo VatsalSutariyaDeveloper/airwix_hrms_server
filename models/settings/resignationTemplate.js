@@ -24,11 +24,9 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "Default notice period in days for this policy" 
             },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
-            company_id: { type: DataTypes.INTEGER, allowNull: true },
-        },
-        {
-            tableName: "resignation_templates",
+                        company_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
+    tableName: "resignation_templates",
             timestamps: true,
             underscored: true,
         }

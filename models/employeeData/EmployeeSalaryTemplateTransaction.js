@@ -23,10 +23,10 @@ module.exports = (sequelize, DataTypes) => {
         percentage_value: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    }, {
-        tableName: "employee_salary_template_transactions",
+        
+        company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
+  }, {
+    tableName: "employee_salary_template_transactions",
         timestamps: true,
         underscored: true
     });

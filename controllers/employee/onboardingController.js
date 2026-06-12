@@ -134,7 +134,6 @@ exports.getDetailsByToken = async (req, res) => {
         }
 
         const company_id = employee.company_id;
-        const branch_id = employee.branch_id;
 
         // Check if onboarding is already completed
         if (employee.onboarding_status === 3) {
@@ -176,10 +175,9 @@ exports.getDetailsByToken = async (req, res) => {
             where: {
                 entity_id: MODULES.EMPLOYEE.ID,
                 company_id: company_id,
-                branch_id: branch_id,
                 status: 0
             },
-            attributes: ['id', 'field_label', 'field_name', 'field_type', 'is_mandatory', 'is_readonly', 'default_value', 'placeholder', 'options', 'validation_regex', 'priority', 'description', "branch_id", "company_id"],
+            attributes: ['id', 'field_label', 'field_name', 'field_type', 'is_mandatory', 'is_readonly', 'default_value', 'placeholder', 'options', 'validation_regex', 'priority', 'description', "company_id"],
             order: [['priority', 'ASC'], ['id', 'ASC']]
         });
 

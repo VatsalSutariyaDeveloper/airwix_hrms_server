@@ -39,7 +39,6 @@ exports.create = async (req, res) => {
                     reference_id: incentive.id,
                     status_code: 0,
                     company_id: req.user.company_id,
-                    branch_id: req.body.branch_id
                 }, transaction);
             }
         } catch (notifyErr) {
@@ -98,7 +97,6 @@ exports.getAll = async (req, res) => {
                     "notes",
                     "adjusted_in_payroll",
                     "status",
-                    "branch_id",
                     ["employee.first_name", "employee_name"],
                     ["incentiveType.name", "incentive_type_name"]
 

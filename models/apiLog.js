@@ -3,7 +3,7 @@ module.exports = (sequelize, DataTypes) => {
     "ApiLog",
     {
       company_id: { type: DataTypes.INTEGER, allowNull: true },
-      branch_id: { type: DataTypes.INTEGER, allowNull: true },
+      
       user_id: { type: DataTypes.INTEGER, allowNull: true },
       method: { type: DataTypes.STRING(10), allowNull: false },
       url: { type: DataTypes.TEXT, allowNull: false },
@@ -16,10 +16,9 @@ module.exports = (sequelize, DataTypes) => {
       status: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: true, comment: "0 = Success, 1 = Error" },
       access_type: { type: DataTypes.STRING(50), allowNull: true, comment: "The source type: 'web login', 'attendance device', etc." },
       sql_query: { type: DataTypes.TEXT, allowNull: true, comment: "The raw SQL query executed" },
-      caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
-    },
-    {
-      tableName: "api_logs",
+      caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" }
+  }, {
+    tableName: "api_logs",
       timestamps: true,
       underscored: true,
     }

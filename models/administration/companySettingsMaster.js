@@ -15,11 +15,10 @@ module.exports = (sequelize, DataTypes) => {
     entity_visiblity: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1: Yes, 2: No" },
     priority: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-  },
-    {
-      tableName: "company_settings_master",
+    
+    company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
+  }, {
+    tableName: "company_settings_master",
       timestamps: true,
       underscored: true,
     }

@@ -1,4 +1,4 @@
-const { sequelize, CompanyMaster, User, BranchMaster, GodownMaster, RolePermission, CompanyAddress, CountryMaster, StateMaster, UserCompanyRoles } = require("../../../models");
+const { sequelize, CompanyMaster, User, GodownMaster, RolePermission, CompanyAddress, CountryMaster, StateMaster, UserCompanyRoles } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, deleteFile, Op, getCompanySubscription, fileExists, initializeCompanySettings, constants, initializeCompanyRoles } = require("../../../helpers");
 const { updateDocumentUsedLimit } = require("../../../helpers/functions/commonFunctions");
 
@@ -155,12 +155,18 @@ exports.create = async (req, res) => {
       }
     }
 
+    const parentCompanyId = Number(req.body.company_id);
     let record = null;
-    if (company_id){
-      record = await commonQuery.findOneRecord(CompanyMaster, company_id, { attributes: ['id', 'company_id', 'organization_id', 'business_type_id'] }, transaction, false, {});
+    if (parentCompanyId && parentCompanyId > 0) {
+      record = await commonQuery.findOneRecord(CompanyMaster, parentCompanyId, { attributes: ['id', 'company_id', 'organization_id', 'business_type_id'] }, transaction, false, {});
       if (!record) {
-        return res.error(404, "Invalid or missing company record.");
+        await transaction.rollback();
+        return res.error(404, "Invalid or missing parent company record.");
       }
+      req.body.company_id = parentCompanyId;
+    } else {
+      record = await commonQuery.findOneRecord(CompanyMaster, company_id, { attributes: ['id', 'company_id', 'organization_id', 'business_type_id'] }, transaction, false, {});
+      req.body.company_id = 0;
     }
 
     req.body.business_type_id = record?.business_type_id;
@@ -180,37 +186,8 @@ exports.create = async (req, res) => {
 
     // await updateDocumentUsedLimit(company_id, 'companies', 1, transaction);
 
-    // 4. Create the default Branch ("Main Branch")
-    const branchPayload = {
-        branch_name: "Main Branch",
-        country_id: req.body.country_id,
-        state_id: req.body.state_id,
-        city: req.body.city,
-        pincode: req.body.pincode,
-        zone_id: req.body.zone_id || null, 
-        user_id: user_id,
-        branch_id: 0, // Using 0 as default for first branch
-        company_id: newCompany.id,
-    };
-
-    const newBranch = await commonQuery.createRecord(
-        BranchMaster,
-        branchPayload,
-        transaction,
-        {}
-    );
-
-    await commonQuery.updateRecordById(
-      CompanyMaster,
-      newCompany.id,
-      { branch_id: newBranch.id },
-      transaction,
-      false,
-      {}
-    );
-
-    await initializeCompanySettings(newCompany.id, newBranch.id, user_id, transaction);
-    await initializeCompanyRoles(newCompany.id, newBranch.id, user_id, transaction);
+    await initializeCompanySettings(newCompany.id, user_id, transaction);
+    await initializeCompanyRoles(newCompany.id, user_id, transaction);
 
     // Update company_access for the creator
     await updateUserAccess(req.user.id, newCompany.id, 'company_access', transaction);
@@ -408,8 +385,17 @@ exports.update = async (req, res) => {
       isLogoDeleted = true;
     }
 
-    delete POST.company_id;
+    // Keep company_id so we can update the parent company reference
     delete POST.logo_image;
+
+    if (POST.company_id !== undefined) {
+      const parentId = Number(POST.company_id);
+      if (parentId === Number(req.params.id)) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, { company_id: "A company cannot be its own parent." });
+      }
+      POST.company_id = parentId > 0 ? parentId : 0;
+    }
     
     if (req.files?.logo_image) {
       const singleLogoReq = {file: Array.isArray(req.files.logo_image) ? req.files.logo_image[0] : req.files.logo_image,};

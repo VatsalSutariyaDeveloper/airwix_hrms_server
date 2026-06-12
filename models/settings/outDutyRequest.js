@@ -29,7 +29,7 @@ module.exports = (sequelize, DataTypes) => {
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
             approval_remark: { type: DataTypes.TEXT, allowNull: true },
             company_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            
             user_id: { type: DataTypes.INTEGER, allowNull: true },
             start_session: { 
                 type: DataTypes.SMALLINT, 
@@ -41,10 +41,9 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0=Full Day, 1=Session 1, 2=Session 2"
             },
-            status: { type: DataTypes.SMALLINT, defaultValue: 0 },
-        },
-        {
-            tableName: "out_duty_requests",
+            status: { type: DataTypes.SMALLINT, defaultValue: 0 }
+  }, {
+    tableName: "out_duty_requests",
             timestamps: true,
             underscored: true,
         }

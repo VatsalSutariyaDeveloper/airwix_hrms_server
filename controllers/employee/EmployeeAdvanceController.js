@@ -50,7 +50,6 @@ exports.create = async (req, res) => {
                     reference_id: advance.id,
                     status_code: 0,
                     company_id: req.user.company_id,
-                    branch_id: POST.branch_id
                 }, transaction);
             }
         } catch (notifyErr) {
@@ -100,7 +99,6 @@ exports.getAll = async (req, res) => {
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
-                    "branch_id",
                    ["employee.first_name", "employee_name"],
                 ]
             },

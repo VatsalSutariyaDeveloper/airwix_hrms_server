@@ -229,7 +229,7 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
 
   for (const check of checks) {
     if (check?.model && Array.isArray(check.fields)) {
-      const { model, fields, excludeId, excludeCompany = false, excludeBranch = false, excludeStatus = false, where: customWhere, errorCode } = check;
+      const { model, fields, excludeId, excludeCompany = false, excludeStatus = false, where: customWhere, errorCode } = check;
       const { Op } = require("sequelize");
 
       const fieldSets = Array.isArray(fields[0]) ? fields : fields.map((f) => [f]);
@@ -262,10 +262,6 @@ async function validateRequest(body, fieldsWithLabels = {}, options = {}, transa
 
         if (!excludeCompany && ctx.company_id !== undefined) {
           where.company_id = ctx.company_id;
-        }
-
-        if (!excludeBranch && ctx.branch_id !== undefined) {
-          where.branch_id = ctx.branch_id;
         }
 
         if (!excludeStatus) {

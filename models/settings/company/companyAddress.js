@@ -17,8 +17,7 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 0,
       comment: "0: Active, 1: Inactive, 2: Deleted"
     },
-    user_id: { type: DataTypes.INTEGER, allowNull: false },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false },
+    user_id: { type: DataTypes.INTEGER, allowNull: false }
   }, {
     tableName: "company_address",
     timestamps: true,

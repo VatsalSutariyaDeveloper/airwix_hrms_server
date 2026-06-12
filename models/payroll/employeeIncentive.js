@@ -12,11 +12,10 @@ module.exports = (sequelize, DataTypes) => {
       adjusted_in_payroll: { type: DataTypes.BOOLEAN, defaultValue: false },
       status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
       user_id: { type: DataTypes.BIGINT, allowNull: true },
-      branch_id: { type: DataTypes.BIGINT, allowNull: true },
-      company_id: { type: DataTypes.BIGINT, allowNull: true },
-    },
-    {
-      tableName: "employee_incentives",
+      
+      company_id: { type: DataTypes.BIGINT, allowNull: true }
+  }, {
+    tableName: "employee_incentives",
       timestamps: true,
       underscored: true,
     }

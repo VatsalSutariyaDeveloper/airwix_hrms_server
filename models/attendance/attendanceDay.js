@@ -26,11 +26,10 @@ module.exports = (sequelize, DataTypes) => {
         note: { type: DataTypes.TEXT, allowNull: true },
         is_locked: { type: DataTypes.BOOLEAN, defaultValue: false },
         user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    },
-    {
-      tableName: "attendance_day",
+        
+        company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
+  }, {
+    tableName: "attendance_day",
       timestamps: true,
       underscored: true,
     }
@@ -42,7 +41,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendanceDay.belongsTo(models.LeaveTemplateCategory, { foreignKey: "leave_category_id", as: "leaveCategory" });
     AttendanceDay.hasMany(models.AttendancePunch, { foreignKey: "day_id", as: "attendancePunches", onDelete: "CASCADE" });
     AttendanceDay.hasMany(models.CashVoucher, { foreignKey: "attendance_day_id", as: "cashVouchers", onDelete: "CASCADE" });
-    AttendanceDay.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
+    
   };
 
   return AttendanceDay;

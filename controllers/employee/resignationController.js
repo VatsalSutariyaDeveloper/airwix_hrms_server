@@ -6,7 +6,6 @@ const {
     EmployeeLeaveBalance,
     EmployeeAdvance,
     ResignationReason,
-    BranchMaster,
     DesignationMaster,
     Department,
     RolePermission
@@ -278,8 +277,7 @@ exports.handleAction = async (req, res) => {
                     type: "RESIGNATION",
                     reference_id: id,
                     status_code: 0,
-                    company_id: req.user.company_id,
-                    branch_id: req.user.branch_id
+                    company_id: req.user.company_id
                 }, transaction);
             }
         } else if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.REJECTED) {
@@ -326,8 +324,7 @@ exports.handleAction = async (req, res) => {
                     type: "RESIGNATION",
                     reference_id: id,
                     status_code: 2,
-                    company_id: req.user.company_id,
-                    branch_id: req.user.branch_id
+                    company_id: req.user.company_id
                 }, transaction);
             }
         }
@@ -609,7 +606,6 @@ exports.getResignationById = async (req, res) => {
                         { model: ResignationTemplate, as: 'resignationTemplate' },
                         { model: Department, as: 'department', attributes: ['name'] },
                         { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                        { model: BranchMaster, as: 'branch', attributes: ['branch_name'] },
                     ]
                 },
                 { model: ResignationReason, as: 'reason_type' },

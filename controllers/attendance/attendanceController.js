@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -57,7 +57,6 @@ exports.attendancePunch = async (req, res) => {
         ...req.body,
         user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.user.branch_id,
         ip_address: req.ip,
         latitude: req.body.latitude || null,
         longitude: req.body.longitude || null,
@@ -153,7 +152,6 @@ exports.syncPunches = async (req, res) => {
             ...punchData,
             user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
             company_id: req.user.company_id,
-            branch_id: req.user.branch_id,
             ip_address: punchData.ip_address || req.ip,
             latitude: punchData.latitude || null,
             longitude: punchData.longitude || null,
@@ -197,7 +195,6 @@ exports.syncPunches = async (req, res) => {
           accuracy: punchData.match_score || punchData.accuracy || null,
           time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
           company_id: req.user.company_id || punchData.company_id || 0,
-          branch_id: req.user.branch_id || punchData.branch_id || 0,
           employee_id: punchData.employee_id || null,
           latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
           longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
@@ -258,8 +255,7 @@ exports.syncPunches = async (req, res) => {
               title: "🚨 Critical Sync Punch Failure",
               message: `Offline punch sync failed for Employee ID: ${punchData.employee_id} at ${punchData.punch_time}. Error: ${punchErr.message}`,
               type: "CRITICAL_SYNC_ERROR",
-              company_id: req.user.company_id,
-              branch_id: req.user.branch_id
+              company_id: req.user.company_id
             });
           }
         } catch (notifErr) {
@@ -337,7 +333,6 @@ exports.getAttendanceSummary = async (req, res) => {
     const employeeWhere = {
       ...consolidatedFilter,
       company_id: req.user.company_id,
-      branch_id: req.user.branch_id,
       [Op.and]: [...joiningDateFilter[Op.and]]
     };
 
@@ -359,7 +354,7 @@ exports.getAttendanceSummary = async (req, res) => {
     //         const employeesToSync = await commonQuery.findAllRecords(
     //             Employee,
     //             employeeWhere,
-    //             { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
+    //             { attributes: ['id', 'company_id',"joining_date"] },
     //             null, 
     //         );
 
@@ -370,8 +365,7 @@ exports.getAttendanceSummary = async (req, res) => {
     //             targetDate,
     //             { 
     //               user_id: req.user.id, 
-    //               company_id: req.user.company_id, 
-    //               branch_id: req.user.branch_id 
+    //               company_id: req.user.company_id
     //             }
     //           );
     //         }
@@ -425,13 +419,6 @@ exports.getAttendanceSummary = async (req, res) => {
               {
                 model: AttendancePunch,
                 as: "attendancePunches",
-                include: [
-                  {
-                    model: BranchMaster,
-                    as: "branch",
-                    attributes: ["id", "branch_name"]
-                  }
-                ],
                 required: false,
                 separate: true,
                 order: [["punch_time", "ASC"]]
@@ -447,11 +434,6 @@ exports.getAttendanceSummary = async (req, res) => {
                 as: "shiftTemplate",
                 attributes: ["id", "shift_name", "start_time", "end_time"],
                 include: [{ model: ShiftBreak, as: "ShiftBreaks" }]
-              },
-              {
-                model: BranchMaster,
-                as: "branch",
-                attributes: ["id", "branch_name"]
               }
             ]
           },
@@ -466,7 +448,7 @@ exports.getAttendanceSummary = async (req, res) => {
         ],
         order: [['first_name', 'ASC']],
         attributes: [
-          'id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches",
+          'id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template',
           ...summaryAttributes
         ],
         subQuery: false // Required for window functions to work correctly with pagination
@@ -520,7 +502,6 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
           day.setDataValue('is_out_duty_approved', itemOutDutyMap.has(emp.id));
-          day.setDataValue('branch_name', day.branch?.branch_name);
 
           // Enhanced Status Text logic (Same as monthly summary)
           const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
@@ -689,8 +670,7 @@ exports.updateAttendanceDay = async (req, res) => {
       attendance_date,
       {
         user_id: req.user.id,
-        company_id: req.user.company_id,
-        branch_id: req.body.branch_id || req.user.branch_id,
+        company_id: req.user.company_id
       },
       t
     );
@@ -899,7 +879,6 @@ exports.updateAttendanceDay = async (req, res) => {
       await manualPunch(employee_id, attendance_date, effectiveFirstIn, effectiveLastOut, {
         user_id: req.user.id,
         company_id: req.user.company_id,
-        branch_id: req.body.branch_id || req.user.branch_id,
         shift_id: shift_id,
         preserveStatus: shouldPreserveStatus,
         bypassShiftRestrictions: true,
@@ -938,7 +917,6 @@ exports.updateAttendanceDay = async (req, res) => {
       status: effectiveStatus,
       user_id: req.user.id,
       company_id: req.user.company_id,
-      branch_id: req.body.branch_id || req.user.branch_id,
       late_minutes: late_minutes !== undefined ? late_minutes : (day ? day.late_minutes : 0),
       early_out_minutes: early_out_minutes !== undefined ? early_out_minutes : (day ? day.early_out_minutes : 0),
     };
@@ -1251,8 +1229,7 @@ exports.deletePunch = async (req, res) => {
     // After deleting a punch, we MUST rebuild the day summary
     await rebuildAttendanceDay(employeeId, punchDate, {
       user_id: req.user.id,
-      company_id: req.user.company_id,
-      branch_id: req.user.branch_id
+      company_id: req.user.company_id
     }, t);
 
     await t.commit();
@@ -1316,8 +1293,7 @@ exports.deleteAttendanceDay = async (req, res) => {
     // 5. Rebuild attendance day to restore default statuses (Holiday, Weekly Off, etc.)
     // await rebuildAttendanceDay(employee_id, attendance_date, {
     //   user_id: req.user.id,
-    //   company_id: req.user.company_id,
-    //   branch_id: req.body.branch_id || req.user.branch_id
+    //   company_id: req.user.company_id
     // }, t);
 
     await t.commit();
@@ -1389,7 +1365,6 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         await manualPunch(employee_id, attendance_date, first_in, last_out, {
           user_id: req.user.id,
           company_id: req.user.company_id,
-          branch_id: req.body.branch_id || req.user.branch_id,
           shift_id: employee_shift_id,
           employee: emp, // Pass pre-fetched employee
           existingDay: existingRecord // Pass pre-fetched day
@@ -1404,7 +1379,6 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         await rebuildAttendanceDay(employee_id, attendance_date, {
           user_id: req.user.id,
           company_id: req.user.company_id,
-          branch_id: req.body.branch_id || req.user.branch_id,
           shift_id: employee_shift_id,
           employee: emp,
           forcedStatus: status // [NEW] Pass status to ensure leave adjustment during rebuild
@@ -1421,8 +1395,7 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
         attendance_date,
         status,
         user_id: req.user.id,
-        company_id: req.user.company_id,
-        branch_id: req.body.branch_id || req.user.branch_id
+        company_id: req.user.company_id
       };
 
       if (status !== undefined) payload.status = status;
@@ -1548,11 +1521,6 @@ exports.getAttendanceDayDetails = async (req, res) => {
           model: AttendancePunch,
           as: "attendancePunches",
           include: [
-            {
-              model: BranchMaster,
-              as: "branch",
-              attributes: ["branch_name"]
-            },
             {
               model: DeviceMaster,
               as: "device",
@@ -1727,7 +1695,7 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     let isOwnRequest = employee_id == req.user?.employee_id;
-    const tenantOptions = isOwnRequest ? { company_id: true, branch_id: true, user_id: true, applyHierarchy: false } : true;
+    const tenantOptions = isOwnRequest ? { company_id: true, user_id: true, applyHierarchy: false } : true;
     const tenantOptionsEmpty = isOwnRequest ? { applyHierarchy: false } : {};
 
     // Normalize input (e.g., "jan 2026" -> "Jan 2026")
@@ -1745,7 +1713,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // 1. Fetch employee details
     const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {
-      attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'shift_template', 'leave_template', 'holiday_template', 'weekly_off_template', 'joining_date', 'access_branches'],
+      attributes: ['id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'shift_template', 'leave_template', 'holiday_template', 'weekly_off_template', 'joining_date'],
       include: [
         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
         { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
@@ -1796,11 +1764,6 @@ exports.getMonthlyAttendance = async (req, res) => {
               model: DeviceMaster,
               as: 'device',
               attributes: ['id', 'device_name']
-            },
-            {
-              model: BranchMaster,
-              as: 'branch',
-              attributes: ['id', 'branch_name']
             }
           ],
           order: [["punch_time", "ASC"]]
@@ -1812,11 +1775,6 @@ exports.getMonthlyAttendance = async (req, res) => {
         {
           model: LeaveTemplateCategory,
           as: "leaveCategory"
-        },
-        {
-          model: BranchMaster,
-          as: "branch",
-          attributes: ["id", "branch_name"]
         }
       ],
       order: [["attendance_date", "ASC"]]
@@ -1993,7 +1951,6 @@ exports.getMonthlyAttendance = async (req, res) => {
           overtime_amount: attendanceDay.overtime_amount,
           overtime_data: attendanceDay.overtime_data,
           fine_data: attendanceDay.fine_data,
-          branch_name: attendanceDay.branch?.branch_name,
           leave_session: attendanceDay.leave_session,
           is_locked: attendanceDay.is_locked,
           shift_id: attendanceDay.shift_id,
@@ -2018,7 +1975,6 @@ exports.getMonthlyAttendance = async (req, res) => {
               date_time: dayjs(p.punch_time).format("DD MMM, hh:mm A"),
               type: p.punch_type,
               punch_by: p.user?.user_name || "System",
-              branch_name: p.branch?.branch_name,
               image_url: p.image_name
                 ? `${process.env.FILE_SERVER_URL}${constants.ATTENDANCE_FOLDER}${p.image_name}`
                 : null,
@@ -2279,7 +2235,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
 
   const t = await sequelize.transaction();
   try {
-    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
+    const { accuracy, time, company_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
     const finalMessage = message || massage || null;
 
     if (!time) {
@@ -2287,9 +2243,8 @@ exports.storeFaceRecognitionError = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Time is required");
     }
 
-    // Determine the company and branch IDs
+    // Determine the company and IDs
     const finalCompanyId = company_id || req.user?.company_id || 0;
-    const finalBranchId = branch_id || req.user?.branch_id || 0;
 
     let errorImage = null;
 
@@ -2323,7 +2278,6 @@ exports.storeFaceRecognitionError = async (req, res) => {
       accuracy: accuracy ? parseFloat(accuracy) : null,
       time: dayjs(time).toDate(),
       company_id: finalCompanyId,
-      branch_id: finalBranchId,
       employee_id: employee_id || null,
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
@@ -2343,7 +2297,6 @@ exports.storeFaceRecognitionError = async (req, res) => {
         accuracy: faceError.accuracy,
         time: faceError.time,
         company_id: faceError.company_id,
-        branch_id: faceError.branch_id,
         employee_id: faceError.employee_id,
         latitude: faceError.latitude,
         longitude: faceError.longitude,
@@ -2401,11 +2354,6 @@ exports.getFaceRecognitionErrors = async (req, res) => {
       fieldConfig,
       {
         include: [
-          {
-            model: BranchMaster,
-            as: "branch",
-            attributes: ["id", "branch_name"]
-          },
           {
             model: Employee,
             as: "employee",

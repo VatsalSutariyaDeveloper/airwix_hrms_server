@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
     priority: { type: DataTypes.INTEGER, defaultValue: 999 },
     status: { type: DataTypes.SMALLINT, defaultValue: 1, comment: "1: Active, 0: Inactive" },
     user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "approval_workflows",

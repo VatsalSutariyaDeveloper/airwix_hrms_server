@@ -169,6 +169,10 @@ if (cluster.isMaster) {
     });
   };
 
+  const runMigrationsAndStartServer = async () => {
+    startServer();
+  };
+
   const DB_SYNC_ENABLED = process.env.DB_SYNC === "true";
   if (DB_SYNC_ENABLED) {
     const { createConnectionByPrefix } = require("./config/database");
@@ -179,7 +183,7 @@ if (cluster.isMaster) {
     Promise.all(prefixes.map(prefix => createConnectionByPrefix(prefix).sync()))
       .then(() => {
         console.log("✅ Database checks complete.");
-        startServer();
+        runMigrationsAndStartServer();
       })
       .catch((err) => {
         console.error("❌ Database sync failed:", err.message);
@@ -187,7 +191,7 @@ if (cluster.isMaster) {
       });
   } else {
     console.log("ℹ️  DB_SYNC is DISABLED. Skipping table checks.");
-    startServer();
+    runMigrationsAndStartServer();
   }
 
   initCronJobs();

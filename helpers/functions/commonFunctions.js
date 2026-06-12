@@ -403,7 +403,7 @@ exports.createOrUpdateNotification = async (data, transaction = null) => {
   }
 }
 
-exports.initializeCompanySettings = async (company_id, branch_id, user_id, transaction) => {
+exports.initializeCompanySettings = async (company_id, user_id, transaction) => {
   try {
     const employeeSettingsPayload = [
       {
@@ -411,7 +411,6 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
         settings_value: true,
         status: 0,
         user_id: user_id,
-        branch_id: branch_id,
         company_id: company_id
       },
       {
@@ -419,7 +418,6 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
         settings_value: [],
         status: 0,
         user_id: user_id,
-        branch_id: branch_id,
         company_id: company_id
       }
     ];
@@ -427,7 +425,7 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
     const data = await commonQuery.bulkCreate(
       EmployeeSettings,
       employeeSettingsPayload,
-      { company_id, branch_id, user_id },
+      { company_id, user_id },
       transaction,
       false
     );
@@ -461,23 +459,22 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
           settings_name: ms.setting_key,
           settings_value: parsedVal,
           user_id: user_id,
-          branch_id: branch_id,
           company_id: company_id,
           status: 0
         };
       });
-
+ 
       await commonQuery.bulkCreate(
         CompanySettings,
         masterPayload,
-        { company_id, branch_id, user_id },
+        { company_id, user_id },
         transaction,
         false
       );
     }
-
-    await this.initializeSalaryComponents(company_id, branch_id, user_id, transaction);
-
+ 
+    await this.initializeSalaryComponents(company_id, user_id, transaction);
+ 
     return data;
   } catch (error) {
     console.error("Error initializing company settings:", error);
@@ -485,7 +482,7 @@ exports.initializeCompanySettings = async (company_id, branch_id, user_id, trans
   }
 }
 
-exports.initializeSalaryComponents = async (company_id, branch_id, user_id, transaction) => {
+exports.initializeSalaryComponents = async (company_id, user_id, transaction) => {
   try {
     const standardComponents = [
       {
@@ -565,7 +562,6 @@ exports.initializeSalaryComponents = async (company_id, branch_id, user_id, tran
     const payload = standardComponents.map(comp => ({
       ...comp,
       company_id,
-      branch_id: branch_id || 0,
       user_id: user_id || 0,
       status: 0
     }));
@@ -595,14 +591,14 @@ exports.initializeSalaryComponents = async (company_id, branch_id, user_id, tran
   }
 };
 
-exports.initializeCompanyRoles = async (company_id, branch_id, user_id, transaction) => {
+exports.initializeCompanyRoles = async (company_id, user_id, transaction) => {
   try {
     const { RolePermission } = require("../../models");
     const commonQuery = require("../commonQuery");
 
     const systemRoles = await commonQuery.findAllRecords(
       RolePermission,
-      { is_system: true, status: 0, company_id: -1, branch_id: -1 },
+      { is_system: true, status: 0, company_id: -1 },
       {},
       transaction,
       {}
@@ -619,7 +615,6 @@ exports.initializeCompanyRoles = async (company_id, branch_id, user_id, transact
           is_system: false,
           p_role_id: roleData.id,
           company_id: company_id,
-          branch_id: branch_id || 0,
           user_id: user_id,
           status: 0
         };
@@ -841,9 +836,8 @@ exports.applyRounding = (amount, roundOffType) => {
   return { roundedAmount, roundOffAmount };
 };
 
-exports.getPunchAllowedWhere = async (company_id, branch_id) => {
+exports.getPunchAllowedWhere = async (company_id) => {
   const settings = await getCompanySetting(company_id);
-  const company_branch_punch_config = settings.company_branch_punch_config;
   const company_punch_config = settings.company_punch_config;
   let where = { status: 0 };
   if (company_punch_config === true || company_punch_config === "true") {
@@ -855,18 +849,8 @@ exports.getPunchAllowedWhere = async (company_id, branch_id) => {
     } else {
       where.company_id = company_id;
     }
-  } else if (company_branch_punch_config === true || company_branch_punch_config === "true") {
-    where.company_id = company_id;
   } else {
     where.company_id = company_id;
-    where[Op.or] = [
-      { branch_id: branch_id },
-      {
-        access_branches: {
-          [Op.contains]: [branch_id]   // 👈 important
-        }
-      }
-    ];
   }
   console.log('where', where);
   return where;

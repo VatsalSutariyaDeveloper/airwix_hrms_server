@@ -30,8 +30,7 @@ module.exports = (sequelize, DataTypes) => {
             comment: "0: Success, 1: Completed with Errors, 2: Failed/Aborted" 
         },
         user_id: { type: DataTypes.INTEGER, allowNull: true },
-        branch_id: { type: DataTypes.INTEGER, allowNull: true },
-        company_id: { type: DataTypes.INTEGER, allowNull: true },
+                company_id: { type: DataTypes.INTEGER, allowNull: true },
         error_details: { type: DataTypes.TEXT, allowNull: true },
         import_parameters: { type: DataTypes.TEXT, allowNull: true }
     }, {

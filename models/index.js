@@ -37,7 +37,7 @@ function initModels(prefix) {
   const CompanyAddress = require("./settings/company/companyAddress")(seq, DataTypes);
   const DeviceMaster = require("./settings/deviceMaster")(seq, DataTypes);
   const DesignationMaster = require("./settings/designationMaster")(seq, DataTypes);
-  const BranchMaster = require("./settings/branchMaster")(seq, DataTypes);
+
   const ResignationTemplate = require("./settings/resignationTemplate")(seq, DataTypes);
   const ResignationReason = require("./settings/resignationReason")(seq, DataTypes);
   const OutDutyRequest = require("./settings/outDutyRequest")(seq, DataTypes);
@@ -154,7 +154,7 @@ function initModels(prefix) {
     CompanyAddress,
     DeviceMaster,
     DesignationMaster,
-    BranchMaster,
+
     ResignationTemplate,
     ResignationReason,
     OutDutyRequest,
@@ -230,6 +230,16 @@ function initModels(prefix) {
   Object.keys(db).forEach(modelName => {
     if (db[modelName].associate) {
       db[modelName].associate(db);
+    }
+  });
+
+  // Dynamically define company association if model has company_id but no association named "company"
+  Object.keys(db).forEach(modelName => {
+    const model = db[modelName];
+    if (model && model.rawAttributes && model.rawAttributes.company_id && modelName !== "CompanyMaster") {
+      if (!model.associations || !model.associations.company) {
+        model.belongsTo(db.CompanyMaster, { foreignKey: "company_id", as: "company" });
+      }
     }
   });
 

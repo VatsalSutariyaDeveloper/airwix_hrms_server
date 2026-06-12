@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0 = active, 1 = inactive, 2 = deleted",
       },
       user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      branch_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
+      
       company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
     },
     {

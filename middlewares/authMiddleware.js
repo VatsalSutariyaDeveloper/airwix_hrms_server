@@ -81,11 +81,13 @@ async function authMiddleware(req, res, next) {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const { Op } = require("sequelize");
 
     // Verify User, Company, and Branch status
+    let userRecord = null;
     if (decoded.id && !decoded.device_id) {
-      const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
-      if (!user) {
+      userRecord = await User.findOne({ where: { id: decoded.id, status: 0 } });
+      if (!userRecord) {
         req.auth_error_detail = `User with ID ${decoded.id} is inactive or does not exist.`;
         await cleanupFcmToken(token);
         return res.status(401).json({ success: false, message: "Unauthorized - User is inactive or not exist" });
@@ -93,6 +95,7 @@ async function authMiddleware(req, res, next) {
     }
 
     if (decoded.company_id) {
+      decoded.company_id = Number(decoded.company_id);
       const company = await CompanyMaster.findOne({ where: { id: decoded.company_id, status: 0 } });
       if (!company) {
         req.auth_error_detail = `Company with ID ${decoded.company_id} is inactive or suspended.`;
@@ -101,14 +104,41 @@ async function authMiddleware(req, res, next) {
       }
     }
 
-    if (decoded.branch_id) {
-      const branch = await BranchMaster.findOne({ where: { id: decoded.branch_id, status: 0 } });
-      if (!branch) {
-        req.auth_error_detail = `Branch with ID ${decoded.branch_id} is inactive or deleted.`;
-        await cleanupFcmToken(token);
-        return res.status(401).json({ success: false, message: "Unauthorized - Branch is inactive or not exist" });
+    // Branch verification removed as branches are now companies.
+    // 🚀 MULTI-COMPANY PARSING & VALIDATION
+    const isSuperAdmin = decoded.is_super_admin || decoded.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN;
+    let allowedCompanyIds = [];
+    if (isSuperAdmin && decoded.organization_id) {
+      const orgId = decoded.organization_id;
+      const companies = await CompanyMaster.findAll({
+        where: { organization_id: orgId, status: { [Op.ne]: 2 } },
+        attributes: ['id'],
+        raw: true
+      });
+      allowedCompanyIds = companies.map(c => c.id);
+    } else if (userRecord) {
+      const companyAccessStr = (userRecord.company_access || "").replace(/[\[\]]/g, "");
+      allowedCompanyIds = companyAccessStr.split(",").map(id => Number(id.trim())).filter(id => !isNaN(id) && id > 0);
+      if (!allowedCompanyIds.includes(decoded.company_id)) {
+        allowedCompanyIds.push(decoded.company_id);
       }
+    } else {
+      allowedCompanyIds = [decoded.company_id];
     }
+
+    const companyAccessList = allowedCompanyIds;
+
+    const selectedCompaniesHeader = req.headers["x-selected-companies"];
+    let selectedCompanyIds = [];
+    if (selectedCompaniesHeader) {
+      const requestedIds = selectedCompaniesHeader.split(",").map(id => Number(id.trim())).filter(id => !isNaN(id) && id > 0);
+      selectedCompanyIds = requestedIds.filter(id => allowedCompanyIds.includes(id));
+    }
+    if (selectedCompanyIds.length === 0) {
+      selectedCompanyIds = [decoded.company_id];
+    }
+
+    const isDropdown = req.path.includes("/dropdown-list") || req.path.includes("/dropdown");
 
     // 🚀 NEW: Verify Device ID if present (Multi-device security)
     if (decoded.device_id) {
@@ -131,7 +161,7 @@ async function authMiddleware(req, res, next) {
 
         try {
           if (existingDevice && existingDevice.status !== 0 && existingDevice.status !== 3) {
-            const newDeviceId = await deviceHelper.generateUniqueDeviceId(existingDevice.company_id, existingDevice.branch_id);
+            const newDeviceId = await deviceHelper.generateUniqueDeviceId(existingDevice.company_id, 0);
             await DeviceMaster.update({
               device_id: newDeviceId,
               ip_address: null,
@@ -165,10 +195,8 @@ async function authMiddleware(req, res, next) {
       employee_id: decoded.employee_id,
       company_id: decoded.company_id,
       organization_id: decoded.organization_id || null, // Decrypt organization_id
-      branch_id: decoded.branch_id,
       role_id: decoded.role_id,
       role_key: decoded.role_key,
-      branch_access: decoded.branch_access || "",
       permissions: decoded.permissions || [],
       access_by: decoded.access_by || "web login",
       is_attendance_supervisor: decoded.is_attendance_supervisor,
@@ -177,7 +205,10 @@ async function authMiddleware(req, res, next) {
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
       access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
       device_id: decoded.device_id || null,
-      fcm_token: decoded.fcm_token || null
+      fcm_token: decoded.fcm_token || null,
+      selectedCompanyIds,
+      companyAccessList,
+      isDropdown
     };
 console.log("req.user",req.user)
     requestContext.run(
@@ -186,8 +217,6 @@ console.log("req.user",req.user)
         employeeId: decoded.employee_id,
         companyId: decoded.company_id,
         organizationId: decoded.organization_id || null, // Link organizationId to context
-        branchId: decoded.branch_id,
-        branchAccess: decoded.branch_access || "",
         roleId: decoded.role_id,
         roleKey: decoded.role_key,
         is_attendance_supervisor: decoded.is_attendance_supervisor,
@@ -197,13 +226,17 @@ console.log("req.user",req.user)
         access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
         ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip,
         userAgent: req.headers["user-agent"] || "unknown",
-        endpoint: `${req.method} ${req.originalUrl}`
+        endpoint: `${req.method} ${req.originalUrl}`,
+        selectedCompanyIds,
+        companyAccessList,
+        isDropdown
       },
       () => next()
     );
 
   } catch (err) {
     req.auth_error_detail = `JWT validation failed: ${err.message} (${err.name}).`;
+    console.error("🔐 [AUTH FAILED] Detailed stack trace:", err);
     try {
       const authHeader = req.headers.authorization;
       if (authHeader) {
@@ -231,7 +264,7 @@ console.log("req.user",req.user)
             });
 
             if (device && device.status === 0) {
-              const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
+              const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, 0);
               await DeviceMaster.update({
                 device_id: newDeviceId,
                 ip_address: null,

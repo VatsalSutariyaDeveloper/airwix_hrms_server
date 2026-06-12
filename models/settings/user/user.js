@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
     authorized_signature: { type: DataTypes.STRING(255), allowNull: true },
     report_to: { type: DataTypes.STRING(255), allowNull: true },
     company_access: { type: DataTypes.STRING(255) },
-    branch_access: { type: DataTypes.STRING(255) },
+    
     device_id: { type: DataTypes.STRING(100), allowNull: true },
     ip_address: { type: DataTypes.STRING(50), allowNull: true },
     is_login: { type: DataTypes.INTEGER, defaultValue: 0, comment: "0 = No, 1 = Yes" },
@@ -24,12 +24,11 @@ module.exports = (sequelize, DataTypes) => {
     pin_setup_token: { type: DataTypes.STRING(255), allowNull: true },
     pin_setup_expires: { type: DataTypes.DATE, allowNull: true },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    fcm_token: { type: DataTypes.STRING(255), allowNull: true },
-  },
-    {
-      tableName: "users",
+    fcm_token: { type: DataTypes.STRING(255), allowNull: true }
+  }, {
+    tableName: "users",
       underscored: true,
       timestamps: true,
     }
@@ -54,10 +53,7 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: "employee_id",
       as: "Employee",
     });
-    User.belongsTo(models.BranchMaster, {
-      foreignKey: "branch_id",
-      as: "Branch",
-    });
+    
     User.belongsTo(models.CompanyMaster, {
       foreignKey: "company_id",
       as: "Company",

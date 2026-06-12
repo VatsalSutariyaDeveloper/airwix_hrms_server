@@ -14,8 +14,8 @@ module.exports = (sequelize, DataTypes) => {
     approved_by: { type: DataTypes.INTEGER },
     approved_at: { type: DataTypes.DATE },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    
+    company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "salary_revision_histories",
     timestamps: true,

@@ -16,7 +16,6 @@ exports.create = async (req, res) => {
       approve_status: "Approve Status",
       without_logo: "Without Logo",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company"
     };
 
@@ -69,7 +68,6 @@ exports.update = async (req, res) => {
       approve_status: "Approve Status",
       without_logo: "Without Logo",
       user_id: "User",
-      branch_id: "Branch",
       company_id: "Company"
     };
 

@@ -409,11 +409,6 @@ module.exports = {
 
       // Explicit Tenant overrides passed in the request body
       if (reqBody?.company_id) filters.company_id = reqBody?.company_id;
-      if (reqBody?.branch_id !== undefined && reqBody?.branch_id !== null && reqBody?.branch_id !== "") {
-        if (reqBody.branch_id !== "All" && reqBody.branch_id !== "all" && reqBody.branch_id !== 0 && reqBody.branch_id !== "0") {
-          filters.branch_id = reqBody.branch_id;
-        }
-      }
       if (reqBody?.user_id) filters.user_id = reqBody?.user_id;
 
       if (reqBody?.startDate || reqBody?.endDate) {

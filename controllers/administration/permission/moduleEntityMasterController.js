@@ -44,7 +44,7 @@ exports.create = async (req, res) => {
     }
     const result = await commonQuery.createRecord(
       ModuleEntityMaster,
-      { ...POST, company_id: -1, branch_id: -1, user_id: -1 },
+      { ...POST, company_id: -1, user_id: -1 },
       transaction,
       false
     );
@@ -73,7 +73,6 @@ exports.create = async (req, res) => {
         entity_id: result.id,
         action: action.action,
         company_id: -1,
-        branch_id: -1,
         user_id: -1,
       }, transaction, false);
 
@@ -220,7 +219,7 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors );
     }
 
-    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, { ...POST, company_id: -1, branch_id: -1, user_id: -1 }, transaction, false, false);
+    const updated = await commonQuery.updateRecordById(ModuleEntityMaster, req.params.id, { ...POST, company_id: -1, user_id: -1 }, transaction, false, false);
 
     if (!updated || updated.status === 2) {
       await transaction.rollback();
@@ -250,7 +249,6 @@ exports.update = async (req, res) => {
             { 
               action: action.action,
               company_id: -1,
-              branch_id: -1,
               user_id: -1,
             },
             transaction,
@@ -285,7 +283,6 @@ exports.update = async (req, res) => {
             action: action.action,
             company_id: -1,
             user_id: -1,
-            branch_id: -1,
           }, transaction, false, false);
 
           createdPermissions.push(newPerm);

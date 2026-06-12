@@ -25,11 +25,10 @@ module.exports = (sequelize, DataTypes) => {
             is_night_shift: { type: DataTypes.BOOLEAN, defaultValue: false },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-            branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-            company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-        },
-        {
-            tableName: "employee_shift",
+            
+            company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
+  }, {
+    tableName: "employee_shift",
             timestamps: true,
             underscored: true,
         }

@@ -21,11 +21,10 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0: Pending, 1: Adjusted, 2: Cancelled", 
       },
       user_id: { type: DataTypes.INTEGER, allowNull: false },
-      branch_id: { type: DataTypes.INTEGER, allowNull: false },
-      company_id: { type: DataTypes.INTEGER, allowNull: false },
-    },
-    {
-      tableName: "employee_advances",
+      
+      company_id: { type: DataTypes.INTEGER, allowNull: false }
+  }, {
+    tableName: "employee_advances",
       timestamps: true,
       underscored: true,
     }

@@ -18,8 +18,7 @@ const {
     EmployeeLeaveBalance,
     LeaveTemplateCategory,
     Reimbursement,
-    ExpenseType,
-    BranchMaster
+    ExpenseType
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting, fileExists } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
@@ -368,11 +367,6 @@ exports.getPendingApprovalsDetails = async (req, res) => {
                         as: "approvedBy",
                         attributes: ["id", "user_name"],
                         required: false
-                    },
-                    {
-                        model: BranchMaster,
-                        as: "branch",
-                        attributes: []
                     }
                 ],
                 order: [['created_at', 'DESC']]
@@ -640,7 +634,8 @@ exports.getDepartmentStats = async (req, res) => {
                 ],
                 include: [{ model: Department, as: "department", attributes: ["name"], where: { status: { [Op.in]: [0, 1, 2] } } }],
                 group: ['department_id', 'department.id', 'department.name'],
-                order: [['department_id', 'ASC']]
+                order: [['department_id', 'ASC']],
+                skipAutoCompanyInclude: true
             }
         );
 
@@ -694,9 +689,10 @@ exports.getPayrollOverview = async (req, res) => {
             {
                 attributes: [
                     [sequelize.fn('SUM', sequelize.col('net_salary')), 'total_payout'],
-                    [sequelize.fn('COUNT', sequelize.col('id')), 'processed_count']
+                    [sequelize.fn('COUNT', sequelize.col('Payslip.id')), 'processed_count']
                 ],
-                raw: true
+                raw: true,
+                skipAutoCompanyInclude: true
             },
         );
 
@@ -787,18 +783,17 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
             date: todayDate,
             status: 0
         }, {
-            attributes: ['id', 'name', 'date', 'company_id', 'branch_id']
+            attributes: ['id', 'name', 'date', 'company_id']
         });
 
         if (holidays.length > 0) {
             for (const holiday of holidays) {
-                // Get all active employees for this company/branch
+                // Get all active employees for this company
                 const employees = await commonQuery.findAllRecords(Employee, {
                     company_id: holiday.company_id,
-                    status: 0,
-                    ...(holiday.branch_id ? { branch_id: holiday.branch_id } : {})
+                    status: 0
                 }, {
-                    attributes: ['id', 'company_id', 'branch_id']
+                    attributes: ['id', 'company_id']
                 });
 
                 // Get users for these employees
@@ -807,7 +802,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                     employee_id: { [Op.in]: employeeIds },
                     status: 0
                 }, {
-                    attributes: ['id', 'company_id', 'branch_id']
+                    attributes: ['id', 'company_id']
                 });
 
                 // Create notification for each user
@@ -818,8 +813,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                         message: `Tomorrow is ${holiday.name}. Enjoy your holiday!`,
                         type: 'HOLIDAY',
                         reference_id: holiday.id,
-                        company_id: user.company_id,
-                        branch_id: user.branch_id
+                        company_id: user.company_id
                     });
                 }
                 console.log(`✅ Holiday notification created for ${holiday.name} - ${users.length} users notified`);
@@ -834,7 +828,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                 sequelize.where(sequelize.literal(`TO_CHAR("dob", 'DD')`), todayDay)
             ]
         }, {
-            attributes: ['id', 'first_name', 'company_id', 'branch_id', 'dob']
+            attributes: ['id', 'first_name', 'company_id', 'dob']
         });
 
         if (birthdayEmployees.length > 0) {
@@ -844,7 +838,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                     employee_id: employee.id,
                     status: 0
                 }, {
-                    attributes: ['id', 'company_id', 'branch_id']
+                    attributes: ['id', 'company_id']
                 });
 
                 if (user) {
@@ -854,8 +848,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                         message: `Happy Birthday, ${employee.first_name}! 🎉`,
                         type: 'BIRTHDAY',
                         reference_id: employee.id,
-                        company_id: user.company_id,
-                        branch_id: user.branch_id
+                        company_id: user.company_id
                     });
                     console.log(`✅ Birthday notification created for ${employee.first_name}`);
                 }

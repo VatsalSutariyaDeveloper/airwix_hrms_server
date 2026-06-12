@@ -43,7 +43,7 @@
             comment: "0: Active, 1: Inactive, 2: Deleted"
         },
         user_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
-        branch_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
+        
         company_id: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 }
     }, {
         tableName: "permissions",

@@ -1,4 +1,4 @@
-const { User, CompanyMaster, BranchMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
+const { User, CompanyMaster, GodownMaster, CompanyConfigration, RolePermission, CompanySubscription, SubscriptionPlan, ActivationRequest, Organization, DeviceMaster, Employee } = require("../../models");
 const { sequelize, validateRequest, handleError, otpService, uploadFile, constants, initializeCompanySettings, initializeCompanyRoles } = require("../../helpers");
 const { validatePhone } = require("../../helpers/phoneValidation");
 const bcrypt = require("bcrypt");
@@ -215,9 +215,9 @@ exports.register = async (req, res) => {
     // ─────────────────────────────────────────────────────────────────────────
 
     // ✅ Required field validation
-    await requestContext.run({ userId: 0, companyId: 0, branchId: 0 }, async () => {
+    await requestContext.run({ userId: 0, companyId: 0 }, async () => {
       const errors = await validateRequest(req.body, requiredFields, {
-        skipDefaultRequired: ["company_id", "branch_id", "user_id"]
+        skipDefaultRequired: ["company_id", "user_id"]
       }, transaction);
 
       if (errors) {
@@ -330,20 +330,9 @@ exports.register = async (req, res) => {
         status: 0
     }, { transaction });
 
-    // 3. Create Branch
-    const newBranch = await BranchMaster.create({
-        branch_name: "Main Branch", country_id: country_id || null, state_id: state_id || null,
-        city: city || null, pincode: pincode || null, is_main_branch: 1,
-        company_id: newCompany.id, user_id: newUser.id 
-    }, { transaction });
 
-    // 4. Update User with Branch ID
-    await User.update(
-      { branch_id: newBranch.id },
-      { where: { id: newUser.id }, transaction }
-    );
 
-    // await initializeCompanySettings(newCompany.id, newBranch.id, newUser.id, transaction);
+    // await initializeCompanySettings(newCompany.id, newUser.id, transaction);
 
     // ---------------------------------------------------------
     // 🆕 NEW LOGIC: START 2-DAY FREE TRIAL
@@ -368,7 +357,6 @@ exports.register = async (req, res) => {
     //         duration_days: 2,
     //         is_trial: true,
     //         status: 0,
-    //         branch_id: newBranch.id, 
     //         user_id: newUser.id,
     //         organization_id: newOrg.id,
             
@@ -404,12 +392,17 @@ exports.register = async (req, res) => {
 
     await transaction.commit();
 
-    const token = generateToken({
-      ...newUser.get({ plain: true }),
-      organization_id: newOrg.id,
-      branch_id: newBranch.id,
-      is_super_admin: newUser.is_super_admin || (adminRole && newUser.role_id == adminRole.id),
-    }, newCompany.id, "web login");
+    const token = generateToken(
+      {
+        id: newUser.id,
+        employee_id: newUser.employee_id || null,
+        role_id: newUser.role_id,
+        role_key: userPermission?.role_key || null,
+        is_super_admin: newUser.is_super_admin || (adminRole && newUser.role_id == adminRole.id),
+      },
+      newCompany.id,
+      "web login"
+    );
 
     const userData = {
       id: newUser.id,
@@ -433,7 +426,6 @@ exports.register = async (req, res) => {
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: newUser.user_id || null,
-      branch_id: newBranch.id,
       company_id: newCompany.id,
       organization_id: newOrg.id,
     };

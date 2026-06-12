@@ -5,7 +5,7 @@ module.exports = (sequelize, DataTypes) => {
     action: { type: DataTypes.STRING(20), allowNull: false, comment: "APPROVED, REJECTED" },
     comment: { type: DataTypes.TEXT },
     level_sequence: { type: DataTypes.INTEGER },
-    branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    
     company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "approval_logs",

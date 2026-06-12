@@ -1,4 +1,4 @@
-const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, BranchMaster, EmployeeSettings, RolePermission, Employee, CompanySettings, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../../models");
+const { User, CompanyMaster, ModuleMaster, ModuleEntityMaster, CountryMaster, CurrencyMaster, StateMaster, CompanyConfigration, UserCompanyRoles, Permission, EmployeeSettings, RolePermission, Employee, CompanySettings, AttendanceTemplate, EmployeeAttendanceTemplate } = require("../../../models");
 const { sequelize, commonQuery, handleError, Op, constants, getCompanySubscription } = require("../../../helpers");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
@@ -8,7 +8,7 @@ const { generateToken } = require("../../../helpers/tokenHelper");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
-  if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
+  if (typeof access === "string") return access.replace(/[\[\]]/g, "").split(",").map((id) => id.trim()).filter(Boolean);
   return [];
 };
 
@@ -40,7 +40,7 @@ exports.sessionData = async (req, res) => {
     // 2. Fetch User & Access Logic (Standard Sequelize)
     const userData = await User.findOne({
       where: { id: user_id },
-      attributes: ['id', 'user_name', 'email', 'role_id', 'is_super_admin', 'mobile_no', 'profile_image', 'company_access', 'branch_access', 'is_login', 'status', 'branch_id', 'company_id', 'employee_id'],
+      attributes: ['id', 'user_name', 'email', 'role_id', 'is_super_admin', 'mobile_no', 'profile_image', 'company_access', 'is_login', 'status', 'company_id', 'employee_id'],
       include: [{
         model: RolePermission,
         as: "RolePermission",
@@ -158,44 +158,35 @@ exports.sessionData = async (req, res) => {
         transaction
       }),
 
-      // E. Branch List
-      BranchMaster.findAll({
+      // E. Branch List (Mapped to CompanyMaster as sub-companies)
+      CompanyMaster.findAll({
         where: {
           status: 0,
-          company_id: {
-            [Op.in]: sequelize.literal(
-              isAdmin
-                ? `(SELECT id FROM company_master WHERE organization_id = ${orgId} AND status != 2)`
-                : `(SELECT id FROM company_master WHERE id IN (${companyAccessList.map(Number).join(',') || 0}) AND status != 2)`
-            )
-          },
-          ...(!isAdmin && normalizeBranchAccess(userData.branch_access).length > 0 ? {
-            id: { [Op.in]: normalizeBranchAccess(userData.branch_access) }
-          } : {})
+          [Op.or]: [
+            { id: company_id },
+            { company_id: company_id }
+          ]
         },
-        attributes: ['id', 'branch_name', 'city', 'country_id', 'state_id', 'company_id'],
+        attributes: ['id', ['company_name', 'branch_name'], 'city', 'country_id', 'state_id', 'company_id'],
         order: [["id", "ASC"]],
         transaction
       }),
-
-      // F. Employee Settings
+// F. Employee Settings
       EmployeeSettings.findAll({
         where: {
           company_id: company_id,
-          branch_id: branch_id,
           status: 0
         },
         attributes: ['id', 'settings_name', 'settings_value'],
         transaction
       }),
 
-      // G. Total Branches Count
-      BranchMaster.count({
+      // G. Total Branches Count (Mapped to CompanyMaster sub-companies count)
+      CompanyMaster.count({
         where: { company_id: record.id, status: 0 },
         transaction
       }),
-
-      // H. Company Settings
+// H. Company Settings
       CompanySettings.findAll({
         where: {
           company_id: company_id,
@@ -237,7 +228,7 @@ exports.sessionData = async (req, res) => {
     const enrichedUserData = {
       ...userJson,
       permission: permissions?.permissions ?? null,
-      branch_access: userData.branch_access || "",
+      branch_access: "",
       profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
       is_attendance_supervisor: userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ? true : false,
       is_reporting_manager: userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ? true : false,
@@ -358,15 +349,9 @@ exports.sessionData = async (req, res) => {
 
     let currentBranch = null;
     if (branchList && branchList.length > 0) {
-      if (branch_id === 0) {
-        currentBranch = { id: 0, branch_name: "All Branches" };
-      } else if (branch_id) {
-        currentBranch = branchList.find(b => b.id === branch_id);
-      }
-
-      if (!currentBranch) {
-        currentBranch = branchList[0];
-      }
+      currentBranch = branchList.find(b => b.id === company_id) || branchList[0];
+    } else {
+      currentBranch = { id: company_id, branch_name: currentCompany.company_name };
     }
 
     const sessionData = {
@@ -443,26 +428,10 @@ exports.switchCompany = async (req, res) => {
       return res.error(constants.NOT_FOUND, { message: "Selected company is inactive or not found." });
     }
 
-    // --- Find a Valid Branch for the NEW Company (Standard Sequelize) ---
-    const branchAccessList = normalizeBranchAccess(user.branch_access || "");
-
-    const defaultBranch = await BranchMaster.findOne({
-      where: {
-        company_id: company_id,
-        status: { [Op.ne]: 2 },
-        ...(!isAdminUser && branchAccessList.length > 0 ? {
-          id: { [Op.in]: branchAccessList }
-        } : {})
-      },
-      attributes: ['id'],
-      transaction
-    });
-
-    const newBranchId = defaultBranch ? defaultBranch.id : 0;
+    const newBranchId = 0;
 
     // 4. Generate New Token
-    user.branch_id = newBranchId;
-    user.organization_id = company.organization_id || null;
+        user.organization_id = company.organization_id || null;
     
     // Fetch supervisor and manager flags
     if (user.employee_id) {
@@ -505,95 +474,7 @@ exports.switchCompany = async (req, res) => {
  * Switch Branch (Updates Token)
  */
 exports.switchBranch = async (req, res) => {
-  const transaction = await sequelize.transaction();
-  try {
-    const { user_id, company_id, organization_id } = getContext();
-    const branch_id = req.query.branch_id;
-
-    if (!branch_id) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, { message: "Branch ID is required." });
-    }
-
-    // 1. Fetch User with Role (Standard Sequelize)
-    const user = await User.findOne({
-      where: { id: user_id, status: 0 },
-      include: [{ model: RolePermission, as: 'RolePermission', attributes: ['role_key'] }],
-      transaction
-    });
-
-    if (!user) {
-      await transaction.rollback();
-      return res.error(constants.NOT_FOUND, { message: "User not found." });
-    }
-
-    let finalBranchId = branch_id;
-    if (branch_id == 0) {
-      finalBranchId = 0;
-    } else {
-      // 2. Validate Branch (Standard Sequelize)
-      const branch = await BranchMaster.findOne({
-        where: {
-          id: branch_id,
-          company_id: company_id, // Security check
-          status: { [Op.ne]: 2 }
-        },
-        transaction
-      });
-
-      if (!branch) {
-        await transaction.rollback();
-        return res.error(constants.NOT_FOUND, { message: "Branch not found or does not belong to this company." });
-      }
-
-      // 2.1 Validate Branch Access for non-super admins
-      const isBranchAdmin = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
-      const branchAccessList = normalizeBranchAccess(user.branch_access || "");
-      if (!isBranchAdmin && branchAccessList.length > 0 && !branchAccessList.includes(String(branch_id))) {
-        await transaction.rollback();
-        return res.error(constants.FORBIDDEN, { message: "You do not have access to this branch." });
-      }
-      finalBranchId = branch.id;
-    }
-
-    // 3. Generate New Token
-    user.branch_id = finalBranchId;
-    user.organization_id = organization_id || null;
-    
-    // Fetch supervisor and manager flags
-    if (user.employee_id) {
-      const employee = await Employee.findOne({
-        where: { id: user.employee_id },
-        attributes: ['is_attendance_supervisor', 'is_reporting_manager'],
-        transaction
-      });
-      if (employee) {
-        user.is_attendance_supervisor = employee.is_attendance_supervisor;
-        user.is_reporting_manager = employee.is_reporting_manager;
-      }
-    }
-
-    const newToken = generateToken({
-      ...(user.get ? user.get({ plain: true }) : user),
-      role_key: user.RolePermission?.role_key,
-      is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager
-    }, company_id, "web login");
-
-    clearUserCache(user.user_id || user.id);
-
-    await transaction.commit();
-
-    return res.ok({
-      token: newToken,
-      message: "Switched branch successfully",
-      current_branch_id: finalBranchId
-    });
-
-  } catch (err) {
-    if (!transaction.finished) await transaction.rollback();
-    return handleError(err, res, req);
-  }
+  return res.ok({ message: "Switch branch is deprecated. Please switch company instead." });
 };
 
 exports.getCompanySettingsData = async (req, res) => {

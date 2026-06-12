@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         priority: { type: DataTypes.INTEGER, defaultValue: 0 },
         status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         user_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-        branch_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+        
         company_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
     }, {
         tableName: "employee_print_templates",

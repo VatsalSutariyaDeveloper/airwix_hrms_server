@@ -1,7 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const Logs = sequelize.define("Logs",{
       company_id: { type: DataTypes.INTEGER, allowNull: true },
-      branch_id: { type: DataTypes.INTEGER, allowNull: true },
+      
       user_id: { type: DataTypes.INTEGER, allowNull: true },
       entity_name: { type: DataTypes.STRING(100), allowNull: false },//(e.g., 'ItemMaster', 'LoginController')
       action_type: { type: DataTypes.ENUM("CREATE", "UPDATE", "DELETE", "STATUS_CHANGE", "ERROR", "BULK_CREATE"), allowNull: false, },
@@ -18,10 +18,9 @@ module.exports = (sequelize, DataTypes) => {
       endpoint: { type: DataTypes.STRING(255), allowNull: true, comment: "The API endpoint requested" },
       user_agent: { type: DataTypes.TEXT, allowNull: true, comment: "Device/Browser details" },
       caller: { type: DataTypes.TEXT, allowNull: true, comment: "The file and line where the query originated" },
-      batch_id: { type: DataTypes.INTEGER, allowNull: true, comment: "Links to cron_job_runs.id for batch operations" },
-    },
-    {
-      tableName: "logs", 
+      batch_id: { type: DataTypes.INTEGER, allowNull: true, comment: "Links to cron_job_runs.id for batch operations" }
+  }, {
+    tableName: "logs", 
       timestamps: true,
       underscored: true,
     }

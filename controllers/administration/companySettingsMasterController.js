@@ -63,7 +63,6 @@ async function syncSettingsToAllCompanies(transaction) {
             const newEntries = missingSettings.map(ms => ({
                 company_id: company.id,
                 user_id: company.user_id,
-                branch_id: 0, // Default to 0 or Main Branch
                 settings_name: ms.setting_key,
                 settings_value: parseDefaultValue(ms.default_value, ms.input_type),
                 status: 0

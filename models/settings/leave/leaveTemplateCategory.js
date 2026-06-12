@@ -30,10 +30,8 @@ const LeaveTemplateCategory = sequelize.define("LeaveTemplateCategory",{
     automation_rules: { type: DataTypes.TEXT, allowNull: true },
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     company_id: { type: DataTypes.INTEGER, allowNull: true },
-    user_id: { type: DataTypes.INTEGER, allowNull: true },
-    branch_id: { type: DataTypes.INTEGER, allowNull: true },
-},
-{
+    user_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
     tableName: "leave_template_categories",
     timestamps: true,
     underscored: true,

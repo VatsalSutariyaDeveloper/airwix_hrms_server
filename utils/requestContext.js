@@ -10,6 +10,9 @@ function getContext() {
     return {
       user_id: null,
       company_id: null,
+      selected_company_ids: [],
+      company_access_list: [],
+      isDropdown: false,
       organization_id: null,
       branch_id: null,
       branch_access: [],
@@ -30,6 +33,9 @@ function getContext() {
   return {
     user_id: store.userId,
     company_id: store.companyId,
+    selected_company_ids: store.selectedCompanyIds || (store.companyId ? [store.companyId] : []),
+    company_access_list: store.companyAccessList || (store.companyId ? [store.companyId] : []),
+    isDropdown: store.isDropdown || false,
     organization_id: store.organizationId,
     branch_id: store.branchId,
     branch_access: store.branchAccess,

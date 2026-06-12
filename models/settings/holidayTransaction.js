@@ -25,7 +25,7 @@ module.exports = (sequelize, DataTypes) => {
             color: { type: DataTypes.STRING(20), defaultValue: "#E11D48" },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
             user_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
+            
             company_id: { type: DataTypes.INTEGER, allowNull: true }
         },
         {

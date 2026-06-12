@@ -10,11 +10,10 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0: Active, 1: Inactive, 2: Deleted" 
       },
       user_id: { type: DataTypes.BIGINT, allowNull: true },
-      branch_id: { type: DataTypes.BIGINT, allowNull: true },
-      company_id: { type: DataTypes.BIGINT, allowNull: true },
-    },
-    {
-      tableName: "expense_type",
+      
+      company_id: { type: DataTypes.BIGINT, allowNull: true }
+  }, {
+    tableName: "expense_type",
       timestamps: true,
       underscored: true,
     }

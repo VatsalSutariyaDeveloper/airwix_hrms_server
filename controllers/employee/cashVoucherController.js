@@ -181,13 +181,13 @@ exports.getCashVoucherById = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code", "branch_id", "company_id"]
+                        attributes: ["id", "first_name", "employee_code", "company_id"]
                     }
                 ],
                 attributes: [
                     "id", "employee_id", "attendance_day_id", "attendance_date", 
                     "voucher_type", "overtime_minutes", "amount", "overtime_data", 
-                    "note", "status", "user_id", "branch_id", "company_id", 
+                    "note", "status", "user_id", "company_id", 
                     "created_at", "updated_at"
                 ]
             },
@@ -233,7 +233,7 @@ exports.calculateCashVoucher = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code", "worker_type", "branch_id", "company_id"],
+                        attributes: ["id", "first_name", "employee_code", "worker_type", "company_id"],
                         include: [
                             {
                                 model: EmployeeAttendanceTemplate,

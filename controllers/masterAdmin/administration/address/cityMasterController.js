@@ -10,7 +10,7 @@ exports.create = async (req, res) => {
   };
 
   const errors = await validateRequest(req.body, requiredFields, {
-    skipDefaultRequired: ["company_id", "branch_id", "user_id"],
+    skipDefaultRequired: ["company_id", "user_id"],
     uniqueCheck: {
       model: CityMaster,
       fields: ["city_name"]
@@ -81,7 +81,7 @@ exports.update = async (req, res) => {
   };
 
   const errors = await validateRequest(req.body, requiredFields, {
-    skipDefaultRequired: ["company_id", "branch_id", "user_id"],
+    skipDefaultRequired: ["company_id", "user_id"],
     uniqueCheck: {
       model: CityMaster,
       fields: ["city_name"],

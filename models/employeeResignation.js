@@ -29,11 +29,9 @@ module.exports = (sequelize, DataTypes) => {
             },
 
             user_id: { type: DataTypes.INTEGER, allowNull: true },
-            branch_id: { type: DataTypes.INTEGER, allowNull: true },
-            company_id: { type: DataTypes.INTEGER, allowNull: true },
-        },
-        {
-            tableName: "employee_resignations",
+                        company_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
+    tableName: "employee_resignations",
             timestamps: true,
             underscored: true,
         }

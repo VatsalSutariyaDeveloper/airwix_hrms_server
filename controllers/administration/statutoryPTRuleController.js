@@ -26,7 +26,6 @@ exports.create = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
         req.body.company_id = -1;
-        req.body.branch_id = -1;
         req.body.user_id = -1;
         await commonQuery.createRecord(StatutoryPTRule, req.body, transaction, false);
         await transaction.commit();
@@ -157,7 +156,6 @@ exports.update = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, errors);
         }
         req.body.company_id = -1;
-        req.body.branch_id = -1;
         req.body.user_id = -1;
         const updated = await commonQuery.updateRecordById(StatutoryPTRule, req.params.id, req.body, transaction, false, false);
         if (!updated || updated.status === 2) {

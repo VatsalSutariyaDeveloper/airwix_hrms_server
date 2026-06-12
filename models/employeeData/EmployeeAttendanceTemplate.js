@@ -64,8 +64,8 @@ module.exports = (sequelize, DataTypes) => {
 
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    
+    company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "employee_attendance_templates",
     timestamps: true,

@@ -13,7 +13,6 @@ exports.create = async (req, res) => {
       ip_address: "IP Address",
       browser: "Browser",
       os: "OS",
-      branch_id: "Branch",
       company_id: "Company"
     };
 
@@ -65,7 +64,6 @@ exports.update = async (req, res) => {
       ip_address: "IP Address",
       browser: "Browser",
       os: "OS",
-      branch_id: "Branch",
       company_id: "Company"
     };
 

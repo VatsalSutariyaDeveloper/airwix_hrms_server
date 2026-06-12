@@ -1,4 +1,4 @@
-const { LoginHistory, User, CompanyMaster, BranchMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification, UserDevice } = require("../../models"); // Added Company and Branch models
+const { LoginHistory, User, CompanyMaster, UserCompanyRoles, RolePermission, Employee, DeviceMaster, OtpVerification, UserDevice } = require("../../models"); // Added Company and Branch models
 const { sequelize, commonQuery, handleError, Op, constants, otpService, whatsappService, cryptoHelper, getCompanySetting, deviceHelper } = require("../../helpers");
 const { validatePhone } = require("../../helpers/phoneValidation");
 const crypto = require("crypto");
@@ -15,7 +15,7 @@ const { generateEmailTemplate } = require("../../helpers/emailTemplate");
 
 const normalizeCompanyAccess = (access) => {
   if (Array.isArray(access)) return access.map(String);
-  if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
+  if (typeof access === "string") return access.replace(/[\[\]]/g, "").split(",").map((id) => id.trim()).filter(Boolean);
   return [];
 };
 
@@ -97,8 +97,8 @@ exports.login = async (req, res) => {
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
       'id', 'user_name', 'email', 'mobile_no', 'password',
-      'role_id', 'company_id', 'branch_id', 'employee_id',
-      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'role_id', 'company_id', 'employee_id',
+      'user_id', 'company_access', 'is_activated', 'is_super_admin',
     ];
 
     let cleanEmail = email;
@@ -287,10 +287,10 @@ exports.login = async (req, res) => {
     user.organization_id = company.organization_id;
 
     // 2. Validate Branch
-    if (!user.branch_id) {
-      await transaction.rollback();
-      return res.error(401, "No branch assigned to your profile.");
-    }
+    // if (!user.branch_id) {
+    //   await transaction.rollback();
+    //   return res.error(401, "No branch assigned to your profile.");
+    // }
 
     // --- C. GENERATE TOKEN & HISTORY ---
 
@@ -319,7 +319,7 @@ exports.login = async (req, res) => {
       // Use Sequelize findAll directly
       const companyList = await CompanyMaster.findAll({
         where: whereCompany,
-        attributes: ['id', 'is_default', 'branch_id'],
+        attributes: ['id', 'is_default'],
         raw: true,
         transaction
       });
@@ -331,36 +331,6 @@ exports.login = async (req, res) => {
       if (companyAccessList.length > 0) {
         if (!companyAccessList.includes(String(defaultCompanyId))) {
           finalCompanyId = user.company_id;
-        }
-      }
-
-      // Adjust branch_id based on the selected finalCompanyId
-      const branchAccessList = normalizeCompanyAccess(user.branch_access || "");
-      const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
-      const currentBranchValid = await BranchMaster.findOne({
-        where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
-        attributes: ['id'],
-        raw: true,
-        transaction
-      });
-      user.branch_id = finalBranch;
-
-      if (!currentBranchValid) {
-        // Find a branch that user has access to in that company, or just first active branch
-        const fallbackBranch = await BranchMaster.findOne({
-          where: {
-            company_id: finalCompanyId,
-            status: 0,
-            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
-          raw: true,
-          transaction
-        });
-
-        if (fallbackBranch) {
-          user.branch_id = fallbackBranch.id;
         }
       }
     }
@@ -449,7 +419,6 @@ exports.login = async (req, res) => {
       permission: userPermission?.permissions,
       is_login: 1,
       user_id: user.user_id,
-      branch_id: user.branch_id,
       company_id: finalCompanyId,
       organization_id: user.organization_id,
     };
@@ -499,7 +468,7 @@ exports.logout = async (req, res) => {
       if (Object.keys(whereClause).length > 0) {
         const device = await commonQuery.findOneRecord(DeviceMaster, whereClause, {}, transaction, false, {});
         if (device) {
-          const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+          const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, transaction);
           await commonQuery.updateRecordById(
             DeviceMaster,
             device.id,
@@ -534,7 +503,7 @@ exports.logout = async (req, res) => {
       const decryptedDeviceId = cryptoHelper.decryptId(req.user.device_id);
       const device = await commonQuery.findOneRecord(DeviceMaster, { device_id: decryptedDeviceId }, {}, transaction, false, {});
       if (device) {
-        const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+        const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, transaction);
         await commonQuery.updateRecordById(
           DeviceMaster,
           device.id,
@@ -995,8 +964,8 @@ exports.verifyOtp = async (req, res) => {
     // 1. Fetch User details for login
     const userAttributes = [
       'id', 'user_name', 'email', 'mobile_no', 'password',
-      'role_id', 'company_id', 'branch_id', 'employee_id',
-      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'role_id', 'company_id', 'employee_id',
+      'user_id', 'company_access', 'is_activated', 'is_super_admin',
     ];
 
     let userWhere = isEmail ? { email: identifier } : { mobile_no: identifier };
@@ -1133,10 +1102,10 @@ exports.verifyOtp = async (req, res) => {
     if (!isDevice) entity.organization_id = company.organization_id;
 
     // Validate Branch
-    if (!entity.branch_id) {
-      authLog("Authentication failed", { reason: "Missing branch_id on entity", entityId: entity.id, company_id: entity.company_id });
-      return res.error(401, "No branch assigned to your profile.");
-    }
+    // if (!entity.branch_id) {
+    //   authLog("Authentication failed", { reason: "Missing branch_id on entity", entityId: entity.id, company_id: entity.company_id });
+    //   return res.error(401, "No branch assigned to your profile.");
+    // }
 
     let companyId = company.company_id || company.id;
     const isEmployee = !isDevice && entity.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE;
@@ -1162,7 +1131,7 @@ exports.verifyOtp = async (req, res) => {
 
       const companyList = await CompanyMaster.findAll({
         where: whereCompany,
-        attributes: ['id', 'is_default', 'branch_id'],
+        attributes: ['id', 'is_default'],
         raw: true
       });
 
@@ -1171,32 +1140,6 @@ exports.verifyOtp = async (req, res) => {
       if (companyAccessList.length > 0) {
         if (!companyAccessList.includes(String(defaultCompanyId))) {
           finalCompanyId = entity.company_id;
-        }
-      }
-
-      const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
-      const finalBranch = companyList?.find(c => c.id == defaultCompanyId)?.branch_id || companyList[0]?.branch_id;
-      const currentBranchValid = await BranchMaster.findOne({
-        where: { id: finalBranch, company_id: finalCompanyId, status: 0 },
-        attributes: ['id'],
-        raw: true
-      });
-      entity.branch_id = finalBranch;
-
-      if (!currentBranchValid) {
-        const fallbackBranch = await BranchMaster.findOne({
-          where: {
-            company_id: finalCompanyId,
-            status: 0,
-            ...(!isAdmin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
-          raw: true
-        });
-
-        if (fallbackBranch) {
-          entity.branch_id = fallbackBranch.id;
         }
       }
     }
@@ -1293,7 +1236,6 @@ exports.verifyOtp = async (req, res) => {
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: isDevice ? null : entity.user_id,
-      branch_id: entity.branch_id,
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
@@ -1308,8 +1250,7 @@ exports.verifyOtp = async (req, res) => {
         login_method: "OTP",
         entityId: entity.id,
         isDevice,
-        company_id: entity.company_id,
-        branch_id: entity.branch_id
+        company_id: entity.company_id
       }
     });
 
@@ -1355,8 +1296,8 @@ exports.generatePin = async (req, res) => {
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
       'id', 'user_name', 'email', 'mobile_no', 'password',
-      'role_id', 'company_id', 'branch_id', 'employee_id',
-      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'role_id', 'company_id', 'employee_id',
+      'user_id', 'company_access', 'is_activated', 'is_super_admin',
     ];
 
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
@@ -1518,10 +1459,10 @@ exports.generatePin = async (req, res) => {
     if (!isDevice) entity.organization_id = company.organization_id;
 
     // 3. Validate Branch
-    if (!entity.branch_id) {
-      await transaction.rollback();
-      return res.error(401, { message: "No branch assigned to your profile." });
-    }
+    // if (!entity.branch_id) {
+    //   await transaction.rollback();
+    //   return res.error(401, { message: "No branch assigned to your profile." });
+    // }
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
@@ -1562,33 +1503,6 @@ exports.generatePin = async (req, res) => {
     }
 
     if (!isDevice && entity.employee_id) {
-      // Adjust branch_id based on the selected finalCompanyId
-      const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
-      const currentBranchValid = await BranchMaster.findOne({
-        where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
-        attributes: ['id'],
-        raw: true,
-        transaction
-      });
-
-      if (!currentBranchValid) {
-        // Find a branch that user has access to in that company, or just first active branch
-        const fallbackBranch = await BranchMaster.findOne({
-          where: {
-            company_id: finalCompanyId,
-            status: 0,
-            ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
-          raw: true,
-          transaction
-        });
-
-        if (fallbackBranch) {
-          entity.branch_id = fallbackBranch.id;
-        }
-      }
 
 
       const employee = await Employee.findOne({
@@ -1675,7 +1589,6 @@ exports.generatePin = async (req, res) => {
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: isDevice ? null : entity.user_id,
-      branch_id: entity.branch_id,
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
@@ -1729,8 +1642,8 @@ exports.pinLogin = async (req, res) => {
     // Define strict attributes to fetch (Security & Performance)
     const userAttributes = [
       'id', 'user_name', 'email', 'mobile_no', 'password',
-      'role_id', 'company_id', 'branch_id', 'employee_id',
-      'user_id', 'company_access', 'branch_access', 'is_activated', 'is_super_admin',
+      'role_id', 'company_id', 'employee_id',
+      'user_id', 'company_access', 'is_activated', 'is_super_admin',
     ];
 
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
@@ -1854,10 +1767,10 @@ exports.pinLogin = async (req, res) => {
     if (!isDevice) entity.organization_id = company.organization_id;
 
     // 3. Validate Branch
-    if (!entity.branch_id) {
-      await transaction.rollback();
-      return res.error(401, { message: "No branch assigned to your profile." });
-    }
+    // if (!entity.branch_id) {
+    //   await transaction.rollback();
+    //   return res.error(401, { message: "No branch assigned to your profile." });
+    // }
 
     // --- C. GENERATE TOKEN & HISTORY ---
     let companyId = company.company_id || company.id;
@@ -1898,33 +1811,6 @@ exports.pinLogin = async (req, res) => {
     }
 
     if (!isDevice && entity.employee_id) {
-      // Adjust branch_id based on the selected finalCompanyId
-      const branchAccessList = normalizeCompanyAccess(entity.branch_access || "");
-      const currentBranchValid = await BranchMaster.findOne({
-        where: { id: entity.branch_id, company_id: finalCompanyId, status: 0 },
-        attributes: ['id'],
-        raw: true,
-        transaction
-      });
-
-      if (!currentBranchValid) {
-        // Find a branch that user has access to in that company, or just first active branch
-        const fallbackBranch = await BranchMaster.findOne({
-          where: {
-            company_id: finalCompanyId,
-            status: 0,
-            ...(!isDevice && !entity.is_super_admin && branchAccessList.length > 0 ? { id: { [Op.in]: branchAccessList } } : {})
-          },
-          attributes: ['id'],
-          order: [['id', 'ASC']],
-          raw: true,
-          transaction
-        });
-
-        if (fallbackBranch) {
-          entity.branch_id = fallbackBranch.id;
-        }
-      }
 
       const employee = await Employee.findOne({
         where: { id: entity.employee_id },
@@ -2010,7 +1896,6 @@ exports.pinLogin = async (req, res) => {
       permission: userPermission?.permissions || [],
       is_login: 1,
       user_id: isDevice ? null : entity.user_id,
-      branch_id: entity.branch_id,
       company_id: isDevice ? entity.company_id : finalCompanyId,
       company_name: company.company_name,
       organization_id: company.organization_id,
@@ -2323,7 +2208,7 @@ exports.publicUnpairDevice = async (req, res) => {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Device not found." });
     }
-    const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id, transaction);
+    const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, transaction);
     await commonQuery.updateRecordById(
       DeviceMaster,
       device.id,

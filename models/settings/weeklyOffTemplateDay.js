@@ -9,11 +9,10 @@ module.exports = (sequelize, DataTypes) => {
             is_off: { type: DataTypes.BOOLEAN, defaultValue: false },
             status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted" },
             user_id: {type: DataTypes.INTEGER, allowNull: true },
-            branch_id: {type: DataTypes.INTEGER, allowNull: true },
-            company_id: { type: DataTypes.INTEGER, allowNull: true },
-        },
-        {
-            tableName: "weekly_off_template_days",
+            
+            company_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
+    tableName: "weekly_off_template_days",
             timestamps: true,
             underscored: true
         }

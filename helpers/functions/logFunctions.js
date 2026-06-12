@@ -191,7 +191,6 @@ exports.logQuery = async (logData, mainTransaction = null) => {
         action_type: logData.action_type,
         user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
         company_id: logData.company_id || ctx?.company_id,
-        branch_id: logData.branch_id || ctx?.branch_id,
         record_id: logData.record_id,
         log_message: truncateText(message, TEXT_LIMIT),
         old_data: safeJson(finalOld),
@@ -234,7 +233,7 @@ exports.logError = async (logData, transaction = null) => {
   try {
     let ctx = null;
     try { ctx = getContext(); } catch (e) {}
-
+ 
     // 1. ALWAYS write to physical file as backup (safety first)
     const fileLogMessage = `🚨 ERROR: ${errorMsg}\n   Entity: ${logData.entity_name}\n   Body: ${JSON.stringify(logData.request_body || {})}\n   Stack: ${JSON.stringify(logData.stack_trace || {})}`;
     exports.writeLogToFile("error.log", fileLogMessage);
@@ -245,7 +244,6 @@ exports.logError = async (logData, transaction = null) => {
       action_type: "ERROR",
       user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
       company_id: logData.company_id || ctx?.company_id,
-      branch_id: logData.branch_id || ctx?.branch_id,
       record_id: null,
       log_message: truncateText(errorMsg, TEXT_LIMIT),
       old_data: null,

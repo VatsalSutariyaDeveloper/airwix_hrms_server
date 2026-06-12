@@ -12,8 +12,8 @@ module.exports = (sequelize, DataTypes) => {
     effective_to: { type: DataTypes.DATEONLY },
     status: { type: DataTypes.SMALLINT, defaultValue: 0, comment: "0: Active, 1: Inactive, 2: Deleted", },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+    
+    company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
   }, {
     tableName: "statutory_configurations",
     timestamps: true

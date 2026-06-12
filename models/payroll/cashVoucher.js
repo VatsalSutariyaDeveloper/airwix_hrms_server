@@ -20,11 +20,10 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0: Active, 1: Settled, 2: Deleted",
       },
       user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-      branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-      company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-    },
-    {
-      tableName: "cash_vouchers",
+      
+      company_id: { type: DataTypes.INTEGER, defaultValue: 0 }
+  }, {
+    tableName: "cash_vouchers",
       timestamps: true,
       underscored: true,
       indexes: [

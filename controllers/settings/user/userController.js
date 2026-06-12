@@ -219,7 +219,6 @@ exports.create = async (req, res) => {
     // await commonQuery.createRecord(UserCompanyRoles, {
     //   user_id: newUser.id,
     //   role_id: req.body.role_id,
-    //   branch_id: req.user.branch_id,
     //   company_id: req.user.company_id,
     //   permissions: req.body.permission,
     //   status: 0
@@ -817,13 +816,12 @@ exports.update = async (req, res) => {
 
     // ✅ Sync UserCompanyRoles if permissions or role changed
     // if (req.body.permission) {
-    //   const branchId = req.body.branch_id || existing.branch_id;
     //   const companyId = req.body.company_id || existing.company_id;
     //   const roleId = req.body.role_id || existing.role_id;
 
     //   const userCompanyRole = await commonQuery.findOneRecord(
     //     UserCompanyRoles,
-    //     { user_id: req.params.id, branch_id: branchId, company_id: companyId },
+    //     { user_id: req.params.id, company_id: companyId },
     //     {},
     //     transaction
     //   );
@@ -846,7 +844,6 @@ exports.update = async (req, res) => {
     //       {
     //         user_id: req.params.id,
     //         role_id: roleId,
-    //         branch_id: branchId,
     //         company_id: companyId,
     //         permissions: permissions,
     //         status: 0,
@@ -904,22 +901,20 @@ exports.getAll = async (req, res) => {
         extraFilters[Op.and].push({
           [Op.or]: [
             { is_super_admin: true, '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN, company_id: { [Op.in]: organizationCompanyIds } },
-            { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN, company_id: company_id, branch_id: req.user.branch_id }
+            { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN, company_id: company_id }
           ]
         });
       } else {
         extraFilters[Op.and].push({
           '$RolePermission.role_key$': { [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] },
-          company_id: company_id,
-          branch_id: req.user.branch_id
+          company_id: company_id
         });
       }
     } else if (req.body.filter?.role_key) {
       // Direct role_key filtering (used for Attendance Supervisor, Reporting Manager, etc.)
       extraFilters[Op.and].push({
         '$RolePermission.role_key$': req.body.filter.role_key,
-        company_id: company_id,
-        branch_id: req.user.branch_id
+        company_id: company_id
       });
     } else if (req.body.filter?.role === "employee" || !req.body.filter?.role_key) {
       // Show everyone EXCEPT Business Admin and Admin for the main tab
@@ -927,27 +922,13 @@ exports.getAll = async (req, res) => {
         '$RolePermission.role_key$': { 
           [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] 
         },
-        company_id: company_id,
-        branch_id: req.user.branch_id
+        company_id: company_id
       });
     } else {
       extraFilters[Op.and].push({
-        company_id: company_id,
-        branch_id: req.user.branch_id
+        company_id: company_id
       });
     }
-    // else if (!req.user.is_super_admin) {
-    //   // Apply basic branch/company restriction for other views
-    //   const security = { company_id: company_id };
-    //   if (req.user.branch_id && req.user.branch_id !== 0 && req.user.branch_id !== "0") {
-    //     security.branch_id = req.user.branch_id;
-    //   } else if (req.user.branch_access) {
-    //     const branches = req.user.branch_access.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-    //     if (branches.length > 0) security.branch_id = { [Op.in]: branches };
-    //   }
-    //   extraFilters[Op.and].push(security);
-    // }
-
     if (req.body.filter) {
       delete req.body.filter.role;
       delete req.body.filter.role_key;
@@ -976,12 +957,6 @@ exports.getAll = async (req, res) => {
             attributes: [],
             required: false,
           },
-          {
-            model: BranchMaster,
-            as: "Branch",
-            attributes: [],
-            required: false,
-          },
         ],
         attributes: [
           "id",
@@ -993,10 +968,8 @@ exports.getAll = async (req, res) => {
           "profile_image",
           "is_super_admin",
           "authorized_signature",
-          "branch_id",
           "createdAt",
           [sequelize.col("RolePermission.role_name"), "role_name"],
-          [sequelize.col("Branch.branch_name"), "branch_name"],
           [sequelize.col("Employee.first_name"), "first_name"],
           [sequelize.col("Employee.employee_code"), "employee_code"],
         ],
@@ -1028,8 +1001,7 @@ exports.dropdownList = async (req, res) => {
       ],
       [Op.and]: [
         { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
-        { company_id: company_id },
-        { branch_id: req.user.branch_id }
+        { company_id: company_id }
       ]
     };
     const record = await commonQuery.findAllRecords(
@@ -1061,7 +1033,6 @@ exports.getUserEmployeeList = async (req, res) => {
       [Op.and]: [
         { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.REPORTING_MANAGER, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR] } },
         { company_id: company_id },
-        { branch_id: req.user.branch_id }
       ]
     };
     const record = await commonQuery.findAllRecords(
@@ -1092,8 +1063,7 @@ exports.getUserListForAnnouncement = async (req, res) => {
       ],
       [Op.and]: [
         { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] } },
-        { company_id: company_id },
-        { branch_id: req.user.branch_id }
+        { company_id: company_id }
       ]
     };
     const record = await commonQuery.findAllRecords(

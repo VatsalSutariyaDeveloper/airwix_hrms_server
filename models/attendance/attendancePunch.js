@@ -18,7 +18,7 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0: Active, 1: Inactive, 2: Deleted",
       },
       user_id: { type: DataTypes.INTEGER, defaultValue: 0 },
-      branch_id: { type: DataTypes.INTEGER, defaultValue: 0 },
+      
       company_id: { type: DataTypes.INTEGER, defaultValue: 0 },
       face_descriptor: {
         type: DataTypes.JSONB,
@@ -29,10 +29,9 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DECIMAL(10, 4),
         allowNull: true,
         comment: "Stores the similarity score from face recognition"
-      },
-    },
-    {
-      tableName: "attendance_punch",
+      }
+  }, {
+    tableName: "attendance_punch",
       timestamps: true,
       underscored: true,
     }
@@ -43,7 +42,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendancePunch.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
     AttendancePunch.belongsTo(models.User, { foreignKey: "user_id", as: "user" });
     AttendancePunch.belongsTo(models.DeviceMaster, { foreignKey: "device_id", as: "device" });
-    AttendancePunch.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
+    
   };
 
   return AttendancePunch;

@@ -7,11 +7,10 @@ module.exports = (sequelize, DataTypes) => {
         comment: "0: Active, 1: Inactive, 2: Deleted"
     },
     user_id: { type: DataTypes.INTEGER, allowNull: true },
-    branch_id: { type: DataTypes.INTEGER, allowNull: true },
-    company_id: { type: DataTypes.INTEGER, allowNull: true },
-    },
-    {
-        tableName: "designation_master",
+    
+    company_id: { type: DataTypes.INTEGER, allowNull: true }
+  }, {
+    tableName: "designation_master",
         timestamps: true,
         underscored: true,
     });
