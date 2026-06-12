@@ -10,7 +10,7 @@ const importEmployeeController = require("../controllers/settings/import/importE
 
 // const { bufferImage } = require("../helpers/fileUpload");
 
-router.get("/me", employeeController.getProfile);
+router.post("/me", employeeController.getProfile);
 router.get("/device/employee-list", employeeController.getEmployeesByDeviceBranch);
 router.get("/available-out-duty", employeeController.availableOutDuty);
 router.post("/", bufferFile(), employeeController.create);
