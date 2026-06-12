@@ -1151,8 +1151,8 @@ exports.getProfile = async (req, res) => {
                 physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
                 probation_period: probationPeriodDays ? `${probationPeriodDays} Days` : 'N/A',
                 notice_period: plainRecord.resignationTemplate?.notice_period_days ? `${plainRecord.resignationTemplate.notice_period_days} Days` : 'N/A',
-                attendance_supervisor: plainRecord.supervisor || 'N/A',
-                reporting_manager: plainRecord.manager || 'N/A',
+                attendance_supervisor: plainRecord.supervisor || null,
+                reporting_manager: plainRecord.manager || null,
                 // referred_by: plainRecord.referred_by || 'N/A'
             },
             address_info: {

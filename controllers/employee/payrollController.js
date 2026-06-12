@@ -1943,8 +1943,7 @@ exports.getEmployeePayslip = async (req, res) => {
             status: { [Op.in]: [1, 3] } // Finalized or Paid
         }, {
             order: [['year', 'DESC'], ['month', 'DESC']]
-        });
-
+        }, null, { applyHierarchy: false });
         const formattedList = payslips.map(p => {
             const monthName = formatDateTime(new Date(2000, p.month - 1, 1), "MMM");
             return {
@@ -1958,7 +1957,6 @@ exports.getEmployeePayslip = async (req, res) => {
                 status_text: p.status === 1 ? "Finalized" : "Paid"
             };
         });
-
         return res.ok(formattedList);
     } catch (err) {
         return handleError(err, res, req);
@@ -2364,7 +2362,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
             employee_id: targetEmployeeId,
             year: selectedYear
-        });
+        }, {}, null, { applyHierarchy: false });
 
         // 3. Combine unique months
         const monthSet = new Set();
@@ -2410,8 +2408,6 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 status: existing ? (existing.status === 0 ? "Draft" : (existing.status === 1 ? "Finalized" : "Paid")) : "No Calculation"
             });
         }
-
-        console.log("yearRange--------------------\n", yearRange);
 
         return res.ok({
             min_year: yearRange?.min_year || selectedYear,

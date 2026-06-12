@@ -863,16 +863,16 @@ exports.verifyIdentifier = async (req, res) => {
       const isAdmin = roleKey === constants.ROLE_KEYS.ADMIN;
 
       // Restrict access if login request source client does not match allowed role configuration
-      if (entity.RolePermission && entity.RolePermission.allowed_clients) {
-        const allowedClients = entity.RolePermission.allowed_clients.split(",").map(c => c.trim().toLowerCase());
-        const isMobileRequest = req.body.access_by === "application";
-        if (isMobileRequest && !allowedClients.includes("mobile") && !allowedClients.includes("both")) {
-          return res.error(403, { message: "This account is not authorized to use the mobile application." });
-        }
-        if (!isMobileRequest && !allowedClients.includes("web") && !allowedClients.includes("both")) {
-          return res.error(403, { message: "This account is not authorized to log in via the web portal." });
-        }
-      }
+      // if (entity.RolePermission && entity.RolePermission.allowed_clients) {
+      //   const allowedClients = entity.RolePermission.allowed_clients.split(",").map(c => c.trim().toLowerCase());
+      //   const isMobileRequest = req.body.access_by === "application";
+      //   if (isMobileRequest && !allowedClients.includes("mobile") && !allowedClients.includes("both")) {
+      //     return res.error(403, { message: "This account is not authorized to use the mobile application." });
+      //   }
+      //   if (!isMobileRequest && !allowedClients.includes("web") && !allowedClients.includes("both")) {
+      //     return res.error(403, { message: "This account is not authorized to log in via the web portal." });
+      //   }
+      // }
     }
 
     // 3. Device Verification Logic

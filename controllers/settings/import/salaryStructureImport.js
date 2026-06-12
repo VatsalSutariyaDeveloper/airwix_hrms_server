@@ -1097,15 +1097,60 @@ const runWorker = async () => {
             const finalTemplateMap = new Map();
             finalTemplates.forEach(t => finalTemplateMap.set(t.employee_id, t));
 
+            // Fetch existing transactions for merging
+            const existingTxns = await commonQuery.findAllRecords(EmployeeSalaryTemplateTransaction, {
+                employee_id: { [Op.in]: existingEmployees.map(e => e.id) }
+            }, { raw: true }, transaction, {});
+
+            const existingTxnsMap = new Map();
+            existingTxns.forEach(tx => {
+                if (!existingTxnsMap.has(tx.employee_id)) {
+                    existingTxnsMap.set(tx.employee_id, []);
+                }
+                existingTxnsMap.get(tx.employee_id).push(tx);
+            });
+
             const empIdsWithTransactions = [];
             existingEmployees.forEach(emp => {
                 if (emp.rowTransactions) {
                     empIdsWithTransactions.push(emp.id);
                     const tid = finalTemplateMap.get(emp.id)?.id;
                     if (tid) {
+                        const existingUserTxns = existingTxnsMap.get(emp.id) || [];
+                        const mergedTxns = [];
+
+                        // 1. Add Excel transactions (which are the newly computed or updated values)
                         emp.rowTransactions.forEach(rt => {
                             rt.employee_salary_template_id = tid;
-                            transactionsToCreate.push(rt);
+                            mergedTxns.push(rt);
+                        });
+
+                        // 2. Add existing transactions that are not in Excel transactions
+                        existingUserTxns.forEach(et => {
+                            const inExcel = emp.rowTransactions.some(rt => rt.component_id === et.component_id);
+                            if (!inExcel) {
+                                mergedTxns.push({
+                                    employee_id: et.employee_id,
+                                    employee_salary_template_id: tid,
+                                    component_id: et.component_id,
+                                    component_category: et.component_category,
+                                    monthly_amount: et.monthly_amount,
+                                    yearly_amount: et.yearly_amount,
+                                    included_in_ctc: et.included_in_ctc,
+                                    is_employer_contribution: et.is_employer_contribution,
+                                    calculation_type: et.calculation_type,
+                                    formula: et.formula,
+                                    percentage_of: et.percentage_of,
+                                    percentage_value: et.percentage_value,
+                                    company_id: et.company_id,
+                                    branch_id: et.branch_id,
+                                    user_id: user_id
+                                });
+                            }
+                        });
+
+                        mergedTxns.forEach(mt => {
+                            transactionsToCreate.push(mt);
                         });
                     }
                 }
