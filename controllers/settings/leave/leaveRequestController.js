@@ -1,4 +1,4 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -137,6 +137,26 @@ exports.create = async (req, res) => {
         let { employee_id, leave_category_id, start_date, end_date, start_session, end_session } = req.body;
         const currentYear = new Date(start_date).getFullYear();
 
+        // Fetch employee & category upfront
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [
+                { model: LeaveTemplate, as: "leaveTemplate" },
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        }, transaction);
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
+        if (!category) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
+        }
+
         // 0=Full Day, 1=Session 1, 2=Session 2
         start_session = parseInt(start_session) || 0;
         end_session = parseInt(end_session) || 0;
@@ -149,9 +169,65 @@ exports.create = async (req, res) => {
 
         let total_days = 0;
         let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
+        let is_credit = req.body.request_type === 'CREDIT';
 
         if (is_encashment) {
             total_days = requestedTotal;
+        } else if (is_credit) {
+            if (start_date !== end_date) {
+                await transaction.rollback();
+                return res.error("INVALID_DATE_RANGE", { message: "Comp-off credit request must be applied day-by-day (start date and end date must be same)." });
+            }
+
+            const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+            if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off leaves." });
+            }
+
+            const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, start_date, transaction);
+            if (!isHoliday && !isWeeklyOff) {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: "Comp-off can only be claimed for working on Holidays or Weekly Offs." });
+            }
+
+            const attendance = await commonQuery.findOneRecord(AttendanceDay, {
+                employee_id,
+                attendance_date: start_date,
+                status: { [Op.ne]: 2 }
+            }, {}, transaction);
+
+            if (!attendance) {
+                await transaction.rollback();
+                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off." });
+            }
+
+            const workedMins = parseFloat(attendance.worked_minutes || 0);
+            const minCompOff = attTemplate.comp_off_min_working_mins || 0;
+            const maxCompOff = attTemplate.comp_off_max_working_mins || 0;
+
+            if (workedMins >= maxCompOff && maxCompOff > 0) {
+                total_days = 1.0;
+            } else if (workedMins >= minCompOff && minCompOff > 0) {
+                total_days = 0.5;
+            } else {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
+            }
+
+            // Check for duplicate CREDIT request for the same day
+            const overlap = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id,
+                request_type: 'CREDIT',
+                start_date: start_date,
+                approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                status: 0
+            }, {}, transaction);
+
+            if (overlap) {
+                await transaction.rollback();
+                return res.error("OVERLAP", { message: "Selected date already has a compensatory off credit request." });
+            }
         } else {
             // --- Calculate total_days based on Sandwich Policy via Service ---
             const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
@@ -203,29 +279,13 @@ exports.create = async (req, res) => {
             }
         }
 
-        // 2. Fetch specific employee balance record
-        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
-            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
-        }, transaction);
-
-        if (!employee) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
-        }
-
-        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
-        if (!category) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
-        }
-
         const template = employee.leaveTemplate;
         const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
 
         // Check if the current leave template cycle ends this month/period, and restrict next month's leave to only unpaid categories.
         const currentCycle = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs());
         const leaveStartDate = dayjs(start_date);
-        if (currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
+        if (!is_credit && currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
             await transaction.rollback();
             return res.error("RULE_VIOLATION", { 
                 message: "Only unpaid leaves can be applied for the next cycle/month." 
@@ -233,161 +293,163 @@ exports.create = async (req, res) => {
         }
 
         // --- Automation Rules Validation ---
-        const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+        if (!is_credit) {
+            const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
 
-        // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
-        if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
-            const refDate = dayjs(start_date);
-            let startDateRange, endDateRange;
-            let totalMaxDays = parseFloat(rules.max_total_days);
+            // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
+            if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
+                const refDate = dayjs(start_date);
+                let startDateRange, endDateRange;
+                let totalMaxDays = parseFloat(rules.max_total_days);
 
-            if (rules.limit_window === 'monthly') {
-                startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
-
-                if (rules.carry_forward) {
-                    const template = employee.leaveTemplate;
-                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
-                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
-
-                    // If the cycle itself is monthly, carry forward doesn't apply across months unless we anchor to a year
-                    // But usually, carry_forward for monthly limits implies an annual cycle.
-                    if (cycleType !== 'MONTHLY') {
-                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
-                        const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
-                        totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
-                    }
-                }
-            } else if (rules.limit_window === 'quarterly') {
-                startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
-
-                if (rules.carry_forward) {
-                    const template = employee.leaveTemplate;
-                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
-                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
-
-                    if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
-                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
-                        const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
-                        totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
-                    }
-                }
-            } else if (rules.limit_window === 'yearly') {
-                startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
-            } else if (rules.limit_window.endsWith('_month')) {
-                const months = parseInt(rules.limit_window.split('_')[0]);
-                if (!isNaN(months) && months > 0) {
-                    startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                if (rules.limit_window === 'monthly') {
+                    startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
                     endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
-                }
-            }
 
-            if (startDateRange && endDateRange) {
-                const totalUsed = await LeaveRequest.sum('total_days', {
-                    where: {
-                        employee_id,
-                        leave_category_id,
-                        approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
-                        status: 0,
-                        start_date: { [Op.between]: [startDateRange, endDateRange] }
-                    },
-                    transaction
-                }) || 0;
+                    if (rules.carry_forward) {
+                        const template = employee.leaveTemplate;
+                        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
 
-                if ((totalUsed + total_days) > totalMaxDays) {
-                    await transaction.rollback();
-                    const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
-                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
-                }
-            }
-        }
+                        // If the cycle itself is monthly, carry forward doesn't apply across months unless we anchor to a year
+                        // But usually, carry_forward for monthly limits implies an annual cycle.
+                        if (cycleType !== 'MONTHLY') {
+                            startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                            const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
+                            totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
+                        }
+                    }
+                } else if (rules.limit_window === 'quarterly') {
+                    startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
 
-        // 4. Half Day / Full Day Restriction
-        if (rules.allow_half_day === false || rules.allow_full_day === false) {
-            const startSess = parseInt(req.body.start_session) || 0;
-            const endSess = parseInt(req.body.end_session) || 0;
-            const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
+                    if (rules.carry_forward) {
+                        const template = employee.leaveTemplate;
+                        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
 
-            if (rules.allow_half_day === false) {
-                if (startSess !== 0 || endSess !== 0) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
-                }
-            }
-
-            if (rules.allow_full_day === false) {
-                if (calendarDays > 1) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
-                }
-                if (calendarDays === 1 && startSess === 0) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
-                }
-            }
-        }
-
-        // 3. Min Working Time & Late/Early Exit (Check Attendance)
-        if (rules.min_working_time_mins || rules.max_late_early_mins) {
-            const attDate = dayjs(start_date).format('YYYY-MM-DD');
-            const isToday = attDate === dayjs().format('YYYY-MM-DD');
-            const isPast = dayjs(attDate).isBefore(dayjs().startOf('day'));
-
-            const attendance = await commonQuery.findOneRecord(AttendanceDay, {
-                employee_id,
-                attendance_date: attDate,
-                status: { [Op.ne]: 2 }
-            }, {}, transaction, null, false, { company_id: true });
-
-            if (attendance) {
-                if (rules.min_working_time_mins && (attendance.worked_minutes || 0) < rules.min_working_time_mins) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: `Insufficient working time. Required: ${rules.min_working_time_mins} mins. Current: ${attendance.worked_minutes || 0} mins.` });
+                        if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
+                            startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                            const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
+                            totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
+                        }
+                    }
+                } else if (rules.limit_window === 'yearly') {
+                    startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
+                } else if (rules.limit_window.endsWith('_month')) {
+                    const months = parseInt(rules.limit_window.split('_')[0]);
+                    if (!isNaN(months) && months > 0) {
+                        startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                        endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+                    }
                 }
 
-                if (rules.max_late_early_mins) {
-                    const fineMins = attendance.fine_minutes || 0;
-                    if (fineMins > rules.max_late_early_mins) {
+                if (startDateRange && endDateRange) {
+                    const totalUsed = await LeaveRequest.sum('total_days', {
+                        where: {
+                            employee_id,
+                            leave_category_id,
+                            approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                            status: 0,
+                            start_date: { [Op.between]: [startDateRange, endDateRange] }
+                        },
+                        transaction
+                    }) || 0;
+
+                    if ((totalUsed + total_days) > totalMaxDays) {
                         await transaction.rollback();
-                        return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins. Current: ${fineMins} mins.` });
+                        const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
+                        return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
+                    }
+                }
+            }
+
+            // 4. Half Day / Full Day Restriction
+            if (rules.allow_half_day === false || rules.allow_full_day === false) {
+                const startSess = parseInt(req.body.start_session) || 0;
+                const endSess = parseInt(req.body.end_session) || 0;
+                const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
+
+                if (rules.allow_half_day === false) {
+                    if (startSess !== 0 || endSess !== 0) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
                     }
                 }
 
-                const fineData = attendance.fine_data || {};
-                const lateEntry = fineData.late_entry?.minutes || 0;
-                const earlyExit = fineData.early_exit?.minutes || 0;
-                const excessBreaks = fineData.excess_breaks?.minutes || 0;
-
-                const formatMinutesToHours = (mins) => {
-                    if (mins >= 60) {
-                        const hrs = Math.floor(mins / 60);
-                        const remMins = mins % 60;
-                        return remMins > 0 ? `${hrs}hr ${remMins} minutes` : `${hrs}hr`;
+                if (rules.allow_full_day === false) {
+                    if (calendarDays > 1) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
                     }
-                    return `${mins} minutes`;
-                };
+                    if (calendarDays === 1 && startSess === 0) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
+                    }
+                }
+            }
 
-                const parts = [];
-                if (lateEntry > 0) {
-                    parts.push(`Late Entry ${formatMinutesToHours(lateEntry)}`);
-                }
-                if (earlyExit > 0) {
-                    parts.push(`Early Exit ${formatMinutesToHours(earlyExit)}`);
-                }
-                if (excessBreaks > 0) {
-                    parts.push(`Excess Break Time ${formatMinutesToHours(excessBreaks)}`);
-                }
+            // 3. Min Working Time & Late/Early Exit (Check Attendance)
+            if (rules.min_working_time_mins || rules.max_late_early_mins) {
+                const attDate = dayjs(start_date).format('YYYY-MM-DD');
+                const isToday = attDate === dayjs().format('YYYY-MM-DD');
+                const isPast = dayjs(attDate).isBefore(dayjs().startOf('day'));
 
-                if (parts.length > 0) {
-                    const dynamicReason = `leave Request for ${parts.join(" and ")}`;
-                    req.body.reason = req.body.reason ? `${req.body.reason} - ${dynamicReason}` : dynamicReason;
+                const attendance = await commonQuery.findOneRecord(AttendanceDay, {
+                    employee_id,
+                    attendance_date: attDate,
+                    status: { [Op.ne]: 2 }
+                }, {}, transaction, null, false, { company_id: true });
+
+                if (attendance) {
+                    if (rules.min_working_time_mins && (attendance.worked_minutes || 0) < rules.min_working_time_mins) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: `Insufficient working time. Required: ${rules.min_working_time_mins} mins. Current: ${attendance.worked_minutes || 0} mins.` });
+                    }
+
+                    if (rules.max_late_early_mins) {
+                        const fineMins = attendance.fine_minutes || 0;
+                        if (fineMins > rules.max_late_early_mins) {
+                            await transaction.rollback();
+                            return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins. Current: ${fineMins} mins.` });
+                        }
+                    }
+
+                    const fineData = attendance.fine_data || {};
+                    const lateEntry = fineData.late_entry?.minutes || 0;
+                    const earlyExit = fineData.early_exit?.minutes || 0;
+                    const excessBreaks = fineData.excess_breaks?.minutes || 0;
+
+                    const formatMinutesToHours = (mins) => {
+                        if (mins >= 60) {
+                            const hrs = Math.floor(mins / 60);
+                            const remMins = mins % 60;
+                            return remMins > 0 ? `${hrs}hr ${remMins} minutes` : `${hrs}hr`;
+                        }
+                        return `${mins} minutes`;
+                    };
+
+                    const parts = [];
+                    if (lateEntry > 0) {
+                        parts.push(`Late Entry ${formatMinutesToHours(lateEntry)}`);
+                    }
+                    if (earlyExit > 0) {
+                        parts.push(`Early Exit ${formatMinutesToHours(earlyExit)}`);
+                    }
+                    if (excessBreaks > 0) {
+                        parts.push(`Excess Break Time ${formatMinutesToHours(excessBreaks)}`);
+                    }
+
+                    if (parts.length > 0) {
+                        const dynamicReason = `leave Request for ${parts.join(" and ")}`;
+                        req.body.reason = req.body.reason ? `${req.body.reason} - ${dynamicReason}` : dynamicReason;
+                    }
+                } else {
+                    // If no attendance record exists for the selected date (past, present, or future), the rule is violated
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: `Your Selected Date has no attendance record. Please add attendance first.` });
                 }
-            } else {
-                // If no attendance record exists for the selected date (past, present, or future), the rule is violated
-                await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: `Your Selected Date has no attendance record. Please add attendance first.` });
             }
         }
 
@@ -430,12 +492,14 @@ exports.create = async (req, res) => {
             return res.error("BALANCE_NOT_FOUND", { message: "No leave balance found for this category. Please check employee's leave balance." });
         }
 
-        // 2. Adjust Balance via Service
-        try {
-            await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, start_date, employee);
-        } catch (error) {
-            await transaction.rollback();
-            return res.error("INSUFFICIENT_BALANCE", { message: error.message });
+        // 2. Adjust Balance via Service (Only for DEBIT leaves)
+        if (!is_credit) {
+            try {
+                await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, start_date, employee);
+            } catch (error) {
+                await transaction.rollback();
+                return res.error("INSUFFICIENT_BALANCE", { message: error.message });
+            }
         }
 
         // Create Leave Request
@@ -514,15 +578,92 @@ exports.update = async (req, res) => {
         let { leave_category_id, start_date, end_date, start_session, end_session } = req.body;
         const employee_id = leaveRequest.employee_id;
 
+        // Fetch employee & category upfront
+        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
+            include: [
+                { model: LeaveTemplate, as: "leaveTemplate" },
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        }, transaction);
+
+        if (!employee) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
+        if (!category) {
+            await transaction.rollback();
+            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
+        }
+
         start_session = parseInt(start_session) || 0;
         end_session = parseInt(end_session) || 0;
         const requestedTotal = parseFloat(req.body.total_days || 0);
 
         let total_days = 0;
         let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
+        let is_credit = req.body.request_type === 'CREDIT';
 
         if (is_encashment) {
             total_days = requestedTotal;
+        } else if (is_credit) {
+            if (start_date !== end_date) {
+                await transaction.rollback();
+                return res.error("INVALID_DATE_RANGE", { message: "Comp-off credit request must be applied day-by-day (start date and end date must be same)." });
+            }
+
+            const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+            if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off leaves." });
+            }
+
+            const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, start_date, transaction);
+            if (!isHoliday && !isWeeklyOff) {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: "Comp-off can only be claimed for working on Holidays or Weekly Offs." });
+            }
+
+            const attendance = await commonQuery.findOneRecord(AttendanceDay, {
+                employee_id,
+                attendance_date: start_date,
+                status: { [Op.ne]: 2 }
+            }, {}, transaction);
+
+            if (!attendance) {
+                await transaction.rollback();
+                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off." });
+            }
+
+            const workedMins = parseFloat(attendance.worked_minutes || 0);
+            const minCompOff = attTemplate.comp_off_min_working_mins || 0;
+            const maxCompOff = attTemplate.comp_off_max_working_mins || 0;
+
+            if (workedMins >= maxCompOff && maxCompOff > 0) {
+                total_days = 1.0;
+            } else if (workedMins >= minCompOff && minCompOff > 0) {
+                total_days = 0.5;
+            } else {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
+            }
+
+            // Check for duplicate CREDIT request for the same day (excluding this request)
+            const overlap = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id,
+                id: { [Op.ne]: id },
+                request_type: 'CREDIT',
+                start_date: start_date,
+                approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                status: 0
+            }, {}, transaction);
+
+            if (overlap) {
+                await transaction.rollback();
+                return res.error("OVERLAP", { message: "Selected date already has a compensatory off credit request." });
+            }
         } else {
             const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
             let sessionReduction = 0;
@@ -560,111 +701,103 @@ exports.update = async (req, res) => {
             }
         }
 
-        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id, {}, transaction);
-        if (!category) {
-            await transaction.rollback();
-            return res.error(constants.NOT_FOUND, { message: "Leave category not found" });
-        }
-
         // --- Automation Rules Validation ---
-        const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+        if (!is_credit) {
+            const rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
 
-        // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
-        if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
-            const refDate = dayjs(start_date);
-            let startDateRange, endDateRange;
-            let totalMaxDays = parseFloat(rules.max_total_days);
+            // 1. Generic Usage Limit (Monthly/Quarterly/Yearly - total days)
+            if (rules.limit_window && rules.limit_window !== 'none' && rules.max_total_days) {
+                const refDate = dayjs(start_date);
+                let startDateRange, endDateRange;
+                let totalMaxDays = parseFloat(rules.max_total_days);
 
-            if (rules.limit_window === 'monthly') {
-                startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
-
-                if (rules.carry_forward) {
-                    const template = employee.leaveTemplate;
-                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
-                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
-
-                    if (cycleType !== 'MONTHLY') {
-                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
-                        const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
-                        totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
-                    }
-                }
-            } else if (rules.limit_window === 'quarterly') {
-                startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
-
-                if (rules.carry_forward) {
-                    const template = employee.leaveTemplate;
-                    const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
-                    const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
-
-                    if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
-                        startDateRange = cycleDates.start.format('YYYY-MM-DD');
-                        const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
-                        totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
-                    }
-                }
-            } else if (rules.limit_window === 'yearly') {
-                startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
-                endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
-            } else if (rules.limit_window.endsWith('_month')) {
-                const months = parseInt(rules.limit_window.split('_')[0]);
-                if (!isNaN(months) && months > 0) {
-                    startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                if (rules.limit_window === 'monthly') {
+                    startDateRange = refDate.startOf('month').format('YYYY-MM-DD');
                     endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+
+                    if (rules.carry_forward) {
+                        const template = employee.leaveTemplate;
+                        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+
+                        if (cycleType !== 'MONTHLY') {
+                            startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                            const monthsPassed = refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') + 1;
+                            totalMaxDays = parseFloat(rules.max_total_days) * monthsPassed;
+                        }
+                    }
+                } else if (rules.limit_window === 'quarterly') {
+                    startDateRange = refDate.startOf('quarter').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('quarter').format('YYYY-MM-DD');
+
+                    if (rules.carry_forward) {
+                        const template = employee.leaveTemplate;
+                        const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
+                        const cycleDates = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, refDate);
+
+                        if (cycleType !== 'MONTHLY' && cycleType !== 'QUARTERLY') {
+                            startDateRange = cycleDates.start.format('YYYY-MM-DD');
+                            const quartersPassed = Math.floor(refDate.endOf('month').diff(cycleDates.start.startOf('month'), 'month') / 3) + 1;
+                            totalMaxDays = parseFloat(rules.max_total_days) * quartersPassed;
+                        }
+                    }
+                } else if (rules.limit_window === 'yearly') {
+                    startDateRange = refDate.startOf('year').format('YYYY-MM-DD');
+                    endDateRange = refDate.endOf('year').format('YYYY-MM-DD');
+                } else if (rules.limit_window.endsWith('_month')) {
+                    const months = parseInt(rules.limit_window.split('_')[0]);
+                    if (!isNaN(months) && months > 0) {
+                        startDateRange = refDate.subtract(months - 1, 'month').startOf('month').format('YYYY-MM-DD');
+                        endDateRange = refDate.endOf('month').format('YYYY-MM-DD');
+                    }
+                }
+
+                if (startDateRange && endDateRange) {
+                    const totalUsed = await LeaveRequest.sum('total_days', {
+                        where: {
+                            employee_id,
+                            id: { [Op.ne]: id }, // Exclude current request
+                            leave_category_id,
+                            approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
+                            status: 0,
+                            start_date: { [Op.between]: [startDateRange, endDateRange] }
+                        },
+                        transaction
+                    }) || 0;
+
+                    if ((totalUsed + total_days) > totalMaxDays) {
+                        await transaction.rollback();
+                        const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
+                        return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
+                    }
                 }
             }
 
-            if (startDateRange && endDateRange) {
-                const totalUsed = await LeaveRequest.sum('total_days', {
-                    where: {
-                        employee_id,
-                        id: { [Op.ne]: id }, // Exclude current request
-                        leave_category_id,
-                        approval_status: { [Op.notIn]: [constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED, constants.LEAVE_APPROVAL_STATUS.DELETED] },
-                        status: 0,
-                        start_date: { [Op.between]: [startDateRange, endDateRange] }
-                    },
-                    transaction
-                }) || 0;
+            // 4. Half Day / Full Day Restriction
+            if (rules.allow_half_day === false || rules.allow_full_day === false) {
+                const startSess = parseInt(req.body.start_session) || 0;
+                const endSess = parseInt(req.body.end_session) || 0;
+                const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
 
-                if ((totalUsed + total_days) > totalMaxDays) {
-                    await transaction.rollback();
-                    const limitLabel = rules.carry_forward ? `accumulated ${rules.limit_window}` : rules.limit_window.replace('_', ' ');
-                    return res.error("RULE_VIOLATION", { message: `Usage exceeds limit. Max ${totalMaxDays} days allowed for ${limitLabel}. Already used: ${totalUsed} days.` });
+                if (rules.allow_half_day === false) {
+                    if (startSess !== 0 || endSess !== 0) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
+                    }
+                }
+
+                if (rules.allow_full_day === false) {
+                    if (calendarDays > 1) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
+                    }
+                    if (calendarDays === 1 && startSess === 0) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
+                    }
                 }
             }
         }
-
-        // 4. Half Day / Full Day Restriction
-        if (rules.allow_half_day === false || rules.allow_full_day === false) {
-            const startSess = parseInt(req.body.start_session) || 0;
-            const endSess = parseInt(req.body.end_session) || 0;
-            const calendarDays = dayjs(end_date).diff(dayjs(start_date), 'day') + 1;
-
-            if (rules.allow_half_day === false) {
-                if (startSess !== 0 || endSess !== 0) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Half-day leaves are not allowed for this category." });
-                }
-            }
-
-            if (rules.allow_full_day === false) {
-                if (calendarDays > 1) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please apply for a single half-day session." });
-                }
-                if (calendarDays === 1 && startSess === 0) {
-                    await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: "Full-day leaves are not allowed for this category. Please select a session for half-day." });
-                }
-            }
-        }
-
-        const employee = await commonQuery.findOneRecord(Employee, employee_id, {
-            include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
-        }, transaction);
 
         const template = employee?.leaveTemplate;
         const cycleType = template ? template.leave_policy_cycle : 'CALENDAR_YEAR';
@@ -672,19 +805,21 @@ exports.update = async (req, res) => {
         // Check if the current leave template cycle ends this month/period, and restrict next month's leave to only unpaid categories.
         const currentCycle = LeaveBalanceService.getCycleDates(employee.joining_date, cycleType, dayjs());
         const leaveStartDate = dayjs(start_date);
-        if (currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
+        if (!is_credit && currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
             await transaction.rollback();
             return res.error("RULE_VIOLATION", { 
                 message: "Only unpaid leaves can be applied for the next cycle/month." 
             });
         }
 
-        try {
-            await LeaveBalanceService.adjustLeaveBalance(employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
-            await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, dayjs(start_date), employee);
-        } catch (error) {
-            await transaction.rollback();
-            return res.error("INSUFFICIENT_BALANCE", { message: error.message });
+        if (!is_credit) {
+            try {
+                await LeaveBalanceService.adjustLeaveBalance(employee_id, leaveRequest.leave_category_id, -parseFloat(leaveRequest.total_days), transaction, dayjs(leaveRequest.start_date), employee);
+                await LeaveBalanceService.adjustLeaveBalance(employee_id, leave_category_id, total_days, transaction, dayjs(start_date), employee);
+            } catch (error) {
+                await transaction.rollback();
+                return res.error("INSUFFICIENT_BALANCE", { message: error.message });
+            }
         }
 
         const PUT = {
@@ -940,7 +1075,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, approved_by, approval_remark } = req.body;
+        const { approval_status, approved_by, approval_remark, total_days } = req.body;
 
         const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {}, transaction);
         if (!leaveRequest || leaveRequest.status === 2) {
@@ -980,6 +1115,12 @@ exports.updateStatus = async (req, res) => {
                 approval_history: history,
                 approval_remark: approval_remark || ""
             };
+
+            if (leaveRequest.request_type === 'CREDIT' && total_days !== undefined) {
+                const parsedDays = parseFloat(total_days);
+                updateData.total_days = parsedDays;
+                leaveRequest.total_days = parsedDays; // Update local reference for subsequent balance adjustment
+            }
 
             if (currentLevel < totalLevels && !req.user?.is_super_admin) {
                 updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED;
@@ -1561,6 +1702,100 @@ exports.delete = async (req, res) => {
         return res.success(constants.DELETED);
     } catch (err) {
         await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+exports.getEligibleCompOffDates = async (req, res) => {
+    try {
+        let employeeId = req.query.employee_id || req.user?.employee_id;
+        if (!employeeId) {
+            return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [
+                { model: LeaveTemplate, as: "leaveTemplate" },
+                { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+            ]
+        });
+
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, { message: "Employee not found" });
+        }
+
+        const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+        if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
+            return res.success("No comp-off policy", []);
+        }
+
+        const minCompOff = attTemplate.comp_off_min_working_mins || 0;
+        const maxCompOff = attTemplate.comp_off_max_working_mins || 0;
+
+        // Fetch past 90 days of attendance
+        const ninetyDaysAgo = dayjs().subtract(90, 'day').format('YYYY-MM-DD');
+        const todayStr = dayjs().format('YYYY-MM-DD');
+
+        const attendanceRecords = await commonQuery.findAllRecords(AttendanceDay, {
+            employee_id: employeeId,
+            attendance_date: { [Op.between]: [ninetyDaysAgo, todayStr] },
+            status: { [Op.ne]: 2 }
+        });
+
+        const eligibleDates = [];
+
+        for (const record of attendanceRecords) {
+            const workedMins = parseFloat(record.worked_minutes || 0);
+            if (workedMins < minCompOff) {
+                continue;
+            }
+
+            const dateStr = record.attendance_date;
+            
+            // Verify if it is Holiday or Weekly Off
+            const { isHoliday, isWeeklyOff, holidayDetails } = await getDayOffInfo(employee, dateStr);
+            if (!isHoliday && !isWeeklyOff) {
+                continue;
+            }
+
+            // Check if there is already an active CREDIT request for this day
+            const existingRequest = await commonQuery.findOneRecord(LeaveRequest, {
+                employee_id: employeeId,
+                request_type: 'CREDIT',
+                start_date: dateStr,
+                approval_status: { [Op.notIn]: [
+                    constants.LEAVE_APPROVAL_STATUS.REJECTED, 
+                    constants.LEAVE_APPROVAL_STATUS.CANCELLED, 
+                    constants.LEAVE_APPROVAL_STATUS.DELETED
+                ] },
+                status: 0
+            });
+
+            if (existingRequest) {
+                continue;
+            }
+
+            let creditValue = 0;
+            if (workedMins >= maxCompOff && maxCompOff > 0) {
+                creditValue = 1.0;
+            } else if (workedMins >= minCompOff && minCompOff > 0) {
+                creditValue = 0.5;
+            }
+
+            eligibleDates.push({
+                date: dateStr,
+                worked_minutes: workedMins,
+                type: isHoliday ? (holidayDetails?.name || "Holiday") : "Weekly Off",
+                credit_value: creditValue
+            });
+        }
+
+        // Sort descending by date
+        eligibleDates.sort((a, b) => b.date.localeCompare(a.date));
+
+        return res.success("Eligible comp-off dates fetched successfully", eligibleDates);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };

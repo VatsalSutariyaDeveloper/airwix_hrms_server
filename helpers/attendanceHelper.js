@@ -2913,6 +2913,97 @@ async function getDayOffInfo(employee, date, transaction) {
 }
 
 /**
+ * Resolves the user IDs of authorized approvers for a given employee and level.
+ */
+async function getApproversForCompOffCredit(employeeId, currentLevel, transaction) {
+  try {
+    const { User, RolePermission, LeaveTemplate } = require("../models");
+    const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+      include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+    }, transaction);
+
+    if (!employee) return [];
+
+    const template = employee.leaveTemplate;
+    const config = template ? (template.approval_config || []) : [];
+    const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+    const { type } = currentStage;
+
+    const userIds = new Set();
+
+    if (type === 'REPORTING_MANAGER' || type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
+      if (employee.reporting_manager) {
+        userIds.add(employee.reporting_manager);
+      }
+      if (employee.attendance_supervisor) {
+        userIds.add(employee.attendance_supervisor);
+      }
+    }
+
+    if (type === 'ADMIN' || type === 'ANYONE' || type === 'EMPLOYER') {
+      const adminFilters = {
+        status: 0,
+        [Op.or]: [
+          { is_super_admin: true },
+          { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN },
+          { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN }
+        ]
+      };
+      const admins = await commonQuery.findAllRecords(User, adminFilters, {
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+        attributes: ['id'],
+        raw: true
+      }, transaction);
+
+      admins.forEach(a => userIds.add(a.id));
+    }
+
+    return [...userIds];
+  } catch (err) {
+    console.error("Error in getApproversForCompOffCredit in attendanceHelper:", err);
+    return [];
+  }
+}
+
+/**
+ * Creates notifications for the current stage approvers of a Comp-Off credit request.
+ */
+async function sendCompOffApprovalNotifications(leaveRequest, employee, transaction) {
+  try {
+    const userIds = await getApproversForCompOffCredit(leaveRequest.employee_id, leaveRequest.current_level, transaction);
+    if (!userIds || userIds.length === 0) return;
+
+    const employeeName = employee ? employee.first_name : "An employee";
+    const startDateStr = dayjs(leaveRequest.start_date).format('DD MMM YYYY');
+
+    const title = "New Comp Off Credit Request Pending Approval";
+    const message = `${employeeName} has earned a compensatory off credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
+
+    const { User } = require("../models");
+    for (const userId of userIds) {
+      // Avoid notifying the employee themselves
+      const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id"] }, transaction);
+      if (user && user.employee_id === leaveRequest.employee_id) {
+        continue;
+      }
+
+      await notificationService.createNotification({
+        user_id: userId,
+        title,
+        message,
+        type: "LEAVE",
+        reference_id: leaveRequest.id,
+        status_code: 0,
+        company_id: leaveRequest.company_id,
+        branch_id: leaveRequest.branch_id
+      }, transaction);
+    }
+  } catch (err) {
+    console.error("Error sending comp-off approval notifications:", err);
+  }
+}
+
+/**
  * Syncs Compensatory Off credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
@@ -2920,6 +3011,7 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
   if (!template || template.holiday_policy !== "COMP_OFF") return;
+  if (template.comp_off_generation_mode === "MANUAL") return;
 
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
   if (!isHoliday && !isWeeklyOff) return;
@@ -2954,13 +3046,17 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
 
   const employeeId = employee.id;
 
-  // Find existing credit record for this date
+  // Find existing credit record for this date (excluding rejected, cancelled, deleted ones)
   const existingCompOff = await commonQuery.findOneRecord(LeaveRequest, {
     employee_id: employeeId,
     request_type: 'CREDIT',
     start_date: date,
     leave_category_id: compOffCategory.id,
-    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+    approval_status: { [Op.notIn]: [
+      constants.LEAVE_APPROVAL_STATUS.REJECTED,
+      constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+      constants.LEAVE_APPROVAL_STATUS.DELETED
+    ] },
     status: 0
   }, {}, transaction, false, {});
 
@@ -2981,16 +3077,16 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
         // Handle Correction (e.g. Full Day vs Half Day change)
         if (parseFloat(existingCompOff.total_days) !== creditAmount) {
           const diff = creditAmount - parseFloat(existingCompOff.total_days);
-          const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
-          if (error) return error;
+          // Only adjust balance if the request is already approved
+          if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+            const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
+            if (error) return error;
+          }
           await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount, request_type: 'CREDIT' }, transaction);
         }
       } else {
-        // New Credit
-        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction, date, employee, true);
-        if (error) return error;
-
-        await commonQuery.createRecord(LeaveRequest, {
+        // New Credit - Created in PENDING status, balance is adjusted upon approval in leaveRequestController.updateStatus
+        const leaveRequest = await commonQuery.createRecord(LeaveRequest, {
           employee_id: employeeId,
           leave_category_id: compOffCategory.id,
           start_date: date,
@@ -2998,7 +3094,9 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
           total_days: creditAmount,
           request_type: 'CREDIT',
           reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
-          approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+          approval_status: constants.LEAVE_APPROVAL_STATUS.PENDING,
+          current_level: 1,
+          approval_history: [],
           approved_by: 0,
           company_id: employee.company_id,
           branch_id: employee.branch_id,
@@ -3013,17 +3111,26 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
           { note: "compoff leave generated" },
           { where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction }
         );
+
+        // Send multi-approval notifications
+        await sendCompOffApprovalNotifications(leaveRequest, employee, transaction);
       }
     } else if (existingCompOff) {
       // Remove Credit if status changed to non-working or worked time below minimum
-      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
-      if (error) return error;
+      // Only adjust balance to remove credit if it was previously APPROVED
+      if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
+        if (error) return error;
+      }
       await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction, false, {});
     }
   } else if (existingCompOff) {
     // Remove Credit if status changed to non-working (e.g. Absent)
-    const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
-    if (error) return error;
+    // Only adjust balance to remove credit if it was previously APPROVED
+    if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
+      if (error) return error;
+    }
     await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction, false, {});
   }
 }
@@ -3388,5 +3495,8 @@ module.exports = {
   syncAttendanceToLeaveBalance,
   bulkSyncAttendanceDays,
   getDayOffInfo,
-  recalculateMonthAbsentFines
+  recalculateMonthAbsentFines,
+  syncCompOffCredit,
+  getApproversForCompOffCredit,
+  sendCompOffApprovalNotifications
 };

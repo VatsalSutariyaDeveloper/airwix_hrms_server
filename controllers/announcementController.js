@@ -129,6 +129,10 @@ exports.getAll = async (req, res) => {
       ["target_type", true, true],
     ];
 
+    if (!req.user.is_super_admin) {
+      req.body.user_id = req.user.id;
+    }
+
     const result = await commonQuery.fetchPaginatedData(
       Announcement,
       { ...req.body },

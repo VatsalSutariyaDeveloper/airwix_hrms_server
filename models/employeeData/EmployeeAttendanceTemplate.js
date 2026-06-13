@@ -61,6 +61,7 @@ module.exports = (sequelize, DataTypes) => {
 
     comp_off_min_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
     comp_off_max_working_mins: { type: DataTypes.INTEGER, defaultValue: 0 },
+    comp_off_generation_mode: { type: DataTypes.ENUM('AUTO', 'MANUAL'), defaultValue: 'AUTO' },
 
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },
     user_id: { type: DataTypes.INTEGER, defaultValue: 0 },

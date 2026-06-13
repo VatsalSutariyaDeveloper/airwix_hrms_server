@@ -826,7 +826,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
             }
         }
 
-        // 2. Birthday Notifications (Individual - only for the employee whose birthday it is)
+        // 2. Birthday Notifications (Broadcasting to all active employees in the same company)
         const birthdayEmployees = await commonQuery.findAllRecords(Employee, {
             status: 0,
             [Op.and]: [
@@ -839,7 +839,7 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
 
         if (birthdayEmployees.length > 0) {
             for (const employee of birthdayEmployees) {
-                // Get user for this employee
+                // Get user for the birthday employee themselves
                 const user = await commonQuery.findOneRecord(User, {
                     employee_id: employee.id,
                     status: 0
@@ -858,6 +858,40 @@ exports.sendHolidayAndBirthdayNotifications = async (asOf = null) => {
                         branch_id: user.branch_id
                     });
                     console.log(`✅ Birthday notification created for ${employee.first_name}`);
+                }
+
+                // Get other active employees under the same company
+                const otherEmployees = await commonQuery.findAllRecords(Employee, {
+                    company_id: employee.company_id,
+                    status: 0,
+                    id: { [Op.ne]: employee.id }
+                }, {
+                    attributes: ['id']
+                });
+
+                if (otherEmployees.length > 0) {
+                    const otherEmployeeIds = otherEmployees.map(e => e.id);
+                    // Get all active users for these employees
+                    const otherUsers = await commonQuery.findAllRecords(User, {
+                        employee_id: { [Op.in]: otherEmployeeIds },
+                        status: 0
+                    }, {
+                        attributes: ['id', 'company_id', 'branch_id']
+                    });
+
+                    // Send birthday notifications to all other users in the company
+                    for (const otherUser of otherUsers) {
+                        await createNotification({
+                            user_id: otherUser.id,
+                            title: `Birthday Alert! 🎂`,
+                            message: `Today is ${employee.first_name}'s birthday! Let's wish them a very Happy Birthday! 🎉`,
+                            type: 'BIRTHDAY',
+                            reference_id: employee.id,
+                            company_id: otherUser.company_id,
+                            branch_id: otherUser.branch_id
+                        });
+                    }
+                    console.log(`✅ Birthday broadcast notifications created for ${employee.first_name}'s birthday - notified ${otherUsers.length} users`);
                 }
             }
         }
