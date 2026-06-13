@@ -564,7 +564,7 @@ exports.update = async (req, res) => {
                 newProfileImage = result.profile_image;
                 profileImageChanged = true;
             }
-            
+
             if (Array.isArray(req.files)) {
                 req.files = req.files.filter(f => f.fieldname !== 'profile_image');
             } else {
@@ -963,6 +963,88 @@ exports.getById = async (req, res) => {
  */
 exports.getProfile = async (req, res) => {
     try {
+        // Branch: employee_id passed as query param or request body ──────────
+        const queriedEmployeeId = req.query.employee_id || req.body.employee_id;
+        if (queriedEmployeeId) {
+            const emp = await commonQuery.findOneRecord(Employee, queriedEmployeeId, {
+                attributes: [
+                    'id', 'first_name', 'email', 'mobile_no',
+                    'gender', 'dob', 'blood_group',
+                    'father_name', 'mother_name', 'spouse_name', 'nationality',
+                    'emergency_contact_name', 'emergency_contact_mobile', 'emergency_contact_relation',
+                    'present_address1', 'present_address2', 'present_city', 'present_pincode',
+                    'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_pincode',
+                    'profile_image', 'employee_code'
+                ],
+                include: [
+                    { model: User, as: 'linked_user', attributes: ['user_name', 'email', 'mobile_no'], required: false },
+                    { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                    { model: Department, as: 'department', attributes: ['name'] }
+                ]
+            }, null, false, {});
+
+            if (!emp) return res.error(constants.EMPLOYEE_NOT_FOUND);
+
+            const plain = emp.get({ plain: true });
+
+            const getFileUrl = (fileName, folder = constants.EMPLOYEE_IMG_FOLDER) => {
+                if (!fileName) return null;
+                if (fileExists(folder, fileName)) return `${process.env.FILE_SERVER_URL}${folder}${fileName}`;
+                const fallback = folder === constants.EMPLOYEE_IMG_FOLDER ? constants.EMPLOYEE_DOC_FOLDER : constants.EMPLOYEE_IMG_FOLDER;
+                if (fileExists(fallback, fileName)) return `${process.env.FILE_SERVER_URL}${fallback}${fileName}`;
+                return null;
+            };
+
+            return res.ok({
+                id: plain.id,
+                name: plain.first_name?.trim() || 'N/A',
+                first_name: plain.first_name || 'N/A',
+                email: plain.email || plain.linked_user?.email || 'N/A',
+                mobile_no: plain.mobile_no || plain.linked_user?.mobile_no || 'N/A',
+                profile_image_url: getFileUrl(plain.profile_image),
+                header: {
+                    id: plain.id,
+                    employee_code: plain.employee_code || 'N/A',
+                    full_name: plain.first_name?.trim() || 'N/A',
+                    profile_image_url: getFileUrl(plain.profile_image),
+                    designation: plain.designation?.designation_name || 'N/A',
+                    department: plain.department?.name || 'N/A',
+                },
+                account_settings: {
+                    user_name: plain.linked_user?.user_name || 'N/A',
+                    email: plain.email || plain.linked_user?.email || 'N/A',
+                    mobile_no: plain.mobile_no || plain.linked_user?.mobile_no || 'N/A',
+                },
+                personal_info: {
+                    gender: plain.gender === 1 ? 'Male' : (plain.gender === 2 ? 'Female' : (plain.gender === 3 ? 'Others' : 'N/A')),
+                    dob: plain.dob ? formatDateTime(plain.dob) : 'N/A',
+                    blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plain.blood_group - 1] || 'N/A',
+                    father_name: plain.father_name || 'N/A',
+                    mother_name: plain.mother_name || 'N/A',
+                    spouse_name: plain.spouse_name || 'N/A',
+                    nationality: plain.nationality || 'Indian',
+                },
+                address_info: {
+                    present: {
+                        address: `${plain.present_address1 || ''} ${plain.present_address2 || ''}`.trim() || 'N/A',
+                        city: plain.present_city || 'N/A',
+                        pincode: plain.present_pincode || 'N/A'
+                    },
+                    permanent: {
+                        address: `${plain.permanent_address1 || ''} ${plain.permanent_address2 || ''}`.trim() || 'N/A',
+                        city: plain.permanent_city || 'N/A',
+                        pincode: plain.permanent_pincode || 'N/A'
+                    }
+                },
+                emergency_contact: {
+                    name: plain.emergency_contact_name || 'N/A',
+                    mobile: plain.emergency_contact_mobile || 'N/A',
+                    relation: plain.emergency_contact_relation || 'N/A'
+                }
+            });
+        }
+
+        // ── Default Branch: fetch from JWT token ───────────────────────────────
         const userId = req.user.id;
 
         // Always fetch the User data first
@@ -1151,8 +1233,8 @@ exports.getProfile = async (req, res) => {
                 physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
                 probation_period: probationPeriodDays ? `${probationPeriodDays} Days` : 'N/A',
                 notice_period: plainRecord.resignationTemplate?.notice_period_days ? `${plainRecord.resignationTemplate.notice_period_days} Days` : 'N/A',
-                attendance_supervisor: plainRecord.supervisor || 'N/A',
-                reporting_manager: plainRecord.manager || 'N/A',
+                attendance_supervisor: plainRecord.supervisor || null,
+                reporting_manager: plainRecord.manager || null,
                 // referred_by: plainRecord.referred_by || 'N/A'
             },
             address_info: {
@@ -1214,6 +1296,217 @@ exports.getProfile = async (req, res) => {
         return handleError(err, res, req);
     }
 }
+/**
+ * Gets the profile of a specific employee by their employee ID.
+ * Returns the same rich profile shape as getProfile (/me) but for any employee.
+ */
+exports.getProfileById = async (req, res) => {
+    try {
+        const employeeId = req.params.id;
+
+        if (!employeeId) return res.error(constants.VALIDATION_ERROR, { message: "employee_id is required" });
+
+        const record = await commonQuery.findOneRecord(Employee, employeeId, {
+            include: [
+                { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
+                { model: Department, as: 'department', attributes: ['name'] },
+                { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
+                { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
+                {
+                    model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
+                    include: [
+                        { model: AttendanceTemplate, as: 'attendanceTemplate', attributes: ['name'] }
+                    ]
+                },
+                { model: LeaveTemplate, as: "leaveTemplate", attributes: ["template_name"] },
+                {
+                    model: HolidayTemplate, as: "holidayTemplate", attributes: ["name"],
+                    include: [
+                        { model: HolidayTransaction, as: "holidayTransactions", attributes: ['id', 'name', 'date', 'holiday_type', 'color'], required: false }
+                    ]
+                },
+                { model: WeeklyOffTemplate, as: "weeklyOffTemplate", attributes: ["name"] },
+                { model: ShiftTemplate, as: "shiftTemplate", attributes: ["shift_name"] },
+                { model: EmployeeFamilyMember, as: 'family_members' },
+                { model: ResignationTemplate, as: 'resignationTemplate', attributes: ['notice_period_days'] }
+            ]
+        }, null, false, {});
+
+        if (!record) return res.error(constants.EMPLOYEE_NOT_FOUND);
+
+        const getFileUrl = (fileName, folder = constants.EMPLOYEE_IMG_FOLDER) => {
+            if (!fileName) return null;
+            if (fileExists(folder, fileName)) {
+                return `${process.env.FILE_SERVER_URL}${folder}${fileName}`;
+            }
+            const fallback = folder === constants.EMPLOYEE_IMG_FOLDER ? constants.EMPLOYEE_DOC_FOLDER : constants.EMPLOYEE_IMG_FOLDER;
+            if (fileExists(fallback, fileName)) {
+                return `${process.env.FILE_SERVER_URL}${fallback}${fileName}`;
+            }
+            return null;
+        };
+
+        const plainRecord = record.get({ plain: true });
+
+        let supervisorRecord = [];
+        let reportingManagerRecord = [];
+
+        if (plainRecord.is_attendance_supervisor) {
+            supervisorRecord = await commonQuery.findAllRecords(Employee,
+                { attendance_supervisor: plainRecord.linked_user?.id },
+                { attributes: ['id', 'first_name', 'mobile_no', 'email'] }
+            );
+        }
+
+        if (plainRecord.is_reporting_manager) {
+            reportingManagerRecord = await commonQuery.findAllRecords(Employee,
+                { reporting_manager: plainRecord.linked_user?.id },
+                { attributes: ['id', 'first_name', 'mobile_no', 'email'] }
+            );
+        }
+
+        const companySettings = await getCompanySetting(plainRecord.company_id);
+        const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
+
+        const profileData = {
+            header: {
+                id: plainRecord.id,
+                employee_code: plainRecord.employee_code,
+                full_name: plainRecord.first_name?.trim() || 'N/A',
+                profile_image_url: getFileUrl(plainRecord.profile_image),
+                designation: plainRecord.designation?.designation_name || 'N/A',
+                department: plainRecord.department?.name || 'N/A',
+            },
+            account_settings: {
+                user_name: plainRecord.linked_user?.user_name || 'N/A',
+                email: plainRecord.email || plainRecord.linked_user?.email || 'N/A',
+                mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
+            },
+            bank_details: {
+                bank_name: plainRecord.bank_name || 'N/A',
+                account_no: plainRecord.bank_account_number || 'N/A',
+                ifsc: plainRecord.bank_ifsc_code || 'N/A',
+                holder_name: plainRecord.bank_account_holder_name || 'N/A',
+                upi_id: plainRecord.upi_id || 'N/A'
+            },
+            personal_info: {
+                first_name: plainRecord.first_name,
+                gender: plainRecord.gender === 1 ? 'Male' : (plainRecord.gender === 2 ? 'Female' : (plainRecord.gender === 3 ? 'Others' : 'N/A')),
+                dob: plainRecord.dob ? formatDateTime(plainRecord.dob) : 'N/A',
+                blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plainRecord.blood_group - 1] || 'N/A',
+                father_name: plainRecord.father_name || 'N/A',
+                mother_name: plainRecord.mother_name || 'N/A',
+                spouse_name: plainRecord.spouse_name || 'N/A',
+                marriage_date: plainRecord.marriage_date ? formatDateTime(plainRecord.marriage_date) : 'N/A',
+                nationality: plainRecord.nationality || 'Indian',
+                emergency_contact: {
+                    name: plainRecord.emergency_contact_name || 'N/A',
+                    mobile: plainRecord.emergency_contact_mobile || 'N/A',
+                    relation: plainRecord.emergency_contact_relation || 'N/A'
+                }
+            },
+            general_info: {
+                salary_cycle: plainRecord.employeeSalaryTemplate?.salary_type || 'N/A',
+                weekly_off: plainRecord.weeklyOffTemplate?.name || 'N/A',
+                holiday: plainRecord.holidayTemplate?.name || 'N/A',
+                holiday_transactions: plainRecord.holidayTemplate?.holidayTransactions,
+                leave: plainRecord.leaveTemplate?.template_name || 'N/A',
+                shift: plainRecord.shiftTemplate?.shift_name || 'N/A',
+                salary_template: plainRecord.employeeSalaryTemplate?.template_name || 'N/A',
+                attendance_template: plainRecord.employeeAttendanceTemplate?.attendanceTemplate?.name || 'N/A',
+                lwp_basis: plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "DAYS_IN_MONTH" ? "Days in Month" : plainRecord.employeeSalaryTemplate?.lwp_calculation_basis === "FIXED_30_DAYS" ? "Fixed 30 Days" : "Working Days",
+                attendance_supervisor: plainRecord.is_attendance_supervisor ? 'Yes' : 'No',
+                supervisor_details: supervisorRecord,
+                reporting_manager: plainRecord.is_reporting_manager ? 'Yes' : 'No',
+                reporting_manager_details: reportingManagerRecord
+            },
+            employment_info: {
+                joining_date: plainRecord.joining_date ? formatDateTime(plainRecord.joining_date) : 'N/A',
+                employee_type: ["Staff", "Worker", "Contractor"][plainRecord.employee_type - 1] || 'N/A',
+                worker_type: ["On-Role", "Off-Role"][plainRecord.worker_type - 1] || 'N/A',
+                employment_type: plainRecord.employment_type || 'N/A',
+                uan: plainRecord.uan_number || 'N/A',
+                pan: plainRecord.pan_number || 'N/A',
+                aadhaar: plainRecord.aadhaar_number || 'N/A',
+                pf_eligible: plainRecord.pf_eligible ? 'Yes' : 'No',
+                pf_number: plainRecord.pf_number || 'N/A',
+                pf_joining_date: plainRecord.pf_joining_date ? formatDateTime(plainRecord.pf_joining_date) : 'N/A',
+                esi_eligible: plainRecord.esi_eligible ? 'Yes' : 'No',
+                esi_number: plainRecord.esi_number || 'N/A',
+                pt_eligible: plainRecord.pt_eligible ? 'Yes' : 'No',
+                lwf_eligible: plainRecord.lwf_eligible ? 'Yes' : 'No',
+                eps_eligible: plainRecord.eps_eligible ? 'Yes' : 'No',
+                eps_joining_date: plainRecord.eps_joining_date ? formatDateTime(plainRecord.eps_joining_date) : 'N/A',
+                eps_exit_date: plainRecord.eps_exit_date ? formatDateTime(plainRecord.eps_exit_date) : 'N/A',
+                hps_eligible: plainRecord.hps_eligible ? 'Yes' : 'No',
+                exit_date: plainRecord.exit_date ? formatDateTime(plainRecord.exit_date) : 'N/A',
+                physically_challenged: plainRecord.physically_challenged ? 'Yes' : 'No',
+                probation_period: probationPeriodDays ? `${probationPeriodDays} Days` : 'N/A',
+                notice_period: plainRecord.resignationTemplate?.notice_period_days ? `${plainRecord.resignationTemplate.notice_period_days} Days` : 'N/A',
+                attendance_supervisor: plainRecord.supervisor || null,
+                reporting_manager: plainRecord.manager || null,
+            },
+            address_info: {
+                present: {
+                    address: `${plainRecord.present_address1 || ''} ${plainRecord.present_address2 || ''}`.trim() || 'N/A',
+                    city: plainRecord.present_city || 'N/A',
+                    pincode: plainRecord.present_pincode || 'N/A'
+                },
+                permanent: {
+                    address: `${plainRecord.permanent_address1 || ''} ${plainRecord.permanent_address2 || ''}`.trim() || 'N/A',
+                    city: plainRecord.permanent_city || 'N/A',
+                    pincode: plainRecord.permanent_pincode || 'N/A'
+                }
+            },
+            document_center: {
+                aadhaar_doc: getFileUrl(plainRecord.aadhaar_doc, constants.EMPLOYEE_DOC_FOLDER),
+                aadhaar_back_doc: getFileUrl(plainRecord.aadhaar_back_doc, constants.EMPLOYEE_DOC_FOLDER),
+                pan_doc: getFileUrl(plainRecord.pan_doc, constants.EMPLOYEE_DOC_FOLDER),
+                driving_license_doc: getFileUrl(plainRecord.driving_license_doc, constants.EMPLOYEE_DOC_FOLDER),
+                voter_id_doc: getFileUrl(plainRecord.voter_id_doc, constants.EMPLOYEE_DOC_FOLDER),
+                uan_doc: getFileUrl(plainRecord.uan_doc, constants.EMPLOYEE_DOC_FOLDER),
+                signature_doc: getFileUrl(plainRecord.signature_doc, constants.EMPLOYEE_DOC_FOLDER),
+            },
+            background_details: {
+                education_details: plainRecord.education_details || [],
+                family_details: plainRecord.family_members || [],
+                experience_details: Array.isArray(plainRecord.experience_details)
+                    ? plainRecord.experience_details.map(exp => {
+                        if (Array.isArray(exp.attachments)) {
+                            exp.attachment_urls = exp.attachments.map(
+                                att => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_DOC_FOLDER}${att}`
+                            );
+                        } else {
+                            exp.attachment_urls = [];
+                        }
+                        return exp;
+                    })
+                    : [],
+            },
+            additional_details: {
+                professional_reference: (() => {
+                    let professionalReference = plainRecord.professional_reference || [];
+                    if (typeof professionalReference === "string") {
+                        try {
+                            professionalReference = JSON.parse(professionalReference);
+                        } catch (e) {
+                            professionalReference = [];
+                        }
+                    }
+                    return Array.isArray(professionalReference) ? professionalReference : [];
+                })(),
+                custom_fields: (plainRecord.custom_fields && Object.keys(plainRecord.custom_fields).length > 0) ? plainRecord.custom_fields : null
+            },
+        };
+
+        return res.ok(profileData);
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
 exports.delete = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
@@ -3838,6 +4131,70 @@ exports.transfer = async (req, res) => {
 
     } catch (err) {
         if (transaction && !transaction.finished) await transaction.rollback();
+        return handleError(err, res, req);
+    }
+};
+
+/**
+ * Retrieves Paginated List of Team Employees
+ */
+exports.getTeamEmployees = async (req, res) => {
+    try {
+        const POST = req.body || {};
+        const userId = req.user.id;
+
+        const fieldConfig = [
+            ["first_name", true, true],
+            ["employee_code", true, true],
+            ["mobile_no", true, false],
+            ["email", true, false],
+        ];
+
+        POST.filter = POST.filter || {};
+        if (POST.filter.status === undefined) {
+            POST.filter.status = 0;
+        }
+        POST.filter[Op.or] = [
+            { reporting_manager: userId },
+            { attendance_supervisor: userId }
+        ];
+
+        const data = await commonQuery.fetchPaginatedData(
+            Employee,
+            POST,
+            fieldConfig,
+            {
+                attributes: [
+                    "id",
+                    "first_name",
+                    "employee_code",
+                    "mobile_no",
+                    "email",
+                    "profile_image",
+                ],
+                order: [["first_name", "ASC"]]
+            },
+            true,
+            "created_at"
+        );
+
+        if (data.items && data.items.length > 0) {
+            data.items = data.items.map(item => {
+                const plain = item.get ? item.get({ plain: true }) : item;
+                if (plain.profile_image) {
+                    plain.profile_image_url = `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plain.profile_image}`;
+                } else {
+                    plain.profile_image_url = null;
+                }
+                return plain;
+            });
+        }
+
+        console.log("=== TEAM EMPLOYEES RESPONSE DATA ===");
+        console.log(JSON.stringify(data, null, 2));
+
+        return res.ok(data);
+    } catch (err) {
         return handleError(err, res, req);
     }
 };

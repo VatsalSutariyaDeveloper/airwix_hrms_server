@@ -129,6 +129,7 @@ module.exports = (req, res, next) => {
 
       return res.json({
         success: true,
+        code,
         message: formatMessage(code),
         data: finalData
       });
@@ -160,6 +161,7 @@ module.exports = (req, res, next) => {
       
       return res.status(status).json({
         success: false,
+        code,
         message: message,
         data: errors
       });
@@ -172,6 +174,7 @@ module.exports = (req, res, next) => {
     if (isApp()) {
       return res.status(status).json({
         success: false,
+        code,
         message: formatMessage(code, "Validation failed"),
         data: data
       });

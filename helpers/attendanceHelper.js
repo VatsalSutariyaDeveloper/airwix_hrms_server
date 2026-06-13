@@ -3005,6 +3005,14 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
           user_id: 0,
           status: 0
         }, transaction);
+
+        if (attendanceDay) {
+          attendanceDay.note = "compoff leave generated";
+        }
+        await AttendanceDay.update(
+          { note: "compoff leave generated" },
+          { where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction }
+        );
       }
     } else if (existingCompOff) {
       // Remove Credit if status changed to non-working or worked time below minimum

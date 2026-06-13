@@ -354,6 +354,36 @@ exports.create = async (req, res) => {
                         return res.error("RULE_VIOLATION", { message: `Late/Early exit exceeds allowed threshold of ${rules.max_late_early_mins} mins. Current: ${fineMins} mins.` });
                     }
                 }
+
+                const fineData = attendance.fine_data || {};
+                const lateEntry = fineData.late_entry?.minutes || 0;
+                const earlyExit = fineData.early_exit?.minutes || 0;
+                const excessBreaks = fineData.excess_breaks?.minutes || 0;
+
+                const formatMinutesToHours = (mins) => {
+                    if (mins >= 60) {
+                        const hrs = Math.floor(mins / 60);
+                        const remMins = mins % 60;
+                        return remMins > 0 ? `${hrs}hr ${remMins} minutes` : `${hrs}hr`;
+                    }
+                    return `${mins} minutes`;
+                };
+
+                const parts = [];
+                if (lateEntry > 0) {
+                    parts.push(`Late Entry ${formatMinutesToHours(lateEntry)}`);
+                }
+                if (earlyExit > 0) {
+                    parts.push(`Early Exit ${formatMinutesToHours(earlyExit)}`);
+                }
+                if (excessBreaks > 0) {
+                    parts.push(`Excess Break Time ${formatMinutesToHours(excessBreaks)}`);
+                }
+
+                if (parts.length > 0) {
+                    const dynamicReason = `leave Request for ${parts.join(" and ")}`;
+                    req.body.reason = req.body.reason ? `${req.body.reason} - ${dynamicReason}` : dynamicReason;
+                }
             } else {
                 // If no attendance record exists for the selected date (past, present, or future), the rule is violated
                 await transaction.rollback();

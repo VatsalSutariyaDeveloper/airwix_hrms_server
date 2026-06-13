@@ -20,7 +20,6 @@ const { createNotification } = require("../../services/notificationService");
  */
 
 
-
 /**
  * Internal helper to evaluate formula-based components
  */
@@ -1803,7 +1802,7 @@ exports.deletePayslip = async (req, res) => {
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
 
-        // ── 1. Delete salary PaymentHistory entries linked to this payslip ──────────
+        // Delete salary PaymentHistory entries linked to this payslip ──────────
         // These are created when HR records a salary payment against the payslip.
         await PaymentHistory.destroy({
             where: {
@@ -1813,7 +1812,7 @@ exports.deletePayslip = async (req, res) => {
             transaction
         });
 
-        // ── 2. Delete Reimbursement PaymentHistory entries included in this payslip ─
+        // Delete Reimbursement PaymentHistory entries included in this payslip ─
         // Reimbursements with payment_type = "Reimbursement" that fall in this month
         // were included in the payslip's reimbursement_details. We delete their
         // payment history records so they can be re-processed if the payslip is
@@ -1832,7 +1831,7 @@ exports.deletePayslip = async (req, res) => {
             }
         }
 
-        // ── 3. Reset advance adjustments that were included in this payslip ─────────
+        // Reset advance adjustments that were included in this payslip ─────────
         const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
         if (advancesAdjusted.length > 0) {
             const advanceIds = advancesAdjusted.map(a => a.advance_id);
@@ -1845,7 +1844,7 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // ── 4. Reset incentives that were baked into this payslip ───────────────────
+        // Reset incentives that were baked into this payslip ───────────────────
         // EmployeeIncentives matched by employee + month + year are marked
         // adjusted_in_payroll = true when finalized; reverse that here.
         await EmployeeIncentive.update(
@@ -1861,7 +1860,7 @@ exports.deletePayslip = async (req, res) => {
             }
         );
 
-        // ── 5. Reset leave request encashments that were settled in this payslip ────
+        // Reset leave request encashments that were settled in this payslip ────
         const encashmentsSettled = payslip.encashment_details?.history || [];
         if (encashmentsSettled.length > 0) {
             const encashmentIds = encashmentsSettled.map(e => e.id);
@@ -1873,7 +1872,7 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // ── 6. Unlock Attendance ─────────────────────────────────────────────────────
+        // Unlock Attendance ─────────────────────────────────────────────────────
         await AttendanceDay.update({ is_locked: false }, {
             where: {
                 employee_id: payslip.employee_id,
@@ -1943,8 +1942,7 @@ exports.getEmployeePayslip = async (req, res) => {
             status: { [Op.in]: [1, 3] } // Finalized or Paid
         }, {
             order: [['year', 'DESC'], ['month', 'DESC']]
-        });
-
+        }, null, { applyHierarchy: false });
         const formattedList = payslips.map(p => {
             const monthName = formatDateTime(new Date(2000, p.month - 1, 1), "MMM");
             return {
@@ -1958,7 +1956,6 @@ exports.getEmployeePayslip = async (req, res) => {
                 status_text: p.status === 1 ? "Finalized" : "Paid"
             };
         });
-
         return res.ok(formattedList);
     } catch (err) {
         return handleError(err, res, req);
@@ -2364,7 +2361,7 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
         const existingPayslips = await commonQuery.findAllRecords(Payslip, {
             employee_id: targetEmployeeId,
             year: selectedYear
-        });
+        }, {}, null, { applyHierarchy: false });
 
         // 3. Combine unique months
         const monthSet = new Set();
@@ -2410,8 +2407,6 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 status: existing ? (existing.status === 0 ? "Draft" : (existing.status === 1 ? "Finalized" : "Paid")) : "No Calculation"
             });
         }
-
-        console.log("yearRange--------------------\n", yearRange);
 
         return res.ok({
             min_year: yearRange?.min_year || selectedYear,
