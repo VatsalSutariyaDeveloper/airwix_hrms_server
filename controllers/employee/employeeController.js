@@ -1753,7 +1753,7 @@ exports.dropdownList = async (req, res) => {
                 { ...POST, id: employee_id, status: { [Op.in]: [0, 1, 2] } },
                 {},
                 {},
-                false,
+                { company_id: true, applyHierarchy: false },
             );
             return res.ok(data);
         } else {
@@ -1769,7 +1769,7 @@ exports.dropdownList = async (req, res) => {
                 {
                     attributes: ["id", "first_name", "employee_code", "status"],
                 },
-                false,
+                { company_id: true, applyHierarchy: false },
             );
             return res.ok(data);
         }

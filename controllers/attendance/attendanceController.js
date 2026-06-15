@@ -1141,8 +1141,12 @@ exports.updateAttendanceDay = async (req, res) => {
       payload.note = null;
     }
 
+    // Fetch refreshed day to get recalculated worked_minutes, punches, etc. from manualPunch/rebuild
+    const refreshedDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+    const newDayPayload = refreshedDay ? { ...refreshedDay.get({ plain: true }), ...payload } : payload;
+
     // Synchronize leave balance based on status changes (Half Day/Leave)
-    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
+    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, newDayPayload, t, emp);
     if (balanceError) {
       await t.rollback();
       return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
@@ -1283,10 +1287,16 @@ exports.deleteAttendanceDay = async (req, res) => {
 
     for (const day of days) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      let balanceError;
+      try {
+        balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      } catch (balErr) {
+        await t.rollback();
+        return res.error(constants.VALIDATION_ERROR, { message: balErr.message || "Leave balance error occurred." });
+      }
       if (balanceError) {
         await t.rollback();
-        return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
+        return res.error(constants.VALIDATION_ERROR, { message: balanceError });
       }
 
       // 2. Delete punches by day_id specifically
@@ -1464,8 +1474,10 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
+      const newDayPayload = existingRecord ? { ...existingRecord.get({ plain: true }), ...payload } : payload;
+
       // Synchronize leave balance based on status changes (Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t, emp);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, newDayPayload, t, emp);
       if (balanceError) {
         await t.rollback();
         return res.error(balanceError);

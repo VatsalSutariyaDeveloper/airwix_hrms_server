@@ -1,5 +1,5 @@
 const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../../models");
-const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime, getCompanySetting } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
 const { rebuildAttendanceDay, getDayOffInfo } = require("../../../helpers/attendanceHelper");
@@ -60,12 +60,31 @@ const getApproversForLeaveRequest = async (employeeId, currentLevel, transaction
 
 const sendApprovalNotifications = async (leaveRequest, employee, actionType, transaction) => {
     try {
+        if (!employee && leaveRequest.employee_id) {
+            employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {}, transaction);
+        }
+        let employeeEmail = employee?.email;
+        if (!employeeEmail && employee) {
+            const linkedUser = await commonQuery.findOneRecord(User, { employee_id: employee.id }, { attributes: ["email"] }, transaction);
+            if (linkedUser) {
+                employeeEmail = linkedUser.email;
+            }
+        }
         const userIds = await getApproversForLeaveRequest(leaveRequest.employee_id, leaveRequest.current_level, transaction);
         if (!userIds || userIds.length === 0) return;
 
-        const employeeName = employee ? employee.first_name : "An employee";
+        const employeeName = employee ? `${employee.first_name || ""} ${employee.last_name || ""}`.trim() : "An employee";
         const startDateStr = formatDateTime(leaveRequest.start_date, 'DD MMM YYYY');
         const endDateStr = formatDateTime(leaveRequest.end_date, 'DD MMM YYYY');
+
+        // Fetch company settings to see if email sending for comp-off credit is enabled
+        const companySettings = await getCompanySetting(leaveRequest.company_id);
+        const sendEmail = companySettings && (
+            companySettings.send_email_compoff_credit === true ||
+            companySettings.send_email_compoff_credit === "true" ||
+            companySettings.send_email_compoff_credit === 1 ||
+            companySettings.send_email_compoff_credit === "1"
+        );
 
         let title = "";
         let message = "";
@@ -87,7 +106,7 @@ const sendApprovalNotifications = async (leaveRequest, employee, actionType, tra
 
         for (const userId of userIds) {
             // Avoid notifying the employee themselves about their own action
-            const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id"] }, transaction);
+            const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id", "email", "user_name"] }, transaction);
             if (user && user.employee_id === leaveRequest.employee_id) {
                 continue;
             }
@@ -102,6 +121,27 @@ const sendApprovalNotifications = async (leaveRequest, employee, actionType, tra
                 company_id: leaveRequest.company_id,
                 branch_id: leaveRequest.branch_id
             }, transaction);
+
+            // Send Comp-off credit email to manager if setting is enabled
+            if (leaveRequest.request_type === 'CREDIT' && sendEmail && actionType === "CREATE" && user && user.email) {
+                const template = employee?.leaveTemplate;
+                const totalLevels = template?.approval_levels || 1;
+                const emailService = require("../../../services/emailService");
+
+                emailService.sendCompOffCreditApprovalEmail({
+                    companyId: leaveRequest.company_id,
+                    employeeName,
+                    employeeEmail,
+                    approverEmail: user.email,
+                    approverName: user.user_name || "Manager",
+                    date: startDateStr,
+                    totalDays: parseFloat(leaveRequest.total_days || 0),
+                    level: leaveRequest.current_level,
+                    totalLevels
+                }).catch(err => {
+                    console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+                });
+            }
         }
     } catch (err) {
         console.error("Error sending approval level notifications:", err);
@@ -287,8 +327,8 @@ exports.create = async (req, res) => {
         const leaveStartDate = dayjs(start_date);
         if (!is_credit && currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
             await transaction.rollback();
-            return res.error("RULE_VIOLATION", { 
-                message: "Only unpaid leaves can be applied for the next cycle/month." 
+            return res.error("RULE_VIOLATION", {
+                message: "Only unpaid leaves can be applied for the next cycle/month."
             });
         }
 
@@ -807,8 +847,8 @@ exports.update = async (req, res) => {
         const leaveStartDate = dayjs(start_date);
         if (!is_credit && currentCycle.end.isBefore(leaveStartDate) && category.is_paid) {
             await transaction.rollback();
-            return res.error("RULE_VIOLATION", { 
-                message: "Only unpaid leaves can be applied for the next cycle/month." 
+            return res.error("RULE_VIOLATION", {
+                message: "Only unpaid leaves can be applied for the next cycle/month."
             });
         }
 
@@ -858,7 +898,7 @@ exports.getAll = async (req, res) => {
         if (req.body?.status !== undefined && req.body?.status !== null && req.body?.status !== '') {
             const statusVal = req.body.status;
             delete req.body.status;
-            
+
             if (statusVal !== "All") {
                 if (!req.body.filter) {
                     req.body.filter = {};
@@ -892,7 +932,7 @@ exports.getAll = async (req, res) => {
         if (startDate || endDate) {
             delete req.body.startDate;
             delete req.body.endDate;
-            
+
             if (startDate && endDate) {
                 if (!whereClause[Op.and]) {
                     whereClause[Op.and] = [];
@@ -1001,6 +1041,37 @@ exports.getById = async (req, res) => {
         if (!leaveRequest) return res.error(constants.NOT_FOUND);
 
         const raw = leaveRequest.get({ plain: true });
+
+        if (raw.request_type === 'CREDIT') {
+            const { AttendancePunch } = require("../../../models");
+            const attendance = await commonQuery.findOneRecord(AttendanceDay, {
+                employee_id: raw.employee_id,
+                attendance_date: raw.start_date,
+                status: { [Op.ne]: 2 }
+            }, {
+                include: [
+                    {
+                        model: AttendancePunch,
+                        as: "attendancePunches",
+                        where: { status: 0 },
+                        required: false
+                    }
+                ]
+            });
+            raw.worked_minutes = attendance ? parseFloat(attendance.worked_minutes || 0) : 0;
+            raw.punches = attendance?.attendancePunches || [];
+
+            const { EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../../models");
+            const empWithTemplates = await commonQuery.findOneRecord(Employee, raw.employee_id, {
+                include: [
+                    { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+                    { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+                ]
+            });
+            const attTemplate = empWithTemplates?.employeeAttendanceTemplate || empWithTemplates?.attendanceTemplate;
+            raw.comp_off_min_working_mins = attTemplate ? (attTemplate.comp_off_min_working_mins || 0) : 0;
+            raw.comp_off_max_working_mins = attTemplate ? (attTemplate.comp_off_max_working_mins || 0) : 0;
+        }
 
         // Add document URL
         if (raw.document) {
@@ -1165,16 +1236,20 @@ exports.updateStatus = async (req, res) => {
 
             if (Number(updateData.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
                 if (leaveRequest.request_type === 'CREDIT') {
-                    const error = await LeaveBalanceService.adjustLeaveBalance(
-                        leaveRequest.employee_id,
-                        leaveRequest.leave_category_id,
-                        -parseFloat(leaveRequest.total_days),
-                        transaction,
-                        dayjs(leaveRequest.start_date),
-                        employee,
-                        true
-                    );
-                    if (error) throw new Error(error.message || error);
+                    try {
+                        await LeaveBalanceService.adjustLeaveBalance(
+                            leaveRequest.employee_id,
+                            leaveRequest.leave_category_id,
+                            -parseFloat(leaveRequest.total_days),
+                            transaction,
+                            dayjs(leaveRequest.start_date),
+                            employee,
+                            true
+                        );
+                    } catch (balErr) {
+                        await transaction.rollback();
+                        return res.error("RULE_VIOLATION", { message: balErr.message || balErr });
+                    }
                 } else if (!leaveRequest.is_encashment) {
                     const start = dayjs(leaveRequest.start_date);
                     const end = dayjs(leaveRequest.end_date);
@@ -1207,27 +1282,32 @@ exports.updateStatus = async (req, res) => {
             }, {}, transaction);
 
             if (balance) {
-                if (leaveRequest.request_type === 'CREDIT') {
-                    if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                try {
+                    if (leaveRequest.request_type === 'CREDIT') {
+                        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                            await LeaveBalanceService.adjustLeaveBalance(
+                                leaveRequest.employee_id,
+                                leaveRequest.leave_category_id,
+                                parseFloat(leaveRequest.total_days),
+                                transaction,
+                                dayjs(leaveRequest.start_date),
+                                employee,
+                                true
+                            );
+                        }
+                    } else {
                         await LeaveBalanceService.adjustLeaveBalance(
                             leaveRequest.employee_id,
                             leaveRequest.leave_category_id,
-                            parseFloat(leaveRequest.total_days),
+                            -parseFloat(leaveRequest.total_days),
                             transaction,
                             dayjs(leaveRequest.start_date),
-                            employee,
-                            true
+                            employee
                         );
                     }
-                } else {
-                    await LeaveBalanceService.adjustLeaveBalance(
-                        leaveRequest.employee_id,
-                        leaveRequest.leave_category_id,
-                        -parseFloat(leaveRequest.total_days),
-                        transaction,
-                        dayjs(leaveRequest.start_date),
-                        employee
-                    );
+                } catch (balErr) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: balErr.message || balErr });
                 }
             }
 
@@ -1493,30 +1573,35 @@ exports.cancelLeave = async (req, res) => {
             }, {}, transaction);
 
             if (balance) {
-                if (leaveRequest.request_type === 'CREDIT') {
-                    if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                try {
+                    if (leaveRequest.request_type === 'CREDIT') {
+                        if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                            await LeaveBalanceService.adjustLeaveBalance(
+                                leaveRequest.employee_id,
+                                leaveRequest.leave_category_id,
+                                parseFloat(leaveRequest.total_days),
+                                transaction,
+                                dayjs(leaveRequest.start_date),
+                                employee,
+                                true
+                            );
+                        }
+                    } else {
+                        // To restore balance, we pass a negative total_days value to adjustLeaveBalance
+                        // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
+                        // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
                         await LeaveBalanceService.adjustLeaveBalance(
                             leaveRequest.employee_id,
                             leaveRequest.leave_category_id,
-                            parseFloat(leaveRequest.total_days),
+                            -parseFloat(leaveRequest.total_days),
                             transaction,
                             dayjs(leaveRequest.start_date),
-                            employee,
-                            true
+                            employee
                         );
                     }
-                } else {
-                    // To restore balance, we pass a negative total_days value to adjustLeaveBalance
-                    // which essentially adds it back (used_leaves - (-total_days) = used_leaves + total_days)
-                    // Actually, the service adjustLeaveBalance expects positive to deduct. We pass negative to restore.
-                    await LeaveBalanceService.adjustLeaveBalance(
-                        leaveRequest.employee_id,
-                        leaveRequest.leave_category_id,
-                        -parseFloat(leaveRequest.total_days),
-                        transaction,
-                        dayjs(leaveRequest.start_date),
-                        employee
-                    );
+                } catch (balErr) {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: balErr.message || balErr });
                 }
             }
         }
@@ -1693,6 +1778,75 @@ exports.delete = async (req, res) => {
             return res.error(constants.INVALID_ID);
         }
 
+        // Fetch leave requests to be deleted
+        const leaveRequests = await commonQuery.findAllRecords(LeaveRequest, {
+            id: { [Op.in]: ids }
+        }, {}, transaction);
+
+        const employeeCache = {};
+
+        for (const leaveRequest of leaveRequests) {
+            const empId = leaveRequest.employee_id;
+            if (!employeeCache[empId]) {
+                employeeCache[empId] = await commonQuery.findOneRecord(Employee, empId, {
+                    include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                }, transaction);
+            }
+            const employee = employeeCache[empId];
+            const oldStatus = leaveRequest.approval_status;
+
+            try {
+                if (leaveRequest.request_type === 'CREDIT') {
+                    // For CREDIT requests, we only adjust the balance if they were APPROVED
+                    if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                        await LeaveBalanceService.adjustLeaveBalance(
+                            leaveRequest.employee_id,
+                            leaveRequest.leave_category_id,
+                            parseFloat(leaveRequest.total_days),
+                            transaction,
+                            dayjs(leaveRequest.start_date),
+                            employee,
+                            true
+                        );
+                    }
+                } else {
+                    // For DEBIT requests, we restore/refund the balance if they were PENDING, PARTIALLY_APPROVED, or APPROVED
+                    if (
+                        Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.PENDING ||
+                        Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED ||
+                        Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED
+                    ) {
+                        await LeaveBalanceService.adjustLeaveBalance(
+                            leaveRequest.employee_id,
+                            leaveRequest.leave_category_id,
+                            -parseFloat(leaveRequest.total_days),
+                            transaction,
+                            dayjs(leaveRequest.start_date),
+                            employee
+                        );
+                    }
+                }
+            } catch (balErr) {
+                await transaction.rollback();
+                return res.error("RULE_VIOLATION", { message: balErr.message || balErr });
+            }
+
+            // Rebuild attendance if the deleted request was an APPROVED DEBIT leave
+            if (
+                leaveRequest.request_type !== 'CREDIT' &&
+                Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED &&
+                !leaveRequest.is_encashment
+            ) {
+                const start = dayjs(leaveRequest.start_date);
+                const end = dayjs(leaveRequest.end_date);
+                const diff = end.diff(start, 'day');
+                for (let i = 0; i <= diff; i++) {
+                    const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                    await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                }
+            }
+        }
+
         const deleted = await commonQuery.hardDeleteRecords(LeaveRequest, ids, transaction);
         if (!deleted) {
             await transaction.rollback();
@@ -1701,7 +1855,7 @@ exports.delete = async (req, res) => {
         await transaction.commit();
         return res.success(constants.DELETED);
     } catch (err) {
-        await transaction.rollback();
+        if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
     }
 };
@@ -1713,13 +1867,15 @@ exports.getEligibleCompOffDates = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "Employee ID is required" });
         }
 
+        const isOwnRequest = employeeId == req.user?.employee_id;
+
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
             include: [
                 { model: LeaveTemplate, as: "leaveTemplate" },
                 { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
                 { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
             ]
-        });
+        }, null, false, isOwnRequest ? { applyHierarchy: false } : true);
 
         if (!employee) {
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
@@ -1741,21 +1897,35 @@ exports.getEligibleCompOffDates = async (req, res) => {
             employee_id: employeeId,
             attendance_date: { [Op.between]: [ninetyDaysAgo, todayStr] },
             status: { [Op.ne]: 2 }
-        });
+        }, {}, null, isOwnRequest ? { applyHierarchy: false } : true);
 
+        const seenDates = new Set();
         const eligibleDates = [];
 
         for (const record of attendanceRecords) {
-            const workedMins = parseFloat(record.worked_minutes || 0);
-            if (workedMins < minCompOff) {
+            const dateStr = record.attendance_date;
+
+            // Skip if we have already successfully pushed an eligible entry for this date
+            if (seenDates.has(dateStr)) {
                 continue;
             }
 
-            const dateStr = record.attendance_date;
-            
             // Verify if it is Holiday or Weekly Off
             const { isHoliday, isWeeklyOff, holidayDetails } = await getDayOffInfo(employee, dateStr);
             if (!isHoliday && !isWeeklyOff) {
+                continue;
+            }
+
+            // Check if they actually worked on this holiday/weekly off day
+            let isWorkingStatus = [0, 1, 12, 13].includes(Number(record.status));
+            const workedMins = parseFloat(record.worked_minutes || 0);
+            const hasPunches = (record.first_in || record.last_out) ? true : false;
+
+            if (!isWorkingStatus && (workedMins > 0 || hasPunches)) {
+                isWorkingStatus = true;
+            }
+
+            if (!isWorkingStatus) {
                 continue;
             }
 
@@ -1764,25 +1934,32 @@ exports.getEligibleCompOffDates = async (req, res) => {
                 employee_id: employeeId,
                 request_type: 'CREDIT',
                 start_date: dateStr,
-                approval_status: { [Op.notIn]: [
-                    constants.LEAVE_APPROVAL_STATUS.REJECTED, 
-                    constants.LEAVE_APPROVAL_STATUS.CANCELLED, 
-                    constants.LEAVE_APPROVAL_STATUS.DELETED
-                ] },
+                approval_status: {
+                    [Op.notIn]: [
+                        constants.LEAVE_APPROVAL_STATUS.REJECTED,
+                        constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                        constants.LEAVE_APPROVAL_STATUS.DELETED
+                    ]
+                },
                 status: 0
-            });
+            }, {}, null, false, isOwnRequest ? { applyHierarchy: false } : true);
 
             if (existingRequest) {
                 continue;
             }
 
             let creditValue = 0;
-            if (workedMins >= maxCompOff && maxCompOff > 0) {
+            if (workedMins >= maxCompOff) {
                 creditValue = 1.0;
-            } else if (workedMins >= minCompOff && minCompOff > 0) {
+            } else if (workedMins >= minCompOff) {
                 creditValue = 0.5;
             }
 
+            if (creditValue <= 0) {
+                continue;
+            }
+
+            seenDates.add(dateStr);
             eligibleDates.push({
                 date: dateStr,
                 worked_minutes: workedMins,

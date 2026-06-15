@@ -407,7 +407,7 @@ async function punch(employeeId, meta, transaction = null) {
 
       const todayShift = await getCandidateShift(currentDate);
       const yesterdayShift = await getCandidateShift(yesterdayDate);
-console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
+      console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
       let yesterdayShiftEnd = null;
       if (yesterdayShift) {
         yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
@@ -2240,7 +2240,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       earlyOtData = { minutes: earlyOvertimeMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
     }
   }
-console.log("finalWorkedMinutes",finalWorkedMinutes)
+  console.log("finalWorkedMinutes", finalWorkedMinutes)
 
   finalWorkedMinutes = Math.max(0, finalWorkedMinutes);
 
@@ -2300,11 +2300,16 @@ console.log("finalWorkedMinutes",finalWorkedMinutes)
         ot = worked;
         workedToSave = 0;
       } else if (worked < maxCompOff) {
-        workedToSave = halfShiftMins;
-        ot = Math.max(0, worked - halfShiftMins);
+        workedToSave = worked;
+        ot = 0;
       } else {
-        workedToSave = fullShiftMins;
-        ot = Math.max(0, worked - fullShiftMins);
+        workedToSave = worked;
+        if (worked > fullShiftMins) {
+          workedToSave = fullShiftMins;
+          ot = worked - fullShiftMins;
+        } else {
+          ot = 0;
+        }
       }
 
       finalWorkedMinutes = workedToSave;
@@ -2605,11 +2610,11 @@ console.log("finalWorkedMinutes",finalWorkedMinutes)
         if (!n || typeof n !== 'string') return false;
         const trimmed = n.trim();
         return trimmed.startsWith("System:") ||
-               trimmed.startsWith("Auto Absent:") ||
-               trimmed.startsWith("Incomplete:") ||
-               trimmed.startsWith("Leave approved:") ||
-               trimmed.startsWith("Penalty:") ||
-               trimmed.startsWith("Penalty (");
+          trimmed.startsWith("Auto Absent:") ||
+          trimmed.startsWith("Incomplete:") ||
+          trimmed.startsWith("Leave approved:") ||
+          trimmed.startsWith("Penalty:") ||
+          trimmed.startsWith("Penalty (");
       };
 
       if (isSystemGeneratedNote(existingNote)) {
@@ -2970,19 +2975,40 @@ async function getApproversForCompOffCredit(employeeId, currentLevel, transactio
  */
 async function sendCompOffApprovalNotifications(leaveRequest, employee, transaction) {
   try {
+    if (!employee && leaveRequest.employee_id) {
+      employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {}, transaction);
+    }
+    let employeeEmail = employee?.email;
+    if (!employeeEmail && employee) {
+      const { User } = require("../models");
+      const linkedUser = await commonQuery.findOneRecord(User, { employee_id: employee.id }, { attributes: ["email"] }, transaction);
+      if (linkedUser) {
+        employeeEmail = linkedUser.email;
+      }
+    }
     const userIds = await getApproversForCompOffCredit(leaveRequest.employee_id, leaveRequest.current_level, transaction);
     if (!userIds || userIds.length === 0) return;
 
-    const employeeName = employee ? employee.first_name : "An employee";
+    const employeeName = employee ? `${employee.first_name || ""} ${employee.last_name || ""}`.trim() : "An employee";
     const startDateStr = dayjs(leaveRequest.start_date).format('DD MMM YYYY');
 
     const title = "New Comp Off Credit Request Pending Approval";
     const message = `${employeeName} has earned a compensatory off credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
 
-    const { User } = require("../models");
+    // Fetch company settings to see if email sending for comp-off credit is enabled
+    const { getCompanySetting } = require("../helpers");
+    const companySettings = await getCompanySetting(leaveRequest.company_id);
+    const sendEmail = companySettings && (
+      companySettings.send_email_compoff_credit === true ||
+      companySettings.send_email_compoff_credit === "true" ||
+      companySettings.send_email_compoff_credit === 1 ||
+      companySettings.send_email_compoff_credit === "1"
+    );
+
+    const { User, LeaveTemplate } = require("../models");
     for (const userId of userIds) {
       // Avoid notifying the employee themselves
-      const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id"] }, transaction);
+      const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id", "email", "user_name"] }, transaction);
       if (user && user.employee_id === leaveRequest.employee_id) {
         continue;
       }
@@ -2997,6 +3023,29 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
         company_id: leaveRequest.company_id,
         branch_id: leaveRequest.branch_id
       }, transaction);
+
+      if (sendEmail && user && user.email) {
+        let template = employee?.leaveTemplate;
+        if (!template && employee?.leave_template) {
+          template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
+        }
+        const totalLevels = template?.approval_levels || 1;
+        const emailService = require("../services/emailService");
+
+        emailService.sendCompOffCreditApprovalEmail({
+          companyId: leaveRequest.company_id,
+          employeeName,
+          employeeEmail,
+          approverEmail: user.email,
+          approverName: user.user_name || "Manager",
+          date: startDateStr,
+          totalDays: parseFloat(leaveRequest.total_days || 0),
+          level: leaveRequest.current_level,
+          totalLevels
+        }).catch(err => {
+          console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+        });
+      }
     }
   } catch (err) {
     console.error("Error sending comp-off approval notifications:", err);
@@ -3033,10 +3082,10 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   if (!compOffCategory) return;
 
   // Determine if it's a working state based on status OR worked time on non-working days
-  let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
+  let isWorkingStatus = (status !== null && status !== undefined && status !== '') && [0, 1, 12, 13].includes(Number(status));
 
   // Important: If it's a Holiday (4) or Weekly Off (3), check if they actually worked (worked_minutes > 0 or has times)
-  if (!isWorkingStatus && [3, 4].includes(Number(status))) {
+  if (!isWorkingStatus && (status !== null && status !== undefined && status !== '') && [3, 4].includes(Number(status))) {
     const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
     const hasPunches = attendanceDay ? (attendanceDay.first_in || attendanceDay.last_out) : false;
     if (workedMins > 0 || hasPunches) {
@@ -3052,11 +3101,13 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
     request_type: 'CREDIT',
     start_date: date,
     leave_category_id: compOffCategory.id,
-    approval_status: { [Op.notIn]: [
-      constants.LEAVE_APPROVAL_STATUS.REJECTED,
-      constants.LEAVE_APPROVAL_STATUS.CANCELLED,
-      constants.LEAVE_APPROVAL_STATUS.DELETED
-    ] },
+    approval_status: {
+      [Op.notIn]: [
+        constants.LEAVE_APPROVAL_STATUS.REJECTED,
+        constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+        constants.LEAVE_APPROVAL_STATUS.DELETED
+      ]
+    },
     status: 0
   }, {}, transaction, false, {});
 
@@ -3169,7 +3220,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 
   if (employee) {
-    const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction, newDay || oldDay);
+    const error = await syncCompOffCredit(employee, date, newStatus, transaction, newDay);
     if (error) return error;
   }
 
