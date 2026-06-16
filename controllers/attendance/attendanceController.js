@@ -1315,6 +1315,17 @@ exports.deleteAttendanceDay = async (req, res) => {
       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
     }
 
+    // REMOVE ANY PENDING COMP-OFF CREDIT REQUESTS FOR THIS DAY
+    await LeaveRequest.destroy({
+      where: {
+        employee_id,
+        start_date: attendance_date,
+        request_type: "CREDIT",
+        status: 0
+      },
+      transaction: t
+    });
+
     // 4. ALWAYS delete all punches for this employee on this date (handles unassigned punches)
     await commonQuery.hardDeleteRecords(AttendancePunch, {
       employee_id,

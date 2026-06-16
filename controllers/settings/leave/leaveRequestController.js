@@ -1,4 +1,4 @@
-const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../../models");
+const { LeaveRequest, EmployeeLeaveBalance, LeaveTemplate, LeaveTemplateCategory, Employee, User, sequelize, BranchMaster, AttendanceDay, AttendancePunch, Department, DesignationMaster, EmployeeWeeklyOff, EmployeeHoliday, RolePermission, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime, getCompanySetting } = require("../../../helpers");
 const { constants } = require("../../../helpers/constants");
 const { Op } = require("sequelize");
@@ -1897,7 +1897,15 @@ exports.getEligibleCompOffDates = async (req, res) => {
             employee_id: employeeId,
             attendance_date: { [Op.between]: [ninetyDaysAgo, todayStr] },
             status: { [Op.ne]: 2 }
-        }, {}, null, isOwnRequest ? { applyHierarchy: false } : true);
+        }, {
+            include: [{ 
+                model: AttendancePunch, 
+                as: "attendancePunches", 
+                required: false,
+                attributes: ['punch_time', 'punch_type']
+            }],
+            order: [[{ model: AttendancePunch, as: "attendancePunches" }, 'punch_time', 'ASC']]
+        }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
         const seenDates = new Set();
         const eligibleDates = [];
@@ -1964,7 +1972,10 @@ exports.getEligibleCompOffDates = async (req, res) => {
                 date: dateStr,
                 worked_minutes: workedMins,
                 type: isHoliday ? (holidayDetails?.name || "Holiday") : "Weekly Off",
-                credit_value: creditValue
+                credit_value: creditValue,
+                punch_in: record.first_in,
+                punch_out: record.last_out,
+                punches: record.attendancePunches || []
             });
         }
 

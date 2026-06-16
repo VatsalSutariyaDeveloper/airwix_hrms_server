@@ -997,25 +997,25 @@ exports.getProfile = async (req, res) => {
 
             return res.ok({
                 id: plain.id,
-                name: plain.first_name?.trim() || 'N/A',
-                first_name: plain.first_name || 'N/A',
+                first_name: plain.first_name?.trim() || 'N/A',
                 email: plain.email || plain.linked_user?.email || 'N/A',
                 mobile_no: plain.mobile_no || plain.linked_user?.mobile_no || 'N/A',
                 profile_image_url: getFileUrl(plain.profile_image),
                 header: {
                     id: plain.id,
                     employee_code: plain.employee_code || 'N/A',
-                    full_name: plain.first_name?.trim() || 'N/A',
+                    first_name: plain.first_name?.trim() || 'N/A',
                     profile_image_url: getFileUrl(plain.profile_image),
                     designation: plain.designation?.designation_name || 'N/A',
                     department: plain.department?.name || 'N/A',
                 },
                 account_settings: {
-                    user_name: plain.linked_user?.user_name || 'N/A',
+                    first_name: plain.first_name || 'N/A',
                     email: plain.email || plain.linked_user?.email || 'N/A',
                     mobile_no: plain.mobile_no || plain.linked_user?.mobile_no || 'N/A',
                 },
                 personal_info: {
+                    first_name: plain.first_name || 'N/A',
                     gender: plain.gender === 1 ? 'Male' : (plain.gender === 2 ? 'Female' : (plain.gender === 3 ? 'Others' : 'N/A')),
                     dob: plain.dob ? formatDateTime(plain.dob) : 'N/A',
                     blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plain.blood_group - 1] || 'N/A',
@@ -1120,15 +1120,18 @@ exports.getProfile = async (req, res) => {
                 header: {
                     id: null,
                     employee_code: 'N/A',
-                    full_name: user.user_name || 'N/A',
+                    first_name: user.user_name || 'N/A',
                     profile_image_url: null,
                     designation: user.RolePermission.role_name,
                     department: 'N/A',
                 },
                 account_settings: {
-                    user_name: user.user_name || 'N/A',
+                    first_name: user.user_name || 'N/A',
                     email: user.email || 'N/A',
                     mobile_no: user.mobile_no || 'N/A',
+                },
+                personal_info: {
+                    first_name: user.user_name || 'N/A',
                 },
                 is_user_only: true // Flag for frontend
             };
@@ -1161,13 +1164,13 @@ exports.getProfile = async (req, res) => {
             header: {
                 id: plainRecord.id,
                 employee_code: plainRecord.employee_code,
-                full_name: plainRecord.first_name?.trim() || 'N/A',
+                first_name: plainRecord.first_name?.trim() || 'N/A',
                 profile_image_url: getFileUrl(plainRecord.profile_image),
                 designation: plainRecord.designation?.designation_name || 'N/A',
                 department: plainRecord.department?.name || 'N/A',
             },
             account_settings: {
-                user_name: plainRecord.linked_user?.user_name || 'N/A',
+                first_name: plainRecord.first_name || 'N/A',
                 email: plainRecord.email || plainRecord.linked_user?.email || 'N/A',
                 mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
             },
@@ -1179,7 +1182,7 @@ exports.getProfile = async (req, res) => {
                 upi_id: plainRecord.upi_id || 'N/A'
             },
             personal_info: {
-                first_name: plainRecord.first_name,
+                first_name: plainRecord.first_name || 'N/A',
                 gender: plainRecord.gender === 1 ? 'Male' : (plainRecord.gender === 2 ? 'Female' : (plainRecord.gender === 3 ? 'Others' : 'N/A')),
                 dob: plainRecord.dob ? formatDateTime(plainRecord.dob) : 'N/A',
                 blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plainRecord.blood_group - 1] || 'N/A',
@@ -1374,13 +1377,13 @@ exports.getProfileById = async (req, res) => {
             header: {
                 id: plainRecord.id,
                 employee_code: plainRecord.employee_code,
-                full_name: plainRecord.first_name?.trim() || 'N/A',
+                first_name: plainRecord.first_name?.trim() || 'N/A',
                 profile_image_url: getFileUrl(plainRecord.profile_image),
                 designation: plainRecord.designation?.designation_name || 'N/A',
                 department: plainRecord.department?.name || 'N/A',
             },
             account_settings: {
-                user_name: plainRecord.linked_user?.user_name || 'N/A',
+                first_name: plainRecord.first_name || 'N/A',
                 email: plainRecord.email || plainRecord.linked_user?.email || 'N/A',
                 mobile_no: plainRecord.mobile_no || plainRecord.linked_user?.mobile_no || 'N/A',
             },
@@ -1392,7 +1395,7 @@ exports.getProfileById = async (req, res) => {
                 upi_id: plainRecord.upi_id || 'N/A'
             },
             personal_info: {
-                first_name: plainRecord.first_name,
+                first_name: plainRecord.first_name || 'N/A',
                 gender: plainRecord.gender === 1 ? 'Male' : (plainRecord.gender === 2 ? 'Female' : (plainRecord.gender === 3 ? 'Others' : 'N/A')),
                 dob: plainRecord.dob ? formatDateTime(plainRecord.dob) : 'N/A',
                 blood_group: ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"][plainRecord.blood_group - 1] || 'N/A',
