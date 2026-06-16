@@ -24,6 +24,7 @@ const {
 const dayjs = require("dayjs");
 const emailService = require("../../services/emailService");
 const notificationService = require("../../services/notificationService");
+const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
 
 /**
  * Controller for Managing Employee Resignations & Exit Lifecycle
@@ -388,6 +389,11 @@ exports.getPendingApprovals = async (req, res) => {
                 const raw = request.get({ plain: true });
                 const total = template ? template.approval_levels : 1;
                 raw.tracking_summary = `Stage ${raw.current_level} of ${total}`;
+
+                // Resolve pending approver details
+                const pendingDetails = await resolvePendingApprovers(raw, "RESIGNATION");
+                raw.pending_with = pendingDetails.pending_with;
+
                 pendingForUser.push(raw);
             }
         }
@@ -527,6 +533,18 @@ exports.getResignationHistory = async (req, res) => {
             whereClause // customWhere
         );
 
+        data.items = await Promise.all((data?.items || []).map(async row => {
+            const raw = row.get ? row.get({ plain: true }) : row;
+            // Resolve pending approver details
+            if (raw.approval_status === constants.RESIGNATION_APPROVAL_STATUS.PENDING || raw.approval_status === constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+                const pendingDetails = await resolvePendingApprovers(raw, "RESIGNATION");
+                raw.pending_with = pendingDetails.pending_with;
+            } else {
+                raw.pending_with = [];
+            }
+            return raw;
+        }));
+
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
@@ -616,7 +634,17 @@ exports.getResignationById = async (req, res) => {
                 { model: User, as: 'submitted_by', attributes: ['user_name'] }
             ]
         });
-        return res.ok(record);
+        if (!record) return res.error(constants.NOT_FOUND);
+
+        const raw = record.get({ plain: true });
+        if (raw.approval_status === constants.RESIGNATION_APPROVAL_STATUS.PENDING || raw.approval_status === constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+            const pendingDetails = await resolvePendingApprovers(raw, "RESIGNATION");
+            raw.pending_with = pendingDetails.pending_with;
+        } else {
+            raw.pending_with = [];
+        }
+
+        return res.ok(raw);
     } catch (err) {
         return handleError(err, res, req);
     }

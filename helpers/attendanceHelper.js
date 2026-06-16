@@ -2681,29 +2681,33 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       const maxCompOff = template.comp_off_max_working_mins || 0;
 
       const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
-      
+
       let creditValue = 0;
       if (isHoliday || isWeeklyOff) {
         let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
         const workedMins = parseFloat(attendancePayload.worked_minutes || 0);
         const hasPunches = (attendancePayload.first_in || attendancePayload.last_out) ? true : false;
         if (!isWorkingStatus && (workedMins > 0 || hasPunches)) {
-           isWorkingStatus = true;
+          isWorkingStatus = true;
         }
 
         if (isWorkingStatus) {
-           if (maxCompOff > 0 && workedMins >= maxCompOff) {
-             creditValue = 1.0;
-           } else if (minCompOff > 0 && workedMins >= minCompOff) {
-             creditValue = 0.5;
-           }
+          if (minCompOff === 0 && maxCompOff === 0) {
+            if (workedMins > 0) {
+              creditValue = 1.0;
+            }
+          } else if (maxCompOff > 0 && workedMins >= maxCompOff) {
+            creditValue = 1.0;
+          } else if (minCompOff > 0 && workedMins >= minCompOff) {
+            creditValue = 0.5;
+          }
         }
       }
 
       if (creditValue > 0) {
         if (parseFloat(existingCompOffRequest.total_days) !== creditValue) {
-           console.log(`[Rebuild] Updating pending Comp-Off request ${existingCompOffRequest.id} total_days to ${creditValue}`);
-           await commonQuery.updateRecordById(LeaveRequest, existingCompOffRequest.id, { total_days: creditValue }, transaction, false, {});
+          console.log(`[Rebuild] Updating pending Comp-Off request ${existingCompOffRequest.id} total_days to ${creditValue}`);
+          await commonQuery.updateRecordById(LeaveRequest, existingCompOffRequest.id, { total_days: creditValue }, transaction, false, {});
         }
       } else {
         console.log(`[Rebuild] Deleting pending Comp-Off request ${existingCompOffRequest.id} as it is no longer eligible.`);
@@ -3163,9 +3167,13 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
     const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
 
     let creditAmount = 0;
-    if (workedMins >= maxCompOff) {
+    if (minCompOff === 0 && maxCompOff === 0) {
+      if (workedMins > 0) {
+        creditAmount = 1.0;
+      }
+    } else if (workedMins >= maxCompOff && maxCompOff > 0) {
       creditAmount = 1.0;
-    } else if (workedMins >= minCompOff) {
+    } else if (workedMins >= minCompOff && minCompOff > 0) {
       creditAmount = 0.5;
     }
 

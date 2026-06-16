@@ -130,6 +130,7 @@ function initModels(prefix) {
   const CashVoucher = require("./payroll/cashVoucher")(seq, DataTypes);
   const ExpenseType = require("./settings/expenseType")(seq, DataTypes);
   const Reimbursement = require("./payroll/reimbursement")(seq, DataTypes);
+  const ReimbursementItem = require("./payroll/reimbursementItem")(seq, DataTypes);
 
   const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(seq, DataTypes);
   const CompanySettings = require("./settings/companySettings")(seq, DataTypes);
@@ -223,6 +224,7 @@ function initModels(prefix) {
     AttendanceRegularization,
     ExpenseType,
     Reimbursement,
+    ReimbursementItem,
     CompanySettings,
     FaceRecognitionError
   };

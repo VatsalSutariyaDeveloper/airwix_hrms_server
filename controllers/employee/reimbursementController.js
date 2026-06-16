@@ -1,8 +1,9 @@
-const { Reimbursement, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
+const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
 const { Op } = require("sequelize");
+const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
 
 
 
@@ -11,44 +12,85 @@ exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const POST = req.body;
-        const requiredFields = {
-            employee_id: "Employee ID",
-            expense_type: "Expense Type",
-            amount: "Amount",
-            date: "Date",
-        };
+        let items = POST.items;
+        if (items && !Array.isArray(items)) {
+            items = [items];
+        }
 
         if (!POST.employee_id && req.user.employee_id) {
             POST.employee_id = req.user.employee_id;
         }
 
-        const errors = await validateRequest(POST, requiredFields, {}, transaction);
-        if (errors) {
+        if (!items || !Array.isArray(items) || items.length === 0) {
             await transaction.rollback();
-            return res.error(constants.VALIDATION_ERROR, errors);
+            return res.error(constants.VALIDATION_ERROR, { items: "At least one expense item is required" });
         }
 
-        // Validate expense_type exists
-        // const expenseType = await commonQuery.findOneRecord(ExpenseType, POST.expense_type, {}, transaction);
-        // if (!expenseType) {
-        //     await transaction.rollback();
-        //     return res.error(constants.NOT_FOUND, { message: "Expense type not found" });
-        // }
+        let totalAmount = 0;
+        let itemErrors = {};
 
-        // Handle File Upload
-        if (req.files && Object.keys(req.files).length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
-            if (savedFiles.bills_docs) {
-                POST.bills_docs = savedFiles.bills_docs;
+        // Prepare items and calculate total
+        for (let i = 0; i < items.length; i++) {
+            let item = items[i];
+            if (typeof item === 'string') {
+                try { item = JSON.parse(item); items[i] = item; } catch(e) {}
+            }
+
+            if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
+            if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
+            if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
+            
+            if (Object.keys(itemErrors).length === 0) {
+                totalAmount += parseFloat(item.amount);
             }
         }
 
-        await commonQuery.createRecord(Reimbursement, {
-            ...POST,
+        if (Object.keys(itemErrors).length > 0) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, itemErrors);
+        }
+
+        // Upload all files first to get the saved filenames
+        let savedFiles = {};
+        if (req.files && Object.keys(req.files).length > 0) {
+            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+        }
+
+        // Create Parent
+        const reimbursement = await commonQuery.createRecord(Reimbursement, {
+            employee_id: POST.employee_id,
+            total_amount: totalAmount,
+            date: new Date(), // Set claim date as today
+            description: POST.description || "",
             approval_status: constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING,
             current_level: 1,
-            approval_history: []
+            approval_history: [],
+            payment_type: POST.payment_type || 1
         }, transaction);
+
+        // Map files and insert items
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            
+            const fileKey = `items[${i}][bills_docs]`;
+            const fallbackFileKey = `items[${i}].bills_docs`;
+            let uploadedFile = savedFiles[fileKey] || savedFiles[fallbackFileKey] || savedFiles[`bills_docs_${i}`] || savedFiles[`bills_docs[${i}]`];
+            
+            if (!uploadedFile) {
+                await transaction.rollback();
+                return res.error(constants.VALIDATION_ERROR, { [`items[${i}].receipt`]: "Receipt is required for this expense item" });
+            }
+
+            await commonQuery.createRecord(ReimbursementItem, {
+                reimbursement_id: reimbursement.id,
+                expense_type: item.expense_type,
+                amount: parseFloat(item.amount),
+                expense_date: item.expense_date,
+                description: item.description || "",
+                bills_docs: uploadedFile,
+                user_id: req.user?.id
+            }, transaction);
+        }
 
         await transaction.commit();
         return res.success(constants.CREATED);
@@ -84,6 +126,13 @@ exports.getAll = async (req, res) => {
                         model: ExpenseType, 
                         as: "expenseType", 
                         attributes: ["name"] 
+                    },
+                    {
+                        model: ReimbursementItem,
+                        as: "items",
+                        include: [
+                            { model: ExpenseType, as: "expenseType", attributes: ["name"] }
+                        ]
                     }
                 ],
                 order: [['created_at', 'DESC']]
@@ -92,7 +141,7 @@ exports.getAll = async (req, res) => {
         );
 
         // Add document URL
-        data.items = data?.items?.map(row => {
+        data.items = await Promise.all((data?.items || []).map(async row => {
             const raw = row.get ? row.get({ plain: true }) : row;
             if (raw.bills_docs) {
                 const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, raw.bills_docs);
@@ -100,8 +149,29 @@ exports.getAll = async (req, res) => {
             } else {
                 raw.bills_docs_url = null;
             }
+
+            if (raw.items && Array.isArray(raw.items)) {
+                raw.items = raw.items.map(child => {
+                    if (child.bills_docs) {
+                        const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
+                        child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
+                    } else {
+                        child.bills_docs_url = null;
+                    }
+                    return child;
+                });
+            }
+
+            // Resolve pending approver details
+            if (raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING || raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+                const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
+                raw.pending_with = pendingDetails.pending_with;
+            } else {
+                raw.pending_with = [];
+            }
+
             return raw;
-        });
+        }));
 
         return res.ok(data);
     } catch (err) {
@@ -116,7 +186,12 @@ exports.getById = async (req, res) => {
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {
             include: [
                 { model: Employee, as: "employee", attributes: ["first_name", "employee_code"] },
-                { model: ExpenseType, as: "expenseType", attributes: ["name"] }
+                { model: ExpenseType, as: "expenseType", attributes: ["name"] },
+                { 
+                    model: ReimbursementItem, 
+                    as: "items", 
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }] 
+                }
             ]
         });
 
@@ -132,6 +207,26 @@ exports.getById = async (req, res) => {
             raw.bills_docs_url = null;
         }
 
+        if (raw.items && Array.isArray(raw.items)) {
+            raw.items = raw.items.map(child => {
+                if (child.bills_docs) {
+                    const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
+                    child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
+                } else {
+                    child.bills_docs_url = null;
+                }
+                return child;
+            });
+        }
+
+        // Resolve pending approver details
+        if (raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING || raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+            const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
+            raw.pending_with = pendingDetails.pending_with;
+        } else {
+            raw.pending_with = [];
+        }
+
         return res.ok(raw);
     } catch (err) {
         return handleError(err, res, req);
@@ -144,6 +239,11 @@ exports.update = async (req, res) => {
     try {
         const POST = req.body;
         const { id } = req.params;
+        let items = POST.items;
+        if (items && !Array.isArray(items)) {
+            items = [items];
+        }
+
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {}, transaction);
         if (!reimbursement || reimbursement.status === 2) {
             await transaction.rollback();
@@ -155,12 +255,106 @@ exports.update = async (req, res) => {
             return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be updated" });
         }
 
-        if (req.files && Object.keys(req.files).length > 0) {
-            const savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
-            if (savedFiles.bills_docs) POST.bills_docs = savedFiles.bills_docs;
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, { items: "At least one expense item must remain" });
         }
 
-        await commonQuery.updateRecordById(Reimbursement, id, POST, transaction);
+        let itemErrors = {};
+        const incomingIds = new Set();
+        for (let i = 0; i < items.length; i++) {
+            let item = items[i];
+            if (typeof item === 'string') {
+                try { item = JSON.parse(item); items[i] = item; } catch(e) {}
+            }
+            if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
+            if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
+            if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
+            
+            if (item.id) incomingIds.add(Number(item.id));
+        }
+
+        if (Object.keys(itemErrors).length > 0) {
+            await transaction.rollback();
+            return res.error(constants.VALIDATION_ERROR, itemErrors);
+        }
+
+        // Fetch existing items
+        const existingItems = await commonQuery.findAllRecords(ReimbursementItem, { reimbursement_id: id }, {}, transaction);
+        const existingItemsMap = new Map();
+        existingItems.forEach(i => existingItemsMap.set(i.id, i));
+
+        const toDeleteIds = [];
+        for (const existing of existingItems) {
+            if (!incomingIds.has(existing.id)) {
+                toDeleteIds.push(existing.id);
+            }
+        }
+
+        if (toDeleteIds.length > 0) {
+            await commonQuery.softDeleteById(ReimbursementItem, toDeleteIds, transaction);
+        }
+
+        let savedFiles = {};
+        if (req.files && Object.keys(req.files).length > 0) {
+            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+        }
+
+        let totalAmount = 0;
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const fileKey = `items[${i}][bills_docs]`;
+            const fallbackFileKey = `items[${i}].bills_docs`;
+            let uploadedFile = savedFiles[fileKey] || savedFiles[fallbackFileKey] || savedFiles[`bills_docs_${i}`] || savedFiles[`bills_docs[${i}]`];
+
+            if (item.id) {
+                const itemId = Number(item.id);
+                const existing = existingItemsMap.get(itemId);
+                
+                if (!existing) {
+                    await transaction.rollback();
+                    return res.error("INVALID_OPERATION", { message: `Item ID ${itemId} does not exist in this reimbursement` });
+                }
+
+                const finalReceipt = uploadedFile || existing.bills_docs;
+                
+                await commonQuery.updateRecordById(ReimbursementItem, itemId, {
+                    expense_type: item.expense_type,
+                    amount: parseFloat(item.amount),
+                    expense_date: item.expense_date,
+                    description: item.description || "",
+                    bills_docs: finalReceipt
+                }, transaction);
+
+                totalAmount += parseFloat(item.amount);
+            } else {
+                if (!uploadedFile) {
+                    await transaction.rollback();
+                    return res.error(constants.VALIDATION_ERROR, { [`items[${i}].receipt`]: "Receipt is required for new expense item" });
+                }
+
+                await commonQuery.createRecord(ReimbursementItem, {
+                    reimbursement_id: id,
+                    expense_type: item.expense_type,
+                    amount: parseFloat(item.amount),
+                    expense_date: item.expense_date,
+                    description: item.description || "",
+                    bills_docs: uploadedFile,
+                    user_id: req.user?.id
+                }, transaction);
+
+                totalAmount += parseFloat(item.amount);
+            }
+        }
+
+        const parentUpdate = {};
+        if (POST.description !== undefined) parentUpdate.description = POST.description;
+        if (POST.payment_type !== undefined) parentUpdate.payment_type = POST.payment_type;
+        parentUpdate.total_amount = totalAmount;
+
+        await commonQuery.updateRecordById(Reimbursement, id, parentUpdate, transaction);
+
         await transaction.commit();
         return res.success(constants.UPDATED);
     } catch (err) {
@@ -249,7 +443,7 @@ exports.updateStatus = async (req, res) => {
                         month: reimbursementDate.month() + 1,
                         year: reimbursementDate.year(),
                         payment_date: dayjs().format('YYYY-MM-DD'),
-                        amount: reimbursement.amount,
+                        amount: reimbursement.total_amount,
                         payment_type: "Reimbursement",
                         payment_mode: "Bank",
                         status: 1, // Adjusted/Paid
@@ -374,6 +568,11 @@ exports.getPendingApprovals = async (req, res) => {
                     model: ExpenseType, 
                     as: "expenseType", 
                     attributes: ["name"] 
+                },
+                {
+                    model: ReimbursementItem,
+                    as: "items",
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
                 }
             ],
             order: [['created_at', 'DESC']]
@@ -417,6 +616,23 @@ exports.getPendingApprovals = async (req, res) => {
                 } else {
                     raw.bills_docs_url = null;
                 }
+
+                if (raw.items && Array.isArray(raw.items)) {
+                    raw.items = raw.items.map(child => {
+                        if (child.bills_docs) {
+                            const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
+                            child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
+                        } else {
+                            child.bills_docs_url = null;
+                        }
+                        return child;
+                    });
+                }
+
+                // Resolve pending approver details
+                const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
+                raw.pending_with = pendingDetails.pending_with;
+
                 pendingForUser.push(raw);
             }
         }
@@ -489,6 +705,12 @@ exports.getReimbursementSummary = async (req, res) => {
                     as: "expenseType",
                     attributes: ["name"],
                     required: false
+                },
+                {
+                    model: ReimbursementItem,
+                    as: "items",
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"], required: false }],
+                    required: false
                 }
             ],
             order: [["date", "DESC"]]
@@ -509,7 +731,7 @@ exports.getReimbursementSummary = async (req, res) => {
                 groupedHistory.push(group);
             }
 
-            group.total_amount += parseFloat(reimbursement.amount || 0);
+            group.total_amount += parseFloat(reimbursement.total_amount || 0);
 
             const statusMap = {
                 [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "PENDING",
@@ -527,24 +749,39 @@ exports.getReimbursementSummary = async (req, res) => {
                 [constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED]: "#6B7280",
             };
 
+            let mappedItems = [];
+            if (reimbursement.items && Array.isArray(reimbursement.items)) {
+                mappedItems = reimbursement.items.map(child => {
+                    const childRaw = child.get ? child.get({plain: true}) : child;
+                    if (childRaw.bills_docs) {
+                        const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, childRaw.bills_docs);
+                        childRaw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${childRaw.bills_docs}` : null;
+                    } else {
+                        childRaw.bills_docs_url = null;
+                    }
+                    return childRaw;
+                });
+            }
+
             group.reimbursements.push({
                 id: reimbursement.id,
                 applied_date: reimbursement.createdAt,
                 date: formatDateTime(reimbursement.date, "D MMM, ddd"),
-                amount_display: `${parseFloat(reimbursement.amount).toFixed(2)}`,
+                amount_display: `${parseFloat(reimbursement.total_amount).toFixed(2)}`,
                 expense_type: reimbursement.expenseType?.name || "",
                 description: reimbursement.description || "",
                 status_id: reimbursement.approval_status,
                 status: statusMap[reimbursement.approval_status],
                 status_color: colorMap[reimbursement.approval_status] || "#F59E0B",
-                approval_remark: reimbursement.approval_remark || ""
+                approval_remark: reimbursement.approval_remark || "",
+                items: mappedItems
             });
         });
 
         // Calculate totals
         let totalAmount = 0;
         history.forEach(reimbursement => {
-            totalAmount += parseFloat(reimbursement.amount || 0);
+            totalAmount += parseFloat(reimbursement.total_amount || 0);
         });
 
         return res.ok({

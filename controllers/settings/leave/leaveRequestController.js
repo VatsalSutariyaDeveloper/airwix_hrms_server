@@ -8,6 +8,7 @@ const isSameOrBefore = require("dayjs/plugin/isSameOrBefore");
 dayjs.extend(isSameOrBefore);
 const LeaveBalanceService = require("../../../services/leaveBalanceService");
 const notificationService = require("../../../services/notificationService");
+const { resolvePendingApprovers } = require("../../../helpers/approvalHelper");
 
 const getApproversForLeaveRequest = async (employeeId, currentLevel, transaction) => {
     try {
@@ -246,7 +247,14 @@ exports.create = async (req, res) => {
             const minCompOff = attTemplate.comp_off_min_working_mins || 0;
             const maxCompOff = attTemplate.comp_off_max_working_mins || 0;
 
-            if (workedMins >= maxCompOff && maxCompOff > 0) {
+            if (minCompOff === 0 && maxCompOff === 0) {
+                if (workedMins > 0) {
+                    total_days = 1.0;
+                } else {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: 1 mins.` });
+                }
+            } else if (workedMins >= maxCompOff && maxCompOff > 0) {
                 total_days = 1.0;
             } else if (workedMins >= minCompOff && minCompOff > 0) {
                 total_days = 0.5;
@@ -681,7 +689,14 @@ exports.update = async (req, res) => {
             const minCompOff = attTemplate.comp_off_min_working_mins || 0;
             const maxCompOff = attTemplate.comp_off_max_working_mins || 0;
 
-            if (workedMins >= maxCompOff && maxCompOff > 0) {
+            if (minCompOff === 0 && maxCompOff === 0) {
+                if (workedMins > 0) {
+                    total_days = 1.0;
+                } else {
+                    await transaction.rollback();
+                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: 1 mins.` });
+                }
+            } else if (workedMins >= maxCompOff && maxCompOff > 0) {
                 total_days = 1.0;
             } else if (workedMins >= minCompOff && minCompOff > 0) {
                 total_days = 0.5;
@@ -986,7 +1001,7 @@ exports.getAll = async (req, res) => {
         );
 
         // Add a "progression" summary for the UI and document URL
-        data.items = data?.items?.map(row => {
+        data.items = await Promise.all((data?.items || []).map(async row => {
             const raw = row.get ? row.get({ plain: true }) : row;
             const statusLabels = {
                 [constants.LEAVE_APPROVAL_STATUS.PENDING]: "PENDING",
@@ -1017,8 +1032,16 @@ exports.getAll = async (req, res) => {
             // Add approver name if available
             raw.approved_by = raw.approvedBy?.user_name || null;
 
+            // Resolve pending approver details
+            if (raw.approval_status === constants.LEAVE_APPROVAL_STATUS.PENDING || raw.approval_status === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+                const pendingDetails = await resolvePendingApprovers(raw, "LEAVE");
+                raw.pending_with = pendingDetails.pending_with;
+            } else {
+                raw.pending_with = [];
+            }
+
             return raw;
-        });
+        }));
 
         return res.ok(data);
     } catch (err) {
@@ -1134,6 +1157,14 @@ exports.getById = async (req, res) => {
         raw.next_action_at_level = totalLevels === raw.current_level &&
             [constants.LEAVE_APPROVAL_STATUS.APPROVED, constants.LEAVE_APPROVAL_STATUS.REJECTED, constants.LEAVE_APPROVAL_STATUS.CANCELLED].includes(Number(raw.approval_status))
             ? null : raw.current_level;
+
+        // Resolve pending approver details
+        if (raw.approval_status === constants.LEAVE_APPROVAL_STATUS.PENDING || raw.approval_status === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+            const pendingDetails = await resolvePendingApprovers(raw, "LEAVE");
+            raw.pending_with = pendingDetails.pending_with;
+        } else {
+            raw.pending_with = [];
+        }
 
         return res.ok(raw);
     } catch (err) {
@@ -1489,6 +1520,11 @@ exports.getPendingApprovals = async (req, res) => {
                 } else {
                     raw.document_url = null;
                 }
+
+                // Resolve pending approver details
+                const pendingDetails = await resolvePendingApprovers(raw, "LEAVE");
+                raw.pending_with = pendingDetails.pending_with;
+
                 pendingForUser.push(raw);
             }
         }
@@ -1898,9 +1934,9 @@ exports.getEligibleCompOffDates = async (req, res) => {
             attendance_date: { [Op.between]: [ninetyDaysAgo, todayStr] },
             status: { [Op.ne]: 2 }
         }, {
-            include: [{ 
-                model: AttendancePunch, 
-                as: "attendancePunches", 
+            include: [{
+                model: AttendancePunch,
+                as: "attendancePunches",
                 required: false,
                 attributes: ['punch_time', 'punch_type']
             }],
@@ -1957,9 +1993,13 @@ exports.getEligibleCompOffDates = async (req, res) => {
             }
 
             let creditValue = 0;
-            if (workedMins >= maxCompOff) {
+            if (minCompOff === 0 && maxCompOff === 0) {
+                if (workedMins > 0) {
+                    creditValue = 1.0;
+                }
+            } else if (workedMins >= maxCompOff && maxCompOff > 0) {
                 creditValue = 1.0;
-            } else if (workedMins >= minCompOff) {
+            } else if (workedMins >= minCompOff && minCompOff > 0) {
                 creditValue = 0.5;
             }
 

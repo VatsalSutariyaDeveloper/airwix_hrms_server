@@ -18,6 +18,7 @@ const {
     EmployeeLeaveBalance,
     LeaveTemplateCategory,
     Reimbursement,
+    ReimbursementItem,
     ExpenseType,
     BranchMaster
 } = require("../../models");
@@ -443,6 +444,11 @@ exports.getPendingApprovalsDetails = async (req, res) => {
                         as: "approvedBy",
                         attributes: ["id", "user_name"],
                         required: false
+                    },
+                    {
+                        model: ReimbursementItem,
+                        as: "items",
+                        include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
                     }
                 ],
                 order: [['created_at', 'DESC']]
@@ -547,6 +553,18 @@ exports.getPendingApprovalsDetails = async (req, res) => {
                     raw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${raw.bills_docs}` : null;
                 } else {
                     raw.bills_docs_url = null;
+                }
+
+                if (raw.items && Array.isArray(raw.items)) {
+                    raw.items = raw.items.map(child => {
+                        if (child.bills_docs) {
+                            const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
+                            child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
+                        } else {
+                            child.bills_docs_url = null;
+                        }
+                        return child;
+                    });
                 }
                 reimbursements.push(raw);
             }

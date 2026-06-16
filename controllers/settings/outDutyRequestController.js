@@ -3,6 +3,7 @@ const { constants } = require("../../helpers/constants");
 const { sequelize, OutDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, RolePermission } = require("../../models");
 const dayjs = require("dayjs");
 const notificationService = require("../../services/notificationService");
+const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
 
 const getApproversForOutDutyRequest = async (employeeId, currentLevel, transaction) => {
     try {
@@ -261,6 +262,17 @@ exports.getAll = async (req, res) => {
             whereClause // customWhere
         );
 
+        data.items = await Promise.all((data?.items || []).map(async row => {
+            const raw = row.get ? row.get({ plain: true }) : row;
+            if (raw.approval_status === constants.OUT_DUTY_STATUS.PENDING || raw.approval_status === constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED) {
+                const pendingDetails = await resolvePendingApprovers(raw, "OUT_DUTY");
+                raw.pending_with = pendingDetails.pending_with;
+            } else {
+                raw.pending_with = [];
+            }
+            return raw;
+        }));
+
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
@@ -355,6 +367,13 @@ exports.getById = async (req, res) => {
         raw.next_action_at_level = totalLevels === raw.current_out_duty_level &&
             [constants.OUT_DUTY_STATUS.APPROVED, constants.OUT_DUTY_STATUS.REJECTED, constants.OUT_DUTY_STATUS.CANCELLED].includes(Number(raw.approval_status))
             ? null : raw.current_out_duty_level;
+
+        if (raw.approval_status === constants.OUT_DUTY_STATUS.PENDING || raw.approval_status === constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED) {
+            const pendingDetails = await resolvePendingApprovers(raw, "OUT_DUTY");
+            raw.pending_with = pendingDetails.pending_with;
+        } else {
+            raw.pending_with = [];
+        }
 
         return res.ok(raw);
     } catch (err) {
@@ -545,6 +564,11 @@ exports.getPendingApprovals = async (req, res) => {
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
                 raw.approved_by_name = raw.approvedBy?.user_name || null;
+
+                // Resolve pending approver details
+                const pendingDetails = await resolvePendingApprovers(raw, "OUT_DUTY");
+                raw.pending_with = pendingDetails.pending_with;
+
                 pendingForUser.push(raw);
             }
         }

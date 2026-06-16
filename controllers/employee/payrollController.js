@@ -119,7 +119,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             {
                 model: Reimbursement,
                 as: "reimbursements",
-                attributes: ['id', 'amount', 'date', 'description', 'expense_type', 'approval_status', 'payment_type'],
+                attributes: ['id', 'total_amount', 'date', 'description', 'expense_type', 'approval_status', 'payment_type'],
                 where: {
                     date: { [Op.between]: [startDate, endDate] },
                     approval_status: constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED,
@@ -538,7 +538,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const reimbursements = employee.reimbursements || [];
 
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
-    const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.amount || 0), 0);
+    const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.total_amount || 0), 0);
 
     // Create overtime history from attendance records
     const overtimeHistory = attendanceRecords
@@ -1199,7 +1199,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         fine_history: fineHistory,
         reimbursement_history: reimbursements.map(r => ({
             id: r.id,
-            amount: r.amount,
+            amount: r.total_amount,
             date: r.date,
             description: r.description,
             expense_type: r.expenseType?.name,
@@ -2629,7 +2629,7 @@ exports.getPayslipById = async (req, res) => {
                 incentives: incentives.map(i => ({ name: i.incentiveType?.name, amount: i.amount })),
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
-            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.amount, description: r.description, date: r.date, expense_type: r.expense_type?.name, })),
+            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.total_amount, description: r.description, date: r.date, expense_type: r.expense_type?.name, })),
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
             leave_balances: payslip.leave_balances || leaveBalances,

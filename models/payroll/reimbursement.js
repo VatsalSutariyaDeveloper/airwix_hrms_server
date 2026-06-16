@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
         {
             employee_id: { type: DataTypes.INTEGER },
             expense_type: { type: DataTypes.INTEGER },
-            amount: { type: DataTypes.DECIMAL(10, 2) },
+            total_amount: { type: DataTypes.DECIMAL(10, 2) },
             date: { type: DataTypes.DATEONLY },
             description: { type: DataTypes.TEXT, allowNull: true },
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
@@ -34,6 +34,7 @@ module.exports = (sequelize, DataTypes) => {
         Reimbursement.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
         Reimbursement.belongsTo(models.ExpenseType, { foreignKey: "expense_type", as: "expenseType" });
         Reimbursement.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
+        Reimbursement.hasMany(models.ReimbursementItem, { foreignKey: "reimbursement_id", as: "items", onDelete: "CASCADE", onUpdate: "CASCADE" });
     };
 
     return Reimbursement;
