@@ -964,7 +964,7 @@ exports.getById = async (req, res) => {
 exports.getProfile = async (req, res) => {
     try {
         // Branch: employee_id passed as query param or request body ──────────
-        const queriedEmployeeId = req.query.employee_id || req.body.employee_id;
+        const queriedEmployeeId = req.query?.employee_id || req.body?.employee_id;
         if (queriedEmployeeId) {
             const emp = await commonQuery.findOneRecord(Employee, queriedEmployeeId, {
                 attributes: [

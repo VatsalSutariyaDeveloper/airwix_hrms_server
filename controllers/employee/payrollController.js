@@ -3124,6 +3124,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
             },
             attendance: {
                 present: presentDays,
+                pd_days: parseFloat(payslip.pd_days || 0),
                 lwp: lwpDays,
                 lunch_count: payslip.lunch_count || 0,
                 leave_details: leave_details
@@ -3163,7 +3164,7 @@ exports.generatePayslipPdf = async (req, res) => {
         if (!data) {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
-
+console.log("data",data)
         const templatePath = path.join(process.cwd(), 'views', 'payslip', 'slip.ejs');
         const filename = `payslip_${id}_${Date.now()}.pdf`;
         const outputDir = path.join(process.cwd(), 'uploads', 'payslips');
