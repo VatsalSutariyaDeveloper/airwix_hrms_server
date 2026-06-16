@@ -1,4 +1,4 @@
-const { Announcement, User, RolePermission, UserDevice } = require("../models");
+const { Announcement, User, RolePermission, UserDevice, CompanyMaster } = require("../models");
 const commonQuery = require("../helpers/commonQuery");
 const { handleError, sequelize, constants, Op, formatDateTime } = require("../helpers");
 const firebaseService = require("../helpers/firebaseService");
@@ -34,11 +34,30 @@ exports.create = async (req, res) => {
     // Send notifications to the targeted users asynchronously in the background
     setImmediate(async () => {
       try {
+        const announcementDate = dayjs(req.body.announcement_date);
+        const todayEnd = dayjs().endOf('day');
+        if (announcementDate.isAfter(todayEnd)) {
+          console.log(`Announcement date is in the future (${req.body.announcement_date}), skipping immediate notification.`);
+          return;
+        }
+
         const companyId = req.user?.company_id || req.body.company_id;
         if (!companyId) return;
 
+        const company = await CompanyMaster.findByPk(companyId, { attributes: ["organization_id"] });
+        let companyIds = [companyId];
+        if (company && company.organization_id) {
+          const companies = await CompanyMaster.findAll({
+            where: { organization_id: company.organization_id, status: 0 },
+            attributes: ["id"]
+          });
+          if (companies.length > 0) {
+            companyIds = companies.map(c => c.id);
+          }
+        }
+
         let whereClause = {
-          company_id: companyId,
+          company_id: { [Op.in]: companyIds },
           status: 0 // Active users
         };
 
@@ -129,6 +148,10 @@ exports.getAll = async (req, res) => {
       ["target_type", true, true],
     ];
 
+    if (!req.user.is_super_admin) {
+      req.body.user_id = req.user.id;
+    }
+
     const result = await commonQuery.fetchPaginatedData(
       Announcement,
       { ...req.body },
@@ -169,11 +192,30 @@ exports.update = async (req, res) => {
     // Send Firebase push notifications to target users (without creating Notification DB entries)
     setImmediate(async () => {
       try {
+        const announcementDate = dayjs(req.body.announcement_date);
+        const todayEnd = dayjs().endOf('day');
+        if (announcementDate.isAfter(todayEnd)) {
+          console.log(`Announcement date is in the future (${req.body.announcement_date}), skipping immediate notification.`);
+          return;
+        }
+
         const companyId = req.user?.company_id || req.body.company_id;
         if (!companyId) return;
 
+        const company = await CompanyMaster.findByPk(companyId, { attributes: ["organization_id"] });
+        let companyIds = [companyId];
+        if (company && company.organization_id) {
+          const companies = await CompanyMaster.findAll({
+            where: { organization_id: company.organization_id, status: 0 },
+            attributes: ["id"]
+          });
+          if (companies.length > 0) {
+            companyIds = companies.map(c => c.id);
+          }
+        }
+
         let whereClause = {
-          company_id: companyId,
+          company_id: { [Op.in]: companyIds },
           status: 0
         };
 

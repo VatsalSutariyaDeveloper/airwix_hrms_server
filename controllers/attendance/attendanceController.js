@@ -1141,8 +1141,12 @@ exports.updateAttendanceDay = async (req, res) => {
       payload.note = null;
     }
 
+    // Fetch refreshed day to get recalculated worked_minutes, punches, etc. from manualPunch/rebuild
+    const refreshedDay = await commonQuery.findOneRecord(AttendanceDay, { id: day.id }, {}, t);
+    const newDayPayload = refreshedDay ? { ...refreshedDay.get({ plain: true }), ...payload } : payload;
+
     // Synchronize leave balance based on status changes (Half Day/Leave)
-    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, payload, t, emp);
+    const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, newDayPayload, t, emp);
     if (balanceError) {
       await t.rollback();
       return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
@@ -1283,10 +1287,16 @@ exports.deleteAttendanceDay = async (req, res) => {
 
     for (const day of days) {
       // 1.5 Synchronize leave balance before deletion (Refund if Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      let balanceError;
+      try {
+        balanceError = await syncAttendanceToLeaveBalance(employee_id, day, null, t);
+      } catch (balErr) {
+        await t.rollback();
+        return res.error(constants.VALIDATION_ERROR, { message: balErr.message || "Leave balance error occurred." });
+      }
       if (balanceError) {
         await t.rollback();
-        return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
+        return res.error(constants.VALIDATION_ERROR, { message: balanceError });
       }
 
       // 2. Delete punches by day_id specifically
@@ -1304,6 +1314,17 @@ exports.deleteAttendanceDay = async (req, res) => {
     if (days.length === 0) {
       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
     }
+
+    // REMOVE ANY PENDING COMP-OFF CREDIT REQUESTS FOR THIS DAY
+    await LeaveRequest.destroy({
+      where: {
+        employee_id,
+        start_date: attendance_date,
+        request_type: "CREDIT",
+        status: 0
+      },
+      transaction: t
+    });
 
     // 4. ALWAYS delete all punches for this employee on this date (handles unassigned punches)
     await commonQuery.hardDeleteRecords(AttendancePunch, {
@@ -1464,8 +1485,10 @@ exports.bulkUpdateAttendanceDay = async (req, res) => {
       if (fine_amount !== undefined) payload.fine_amount = fine_amount;
       if (note !== undefined) payload.note = note;
 
+      const newDayPayload = existingRecord ? { ...existingRecord.get({ plain: true }), ...payload } : payload;
+
       // Synchronize leave balance based on status changes (Half Day/Leave)
-      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, payload, t, emp);
+      const balanceError = await syncAttendanceToLeaveBalance(employee_id, existingRecord, newDayPayload, t, emp);
       if (balanceError) {
         await t.rollback();
         return res.error(balanceError);
@@ -1580,8 +1603,6 @@ exports.getAttendanceDayDetails = async (req, res) => {
     let attendanceDayJson = null;
     let punchesWithImages = [];
     let employeeDetails = null;
-    let isHolidayAllowed = false;
-    let isWeeklyOffAllowed = false;
 
     if (attendanceDay) {
       attendanceDayJson = attendanceDay.get ? attendanceDay.toJSON() : attendanceDay;
@@ -1626,10 +1647,6 @@ exports.getAttendanceDayDetails = async (req, res) => {
 
       attendanceDayJson.is_scheduled_holiday = !!isHoliday;
       attendanceDayJson.is_scheduled_weekly_off = !!isWeeklyOff;
-      attendanceDayJson.isHolidayAllowed = !!isHoliday;
-      attendanceDayJson.isWeeklyOff = !!isWeeklyOff;
-      isHolidayAllowed = !!isHoliday;
-      isWeeklyOffAllowed = !!isWeeklyOff;
 
       if (attendanceDayJson.attendancePunches) {
         punchesWithImages = attendanceDayJson.attendancePunches.map(punch => {
@@ -1679,10 +1696,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
       const template = employeeDetails.employeeAttendanceTemplate || employeeDetails.attendanceTemplate;
       if (template) {
         attendanceTemplateObj = {
-          allow_multiple_punches: template.allow_multiple_punches !== undefined ? template.allow_multiple_punches : true,
-          isAllowedOutDuty: template.enble_out_duty !== undefined ? template.enble_out_duty : true,
-          isFineAllowed: template.fines_allowed !== undefined ? template.fines_allowed : true,
-          isOvertimeAllowed: template.overtime_allowed !== undefined ? template.overtime_allowed : true,
+          allow_multiple_punches: template.allow_multiple_punches !== undefined ? template.allow_multiple_punches : true
         };
       }
     }
@@ -1690,9 +1704,7 @@ exports.getAttendanceDayDetails = async (req, res) => {
     return res.ok({
       attendanceDay: attendanceDayJson,
       employee: attendanceDayJson ? undefined : employeeDetails,
-      employeeAttendanceTemplate: attendanceTemplateObj,
-      isHolidayAllowed,
-      isWeeklyOffAllowed
+      employeeAttendanceTemplate: attendanceTemplateObj
       // punches: punchesWithImages
     });
   } catch (err) {

@@ -109,7 +109,7 @@ const emailService = {
         try {
             const company = await CompanyMaster.findByPk(companyId);
             const companyName = company ? company.company_name : 'Airwix Payroll';
-            
+
             const message = `
                 We are pleased to inform you that your onboarding process has been successfully approved. Welcome to the ${companyName} team!
                 
@@ -227,14 +227,14 @@ const emailService = {
      */
     sendResignationNotification: async (data) => {
         try {
-            const { 
-                companyId, 
-                employeeName, 
-                employeeEmail, 
-                resignationDate, 
-                preferredLWD, 
-                reason, 
-                recipients 
+            const {
+                companyId,
+                employeeName,
+                employeeEmail,
+                resignationDate,
+                preferredLWD,
+                reason,
+                recipients
             } = data;
 
             const message = `
@@ -294,17 +294,17 @@ const emailService = {
      */
     sendResignationActionNotification: async (data) => {
         try {
-            const { 
-                companyId, 
-                employeeName, 
-                employeeEmail, 
-                resignationDate, 
-                action, 
-                remarks, 
-                level, 
-                totalLevels, 
+            const {
+                companyId,
+                employeeName,
+                employeeEmail,
+                resignationDate,
+                action,
+                remarks,
+                level,
+                totalLevels,
                 approvedLWD,
-                recipients 
+                recipients
             } = data;
 
             // Get company email from CompanyMaster
@@ -378,13 +378,13 @@ const emailService = {
                 </p>
             `;
 
-             await sendEmailHelper({
+            await sendEmailHelper({
                 company_id: companyId,
                 // from: employeeEmail,
-                from: process.env.ADMIN_EMAIL, 
-                replyTo: employeeEmail, 
-                email: companyEmail, 
-                cc: recipients.join(','), 
+                from: process.env.ADMIN_EMAIL,
+                replyTo: employeeEmail,
+                email: companyEmail,
+                cc: recipients.join(','),
                 subject: subject,
                 message: generateEmailTemplate({
                     title: `${isFinalApproval ? 'Resignation Approved' : isApproval ? 'Resignation Partially Approved' : 'Resignation Rejected'}`,
@@ -398,6 +398,75 @@ const emailService = {
             return true;
         } catch (error) {
             console.error("Failed to send resignation action notification email:", error);
+            throw error;
+        }
+    },
+
+    /**
+     * Send email notification to manager for comp-off leave credit approval
+     */
+    sendCompOffCreditApprovalEmail: async (data) => {
+        try {
+            const {
+                companyId,
+                employeeName,
+                employeeEmail,
+                approverEmail,
+                approverName,
+                date,
+                totalDays,
+                level,
+                totalLevels
+            } = data;
+
+            const message = `
+                A compensatory off credit request has been submitted by <strong>${employeeName}</strong> and is pending your approval.
+                
+                <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="color: #64748b; padding: 5px 0; width: 40%;"><strong>Employee Name:</strong></td>
+                            <td style="color: #1e293b;">${employeeName}</td>
+                        </tr>
+                        <tr>
+                            <td style="color: #64748b; padding: 5px 0;"><strong>Working Date:</strong></td>
+                            <td style="color: #1e293b;">${date}</td>
+                        </tr>
+                        <tr>
+                            <td style="color: #64748b; padding: 5px 0;"><strong>Comp-off Credit Days:</strong></td>
+                            <td style="color: #1e293b;">${totalDays} ${totalDays === 1 ? 'day' : 'days'}</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <p style="color: #475569; line-height: 1.6;">
+                    Please log in to the HRMS portal to review and take action on this request.
+                </p>
+                
+                <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+                <p style="color: #94a3b8; font-size: 0.8em; text-align: center;">
+                    This is an automated message from Airwix HRMS.
+                </p>
+            `;
+
+            await sendEmailHelper({
+                company_id: companyId,
+                from: `${process.env.EMAIL_COMPANY_NAME || 'Airwix Payroll'} <${process.env.ADMIN_EMAIL}>`,
+                replyTo: employeeEmail ? `"${employeeName}" <${employeeEmail}>` : undefined,
+                email: approverEmail,
+                subject: `Comp-off Credit Approval Request - ${employeeName}`,
+                message: generateEmailTemplate({
+                    title: 'Comp-off Credit Pending Approval',
+                    subject: `Comp-off Credit Approval Request - ${employeeName}`,
+                    userName: approverName,
+                    message: message,
+                    buttonText: 'View Pending Requests',
+                    actionUrl: `${process.env.FRONTEND_URL || '#'}/pending-request`
+                }),
+            });
+            return true;
+        } catch (error) {
+            console.error("Failed to send comp-off credit approval email:", error);
             throw error;
         }
     }

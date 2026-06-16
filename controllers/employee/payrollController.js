@@ -20,7 +20,6 @@ const { createNotification } = require("../../services/notificationService");
  */
 
 
-
 /**
  * Internal helper to evaluate formula-based components
  */
@@ -120,7 +119,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             {
                 model: Reimbursement,
                 as: "reimbursements",
-                attributes: ['id', 'amount', 'date', 'description', 'expense_type', 'approval_status', 'payment_type'],
+                attributes: ['id', 'total_amount', 'date', 'description', 'expense_type', 'approval_status', 'payment_type'],
                 where: {
                     date: { [Op.between]: [startDate, endDate] },
                     approval_status: constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED,
@@ -539,7 +538,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const reimbursements = employee.reimbursements || [];
 
     const totalIncentive = incentives.reduce((sum, i) => sum + parseFloat(i.amount || 0), 0);
-    const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.amount || 0), 0);
+    const totalReimbursement = reimbursements.reduce((sum, r) => sum + parseFloat(r.total_amount || 0), 0);
 
     // Create overtime history from attendance records
     const overtimeHistory = attendanceRecords
@@ -1200,7 +1199,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         fine_history: fineHistory,
         reimbursement_history: reimbursements.map(r => ({
             id: r.id,
-            amount: r.amount,
+            amount: r.total_amount,
             date: r.date,
             description: r.description,
             expense_type: r.expenseType?.name,
@@ -1803,7 +1802,7 @@ exports.deletePayslip = async (req, res) => {
         const startDate = dayjs(`${payslip.year}-${payslip.month}-01`).startOf('month').format('YYYY-MM-DD');
         const endDate = dayjs(`${payslip.year}-${payslip.month}-01`).endOf('month').format('YYYY-MM-DD');
 
-        // ── 1. Delete salary PaymentHistory entries linked to this payslip ──────────
+        // Delete salary PaymentHistory entries linked to this payslip ──────────
         // These are created when HR records a salary payment against the payslip.
         await PaymentHistory.destroy({
             where: {
@@ -1813,7 +1812,7 @@ exports.deletePayslip = async (req, res) => {
             transaction
         });
 
-        // ── 2. Delete Reimbursement PaymentHistory entries included in this payslip ─
+        // Delete Reimbursement PaymentHistory entries included in this payslip ─
         // Reimbursements with payment_type = "Reimbursement" that fall in this month
         // were included in the payslip's reimbursement_details. We delete their
         // payment history records so they can be re-processed if the payslip is
@@ -1832,7 +1831,7 @@ exports.deletePayslip = async (req, res) => {
             }
         }
 
-        // ── 3. Reset advance adjustments that were included in this payslip ─────────
+        // Reset advance adjustments that were included in this payslip ─────────
         const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
         if (advancesAdjusted.length > 0) {
             const advanceIds = advancesAdjusted.map(a => a.advance_id);
@@ -1845,7 +1844,7 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // ── 4. Reset incentives that were baked into this payslip ───────────────────
+        // Reset incentives that were baked into this payslip ───────────────────
         // EmployeeIncentives matched by employee + month + year are marked
         // adjusted_in_payroll = true when finalized; reverse that here.
         await EmployeeIncentive.update(
@@ -1861,7 +1860,7 @@ exports.deletePayslip = async (req, res) => {
             }
         );
 
-        // ── 5. Reset leave request encashments that were settled in this payslip ────
+        // Reset leave request encashments that were settled in this payslip ────
         const encashmentsSettled = payslip.encashment_details?.history || [];
         if (encashmentsSettled.length > 0) {
             const encashmentIds = encashmentsSettled.map(e => e.id);
@@ -1873,7 +1872,7 @@ exports.deletePayslip = async (req, res) => {
             }, transaction);
         }
 
-        // ── 6. Unlock Attendance ─────────────────────────────────────────────────────
+        // Unlock Attendance ─────────────────────────────────────────────────────
         await AttendanceDay.update({ is_locked: false }, {
             where: {
                 employee_id: payslip.employee_id,
@@ -2630,7 +2629,7 @@ exports.getPayslipById = async (req, res) => {
                 incentives: incentives.map(i => ({ name: i.incentiveType?.name, amount: i.amount })),
                 advances: advances.map(a => ({ name: "Advance repayment", amount: a.amount }))
             },
-            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.amount, description: r.description, date: r.date, expense_type: r.expense_type?.name, })),
+            reimbursements: reimbursements.map(r => ({ name: r.expenseType?.name || "Reimbursement", amount: r.total_amount, description: r.description, date: r.date, expense_type: r.expense_type?.name, })),
             breakdown: breakdown,
             tds_calculation_data: payslip.tds_calculation_data,
             leave_balances: payslip.leave_balances || leaveBalances,
@@ -3125,6 +3124,7 @@ const preparePayslipPdfData = async (payslipId, companyId) => {
             },
             attendance: {
                 present: presentDays,
+                pd_days: parseFloat(payslip.pd_days || 0),
                 lwp: lwpDays,
                 lunch_count: payslip.lunch_count || 0,
                 leave_details: leave_details
@@ -3164,7 +3164,7 @@ exports.generatePayslipPdf = async (req, res) => {
         if (!data) {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
-
+console.log("data",data)
         const templatePath = path.join(process.cwd(), 'views', 'payslip', 'slip.ejs');
         const filename = `payslip_${id}_${Date.now()}.pdf`;
         const outputDir = path.join(process.cwd(), 'uploads', 'payslips');

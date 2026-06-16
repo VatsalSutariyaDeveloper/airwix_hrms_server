@@ -162,6 +162,122 @@ const jobHolidayAndBirthdayNotifications = async (asOf = null, batch_id = null) 
     await hrDashboardController.sendHolidayAndBirthdayNotifications(asOf);
 };
 
+const jobAnnouncementNotifications = async (asOf = null, batch_id = null) => {
+    console.log('⏰ Running daily announcement notification task...');
+    const dayjs = require('dayjs');
+    const { Announcement, User, RolePermission, UserDevice, CompanyMaster } = require("../models");
+    const { Op, commonQuery } = require("../helpers");
+    const firebaseService = require("../helpers/firebaseService");
+    const constants = require("../helpers/constants");
+
+    const refDate = asOf ? dayjs(asOf) : dayjs();
+    const todayStart = refDate.startOf('day').toDate();
+    const todayEnd = refDate.endOf('day').toDate();
+
+    const announcements = await Announcement.findAll({
+        where: {
+            announcement_date: {
+                [Op.between]: [todayStart, todayEnd]
+            },
+            status: 0
+        }
+    });
+
+    console.log(`[Cron] Found ${announcements.length} announcements scheduled for today.`);
+
+    for (const ann of announcements) {
+        try {
+            const companyId = ann.company_id;
+            if (!companyId) continue;
+
+            const company = await CompanyMaster.findByPk(companyId, { attributes: ["organization_id"] });
+            let companyIds = [companyId];
+            if (company && company.organization_id) {
+                const companies = await CompanyMaster.findAll({
+                    where: { organization_id: company.organization_id, status: 0 },
+                    attributes: ["id"]
+                });
+                if (companies.length > 0) {
+                    companyIds = companies.map(c => c.id);
+                }
+            }
+
+            let whereClause = {
+                company_id: { [Op.in]: companyIds },
+                status: 0
+            };
+
+            const targetType = parseInt(ann.target_type);
+            const target = ann.target;
+
+            let queryOptions = {
+                attributes: ["id", "fcm_token"]
+            };
+
+            if (targetType === 3) {
+                const userIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
+                if (userIds.length > 0) {
+                    whereClause.id = { [Op.in]: userIds };
+                } else {
+                    continue;
+                }
+            } else if (targetType === 2) {
+                const roleIds = target ? target.split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : [];
+                if (roleIds.length > 0) {
+                    whereClause.role_id = { [Op.in]: roleIds };
+                } else {
+                    continue;
+                }
+            } else if (targetType === 1) {
+                queryOptions.include = [
+                    {
+                        model: RolePermission,
+                        as: "RolePermission",
+                        where: { role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
+                        required: true,
+                        attributes: []
+                    }
+                ];
+            }
+
+            const targetUsers = await commonQuery.findAllRecords(User, whereClause, queryOptions);
+
+            const cleanContent = (ann.content || "")
+                .replace(/<[^>]*>/g, "")
+                .substring(0, 150);
+
+            let allTokens = [];
+            for (const user of targetUsers) {
+                const devices = await commonQuery.findAllRecords(UserDevice, { user_id: user.id }, { attributes: ["fcm_token"] }, null, false);
+                const deviceTokens = devices.map(d => d.fcm_token).filter(Boolean);
+                if (deviceTokens.length > 0) {
+                    allTokens.push(...deviceTokens);
+                } else if (user.fcm_token) {
+                    allTokens.push(user.fcm_token);
+                }
+            }
+
+            allTokens = [...new Set(allTokens)];
+
+            if (allTokens.length > 0) {
+                await firebaseService.sendMulticastNotification(allTokens, {
+                    title: `New Announcement: ${ann.title}`,
+                    body: cleanContent || "A new company announcement has been published.",
+                    data: {
+                        type: "ANNOUNCEMENT",
+                        reference_id: String(ann.id || ""),
+                        redirect_url: "/announcements"
+                    }
+                });
+                console.log(`[Cron] Sent notifications to ${allTokens.length} devices for announcement ID ${ann.id}`);
+            }
+        } catch (err) {
+            console.error(`[Cron] Failed to send notifications for announcement ${ann.id}:`, err.message);
+        }
+    }
+};
+
+
 const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily face recognition audit cleanup task...');
     const fifteenDaysAgo = dayjs().subtract(15, 'day').format('YYYY-MM-DD HH:mm:ss');
@@ -305,6 +421,7 @@ const ALL_JOBS = [
     { name: 'Holiday & Birthday Notifications', fn: jobHolidayAndBirthdayNotifications },
     { name: 'Face Audit Cleanup', fn: jobFaceAuditCleanup },
     { name: 'Attendance Irregularity Alert', fn: jobAttendanceIrregularityAlert },
+    { name: 'Announcement Notifications', fn: jobAnnouncementNotifications },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -507,6 +624,7 @@ module.exports = {
     jobHolidayAndBirthdayNotifications,
     jobFaceAuditCleanup,
     jobAttendanceIrregularityAlert,
+    jobAnnouncementNotifications,
     revertCronJobRun,
 };
 

@@ -4,6 +4,7 @@ const { constants } = require("../../helpers/constants");
 const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
+const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
 
 // 1. Create Attendance Regularization  Request
 exports.create = async (req, res) => {
@@ -199,6 +200,17 @@ exports.getAll = async (req, res) => {
             whereClause // customWhere
         );
         
+        data.items = await Promise.all((data?.items || []).map(async row => {
+            const raw = row.get ? row.get({ plain: true }) : row;
+            if (raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING || raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED) {
+                const pendingDetails = await resolvePendingApprovers(raw, "REGULARIZATION");
+                raw.pending_with = pendingDetails.pending_with;
+            } else {
+                raw.pending_with = [];
+            }
+            return raw;
+        }));
+
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
@@ -291,6 +303,11 @@ exports.getPendingApprovals = async (req, res) => {
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
                 raw.approved_by_name = raw.approvedBy?.user_name || null;
+
+                // Resolve pending approver details
+                const pendingDetails = await resolvePendingApprovers(raw, "REGULARIZATION");
+                raw.pending_with = pendingDetails.pending_with;
+
                 pendingForUser.push(raw);
             }
         }
@@ -409,7 +426,15 @@ exports.getById = async (req, res) => {
 
         if (!request) return res.error(constants.NOT_FOUND);
 
-        return res.ok(request);
+        const raw = request.get({ plain: true });
+        if (raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING || raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED) {
+            const pendingDetails = await resolvePendingApprovers(raw, "REGULARIZATION");
+            raw.pending_with = pendingDetails.pending_with;
+        } else {
+            raw.pending_with = [];
+        }
+
+        return res.ok(raw);
     } catch (err) {
         return handleError(err, res, req);
     }

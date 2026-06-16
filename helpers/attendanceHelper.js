@@ -407,7 +407,7 @@ async function punch(employeeId, meta, transaction = null) {
 
       const todayShift = await getCandidateShift(currentDate);
       const yesterdayShift = await getCandidateShift(yesterdayDate);
-console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
+      console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
       let yesterdayShiftEnd = null;
       if (yesterdayShift) {
         yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
@@ -2240,7 +2240,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       earlyOtData = { minutes: earlyOvertimeMinutes, amount: res.amount, rate: res.rate, calculation_type: res.rateId };
     }
   }
-console.log("finalWorkedMinutes",finalWorkedMinutes)
+  console.log("finalWorkedMinutes", finalWorkedMinutes)
 
   finalWorkedMinutes = Math.max(0, finalWorkedMinutes);
 
@@ -2300,11 +2300,16 @@ console.log("finalWorkedMinutes",finalWorkedMinutes)
         ot = worked;
         workedToSave = 0;
       } else if (worked < maxCompOff) {
-        workedToSave = halfShiftMins;
-        ot = Math.max(0, worked - halfShiftMins);
+        workedToSave = worked;
+        ot = 0;
       } else {
-        workedToSave = fullShiftMins;
-        ot = Math.max(0, worked - fullShiftMins);
+        workedToSave = worked;
+        if (worked > fullShiftMins) {
+          workedToSave = fullShiftMins;
+          ot = worked - fullShiftMins;
+        } else {
+          ot = 0;
+        }
       }
 
       finalWorkedMinutes = workedToSave;
@@ -2605,11 +2610,11 @@ console.log("finalWorkedMinutes",finalWorkedMinutes)
         if (!n || typeof n !== 'string') return false;
         const trimmed = n.trim();
         return trimmed.startsWith("System:") ||
-               trimmed.startsWith("Auto Absent:") ||
-               trimmed.startsWith("Incomplete:") ||
-               trimmed.startsWith("Leave approved:") ||
-               trimmed.startsWith("Penalty:") ||
-               trimmed.startsWith("Penalty (");
+          trimmed.startsWith("Auto Absent:") ||
+          trimmed.startsWith("Incomplete:") ||
+          trimmed.startsWith("Leave approved:") ||
+          trimmed.startsWith("Penalty:") ||
+          trimmed.startsWith("Penalty (");
       };
 
       if (isSystemGeneratedNote(existingNote)) {
@@ -2659,6 +2664,56 @@ console.log("finalWorkedMinutes",finalWorkedMinutes)
   // Recalculate ALL absent records in the month so fines are order-independent.
   if (status === 5 && template && template.allow_absent_fine && Array.isArray(template.absent_fine_rules) && template.absent_fine_rules.length > 0) {
     await recalculateMonthAbsentFines(employeeId, date, employee, transaction);
+  }
+
+  // [MOD] Auto-adjust pending Comp-Off Credit Requests based on modified punch times
+  if (template && template.holiday_policy === 'COMP_OFF') {
+    const existingCompOffRequest = await commonQuery.findOneRecord(LeaveRequest, {
+      employee_id: employeeId,
+      request_type: 'CREDIT',
+      start_date: date,
+      status: 0,
+      approval_status: { [Op.in]: [0, 1] } // PENDING or PARTIALLY_APPROVED
+    }, {}, transaction, false, {});
+
+    if (existingCompOffRequest) {
+      const minCompOff = template.comp_off_min_working_mins || 0;
+      const maxCompOff = template.comp_off_max_working_mins || 0;
+
+      const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
+
+      let creditValue = 0;
+      if (isHoliday || isWeeklyOff) {
+        let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
+        const workedMins = parseFloat(attendancePayload.worked_minutes || 0);
+        const hasPunches = (attendancePayload.first_in || attendancePayload.last_out) ? true : false;
+        if (!isWorkingStatus && (workedMins > 0 || hasPunches)) {
+          isWorkingStatus = true;
+        }
+
+        if (isWorkingStatus) {
+          if (minCompOff === 0 && maxCompOff === 0) {
+            if (workedMins > 0) {
+              creditValue = 1.0;
+            }
+          } else if (maxCompOff > 0 && workedMins >= maxCompOff) {
+            creditValue = 1.0;
+          } else if (minCompOff > 0 && workedMins >= minCompOff) {
+            creditValue = 0.5;
+          }
+        }
+      }
+
+      if (creditValue > 0) {
+        if (parseFloat(existingCompOffRequest.total_days) !== creditValue) {
+          console.log(`[Rebuild] Updating pending Comp-Off request ${existingCompOffRequest.id} total_days to ${creditValue}`);
+          await commonQuery.updateRecordById(LeaveRequest, existingCompOffRequest.id, { total_days: creditValue }, transaction, false, {});
+        }
+      } else {
+        console.log(`[Rebuild] Deleting pending Comp-Off request ${existingCompOffRequest.id} as it is no longer eligible.`);
+        await LeaveRequest.destroy({ where: { id: existingCompOffRequest.id }, transaction });
+      }
+    }
   }
 }
 
@@ -2913,6 +2968,141 @@ async function getDayOffInfo(employee, date, transaction) {
 }
 
 /**
+ * Resolves the user IDs of authorized approvers for a given employee and level.
+ */
+async function getApproversForCompOffCredit(employeeId, currentLevel, transaction) {
+  try {
+    const { User, RolePermission, LeaveTemplate } = require("../models");
+    const employee = await commonQuery.findOneRecord(Employee, employeeId, {
+      include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+    }, transaction);
+
+    if (!employee) return [];
+
+    const template = employee.leaveTemplate;
+    const config = template ? (template.approval_config || []) : [];
+    const currentStage = config.find(c => c.level === currentLevel) || { type: "ANYONE" };
+    const { type } = currentStage;
+
+    const userIds = new Set();
+
+    if (type === 'REPORTING_MANAGER' || type === 'ATTENDANCE_SUPERVISOR' || type === 'ANYONE') {
+      if (employee.reporting_manager) {
+        userIds.add(employee.reporting_manager);
+      }
+      if (employee.attendance_supervisor) {
+        userIds.add(employee.attendance_supervisor);
+      }
+    }
+
+    if (type === 'ADMIN' || type === 'ANYONE' || type === 'EMPLOYER') {
+      const adminFilters = {
+        status: 0,
+        [Op.or]: [
+          { is_super_admin: true },
+          { '$RolePermission.role_key$': constants.ROLE_KEYS.BUSINESS_ADMIN },
+          { '$RolePermission.role_key$': constants.ROLE_KEYS.ADMIN }
+        ]
+      };
+      const admins = await commonQuery.findAllRecords(User, adminFilters, {
+        include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
+        attributes: ['id'],
+        raw: true
+      }, transaction);
+
+      admins.forEach(a => userIds.add(a.id));
+    }
+
+    return [...userIds];
+  } catch (err) {
+    console.error("Error in getApproversForCompOffCredit in attendanceHelper:", err);
+    return [];
+  }
+}
+
+/**
+ * Creates notifications for the current stage approvers of a Comp-Off credit request.
+ */
+async function sendCompOffApprovalNotifications(leaveRequest, employee, transaction) {
+  try {
+    if (!employee && leaveRequest.employee_id) {
+      employee = await commonQuery.findOneRecord(Employee, leaveRequest.employee_id, {}, transaction);
+    }
+    let employeeEmail = employee?.email;
+    if (!employeeEmail && employee) {
+      const { User } = require("../models");
+      const linkedUser = await commonQuery.findOneRecord(User, { employee_id: employee.id }, { attributes: ["email"] }, transaction);
+      if (linkedUser) {
+        employeeEmail = linkedUser.email;
+      }
+    }
+    const userIds = await getApproversForCompOffCredit(leaveRequest.employee_id, leaveRequest.current_level, transaction);
+    if (!userIds || userIds.length === 0) return;
+
+    const employeeName = employee ? `${employee.first_name || ""} ${employee.last_name || ""}`.trim() : "An employee";
+    const startDateStr = dayjs(leaveRequest.start_date).format('DD MMM YYYY');
+
+    const title = "New Comp Off Credit Request Pending Approval";
+    const message = `${employeeName} has earned a compensatory off credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
+
+    // Fetch company settings to see if email sending for comp-off credit is enabled
+    const { getCompanySetting } = require("../helpers");
+    const companySettings = await getCompanySetting(leaveRequest.company_id);
+    const sendEmail = companySettings && (
+      companySettings.send_email_compoff_credit === true ||
+      companySettings.send_email_compoff_credit === "true" ||
+      companySettings.send_email_compoff_credit === 1 ||
+      companySettings.send_email_compoff_credit === "1"
+    );
+
+    const { User, LeaveTemplate } = require("../models");
+    for (const userId of userIds) {
+      // Avoid notifying the employee themselves
+      const user = await commonQuery.findOneRecord(User, { id: userId }, { attributes: ["employee_id", "email", "user_name"] }, transaction);
+      if (user && user.employee_id === leaveRequest.employee_id) {
+        continue;
+      }
+
+      await notificationService.createNotification({
+        user_id: userId,
+        title,
+        message,
+        type: "LEAVE",
+        reference_id: leaveRequest.id,
+        status_code: 0,
+        company_id: leaveRequest.company_id,
+        branch_id: leaveRequest.branch_id
+      }, transaction);
+
+      if (sendEmail && user && user.email) {
+        let template = employee?.leaveTemplate;
+        if (!template && employee?.leave_template) {
+          template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
+        }
+        const totalLevels = template?.approval_levels || 1;
+        const emailService = require("../services/emailService");
+
+        emailService.sendCompOffCreditApprovalEmail({
+          companyId: leaveRequest.company_id,
+          employeeName,
+          employeeEmail,
+          approverEmail: user.email,
+          approverName: user.user_name || "Manager",
+          date: startDateStr,
+          totalDays: parseFloat(leaveRequest.total_days || 0),
+          level: leaveRequest.current_level,
+          totalLevels
+        }).catch(err => {
+          console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Error sending comp-off approval notifications:", err);
+  }
+}
+
+/**
  * Syncs Compensatory Off credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
@@ -2920,6 +3110,7 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   const LeaveBalanceService = require("../services/leaveBalanceService");
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
   if (!template || template.holiday_policy !== "COMP_OFF") return;
+  if (template.comp_off_generation_mode === "MANUAL") return;
 
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
   if (!isHoliday && !isWeeklyOff) return;
@@ -2941,10 +3132,10 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   if (!compOffCategory) return;
 
   // Determine if it's a working state based on status OR worked time on non-working days
-  let isWorkingStatus = [0, 1, 12, 13].includes(Number(status));
+  let isWorkingStatus = (status !== null && status !== undefined && status !== '') && [0, 1, 12, 13].includes(Number(status));
 
   // Important: If it's a Holiday (4) or Weekly Off (3), check if they actually worked (worked_minutes > 0 or has times)
-  if (!isWorkingStatus && [3, 4].includes(Number(status))) {
+  if (!isWorkingStatus && (status !== null && status !== undefined && status !== '') && [3, 4].includes(Number(status))) {
     const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
     const hasPunches = attendanceDay ? (attendanceDay.first_in || attendanceDay.last_out) : false;
     if (workedMins > 0 || hasPunches) {
@@ -2954,13 +3145,19 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
 
   const employeeId = employee.id;
 
-  // Find existing credit record for this date
+  // Find existing credit record for this date (excluding rejected, cancelled, deleted ones)
   const existingCompOff = await commonQuery.findOneRecord(LeaveRequest, {
     employee_id: employeeId,
     request_type: 'CREDIT',
     start_date: date,
     leave_category_id: compOffCategory.id,
-    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+    approval_status: {
+      [Op.notIn]: [
+        constants.LEAVE_APPROVAL_STATUS.REJECTED,
+        constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+        constants.LEAVE_APPROVAL_STATUS.DELETED
+      ]
+    },
     status: 0
   }, {}, transaction, false, {});
 
@@ -2970,9 +3167,13 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
     const workedMins = attendanceDay ? parseFloat(attendanceDay.worked_minutes || 0) : 0;
 
     let creditAmount = 0;
-    if (workedMins >= maxCompOff) {
+    if (minCompOff === 0 && maxCompOff === 0) {
+      if (workedMins > 0) {
+        creditAmount = 1.0;
+      }
+    } else if (workedMins >= maxCompOff && maxCompOff > 0) {
       creditAmount = 1.0;
-    } else if (workedMins >= minCompOff) {
+    } else if (workedMins >= minCompOff && minCompOff > 0) {
       creditAmount = 0.5;
     }
 
@@ -2981,16 +3182,16 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
         // Handle Correction (e.g. Full Day vs Half Day change)
         if (parseFloat(existingCompOff.total_days) !== creditAmount) {
           const diff = creditAmount - parseFloat(existingCompOff.total_days);
-          const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
-          if (error) return error;
+          // Only adjust balance if the request is already approved
+          if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+            const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -diff, transaction, date, employee, true);
+            if (error) return error;
+          }
           await commonQuery.updateRecordById(LeaveRequest, existingCompOff.id, { total_days: creditAmount, request_type: 'CREDIT' }, transaction);
         }
       } else {
-        // New Credit
-        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, -creditAmount, transaction, date, employee, true);
-        if (error) return error;
-
-        await commonQuery.createRecord(LeaveRequest, {
+        // New Credit - Created in PENDING status, balance is adjusted upon approval in leaveRequestController.updateStatus
+        const leaveRequest = await commonQuery.createRecord(LeaveRequest, {
           employee_id: employeeId,
           leave_category_id: compOffCategory.id,
           start_date: date,
@@ -2998,7 +3199,9 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
           total_days: creditAmount,
           request_type: 'CREDIT',
           reason: `Comp Off earned for working on ${isHoliday ? 'Holiday' : 'Weekly Off'}`,
-          approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+          approval_status: constants.LEAVE_APPROVAL_STATUS.PENDING,
+          current_level: 1,
+          approval_history: [],
           approved_by: 0,
           company_id: employee.company_id,
           branch_id: employee.branch_id,
@@ -3013,17 +3216,26 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
           { note: "compoff leave generated" },
           { where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction }
         );
+
+        // Send multi-approval notifications
+        await sendCompOffApprovalNotifications(leaveRequest, employee, transaction);
       }
     } else if (existingCompOff) {
       // Remove Credit if status changed to non-working or worked time below minimum
-      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
-      if (error) return error;
+      // Only adjust balance to remove credit if it was previously APPROVED
+      if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+        const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
+        if (error) return error;
+      }
       await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction, false, {});
     }
   } else if (existingCompOff) {
     // Remove Credit if status changed to non-working (e.g. Absent)
-    const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
-    if (error) return error;
+    // Only adjust balance to remove credit if it was previously APPROVED
+    if (Number(existingCompOff.approval_status) === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+      const error = await LeaveBalanceService.adjustLeaveBalance(employeeId, compOffCategory.id, parseFloat(existingCompOff.total_days), transaction, date, employee, true);
+      if (error) return error;
+    }
     await commonQuery.softDeleteById(LeaveRequest, { id: existingCompOff.id }, transaction, false, {});
   }
 }
@@ -3062,7 +3274,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   }
 
   if (employee) {
-    const error = await syncCompOffCredit(employee, date, newStatus !== null ? newStatus : oldStatus, transaction, newDay || oldDay);
+    const error = await syncCompOffCredit(employee, date, newStatus, transaction, newDay);
     if (error) return error;
   }
 
@@ -3388,5 +3600,8 @@ module.exports = {
   syncAttendanceToLeaveBalance,
   bulkSyncAttendanceDays,
   getDayOffInfo,
-  recalculateMonthAbsentFines
+  recalculateMonthAbsentFines,
+  syncCompOffCredit,
+  getApproversForCompOffCredit,
+  sendCompOffApprovalNotifications
 };

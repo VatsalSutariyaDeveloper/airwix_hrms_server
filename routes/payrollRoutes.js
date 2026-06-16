@@ -71,15 +71,15 @@ router.post("/payment-history/view", paymentHistoryController.paymentHistoryView
 // REIMBURSEMENT
 // ==========================
 // Base Path: /reimbursement
-router.post("/reimbursement", bufferFile(["bills_docs"]), reimbursementController.create);
+router.post("/reimbursement", bufferFile(), reimbursementController.create);
 router.post("/reimbursement/get-transactions", reimbursementController.getAll);
+router.post("/reimbursement/pending-approvals", reimbursementController.getPendingApprovals);
+router.post("/reimbursement/summary", reimbursementController.getReimbursementSummary);
 router.get("/reimbursement/:id", reimbursementController.getById);
-router.put("/reimbursement/:id", bufferFile(["bills_docs"]), reimbursementController.update);
+router.post("/reimbursement/:id", bufferFile(), reimbursementController.update);
 router.delete("/reimbursement", reimbursementController.delete);
 router.patch("/reimbursement/status/:id", reimbursementController.updateStatus);
 router.put("/reimbursement/cancel/:id", reimbursementController.cancelReimbursement);
-router.post("/reimbursement/pending-approvals", reimbursementController.getPendingApprovals);
-router.post("/reimbursement/summary", reimbursementController.getReimbursementSummary);
 
 
 

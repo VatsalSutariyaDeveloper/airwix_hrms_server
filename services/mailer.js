@@ -81,7 +81,8 @@ const sendEmailHelper = async (options) => {
       bcc: options.bcc,
       subject: options.subject,
       html: options.message,
-      attachments: options.attachments
+      attachments: options.attachments,
+      replyTo: options.replyTo
     });
 
   } catch (err) {
