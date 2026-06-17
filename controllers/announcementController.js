@@ -185,6 +185,19 @@ exports.update = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, errors);
     }
 
+    const today = dayjs().startOf("day");
+
+    // Check if expiry_date is provided and in the past
+    const isExpiryInPast = req.body.expiry_date && dayjs(req.body.expiry_date).startOf("day").isBefore(today);
+
+    // Check if announcement_date is provided and in the past
+    const isStartDateInPast = req.body.announcement_date && dayjs(req.body.announcement_date).startOf("day").isBefore(today);
+
+    // If EITHER date is in the past, deactivate it
+    if (isExpiryInPast || isStartDateInPast) {
+      req.body.status = 1;
+    }
+
     const announcement = await commonQuery.updateRecordById(Announcement, id, req.body, transaction);
 
     await transaction.commit();
@@ -192,6 +205,12 @@ exports.update = async (req, res) => {
     // Send Firebase push notifications to target users (without creating Notification DB entries)
     setImmediate(async () => {
       try {
+
+        if (req.body.status === 1) {
+          console.log("Announcement deactivated, skipping notifications.");
+          return;
+        }
+
         const announcementDate = dayjs(req.body.announcement_date);
         const todayEnd = dayjs().endOf('day');
         if (announcementDate.isAfter(todayEnd)) {
