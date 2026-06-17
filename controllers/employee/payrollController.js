@@ -57,6 +57,9 @@ const evaluateComponentFormula = (formula, valuesMap) => {
  */
 const performSalaryCalculation = async (employee_id, month, year, transaction = null, options = {}) => {
     const skipStatutory = options.skipStatutory || false;
+    const isOwnRequest = options.isOwnRequest || false;
+    const tenantOptions = isOwnRequest ? { applyHierarchy: false } : true;
+    const childTenantOptions = { company_id: true, applyHierarchy: false };
     const startDate = dayjs(`${year}-${month}-01`).startOf('month').format('YYYY-MM-DD');
     const endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
 
@@ -141,7 +144,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 required: false
             }
         ]
-    }, transaction);
+    }, transaction, false, tenantOptions);
 
     if (!employee) {
         return fail("Employee not found.");
@@ -177,14 +180,14 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
         employee_id,
         year
-    }, {}, transaction);
+    }, {}, transaction, childTenantOptions);
 
     // Also fetch categories from the employee's assigned leave template for name fallback
     let templateCategories = [];
     if (employee.leave_template) {
         templateCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
             leave_template_id: employee.leave_template
-        }, {}, transaction);
+        }, {}, transaction, childTenantOptions);
     }
 
     const leaveParamMap = new Map();
@@ -211,7 +214,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         employee_id,
         attendance_date: { [Op.between]: [startDate, endDate] },
         status: { [Op.ne]: 2 }
-    }, {}, transaction, { company_id: true });
+    }, {}, transaction, childTenantOptions);
 
     const monthLeaveUsage = {}; // Track usage per category ID for the current month
     const leaveCategoryDetails = {}; // Track usage per category name for leave_details
@@ -300,7 +303,8 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             date: { [Op.between]: [startDate, endDate] },
         },
         { attributes: ['date', 'created_at'] },
-        transaction
+        transaction,
+        childTenantOptions
     );
     const lunchHistory = lunchRecords.map(r => ({
         date: formatDateTime(r.getDataValue('date'), 'DD-MM-YYYY'),
@@ -345,7 +349,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     let unitWorkingHours = 8;
     let shift = null;
     if (employee.shift_template) {
-        shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
+        shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, tenantOptions);
     }
     if (shift) {
         if (parseFloat(shift.total_payable_hours) > 0) {
@@ -387,7 +391,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         const revisionRecord = await commonQuery.findOneRecord(SalaryRevisionHistory, revisionCondition, {
             order: [['revision_date', 'DESC']]
-        }, transaction);
+        }, transaction, false, tenantOptions);
 
         const oldMonthlyGross = parseFloat(revisionRecord?.previous_ctc || currentMonthlyGross);
         const newMonthlyGross = parseFloat(revisionRecord?.new_ctc || currentMonthlyGross);
@@ -573,7 +577,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         status: { [Op.ne]: 2 }
     }, {
         attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
-    }, transaction);
+    }, transaction, childTenantOptions);
 
     // Step E.1: Fetch Approved Encashment Requests (all unsettled, no month/year filter)
     const encashments = await commonQuery.findAllRecords(LeaveRequest, {
@@ -589,7 +593,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             as: "category",
             attributes: ['leave_category_name']
         }]
-    }, transaction);
+    }, transaction, childTenantOptions);
 
     const totalEncashedDays = encashments.reduce((sum, e) => sum + parseFloat(e.total_days || 0), 0);
     const encashmentAmount = totalEncashedDays * perDaySalary;
@@ -2676,6 +2680,10 @@ exports.getSalaryOverview = async (req, res) => {
             return res.error("VALIDATION_ERROR", { message: "Employee ID is required" });
         }
 
+        const isOwnRequest = employee_id == req.user.employee_id;
+        const tenantOptions = isOwnRequest ? { applyHierarchy: false } : true;
+        const childTenantOptions = { company_id: true, applyHierarchy: false };
+
         // 1. Fetch Employee for joining date & Salary Template for computation basis
         const employee = await commonQuery.findOneRecord(Employee, employee_id, {
             attributes: ['id', 'joining_date', 'branch_id', 'company_id'],
@@ -2684,7 +2692,7 @@ exports.getSalaryOverview = async (req, res) => {
                 as: 'employeeSalaryTemplate',
                 attributes: ['lwp_calculation_basis']
             }]
-        });
+        }, null, false, tenantOptions);
 
         if (!employee) {
             return res.error("NOT_FOUND", { message: "Employee not found" });
@@ -2732,7 +2740,7 @@ exports.getSalaryOverview = async (req, res) => {
                 month: m.month,
                 year: m.year,
                 status: { [Op.in]: [1, 2] }
-            });
+            }, {}, null, false, childTenantOptions);
             if (payslip) {
                 // Use stored values from payslip database
                 const ot = parseFloat(payslip.ot_amount || 0);
@@ -2777,7 +2785,9 @@ exports.getSalaryOverview = async (req, res) => {
                 const lunchRecords = await commonQuery.findAllRecords(
                     CanteenAttendance,
                     { employee_id, date: { [Op.between]: [startDate, endDate] } },
-                    { attributes: ['date', 'created_at'] }
+                    { attributes: ['date', 'created_at'] },
+                    null,
+                    childTenantOptions
                 );
                 const lunchHistory = lunchRecords.map(r => ({
                     date: dayjs(r.getDataValue('date')).format('YYYY-MM-DD'),
@@ -2790,7 +2800,7 @@ exports.getSalaryOverview = async (req, res) => {
                     month: m.month,
                     year: m.year,
                     status: { [Op.ne]: 2 }
-                });
+                }, {}, null, childTenantOptions);
                 const employeeIncentiveHistory = incentives.map(inc => ({
                     type: "incentive",
                     id: inc.id,
@@ -2805,7 +2815,7 @@ exports.getSalaryOverview = async (req, res) => {
                     status: { [Op.ne]: 2 }
                 }, {
                     attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'payment_type']
-                });
+                }, null, childTenantOptions);
 
                 // Use advances_adjusted from payslip payment_history
                 const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
@@ -2885,7 +2895,7 @@ exports.getSalaryOverview = async (req, res) => {
             } else if (shouldLoadDetails) {
                 // Perform dynamic calculation
                 try {
-                    const summary = await performSalaryCalculation(employee_id, m.month, m.year, null, { skipStatutory: false });
+                    const summary = await performSalaryCalculation(employee_id, m.month, m.year, null, { skipStatutory: false, isOwnRequest });
                     const payableDays = parseFloat(summary.attendance.payableDays);
                     // const totalEarn = earnList.reduce((sum, e) => sum + (e.is_employer ? 0 : parseFloat(e.amount)), 0);
                     // const totalDed = dedList.reduce((sum, d) => sum + parseFloat(d.amount), 0);
@@ -2949,8 +2959,8 @@ exports.getSalaryOverview = async (req, res) => {
 
             // Fill Incentives/Advances if details were loaded or payslip was found
             if (overview[i].is_loaded) {
-                const incentives = await commonQuery.findAllRecords(EmployeeIncentive, { employee_id, month: m.month, year: m.year, status: { [Op.ne]: 2 } });
-                const advances = await commonQuery.findAllRecords(EmployeeAdvance, { employee_id, month: m.month, year: m.year, status: { [Op.ne]: 2 } });
+                const incentives = await commonQuery.findAllRecords(EmployeeIncentive, { employee_id, month: m.month, year: m.year, status: { [Op.ne]: 2 } }, {}, null, childTenantOptions);
+                const advances = await commonQuery.findAllRecords(EmployeeAdvance, { employee_id, month: m.month, year: m.year, status: { [Op.ne]: 2 } }, {}, null, childTenantOptions);
                 overview[i].adjustments = incentives.reduce((sum, inc) => sum + parseFloat(inc.amount || 0), 0).toFixed(2);
                 overview[i].payments = advances.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0).toFixed(2);
             }
@@ -3164,7 +3174,7 @@ exports.generatePayslipPdf = async (req, res) => {
         if (!data) {
             return res.error("NOT_FOUND", { message: "Payslip not found" });
         }
-console.log("data",data)
+        console.log("data", data)
         const templatePath = path.join(process.cwd(), 'views', 'payslip', 'slip.ejs');
         const filename = `payslip_${id}_${Date.now()}.pdf`;
         const outputDir = path.join(process.cwd(), 'uploads', 'payslips');

@@ -33,13 +33,13 @@ exports.create = async (req, res) => {
         for (let i = 0; i < items.length; i++) {
             let item = items[i];
             if (typeof item === 'string') {
-                try { item = JSON.parse(item); items[i] = item; } catch(e) {}
+                try { item = JSON.parse(item); items[i] = item; } catch (e) { }
             }
 
             if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
             if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
             if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
-            
+
             if (Object.keys(itemErrors).length === 0) {
                 totalAmount += parseFloat(item.amount);
             }
@@ -71,11 +71,11 @@ exports.create = async (req, res) => {
         // Map files and insert items
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            
+
             const fileKey = `items[${i}][bills_docs]`;
             const fallbackFileKey = `items[${i}].bills_docs`;
             let uploadedFile = savedFiles[fileKey] || savedFiles[fallbackFileKey] || savedFiles[`bills_docs_${i}`] || savedFiles[`bills_docs[${i}]`];
-            
+
             if (!uploadedFile) {
                 await transaction.rollback();
                 return res.error(constants.VALIDATION_ERROR, { [`items[${i}].receipt`]: "Receipt is required for this expense item" });
@@ -122,10 +122,10 @@ exports.getAll = async (req, res) => {
                         as: "employee",
                         attributes: ["first_name", "employee_code"],
                     },
-                    { 
-                        model: ExpenseType, 
-                        as: "expenseType", 
-                        attributes: ["name"] 
+                    {
+                        model: ExpenseType,
+                        as: "expenseType",
+                        attributes: ["name"]
                     },
                     {
                         model: ReimbursementItem,
@@ -187,10 +187,10 @@ exports.getById = async (req, res) => {
             include: [
                 { model: Employee, as: "employee", attributes: ["first_name", "employee_code"] },
                 { model: ExpenseType, as: "expenseType", attributes: ["name"] },
-                { 
-                    model: ReimbursementItem, 
-                    as: "items", 
-                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }] 
+                {
+                    model: ReimbursementItem,
+                    as: "items",
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
                 }
             ]
         });
@@ -265,12 +265,12 @@ exports.update = async (req, res) => {
         for (let i = 0; i < items.length; i++) {
             let item = items[i];
             if (typeof item === 'string') {
-                try { item = JSON.parse(item); items[i] = item; } catch(e) {}
+                try { item = JSON.parse(item); items[i] = item; } catch (e) { }
             }
             if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
             if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
             if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
-            
+
             if (item.id) incomingIds.add(Number(item.id));
         }
 
@@ -311,14 +311,14 @@ exports.update = async (req, res) => {
             if (item.id) {
                 const itemId = Number(item.id);
                 const existing = existingItemsMap.get(itemId);
-                
+
                 if (!existing) {
                     await transaction.rollback();
                     return res.error("INVALID_OPERATION", { message: `Item ID ${itemId} does not exist in this reimbursement` });
                 }
 
                 const finalReceipt = uploadedFile || existing.bills_docs;
-                
+
                 await commonQuery.updateRecordById(ReimbursementItem, itemId, {
                     expense_type: item.expense_type,
                     amount: parseFloat(item.amount),
@@ -467,8 +467,8 @@ exports.updateStatus = async (req, res) => {
                 remark: approval_remark
             });
 
-            const targetStatus = (approval_status === "REJECTED" || Number(approval_status) === constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED) 
-                ? constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED 
+            const targetStatus = (approval_status === "REJECTED" || Number(approval_status) === constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED)
+                ? constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED
                 : constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED;
 
             await commonQuery.updateRecordById(Reimbursement, reimbursement.id, {
@@ -564,10 +564,10 @@ exports.getPendingApprovals = async (req, res) => {
                     as: "employee",
                     attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                 },
-                { 
-                    model: ExpenseType, 
-                    as: "expenseType", 
-                    attributes: ["name"] 
+                {
+                    model: ExpenseType,
+                    as: "expenseType",
+                    attributes: ["name"]
                 },
                 {
                     model: ReimbursementItem,
@@ -598,7 +598,7 @@ exports.getPendingApprovals = async (req, res) => {
 
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
-                
+
                 // Add Status Summary
                 const statusLabels = {
                     [constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING]: "PENDING",
@@ -639,7 +639,7 @@ exports.getPendingApprovals = async (req, res) => {
 
         // Apply Search filter
         const search = req.body.search ? req.body.search.toLowerCase() : null;
-        const filteredPending = search 
+        const filteredPending = search
             ? pendingForUser.filter(item => {
                 const searchString = `${item.employee?.first_name} ${item.employee?.employee_code} ${item.expenseType?.name} ${item.description} ${item.tracking_summary}`.toLowerCase();
                 return searchString.includes(search);
@@ -752,7 +752,7 @@ exports.getReimbursementSummary = async (req, res) => {
             let mappedItems = [];
             if (reimbursement.items && Array.isArray(reimbursement.items)) {
                 mappedItems = reimbursement.items.map(child => {
-                    const childRaw = child.get ? child.get({plain: true}) : child;
+                    const childRaw = child.get ? child.get({ plain: true }) : child;
                     if (childRaw.bills_docs) {
                         const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, childRaw.bills_docs);
                         childRaw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${childRaw.bills_docs}` : null;
@@ -763,10 +763,17 @@ exports.getReimbursementSummary = async (req, res) => {
                 });
             }
 
+            const expenseDate = mappedItems.length ? mappedItems[0].expense_date : null;
+
             group.reimbursements.push({
                 id: reimbursement.id,
+
+                // Date when reimbursement request was submitted
                 applied_date: reimbursement.createdAt,
-                date: formatDateTime(reimbursement.date, "D MMM, ddd"),
+
+                // Actual expense date
+                expense_date: expenseDate,
+
                 amount_display: `${parseFloat(reimbursement.total_amount).toFixed(2)}`,
                 expense_type: reimbursement.expenseType?.name || "",
                 description: reimbursement.description || "",
