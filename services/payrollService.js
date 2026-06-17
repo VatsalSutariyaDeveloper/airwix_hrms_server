@@ -191,14 +191,14 @@ const calculateEmployeeOffDays = async (employee_id, month, year, transaction = 
         employee_id,
         is_off: true,
         status: 0
-    }, {}, transaction);
+    }, {}, transaction, { company_id: true, applyHierarchy: false });
 
     // Fetch employee holidays for the month
     const allHolidays = await commonQuery.findAllRecords(EmployeeHoliday, {
         employee_id,
         date: { [Op.between]: [startDate, endDate] },
         status: 0
-    }, {}, transaction);
+    }, {}, transaction, { company_id: true, applyHierarchy: false });
 
     // Calculate weekly offs
     let totalWeeklyOffs = 0;
