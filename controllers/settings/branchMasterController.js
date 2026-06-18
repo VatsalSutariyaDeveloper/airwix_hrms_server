@@ -1,4 +1,4 @@
-const { BranchMaster, CountryMaster, StateMaster, ZoneMaster, sequelize } = require("../../models");
+const { BranchMaster, CountryMaster, StateMaster, ZoneMaster, CompanyMaster, sequelize } = require("../../models");
 const { validateRequest, commonQuery, handleError, constants } = require("../../helpers");
 const { ENTITIES } = require("../../helpers/constants");
 
@@ -94,9 +94,10 @@ exports.getById = async (req, res) => {
         ],
         attributes: [
           "id", "branch_name", "city", "pincode", "status",
-          "country_id", "country.country_name", 
-          "state_id", "state.state_name", 
-          // "zone_id", "zone.zone_name", 
+          "latitude", "longitude", "radius_meters",
+          "country_id", "country.country_name",
+          "state_id", "state.state_name",
+          // "zone_id", "zone.zone_name",
         ]
       },
       null,
@@ -202,6 +203,13 @@ exports.delete = async (req, res) => {
       await transaction.rollback();
       return res.error("INVALID_idS_ARRAY");
     }
+
+    // Prevent deleting the main branch
+    const company = await commonQuery.findOneRecord(CompanyMaster, req.user.company_id, { attributes: ['id', 'branch_id'] }, transaction, false, {});
+    if (company && ids.map(Number).includes(Number(company.branch_id))) {
+      await transaction.rollback();
+      return res.error("VALIDATION_ERROR", { ids: "Main branch cannot be deleted." });
+    }
     
     const deleted = await commonQuery.softDeleteById(BranchMaster, ids, transaction, { company_id: true });
     if (!deleted) {
@@ -238,6 +246,15 @@ exports.updateStatus = async (req, res) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       await transaction.rollback();
       return res.error("INVALID_idS_ARRAY");
+    }
+
+    // Prevent deactivating the main branch (anything other than Active/0)
+    if (status !== 0) {
+      const company = await commonQuery.findOneRecord(CompanyMaster, req.user.company_id, { attributes: ['id', 'branch_id'] }, transaction, false, {});
+      if (company && ids.map(Number).includes(Number(company.branch_id))) {
+        await transaction.rollback();
+        return res.error("VALIDATION_ERROR", { ids: "Main branch cannot be deactivated." });
+      }
     }
 
     // Update only the status field by id

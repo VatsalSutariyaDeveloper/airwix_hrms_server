@@ -4,7 +4,13 @@ module.exports = (sequelize, DataTypes) => {
     template_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'attendance_templates', key: 'id' } },
     
     // Copied from AttendanceTemplate
-    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'MANUAL' },
+    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'MANUAL' },
+
+    // Location area restriction (copied from AttendanceTemplate)
+    location_latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },
+    location_longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },
+    location_radius_meters: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 100 },
+
     holiday_policy: { type: DataTypes.ENUM('BLOCK_ATTENDANCE', 'COMP_OFF', 'ALLOW_NORMAL'), defaultValue: 'BLOCK_ATTENDANCE' },
     track_in_out: { type: DataTypes.BOOLEAN, defaultValue: true },
     require_punch_out: { type: DataTypes.BOOLEAN, defaultValue: false },

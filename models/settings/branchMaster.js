@@ -6,6 +6,12 @@ module.exports = (sequelize, DataTypes) => {
     city: { type: DataTypes.STRING(100), allowNull: true },
     pincode: { type: DataTypes.STRING(20), allowNull: true },
     zone_id: { type: DataTypes.INTEGER, allowNull: true },
+
+    // --- GEOFENCE (for LOCATION_BASED / SELFIE_AND_LOCATION attendance) ---
+    latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true, comment: "Branch centre latitude for location-restricted punches" },
+    longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true, comment: "Branch centre longitude for location-restricted punches" },
+    radius_meters: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 100, comment: "Allowed punch radius (in metres) around the branch coordinates" },
+
     status: {
       type: DataTypes.SMALLINT,
       defaultValue: 0,
