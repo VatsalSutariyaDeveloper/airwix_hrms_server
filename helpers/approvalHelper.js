@@ -1,4 +1,4 @@
-const { User, Employee, RolePermission, DesignationMaster, LeaveTemplate, ResignationTemplate, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../models");
+const { User, Employee, RolePermission, DesignationMaster, LeaveTemplate, ResignationTemplate, EmployeeAttendanceTemplate, AttendanceTemplate, CompanySettings } = require("../models");
 const { Op } = require("sequelize");
 const commonQuery = require("./commonQuery");
 const { constants } = require("./constants");
@@ -28,9 +28,9 @@ async function getApproverInfo(userId, companyId) {
             name = user.user_name || user.email;
         }
 
-        const role = user.Employee?.designation?.designation_name || 
-                     user.RolePermission?.role_name || 
-                     (user.is_super_admin ? "Super Admin" : "System User");
+        const role = user.Employee?.designation?.designation_name ||
+            user.RolePermission?.role_name ||
+            (user.is_super_admin ? "Super Admin" : "System User");
 
         return { name, role };
     } catch (err) {
@@ -70,9 +70,9 @@ async function getAdmins(companyId) {
                 name = user.user_name || user.email;
             }
 
-            const role = user.Employee?.designation?.designation_name || 
-                         user.RolePermission?.role_name || 
-                         (user.is_super_admin ? "Super Admin" : "System User");
+            const role = user.Employee?.designation?.designation_name ||
+                user.RolePermission?.role_name ||
+                (user.is_super_admin ? "Super Admin" : "System User");
 
             return { name, role };
         });
@@ -88,199 +88,314 @@ async function getAdmins(companyId) {
  * @param {String} type - "LEAVE" | "OUT_DUTY" | "REGULARIZATION" | "REIMBURSEMENT" | "RESIGNATION"
  * @returns {Promise<Object>} - { pending_approvers: Array, pending_with_text: String }
  */
+// async function resolvePendingApprovers(request, type) {
+//     let approvers = [];
+//     let label = "Pending Approver";
+
+//     try {
+//         // First, fetch the Employee object if not already fully included or if it is incomplete
+//         let employee = request.employee;
+//         const employeeId = request.employee_id || (employee && employee.id);
+
+//         const isEmployeeIncomplete = !employee ||
+//             employee.reporting_manager === undefined ||
+//             employee.attendance_supervisor === undefined ||
+//             employee.company_id === undefined ||
+//             (type === "LEAVE" && employee.leaveTemplate === undefined) ||
+//             (type === "REGULARIZATION" && employee.leaveTemplate === undefined) ||
+//             (type === "OUT_DUTY" && employee.employeeAttendanceTemplate === undefined && employee.attendanceTemplate === undefined) ||
+//             (type === "RESIGNATION" && employee.resignationTemplate === undefined);
+
+//         if (isEmployeeIncomplete && employeeId) {
+//             employee = await commonQuery.findOneRecord(Employee, { id: employeeId }, {
+//                 include: [
+//                     { model: LeaveTemplate, as: "leaveTemplate" },
+//                     { model: ResignationTemplate, as: "resignationTemplate" },
+//                     { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
+//                     { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+//                 ]
+//             });
+//         }
+
+//         if (!employee) {
+//             console.log("resolvePendingApprovers DBG: No employee found");
+//             return { pending_with: [] };
+//         }
+
+//         const companyId = request.company_id || employee.company_id;
+//         console.log("resolvePendingApprovers DBG: companyId =", companyId, "type =", type);
+
+//         if (type === "LEAVE" || type === "REGULARIZATION") {
+//             const template = employee.leaveTemplate;
+//             const currentLevel = request.current_level || 1;
+//             const config = template ? (template.approval_config || []) : [];
+//             const stage = config.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
+
+//             console.log("resolvePendingApprovers DBG: currentLevel =", currentLevel, "stage =", JSON.stringify(stage));
+
+//             label = stage.label || `Level ${currentLevel}`;
+
+//             if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
+//                 console.log("resolvePendingApprovers DBG: REPORTING_MANAGER branch");
+//                 const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                 if (info) approvers.push({ ...info, type: "Reporting Manager" });
+//             } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
+//                 console.log("resolvePendingApprovers DBG: ATTENDANCE_SUPERVISOR branch");
+//                 const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                 if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
+//             } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
+//                 console.log("resolvePendingApprovers DBG: ADMIN/EMPLOYER branch");
+//                 const admins = await getAdmins(companyId);
+//                 console.log("resolvePendingApprovers DBG: admins fetched =", admins.length);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
+//             } else if (stage.type === "ANYONE") {
+//                 console.log("resolvePendingApprovers DBG: ANYONE branch");
+//                 const addedUserIds = new Set();
+//                 if (employee.reporting_manager) {
+//                     const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Reporting Manager" });
+//                         addedUserIds.add(employee.reporting_manager);
+//                     }
+//                 }
+//                 if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
+//                     const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Attendance Supervisor" });
+//                         addedUserIds.add(employee.attendance_supervisor);
+//                     }
+//                 }
+//                 const admins = await getAdmins(companyId);
+//                 console.log("resolvePendingApprovers DBG: admins fetched in ANYONE =", admins.length);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+//             }
+//         }
+//         else if (type === "OUT_DUTY") {
+//             const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+//             const currentLevel = request.current_out_duty_level || 1;
+//             let levelConfigs = template ? (template.out_duty_approval_config || []) : [];
+//             if (typeof levelConfigs === "string") {
+//                 try { levelConfigs = JSON.parse(levelConfigs); } catch (e) { levelConfigs = []; }
+//             }
+//             if (!Array.isArray(levelConfigs)) levelConfigs = [];
+//             const stage = levelConfigs.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
+
+//             label = stage.label || `Level ${currentLevel}`;
+
+//             if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
+//                 const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                 if (info) approvers.push({ ...info, type: "Reporting Manager" });
+//             } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
+//                 const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                 if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
+//             } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
+//                 const admins = await getAdmins(companyId);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
+//             } else if (stage.type === "ANYONE") {
+//                 const addedUserIds = new Set();
+//                 if (employee.reporting_manager) {
+//                     const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Reporting Manager" });
+//                         addedUserIds.add(employee.reporting_manager);
+//                     }
+//                 }
+//                 if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
+//                     const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Attendance Supervisor" });
+//                         addedUserIds.add(employee.attendance_supervisor);
+//                     }
+//                 }
+//                 const admins = await getAdmins(companyId);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+//             }
+//         }
+//         else if (type === "REIMBURSEMENT") {
+//             label = `Level ${request.current_level || 1}`;
+//             const addedUserIds = new Set();
+//             if (employee.reporting_manager) {
+//                 const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                 if (info) {
+//                     approvers.push({ ...info, type: "Reporting Manager" });
+//                     addedUserIds.add(employee.reporting_manager);
+//                 }
+//             }
+//             if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
+//                 const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                 if (info) {
+//                     approvers.push({ ...info, type: "Attendance Supervisor" });
+//                     addedUserIds.add(employee.attendance_supervisor);
+//                 }
+//             }
+//             const admins = await getAdmins(companyId);
+//             admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+//         }
+//         else if (type === "RESIGNATION") {
+//             const template = employee.resignationTemplate;
+//             const currentLevel = request.current_level || 1;
+//             const config = template ? (template.approval_config || []) : [];
+//             const stage = config.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
+
+//             label = stage.label || `Level ${currentLevel}`;
+
+//             if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
+//                 const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                 if (info) approvers.push({ ...info, type: "Reporting Manager" });
+//             } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
+//                 const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                 if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
+//             } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
+//                 const admins = await getAdmins(companyId);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
+//             } else if (stage.type === "ANYONE") {
+//                 const addedUserIds = new Set();
+//                 if (employee.reporting_manager) {
+//                     const info = await getApproverInfo(employee.reporting_manager, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Reporting Manager" });
+//                         addedUserIds.add(employee.reporting_manager);
+//                     }
+//                 }
+//                 if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
+//                     const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+//                     if (info) {
+//                         approvers.push({ ...info, type: "Attendance Supervisor" });
+//                         addedUserIds.add(employee.attendance_supervisor);
+//                     }
+//                 }
+//                 const admins = await getAdmins(companyId);
+//                 admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+//             }
+//         }
+//     } catch (err) {
+//         console.error(`Error resolving pending approvers for request type ${type}:`, err);
+//     }
+
+//     const currentLevel = type === "OUT_DUTY" ? (request.current_out_duty_level || 1) : (request.current_level || 1);
+//     const pending_with = approvers.map(a => ({
+//         level: currentLevel,
+//         name: a.name,
+//         role: a.type
+//     }));
+
+//     return {
+//         pending_with
+//     };
+// }
+/**
+ * Resolves details about who a request is pending with.
+ * @param {Object} request - The request object
+ * @param {String} type - "LEAVE" | "OUT_DUTY" | "REIMBURSEMENT" | "LEAVE_ENCASHMENT"
+ * @returns {Promise<Object>} - { pending_with: Array }
+ */
 async function resolvePendingApprovers(request, type) {
     let approvers = [];
     let label = "Pending Approver";
 
     try {
-        // First, fetch the Employee object if not already fully included or if it is incomplete
         let employee = request.employee;
         const employeeId = request.employee_id || (employee && employee.id);
 
-        const isEmployeeIncomplete = !employee || 
-            employee.reporting_manager === undefined || 
-            employee.attendance_supervisor === undefined ||
-            employee.company_id === undefined ||
-            (type === "LEAVE" && employee.leaveTemplate === undefined) ||
-            (type === "REGULARIZATION" && employee.leaveTemplate === undefined) ||
-            (type === "OUT_DUTY" && employee.employeeAttendanceTemplate === undefined && employee.attendanceTemplate === undefined) ||
-            (type === "RESIGNATION" && employee.resignationTemplate === undefined);
-
-        if (isEmployeeIncomplete && employeeId) {
+        // 1. Fetch complete employee details if missing (Optimized to only include needed templates)
+        if (!employee && employeeId) {
             employee = await commonQuery.findOneRecord(Employee, { id: employeeId }, {
                 include: [
                     { model: LeaveTemplate, as: "leaveTemplate" },
-                    { model: ResignationTemplate, as: "resignationTemplate" },
                     { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
                     { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
                 ]
             });
         }
 
-        if (!employee) {
-            console.log("resolvePendingApprovers DBG: No employee found");
-            return { pending_with: [] };
-        }
+        if (!employee) return { pending_with: [] };
 
         const companyId = request.company_id || employee.company_id;
-        console.log("resolvePendingApprovers DBG: companyId =", companyId, "type =", type);
 
-        if (type === "LEAVE" || type === "REGULARIZATION") {
-            const template = employee.leaveTemplate;
-            const currentLevel = request.current_level || 1;
-            const config = template ? (template.approval_config || []) : [];
-            const stage = config.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
+        // 2. ROUTING LOGIC: Find the exact configuration based on request type
+        let rawConfig = [];
+        let currentLevel = request.current_level || 1;
 
-            console.log("resolvePendingApprovers DBG: currentLevel =", currentLevel, "stage =", JSON.stringify(stage));
+        if (type === "OUT_DUTY") {
+            currentLevel = request.current_out_duty_level || request.current_level || 1;
+        }
 
-            label = stage.label || `Level ${currentLevel}`;
+        switch (type) {
+            case "LEAVE":
+                const leaveTemplate = employee.leaveTemplate;
+                rawConfig = leaveTemplate ? (leaveTemplate.approval_config || []) : [];
+                break;
 
-            if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
-                console.log("resolvePendingApprovers DBG: REPORTING_MANAGER branch");
-                const info = await getApproverInfo(employee.reporting_manager, companyId);
-                if (info) approvers.push({ ...info, type: "Reporting Manager" });
-            } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
-                console.log("resolvePendingApprovers DBG: ATTENDANCE_SUPERVISOR branch");
-                const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
-            } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
-                console.log("resolvePendingApprovers DBG: ADMIN/EMPLOYER branch");
-                const admins = await getAdmins(companyId);
-                console.log("resolvePendingApprovers DBG: admins fetched =", admins.length);
-                admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
-            } else if (stage.type === "ANYONE") {
-                console.log("resolvePendingApprovers DBG: ANYONE branch");
-                const addedUserIds = new Set();
-                if (employee.reporting_manager) {
-                    const info = await getApproverInfo(employee.reporting_manager, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Reporting Manager" });
-                        addedUserIds.add(employee.reporting_manager);
-                    }
-                }
-                if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
-                    const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Attendance Supervisor" });
-                        addedUserIds.add(employee.attendance_supervisor);
-                    }
-                }
-                const admins = await getAdmins(companyId);
-                console.log("resolvePendingApprovers DBG: admins fetched in ANYONE =", admins.length);
-                admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+            case "OUT_DUTY":
+                // Priority: Employee Attendance Template -> General Attendance Template
+                const odTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+                rawConfig = odTemplate ? (odTemplate.out_duty_approval_config || []) : [];
+                break;
+
+            case "REIMBURSEMENT": {
+                // Fetches company settings ONLY when needed
+                const companySettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId });
+                rawConfig = companySettings ? (companySettings.reimbursement_approval_config || []) : [];
+                break;
             }
-        } 
-        else if (type === "OUT_DUTY") {
-            const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
-            const currentLevel = request.current_out_duty_level || 1;
-            let levelConfigs = template ? (template.out_duty_approval_config || []) : [];
-            if (typeof levelConfigs === "string") {
-                try { levelConfigs = JSON.parse(levelConfigs); } catch (e) { levelConfigs = []; }
-            }
-            if (!Array.isArray(levelConfigs)) levelConfigs = [];
-            const stage = levelConfigs.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
 
-            label = stage.label || `Level ${currentLevel}`;
-
-            if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
-                const info = await getApproverInfo(employee.reporting_manager, companyId);
-                if (info) approvers.push({ ...info, type: "Reporting Manager" });
-            } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
-                const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
-            } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
-                const admins = await getAdmins(companyId);
-                admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
-            } else if (stage.type === "ANYONE") {
-                const addedUserIds = new Set();
-                if (employee.reporting_manager) {
-                    const info = await getApproverInfo(employee.reporting_manager, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Reporting Manager" });
-                        addedUserIds.add(employee.reporting_manager);
-                    }
-                }
-                if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
-                    const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Attendance Supervisor" });
-                        addedUserIds.add(employee.attendance_supervisor);
-                    }
-                }
-                const admins = await getAdmins(companyId);
-                admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+            case "LEAVE_ENCASHMENT": {
+                // Fetches leave encashment approval config from company settings
+                const encashmentSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "leave_encashment_approval_config" });
+                rawConfig = encashmentSettings ? (encashmentSettings.settings_value || []) : [];
+                break;
             }
-        } 
-        else if (type === "REIMBURSEMENT") {
-            label = `Level ${request.current_level || 1}`;
+        }
+
+        // 3. Safety Check: Parse JSON if the database returns a string
+        let config = rawConfig;
+        if (typeof config === "string") {
+            try { config = JSON.parse(config); } catch (e) { config = []; }
+        }
+        if (!Array.isArray(config)) config = [];
+
+        // 4. Identify the Required Approver Role for the Current Level
+        // Defaults to "REPORTING_MANAGER" to prevent the duplicate "ANYONE" bug
+        const stage = config.find(c => c.level === currentLevel) || { type: "REPORTING_MANAGER", label: `Level ${currentLevel}` };
+        label = stage.label || `Level ${currentLevel}`;
+
+        // 5. Build the pending_with Array based on the identified stage type
+        if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
+            const info = await getApproverInfo(employee.reporting_manager, companyId);
+            if (info) approvers.push({ ...info, type: "Reporting Manager" });
+
+        } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
+            const info = await getApproverInfo(employee.attendance_supervisor, companyId);
+            if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
+
+        } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
+            const admins = await getAdmins(companyId);
+            admins.forEach(admin => approvers.push({ ...admin, type: stage.type === "EMPLOYER" ? "Employer" : "Admin" }));
+
+        } else if (stage.type === "ANYONE") {
             const addedUserIds = new Set();
             if (employee.reporting_manager) {
                 const info = await getApproverInfo(employee.reporting_manager, companyId);
-                if (info) {
-                    approvers.push({ ...info, type: "Reporting Manager" });
-                    addedUserIds.add(employee.reporting_manager);
-                }
+                if (info) { approvers.push({ ...info, type: "Reporting Manager" }); addedUserIds.add(employee.reporting_manager); }
             }
             if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
                 const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                if (info) {
-                    approvers.push({ ...info, type: "Attendance Supervisor" });
-                    addedUserIds.add(employee.attendance_supervisor);
-                }
+                if (info) { approvers.push({ ...info, type: "Attendance Supervisor" }); addedUserIds.add(employee.attendance_supervisor); }
             }
             const admins = await getAdmins(companyId);
             admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
-        } 
-        else if (type === "RESIGNATION") {
-            const template = employee.resignationTemplate;
-            const currentLevel = request.current_level || 1;
-            const config = template ? (template.approval_config || []) : [];
-            const stage = config.find(c => c.level === currentLevel) || { type: "ANYONE", label: `Level ${currentLevel}` };
-
-            label = stage.label || `Level ${currentLevel}`;
-
-            if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
-                const info = await getApproverInfo(employee.reporting_manager, companyId);
-                if (info) approvers.push({ ...info, type: "Reporting Manager" });
-            } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
-                const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
-            } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
-                const admins = await getAdmins(companyId);
-                admins.forEach(admin => approvers.push({ ...admin, type: stage.type }));
-            } else if (stage.type === "ANYONE") {
-                const addedUserIds = new Set();
-                if (employee.reporting_manager) {
-                    const info = await getApproverInfo(employee.reporting_manager, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Reporting Manager" });
-                        addedUserIds.add(employee.reporting_manager);
-                    }
-                }
-                if (employee.attendance_supervisor && !addedUserIds.has(employee.attendance_supervisor)) {
-                    const info = await getApproverInfo(employee.attendance_supervisor, companyId);
-                    if (info) {
-                        approvers.push({ ...info, type: "Attendance Supervisor" });
-                        addedUserIds.add(employee.attendance_supervisor);
-                    }
-                }
-                const admins = await getAdmins(companyId);
-                admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
-            }
         }
+
     } catch (err) {
         console.error(`Error resolving pending approvers for request type ${type}:`, err);
     }
 
-    const currentLevel = type === "OUT_DUTY" ? (request.current_out_duty_level || 1) : (request.current_level || 1);
-    const pending_with = approvers.map(a => ({
-        level: currentLevel,
-        name: a.name,
-        role: a.type
-    }));
-
     return {
-        pending_with
+        pending_with: approvers.map(a => ({
+            level: (type === "OUT_DUTY" ? (request.current_out_duty_level || request.current_level || 1) : (request.current_level || 1)),
+            name: a.name,
+            role: a.type
+        }))
     };
 }
 

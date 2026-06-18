@@ -1170,7 +1170,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         period: { month, year, daysInMonth, daysInCalculation, monthName: formatDateTime(new Date(year, month - 1, 1), "MMMM") },
         attendance: { presentDays, halfDays, totalPresentDays, absentDays, leaveDays, unpaidLeaveDays, compoffLeaveDays, weeklyOffs, holidays, totalWeeklyOffs: offDays.totalWeeklyOffs, totalHolidays: offDays.totalHolidays, goneWeeklyOffs: offDays.goneWeeklyOffs, goneHolidays: offDays.goneHolidays, totalLWP, lunchCount, lunchHistory, payableDays: parseFloat(payableDaysValue).toFixed(1), actualDaysValue, leave_category_details: leaveCategoryDetails },
         salary: {
-            ctc_monthly: monthlyGross,
+            ctc_monthly: currentMonthlyGross,
             perDaySalary: perDaySalary.toFixed(2),
             lwpDeduction: lwpDeductionTotal.toFixed(2),
             totalFine: totalFine,
@@ -1730,29 +1730,14 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
         transaction
     });
 
-    //Send Notification to Employee
-    try {
-        const targetUser = await commonQuery.findOneRecord(User, { employee_id: employee_id }, {}, transaction);
-        if (targetUser) {
-            const monthName = dayjs().month(month - 1).format('MMMM');
-            await createNotification({
-                user_id: targetUser.id,
-                title: "Payslip Generated",
-                message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
-                type: "PAYROLL",
-                reference_id: finalizedPayslip.id,
-                status_code: 0,
-                company_id: summary.meta?.company_id || req.user?.company_id,
-                branch_id: summary.meta?.branch_id
-            }, transaction);
-        }
-    } catch (notifyErr) {
-        console.error("Payslip Notification Error:", notifyErr.message);
-    }
-
     return {
         id: finalizedPayslip.id,
-        netPayable: summary.salary.netPayable
+        netPayable: summary.salary.netPayable,
+        employee_id,
+        month,
+        year,
+        company_id: summary.meta?.company_id,
+        branch_id: summary.meta?.branch_id
     };
 };
 
@@ -1768,6 +1753,27 @@ exports.finalizeMonthlySalary = async (req, res) => {
         const summaryData = await internalFinalizePayroll(employee_id, month, year, generate_additional, transaction, req, advance_ids_to_adjust, net_take_home_pay, encashment_ids_to_adjust, round_off_amount, initialize_bonus, bonus_override_amount);
 
         await transaction.commit();
+
+        // Send notification AFTER commit — guaranteed to fire only on success
+        try {
+            const targetUser = await commonQuery.findOneRecord(User, { employee_id }, {});
+            if (targetUser) {
+                const monthName = dayjs().month(month - 1).format('MMMM');
+                await createNotification({
+                    user_id: targetUser.id,
+                    title: "Payslip Generated",
+                    message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
+                    type: "PAYROLL",
+                    reference_id: summaryData.id,
+                    status_code: 0,
+                    company_id: summaryData.company_id || req.user?.company_id,
+                    branch_id: summaryData.branch_id
+                });
+            }
+        } catch (notifyErr) {
+            console.error("Payslip Notification Error:", notifyErr.message);
+        }
+
         return res.success("PAYROLL_FINALIZED", {
             message: "Payroll finalized and attendance locked successfully",
             id: summaryData.id,
@@ -2367,6 +2373,19 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
             year: selectedYear
         }, {}, null, { applyHierarchy: false });
 
+        // 2b. Fetch salary template for CTC fallback — same logic as getEmployeesByMonthYear condition 6
+        //     Try EmployeeSalaryTemplate first, fall back to company SalaryTemplate via Employee association
+        const empForTemplate = await commonQuery.findOneRecord(Employee, targetEmployeeId, {
+            attributes: ['id'],
+            include: [
+                { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['ctc_monthly'] },
+                { model: SalaryTemplate, as: 'salaryTemplate', attributes: ['ctc_monthly'] }
+            ]
+        }, null, false, { applyHierarchy: false });
+        const templateCtc = empForTemplate?.employeeSalaryTemplate?.ctc_monthly
+            || empForTemplate?.salaryTemplate?.ctc_monthly
+            || 0;
+
         // 3. Combine unique months
         const monthSet = new Set();
         attendanceMonths.forEach(am => monthSet.add(am.month));
@@ -2389,10 +2408,11 @@ exports.getAvailableMonthsForCalculation = async (req, res) => {
                 net_payable = existing.net_salary || existing.net_payable || 0;
                 payslip_id = existing.id;
             } else {
+                // CASE: No Payslip — use template CTC (same as getEmployeesByMonthYear condition 6)
+                ctc = templateCtc;
                 try {
                     const summary = await performSalaryCalculation(targetEmployeeId, month, selectedYear);
                     if (summary && summary.salary) {
-                        ctc = summary.salary.ctc_monthly;
                         net_payable = summary.salary.netPayable;
                     }
                 } catch (e) {
@@ -3188,28 +3208,6 @@ exports.generatePayslipPdf = async (req, res) => {
 
         const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
 
-        //Send Notification to Employee
-        try {
-            if (data.meta) {
-                const targetUser = await commonQuery.findOneRecord(User, { employee_id: data.meta.employee_id }, {});
-                if (targetUser) {
-                    const monthName = dayjs().month(data.meta.month - 1).format('MMMM');
-                    await createNotification({
-                        user_id: targetUser.id,
-                        title: "Payslip Generated",
-                        message: `Your payslip for ${monthName} ${data.meta.year} has been generated. You can now view and download it.`,
-                        type: "PAYROLL",
-                        reference_id: data.meta.payslip_id,
-                        status_code: 0,
-                        company_id: req.user?.company_id || data.meta.company_id,
-                        branch_id: data.meta.branch_id
-                    });
-                }
-            }
-        } catch (notifyErr) {
-            console.error("Payslip Notification Error in PDF Gen:", notifyErr.message);
-        }
-
         return res.ok({
             download_link: downloadLink,
             filename: filename
@@ -3254,29 +3252,6 @@ exports.generateBulkPayslipPdf = async (req, res) => {
         await pdfService.generatePdfFromTemplate(templatePath, { slips }, outputPath);
 
         const downloadLink = `${process.env.FILE_SERVER_URL}payslips/${filename}`;
-
-        //  Send Notification to Employees
-        try {
-            for (const data of slips) {
-                if (!data.meta) continue;
-                const targetUser = await commonQuery.findOneRecord(User, { employee_id: data.meta.employee_id }, {});
-                if (targetUser) {
-                    const monthName = dayjs().month(data.meta.month - 1).format('MMMM');
-                    await createNotification({
-                        user_id: targetUser.id,
-                        title: "Payslip Generated",
-                        message: `Your payslip for ${monthName} ${data.meta.year} has been generated. You can now view and download it.`,
-                        type: "PAYROLL",
-                        reference_id: data.meta.payslip_id,
-                        status_code: 0,
-                        company_id: req.user?.company_id || data.meta.company_id,
-                        branch_id: data.meta.branch_id
-                    });
-                }
-            }
-        } catch (notifyErr) {
-            console.error("Bulk Payslip Notification Error:", notifyErr.message);
-        }
 
         return res.ok({
             download_link: downloadLink,
@@ -3375,6 +3350,7 @@ exports.getEmployeesByMonthYear = async (req, res) => {
             let pending_amount = 0;
 
             if (existing) {
+                // CASE: Payslip exists - Use stored values
                 ctc = existing.fixed_gross || existing.ctc_monthly || 0;
                 net_payable = existing.net_salary || existing.net_payable || 0;
                 payslip_id = existing.id;
@@ -3382,10 +3358,14 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                 paid_amount = parseFloat(existing.paid_amount || 0);
                 pending_amount = parseFloat(existing.pending_amount || 0);
             } else {
+                // CASE: No Payslip - Fallback to templates and simulate
+                // Here we pull ctc_monthly from the loaded associations
+                const template = emp.employeeSalaryTemplate || emp.salaryTemplate;
+                ctc = template ? template.ctc_monthly : 0;
+
                 try {
                     const sim = await performSalaryCalculation(emp.id, month, year, null, { skipStatutory: false });
                     if (sim && sim.salary) {
-                        ctc = sim.salary.ctc_monthly;
                         net_payable = sim.salary.netPayable;
                         paid_amount = parseFloat(sim.payment_history?.grand_total || 0);
                         pending_amount = Math.max(0, parseFloat(net_payable) - paid_amount);
@@ -3399,10 +3379,10 @@ exports.getEmployeesByMonthYear = async (req, res) => {
                 id: emp.id,
                 name: emp.first_name,
                 employee_code: emp.employee_code,
-                ctc,
-                net_payable,
+                ctc: parseFloat(ctc).toFixed(2), // Now pulls from template if existing is null
+                net_payable: parseFloat(net_payable).toFixed(2),
                 amount: paid_amount,
-                pending_amount,
+                pending_amount: parseFloat(pending_amount.toFixed(2)),
                 payslip_id,
                 status
             });
@@ -3585,6 +3565,7 @@ exports.getMonthlyPayrollListing = async (req, res) => {
  */
 exports.bulkFinalizePayroll = async (req, res) => {
     const transaction = await sequelize.transaction();
+    const finalizedResults = []; // collect results for post-commit notifications
     try {
         const { employee_ids, month, year } = req.body;
         if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
@@ -3594,10 +3575,34 @@ exports.bulkFinalizePayroll = async (req, res) => {
         for (const emp_id of employee_ids) {
             // Direct call without internal try-catch.
             // Any failure will trigger the outer catch and ROLLBACK the entire transaction.
-            await internalFinalizePayroll(emp_id, month, year, false, transaction, req, []);
+            const result = await internalFinalizePayroll(emp_id, month, year, false, transaction, req, []);
+            finalizedResults.push({ emp_id, payslip_id: result.id });
         }
 
         await transaction.commit();
+
+        // Send notifications AFTER commit so they are guaranteed (not rolled back with transaction)
+        try {
+            const monthName = dayjs().month(month - 1).format('MMMM');
+            for (const { emp_id, payslip_id } of finalizedResults) {
+                const targetUser = await commonQuery.findOneRecord(User, { employee_id: emp_id }, {});
+                if (targetUser) {
+                    await createNotification({
+                        user_id: targetUser.id,
+                        title: "Payslip Generated",
+                        message: `Your payslip for ${monthName} ${year} has been generated. You can now view and download it.`,
+                        type: "PAYROLL",
+                        reference_id: payslip_id,
+                        status_code: 0,
+                        company_id: req.user?.company_id,
+                        branch_id: targetUser.branch_id
+                    });
+                }
+            }
+        } catch (notifyErr) {
+            console.error("Bulk Finalize Notification Error:", notifyErr.message);
+        }
+
         return res.success(`${employee_ids.length} payroll records finalized successfully`);
     } catch (err) {
         if (transaction && !transaction.finished) await transaction.rollback();

@@ -1522,7 +1522,8 @@ exports.getPendingApprovals = async (req, res) => {
                 }
 
                 // Resolve pending approver details
-                const pendingDetails = await resolvePendingApprovers(raw, "LEAVE");
+                const approvalType = raw.is_encashment ? "LEAVE_ENCASHMENT" : "LEAVE";
+                const pendingDetails = await resolvePendingApprovers(raw, approvalType);
                 raw.pending_with = pendingDetails.pending_with;
 
                 pendingForUser.push(raw);

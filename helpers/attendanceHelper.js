@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { sequelize, AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster } = require("../models");
+const { sequelize, AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster, BranchMaster } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -185,6 +185,67 @@ async function punch(employeeId, meta, transaction = null) {
     }
   }
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+
+  // --- ATTENDANCE MODE VALIDATION (LOCATION & SELFIE) ---
+  if (template) {
+    const mode = template.mode;
+    if (mode === 'LOCATION_BASED' || mode === 'SELFIE_AND_LOCATION') {
+      if (!meta.latitude || !meta.longitude) {
+        throw new Err("Location access is required to punch attendance. Please enable location and try again.");
+      }
+
+      // Resolve the allowed area: prefer the template's own area, else fall back
+      // to the employee's branch geofence.
+      let areaLat = null;
+      let areaLon = null;
+      let areaRadius = null;
+      let areaLabel = "work location";
+
+      if (template.location_latitude != null && template.location_longitude != null) {
+        areaLat = parseFloat(template.location_latitude);
+        areaLon = parseFloat(template.location_longitude);
+        areaRadius = parseInt(template.location_radius_meters) || 100;
+      } else {
+        const resolvedBranchId = meta.branch_id || employee.branch_id;
+        if (resolvedBranchId) {
+          const branch = await commonQuery.findOneRecord(BranchMaster, resolvedBranchId, {}, transaction, false, {});
+          if (branch && branch.latitude != null && branch.longitude != null) {
+            areaLat = parseFloat(branch.latitude);
+            areaLon = parseFloat(branch.longitude);
+            areaRadius = parseInt(branch.radius_meters) || 100;
+            areaLabel = "branch";
+          }
+        }
+      }
+
+      // Only enforce when an allowed area is actually configured.
+      if (areaLat != null && areaLon != null) {
+        const lat1 = parseFloat(meta.latitude);
+        const lon1 = parseFloat(meta.longitude);
+
+        const R = 6371e3; // metres
+        const phi1 = lat1 * Math.PI/180;
+        const phi2 = areaLat * Math.PI/180;
+        const deltaPhi = (areaLat-lat1) * Math.PI/180;
+        const deltaLambda = (areaLon-lon1) * Math.PI/180;
+
+        const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
+                  Math.cos(phi1) * Math.cos(phi2) *
+                  Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+
+        if (distance > areaRadius) {
+          throw new Err(`You are too far from your ${areaLabel} to punch. You are ~${distance.toFixed(0)}m away (allowed: ${areaRadius}m).`);
+        }
+      }
+    }
+    if (mode === 'SELFIE_BASED' || mode === 'SELFIE_AND_LOCATION') {
+      if (!meta.image_name) {
+        throw new Err("A selfie is required to punch attendance for this mode.");
+      }
+    }
+  }
 
   // --- CANTEEN ATTENDANCE LOGIC ---
   let isCanteenPunch = false;
@@ -385,75 +446,78 @@ async function punch(employeeId, meta, transaction = null) {
       }
     } else {
       // 🚀 Check if this is an evening punch-out without a morning punch-in
-      const currentDate = dayjs(now).format("YYYY-MM-DD");
-      const yesterdayDate = dayjs(now).subtract(1, "day").format("YYYY-MM-DD");
+      // Only check if lastPunchGlobal is null, or if lastPunchGlobal is OUT but occurred > 12 hours ago.
+      if (!lastPunchGlobal || (lastPunchGlobal.punch_type === "OUT" && hoursSinceLast > 12)) {
+        const currentDate = dayjs(now).format("YYYY-MM-DD");
+        const yesterdayDate = dayjs(now).subtract(1, "day").format("YYYY-MM-DD");
 
-      const getCandidateShift = async (dateStr) => {
-        const dow = dayjs(dateStr).day();
-        const empShiftRecord = await commonQuery.findOneRecord(EmployeeShift, {
-          employee_id: employeeId,
-          day_of_week: dow,
-          status: 0,
-        }, {}, transaction, false, {});
+        const getCandidateShift = async (dateStr) => {
+          const dow = dayjs(dateStr).day();
+          const empShiftRecord = await commonQuery.findOneRecord(EmployeeShift, {
+            employee_id: employeeId,
+            day_of_week: dow,
+            status: 0,
+          }, {}, transaction, false, {});
 
-        let shiftTemp = null;
-        if (empShiftRecord) {
-          shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, empShiftRecord.shift_id, {}, transaction, false, {});
-        } else if (employee.shift_template) {
-          shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, {});
+          let shiftTemp = null;
+          if (empShiftRecord) {
+            shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, empShiftRecord.shift_id, {}, transaction, false, {});
+          } else if (employee.shift_template) {
+            shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, {});
+          }
+          return shiftTemp;
+        };
+
+        const todayShift = await getCandidateShift(currentDate);
+        const yesterdayShift = await getCandidateShift(yesterdayDate);
+        console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
+        let yesterdayShiftEnd = null;
+        if (yesterdayShift) {
+          yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
+          if (yesterdayShift.is_night_shift || yesterdayShift.end_time < yesterdayShift.start_time) {
+            yesterdayShiftEnd = yesterdayShiftEnd.add(1, 'day');
+          }
         }
-        return shiftTemp;
-      };
 
-      const todayShift = await getCandidateShift(currentDate);
-      const yesterdayShift = await getCandidateShift(yesterdayDate);
-      console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
-      let yesterdayShiftEnd = null;
-      if (yesterdayShift) {
-        yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
-        if (yesterdayShift.is_night_shift || yesterdayShift.end_time < yesterdayShift.start_time) {
-          yesterdayShiftEnd = yesterdayShiftEnd.add(1, 'day');
+        let todayShiftEnd = null;
+        if (todayShift) {
+          todayShiftEnd = dayjs(`${currentDate} ${todayShift.end_time}`);
+          if (todayShift.is_night_shift || todayShift.end_time < todayShift.start_time) {
+            todayShiftEnd = todayShiftEnd.add(1, 'day');
+          }
         }
-      }
 
-      let todayShiftEnd = null;
-      if (todayShift) {
-        todayShiftEnd = dayjs(`${currentDate} ${todayShift.end_time}`);
-        if (todayShift.is_night_shift || todayShift.end_time < todayShift.start_time) {
-          todayShiftEnd = todayShiftEnd.add(1, 'day');
+        let foundShiftMatch = false;
+
+        // Check yesterday's shift first (for night shifts ending today)
+        if (yesterdayShiftEnd) {
+          const windowStart = yesterdayShiftEnd.subtract(180, 'minute');
+          const windowEnd = yesterdayShiftEnd.add(240, 'minute');
+          const currentPunchTime = dayjs(now);
+
+          if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+            punchType = "OUT";
+            targetDayDate = yesterdayDate;
+            isForgotPunchIn = true;
+            foundShiftMatch = true;
+            console.log(`[Punch] Direct Punch-Out Match (Yesterday Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
+          }
         }
-      }
 
-      let foundShiftMatch = false;
+        // Check today's shift if not matched yet
+        console.log(`[Punch] Checking today's shift end for potential punch-out match...`, { todayShiftEnd: todayShiftEnd ? todayShiftEnd.format('YYYY-MM-DD HH:mm') : 'N/A' });
+        if (!foundShiftMatch && todayShiftEnd) {
+          const windowStart = todayShiftEnd.subtract(180, 'minute');
+          const windowEnd = todayShiftEnd.add(240, 'minute');
+          const currentPunchTime = dayjs(now);
 
-      // Check yesterday's shift first (for night shifts ending today)
-      if (yesterdayShiftEnd) {
-        const windowStart = yesterdayShiftEnd.subtract(180, 'minute');
-        const windowEnd = yesterdayShiftEnd.add(240, 'minute');
-        const currentPunchTime = dayjs(now);
-
-        if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
-          punchType = "OUT";
-          targetDayDate = yesterdayDate;
-          isForgotPunchIn = true;
-          foundShiftMatch = true;
-          console.log(`[Punch] Direct Punch-Out Match (Yesterday Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
-        }
-      }
-
-      // Check today's shift if not matched yet
-      console.log(`[Punch] Checking today's shift end for potential punch-out match...`, { todayShiftEnd: todayShiftEnd ? todayShiftEnd.format('YYYY-MM-DD HH:mm') : 'N/A' });
-      if (!foundShiftMatch && todayShiftEnd) {
-        const windowStart = todayShiftEnd.subtract(180, 'minute');
-        const windowEnd = todayShiftEnd.add(240, 'minute');
-        const currentPunchTime = dayjs(now);
-
-        if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
-          punchType = "OUT";
-          targetDayDate = currentDate;
-          isForgotPunchIn = true;
-          foundShiftMatch = true;
-          console.log(`[Punch] Direct Punch-Out Match (Today Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
+          if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+            punchType = "OUT";
+            targetDayDate = currentDate;
+            isForgotPunchIn = true;
+            foundShiftMatch = true;
+            console.log(`[Punch] Direct Punch-Out Match (Today Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
+          }
         }
       }
 

@@ -326,59 +326,47 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily attendance irregularity alert task...');
     const { AttendanceDay, User, Notification } = require("../models");
 
-    // Yesterday's date relative to reference/asOf date
     const refDate = asOf ? dayjs(asOf) : dayjs();
     const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
 
-    console.log(`[Cron] Checking attendance irregularities for target date: ${targetDate}...`);
+    console.log(`[Cron] Checking attendance irregularities/absences for ${targetDate}...`);
 
-    // Fetch all irregularity records for targetDate
+    //Updated query: Status 5 is Absent
     const irregularities = await AttendanceDay.findAll({
         where: {
             attendance_date: targetDate,
             [Op.or]: [
-                { status: { [Op.in]: [0, 1, 9, 10, 12, 13] } },
-                {
-                    [Op.and]: [
-                        { first_in: null },
-                        { last_out: { [Op.ne]: null } }
-                    ]
-                },
-                {
-                    [Op.and]: [
-                        { first_in: { [Op.ne]: null } },
-                        { last_out: null }
-                    ]
-                }
+                { status: { [Op.in]: [0, 1, 5, 9, 10, 12, 13] } }, // 5 = Absent
+                { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
+                { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
             ],
-            status: { [Op.notIn]: [3, 4, 6] }
+            status: { [Op.notIn]: [3, 4, 6] } // 4 is Holiday, 3 is WO, 6 is Leave
         }
     });
-
-    console.log(`[Cron] Found ${irregularities.length} irregularities for ${targetDate}. Sending notifications...`);
 
     let sentCount = 0;
     for (const record of irregularities) {
         try {
-            // Find active User linked to this employee
-            const user = await User.findOne({
-                where: {
-                    employee_id: record.employee_id,
-                    status: 0
-                }
-            });
+            const user = await User.findOne({ where: { employee_id: record.employee_id, status: 0 } });
+            if (!user) continue;
 
-            if (!user) {
-                console.log(`[Cron] No active user found for employee_id: ${record.employee_id}`);
-                continue;
+            const dateStr = dayjs(targetDate).format("DD MMM YYYY");
+
+            //Logic: Differentiate Absent (5) vs Missing Punch
+            let title = "Missing Punch Alert";
+            let message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
+
+            if (record.status === 5) {
+                title = "Attendance Marked Absent";
+                message = `Your attendance for ${dateStr} has been marked as Absent. Please apply for regularization if this is incorrect.`;
             }
 
-            // Check if notification already exists
+            //Date-based Deduplication
             const existingNotification = await Notification.findOne({
                 where: {
                     user_id: user.id,
-                    reference_id: record.id,
-                    type: "ATTENDANCE_IRREGULARITY"
+                    type: "ATTENDANCE_IRREGULARITY",
+                    message: { [Op.like]: `%${dateStr}%` }
                 }
             });
 
@@ -387,8 +375,8 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
                     user_id: user.id,
                     company_id: record.company_id || user.company_id,
                     branch_id: record.branch_id || user.branch_id,
-                    title: "Missing Punch Alert",
-                    message: `You have a missing punch-in or punch-out on ${dayjs(targetDate).format("DD MMM YYYY")}. Please review and regularize.`,
+                    title: title,
+                    message: message,
                     type: "ATTENDANCE_IRREGULARITY",
                     reference_id: record.id,
                     status_code: 1,
@@ -397,11 +385,10 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
                 sentCount++;
             }
         } catch (err) {
-            console.error(`[Cron] Failed to send notification for irregularity ${record.id}:`, err.message);
+            console.error(`[Cron] Failed to notify ${record.employee_id}:`, err.message);
         }
     }
-
-    console.log(`✅ Sent ${sentCount} attendance irregularity notifications.`);
+    console.log(`✅ Sent ${sentCount} attendance/absence notifications.`);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

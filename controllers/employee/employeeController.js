@@ -3812,6 +3812,9 @@ exports.availableOutDuty = async (req, res) => {
 
         let todayOutDutyRequest = null;
         let outDuty = null;
+        let canPunch = false;
+        let attendanceMode = 'MANUAL';
+        let locationConfig = null;
 
         if (employee_id) {
             const today = dayjs().format("YYYY-MM-DD");
@@ -3831,9 +3834,54 @@ exports.availableOutDuty = async (req, res) => {
                     attributes: ["enble_out_duty"]
                 }
             );
+
+            const { EmployeeAttendanceTemplate: EmpAttTemplate, AttendanceTemplate: AttTemplate, Employee: Emp, BranchMaster: Branch } = require("../../models");
+            const employee = await commonQuery.findOneRecord(Emp, employee_id, {
+                include: [
+                    { model: EmpAttTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+                    { model: AttTemplate, as: "attendanceTemplate", required: false }
+                ]
+            });
+            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
+            if (template?.mode) {
+                attendanceMode = template.mode;
+            }
+            if (template && ['LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'].includes(template.mode)) {
+                canPunch = true;
+            }
+
+            // Resolve the allowed location area (template area first, then branch geofence)
+            // so the client can show the radius and a live distance status.
+            if (template && ['LOCATION_BASED', 'SELFIE_AND_LOCATION'].includes(template.mode)) {
+                if (template.location_latitude != null && template.location_longitude != null) {
+                    locationConfig = {
+                        source: 'template',
+                        latitude: parseFloat(template.location_latitude),
+                        longitude: parseFloat(template.location_longitude),
+                        radius_meters: parseInt(template.location_radius_meters) || 100
+                    };
+                } else if (employee?.branch_id) {
+                    const branch = await commonQuery.findOneRecord(Branch, employee.branch_id, {
+                        attributes: ["id", "branch_name", "latitude", "longitude", "radius_meters"]
+                    }, null, false, {});
+                    if (branch && branch.latitude != null && branch.longitude != null) {
+                        locationConfig = {
+                            source: 'branch',
+                            latitude: parseFloat(branch.latitude),
+                            longitude: parseFloat(branch.longitude),
+                            radius_meters: parseInt(branch.radius_meters) || 100
+                        };
+                    }
+                }
+            }
         }
 
-        return res.ok({ can_punch_from_personal_device: !!todayOutDutyRequest, outDuty });
+        return res.ok({
+            can_punch_from_personal_device: !!todayOutDutyRequest || canPunch,
+            outDuty,
+            attendanceMode,
+            locationConfig
+        });
     } catch (err) {
         return handleError(err, res, req);
     }
@@ -4143,6 +4191,15 @@ exports.transfer = async (req, res) => {
  */
 exports.getTeamEmployees = async (req, res) => {
     try {
+        const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
+            req.user.is_reporting_manager || 
+            req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
+            req.user.is_attendance_supervisor;
+
+        if (!isSupervisorOrManager) {
+            return res.error(constants.FORBIDDEN, { message: "Access denied. Only Supervisors or Reporting Managers can view team employees." });
+        }
+
         const POST = req.body || {};
         const userId = req.user.id;
 
@@ -4157,6 +4214,7 @@ exports.getTeamEmployees = async (req, res) => {
         if (POST.filter.status === undefined) {
             POST.filter.status = 0;
         }
+
         POST.filter[Op.or] = [
             { reporting_manager: userId },
             { attendance_supervisor: userId }

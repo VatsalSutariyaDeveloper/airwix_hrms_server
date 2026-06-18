@@ -1,7 +1,12 @@
 module.exports = (sequelize, DataTypes) => {
   const AttendanceTemplate = sequelize.define("AttendanceTemplate", {
     name: { type: DataTypes.STRING, },
-    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'MANUAL', comment: 'Defines how the employee marks attendance' },
+    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'FACE_RECOGNITION', comment: 'Defines how the employee marks attendance' },
+
+    // --- LOCATION AREA RESTRICTION (used by LOCATION_BASED / SELFIE_AND_LOCATION) ---
+    location_latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true, comment: 'Allowed area centre latitude. If empty, the employee branch geofence is used.' },
+    location_longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true, comment: 'Allowed area centre longitude. If empty, the employee branch geofence is used.' },
+    location_radius_meters: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 100, comment: 'Allowed punch radius (metres) around the area centre' },
 
     // --- HOLIDAY RULES ---
     holiday_policy: { type: DataTypes.ENUM('BLOCK_ATTENDANCE', 'COMP_OFF', 'ALLOW_NORMAL'), defaultValue: 'BLOCK_ATTENDANCE', comment: 'Behavior when a user attempts to punch in on a paid holiday' },

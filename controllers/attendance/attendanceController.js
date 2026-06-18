@@ -170,7 +170,7 @@ exports.syncPunches = async (req, res) => {
 
         // Store face recognition error if flag is present
         console.log(`[SyncPunches] Face Recognition Error detected for Emp=${punchData.employee_id}. Storing in FaceRecognitionError...`);
-        
+
         let faceErrorImage = null;
         if (punchImage) {
           try {
@@ -1122,17 +1122,17 @@ exports.updateAttendanceDay = async (req, res) => {
     }
 
     if (is_locked !== undefined) payload.is_locked = is_locked;
-    
+
     // Clear system-generated note if status is changing and no new note is provided
     const isSystemGeneratedNote = (n) => {
       if (!n || typeof n !== 'string') return false;
       const trimmed = n.trim();
       return trimmed.startsWith("System:") ||
-             trimmed.startsWith("Auto Absent:") ||
-             trimmed.startsWith("Incomplete:") ||
-             trimmed.startsWith("Leave approved:") ||
-             trimmed.startsWith("Penalty:") ||
-             trimmed.startsWith("Penalty (");
+        trimmed.startsWith("Auto Absent:") ||
+        trimmed.startsWith("Incomplete:") ||
+        trimmed.startsWith("Leave approved:") ||
+        trimmed.startsWith("Penalty:") ||
+        trimmed.startsWith("Penalty (");
     };
 
     if (note !== undefined) {
@@ -2536,6 +2536,8 @@ exports.getIrregularities = async (req, res) => {
     const offset = (page - 1) * limit;
 
     const companyId = req.user.company_id;
+    const minAllowedDate = dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD');
+    const maxAllowedDate = dayjs().endOf('month').format('YYYY-MM-DD');
 
     // Date range determination
     let startDate, endDate;
@@ -2544,6 +2546,10 @@ exports.getIrregularities = async (req, res) => {
       if (parsedMonth.isValid()) {
         startDate = parsedMonth.startOf('month').format('YYYY-MM-DD');
         endDate = parsedMonth.endOf('month').format('YYYY-MM-DD');
+
+        if (startDate < minAllowedDate || startDate > maxAllowedDate) {
+          return res.error(constants.VALIDATION_ERROR, { message: "Only the current month and the past month irregularities can be accessed." });
+        }
       }
     }
 
@@ -2552,10 +2558,10 @@ exports.getIrregularities = async (req, res) => {
     let isFilteredByEmployees = true;
 
     const isAdmin = req.user.is_super_admin || req.user.is_admin;
-    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
-                                  req.user.is_reporting_manager || 
-                                  req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
-                                  req.user.is_attendance_supervisor;
+    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ||
+      req.user.is_reporting_manager ||
+      req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ||
+      req.user.is_attendance_supervisor;
 
     if (isAdmin) {
       // Admin sees everyone in their company
@@ -2578,7 +2584,7 @@ exports.getIrregularities = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      
+
       const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
         where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
         attributes: ['employee_id']
@@ -2644,7 +2650,7 @@ exports.getIrregularities = async (req, res) => {
       };
     } else {
       whereClause.attendance_date = {
-        [Op.lte]: yesterday
+        [Op.between]: [minAllowedDate, yesterday]
       };
     }
 
@@ -2720,7 +2726,7 @@ exports.getIrregularitiesCount = async (req, res) => {
     const startDate = dayjs().startOf('month').format('YYYY-MM-DD');
     let endDate = dayjs().endOf('month').format('YYYY-MM-DD');
     const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-    
+
     if (endDate > yesterday) {
       endDate = yesterday;
     }
@@ -2734,10 +2740,10 @@ exports.getIrregularitiesCount = async (req, res) => {
     let isFilteredByEmployees = true;
 
     const isAdmin = req.user.is_super_admin || req.user.is_admin;
-    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
-                                  req.user.is_reporting_manager || 
-                                  req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
-                                  req.user.is_attendance_supervisor;
+    const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ||
+      req.user.is_reporting_manager ||
+      req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ||
+      req.user.is_attendance_supervisor;
 
     if (isAdmin) {
       // Admin sees everyone in their company
@@ -2759,7 +2765,7 @@ exports.getIrregularitiesCount = async (req, res) => {
       }, { attributes: ['id'] });
 
       const teamEmpIds = teamEmployees.map(e => e.id);
-      
+
       const trackedEmployees = await EmployeeAttendanceTemplate.findAll({
         where: { company_id: companyId, status: 0, track_in_out: true, employee_id: { [Op.in]: teamEmpIds } },
         attributes: ['employee_id']
@@ -2772,66 +2778,22 @@ exports.getIrregularitiesCount = async (req, res) => {
       targetEmployeeIds = [];
     }
 
-    // Construct query filters
     const baseWhereClause = {
       company_id: companyId,
       attendance_date: {
-        [Op.between]: [startDate, endDate]
+        [Op.between]: [startDate, endDate],
+        [Op.lt]: dayjs().format('YYYY-MM-DD')
       },
       [Op.or]: [
         { status: { [Op.in]: [9, 10] } },
-        {
-          [Op.and]: [
-            { status: 0 },
-            { first_in: null },
-            { last_out: null }
-          ]
-        },
-        {
-          [Op.and]: [
-            { first_in: null },
-            { last_out: { [Op.ne]: null } }
-          ]
-        },
-        {
-          [Op.and]: [
-            { first_in: { [Op.ne]: null } },
-            { last_out: null }
-          ]
-        }
+        { [Op.and]: [{ status: 0 }, { first_in: null }, { last_out: null }] },
+        { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
+        { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
       ],
-      // Exclude Weekly Off, Holiday, and Leave status. Present/Absent/HalfDay can have irregularity
       status: { [Op.notIn]: [3, 4, 6] }
     };
 
-    const regWhere = {
-      company_id: companyId,
-      approval_status: { [Op.in]: [0, 1, 3] },
-      status: 0,
-      attendance_date: {
-        [Op.gte]: dayjs(startDate).startOf('day').toDate(),
-        [Op.lte]: dayjs(endDate).endOf('day').toDate()
-      }
-    };
-    const activeRegularizations = await AttendanceRegularization.findAll({
-      where: regWhere,
-      attributes: ['employee_id', 'attendance_date']
-    });
-
-    if (activeRegularizations.length > 0) {
-      const exclusionConditions = activeRegularizations.map(reg => ({
-        employee_id: reg.employee_id,
-        attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
-      }));
-      baseWhereClause[Op.and] = [
-        {
-          [Op.not]: {
-            [Op.or]: exclusionConditions
-          }
-        }
-      ];
-    }
-
+    // Calculate team count (NO active regularization exclusion, as per getIrregularities)
     let count = 0;
     if (isFilteredByEmployees) {
       if (targetEmployeeIds.length > 0) {
@@ -2845,12 +2807,42 @@ exports.getIrregularitiesCount = async (req, res) => {
       });
     }
 
-    // Calculate selfCount
+    // Calculate selfCount (WITH active regularization exclusion, as per getSelfIrregularities)
     let selfCount = 0;
     const currentEmpId = req.user.employee_id;
     if (currentEmpId) {
+      const selfWhereClause = {
+        ...baseWhereClause,
+        employee_id: currentEmpId
+      };
+
+      const activeRegularizations = await AttendanceRegularization.findAll({
+        where: {
+          company_id: companyId,
+          employee_id: currentEmpId,
+          approval_status: { [Op.in]: [0, 1, 3] },
+          status: 0,
+          attendance_date: { [Op.between]: [startDate, endDate] }
+        },
+        attributes: ['employee_id', 'attendance_date']
+      });
+
+      if (activeRegularizations.length > 0) {
+        const exclusionConditions = activeRegularizations.map(reg => ({
+          employee_id: reg.employee_id,
+          attendance_date: dayjs(reg.attendance_date).format('YYYY-MM-DD')
+        }));
+        selfWhereClause[Op.and] = [
+          {
+            [Op.not]: {
+              [Op.or]: exclusionConditions
+            }
+          }
+        ];
+      }
+
       selfCount = await AttendanceDay.count({
-        where: { ...baseWhereClause, employee_id: currentEmpId }
+        where: selfWhereClause
       });
     }
 
