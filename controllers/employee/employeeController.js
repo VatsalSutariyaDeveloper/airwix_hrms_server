@@ -4143,6 +4143,15 @@ exports.transfer = async (req, res) => {
  */
 exports.getTeamEmployees = async (req, res) => {
     try {
+        const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
+            req.user.is_reporting_manager || 
+            req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
+            req.user.is_attendance_supervisor;
+
+        if (!isSupervisorOrManager) {
+            return res.error(constants.FORBIDDEN, { message: "Access denied. Only Supervisors or Reporting Managers can view team employees." });
+        }
+
         const POST = req.body || {};
         const userId = req.user.id;
 
@@ -4157,6 +4166,7 @@ exports.getTeamEmployees = async (req, res) => {
         if (POST.filter.status === undefined) {
             POST.filter.status = 0;
         }
+
         POST.filter[Op.or] = [
             { reporting_manager: userId },
             { attendance_supervisor: userId }

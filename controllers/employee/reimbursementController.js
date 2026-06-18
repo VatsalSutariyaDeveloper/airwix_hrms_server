@@ -219,6 +219,9 @@ exports.getById = async (req, res) => {
             });
         }
 
+        // Applied date (date request was submitted) — same as summary endpoint
+        raw.applied_date = raw.createdAt;
+
         // Resolve pending approver details
         if (raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING || raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED) {
             const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
