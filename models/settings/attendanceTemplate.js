@@ -1,7 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const AttendanceTemplate = sequelize.define("AttendanceTemplate", {
     name: { type: DataTypes.STRING, },
-    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'MANUAL', comment: 'Defines how the employee marks attendance' },
+    mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'FACE_RECOGNITION', comment: 'Defines how the employee marks attendance' },
 
     // --- LOCATION AREA RESTRICTION (used by LOCATION_BASED / SELFIE_AND_LOCATION) ---
     location_latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true, comment: 'Allowed area centre latitude. If empty, the employee branch geofence is used.' },
