@@ -140,7 +140,11 @@ const uploadFile = async (
         }
       }
       fs.writeFileSync(fullPath, file.buffer);
-      savedFilenames[file.fieldname] = filename;
+      if (savedFilenames[file.fieldname]) {
+        savedFilenames[file.fieldname] += ',' + filename;
+      } else {
+        savedFilenames[file.fieldname] = filename;
+      }
       attachRollbackHook(transaction, fullPath);
     } catch (err) {
       console.error(`File write failed for ${file.originalname}:`, err);

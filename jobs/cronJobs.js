@@ -352,13 +352,21 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
 
             const dateStr = dayjs(targetDate).format("DD MMM YYYY");
 
-            //Logic: Differentiate Absent (5) vs Missing Punch
+            //Logic: Differentiate Absent, Missing Punch-In, and Missing Punch-Out
             let title = "Missing Punch Alert";
-            let message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
+            let message = "";
 
             if (record.status === 5) {
                 title = "Attendance Marked Absent";
                 message = `Your attendance for ${dateStr} has been marked as Absent. Please apply for regularization if this is incorrect.`;
+            } else if (record.first_in === null && record.last_out !== null) {
+                title = "Missing Punch-In Alert";
+                message = `You have a missing punch-in on ${dateStr}. Please review and regularize.`;
+            } else if (record.first_in !== null && record.last_out === null) {
+                title = "Missing Punch-Out Alert";
+                message = `You have a missing punch-out on ${dateStr}. Please review and regularize.`;
+            } else {
+                message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
             }
 
             //Date-based Deduplication

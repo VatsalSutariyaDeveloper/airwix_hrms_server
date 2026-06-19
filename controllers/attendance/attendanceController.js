@@ -1910,7 +1910,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         shift_id: null,
         shift_name: "N/A",
         shift_time: "0:00 Hrs",
-        time_range: "0:00 Hrs",
+        time_range: undefined,
         day_status: null, // Default Not Marked
         status: "Not Marked",
         note: null,
@@ -2011,7 +2011,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           shift_id: attendanceDay.shift_id,
           shift_name: shiftName,
           shift_time: shiftTimeStr,
-          time_range: timeRange + varianceStr,
+          time_range: timeRange === "0:00 Hrs" ? undefined : (timeRange + varianceStr),
           day_status: attendanceDay.status,
           status: statusText,
           note: attendanceDay.note,

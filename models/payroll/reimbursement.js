@@ -6,6 +6,7 @@ module.exports = (sequelize, DataTypes) => {
             expense_type: { type: DataTypes.INTEGER },
             total_amount: { type: DataTypes.DECIMAL(10, 2) },
             date: { type: DataTypes.DATEONLY },
+            expense_date: { type: DataTypes.DATEONLY, allowNull: true },
             description: { type: DataTypes.TEXT, allowNull: true },
             approved_by: { type: DataTypes.INTEGER, allowNull: true },
             bills_docs: { type: DataTypes.STRING, allowNull: true, comment: "Path to the uploaded bill document" },
@@ -13,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
             current_level: { type: DataTypes.INTEGER, defaultValue: 1, comment: "Tracks the current approval stage" },
             approval_history: { type: DataTypes.JSON, allowNull: true, comment: "Record of who approved at each level" },
             approval_remark: { type: DataTypes.TEXT, allowNull: true },
-            payment_type: { type: DataTypes.INTEGER, defaultValue: 1, comment: "1: Include in payroll (salary), 2: Direct payment (instant)" },
+            payment_type: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null, comment: "1: Include in payroll (salary), 2: Direct payment (instant)" },
             status: {
                 type: DataTypes.SMALLINT,
                 defaultValue: 0,
