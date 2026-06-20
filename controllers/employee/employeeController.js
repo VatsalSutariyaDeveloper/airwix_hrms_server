@@ -3846,7 +3846,7 @@ exports.availableOutDuty = async (req, res) => {
             if (template?.mode) {
                 attendanceMode = template.mode;
             }
-            if (template && ['LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'].includes(template.mode)) {
+            if (template && ['LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION'].includes(template.mode)) {
                 canPunch = true;
             }
 

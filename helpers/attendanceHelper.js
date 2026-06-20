@@ -341,183 +341,136 @@ async function punch(employeeId, meta, transaction = null) {
   let lastInDay = null; // Store for date alignment
   let isForgotPunchIn = false;
   if (!punchType) {
-    if (lastPunchGlobal && lastPunchGlobal.punch_type === "IN") {
-      // 🚀 STEP A: Check if this is a new day's punch-in near the shift start time
-      const lastPunchDate = dayjs(lastPunchGlobal.punch_time).format("YYYY-MM-DD");
-      const currentDate = dayjs(now).format("YYYY-MM-DD");
+    let isWithinLogicalDay = false;
+    if (lastPunchGlobal) {
+      // 🚀 Fetch the day record of the last punch to align the cutoff with the actual shift
+      lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
+        id: lastPunchGlobal.day_id,
+      }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
 
-      // if (lastPunchDate !== currentDate) {
-      //   const currentDayOfWeek = dayjs(now).day();
-      //   const currentEmpShift = await commonQuery.findOneRecord(EmployeeShift, {
-      //     employee_id: employeeId,
-      //     day_of_week: currentDayOfWeek,
-      //     status: 0,
-      //   }, {}, transaction);
+      // 🚀 Rule: Calculate cutoff based on the FIRST punch of this logical day
+      const firstPunch = await commonQuery.findOneRecord(AttendancePunch, {
+        day_id: lastPunchGlobal.day_id,
+        status: 0
+      }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
 
-      //   let todayShift = null;
-      //   if (currentEmpShift) {
-      //     todayShift = await commonQuery.findOneRecord(ShiftTemplate, currentEmpShift.shift_id, {}, transaction);
-      //   } else if (employee.shift_template) {
-      //     todayShift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction);
-      //   }
+      const startTime = firstPunch ? firstPunch.punch_time : lastPunchGlobal.punch_time;
+      const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
 
-      //   if (todayShift) {
-      //     const isNightShift = todayShift.is_night_shift || todayShift.end_time < todayShift.start_time;
-      //     if (!isNightShift) {
-      //       const todayShiftStart = dayjs(`${currentDate} ${todayShift.start_time}`);
-      //       const windowStart = todayShiftStart.subtract(180, 'minute');
-      //       const windowEnd = todayShiftStart.add(300, 'minute');
-      //       const currentPunchTime = dayjs(now);
+      const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
+      let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
 
-      //       if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
-      //         punchType = "IN";
-      //         console.log(`[Punch] Shift Match Decision: IN (Current punch is within today's shift start window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')})`);
-      //       }
-      //     }
-      //   }
-      // }
+      // CHECK IF OVERTIME ALLOWED
+      const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
 
-      if (!punchType) {
-        // 🚀 Fetch the day record of the last IN to align the cutoff with the actual shift
-        // [FIX] Search for the day record across all allowed companies to support cross-company pairing.
-        lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
-          id: lastPunchGlobal.day_id,
-          // company_id: { [Op.in]: allowedCompanyIds }
-        }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
-        // 🚀 Rule: Calculate cutoff based on the FIRST "IN" of this logical day
-        const firstIn = await commonQuery.findOneRecord(AttendancePunch, {
-          day_id: lastPunchGlobal.day_id,
-          punch_type: "IN",
-          status: 0
-        }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
-
-        const startTime = firstIn ? firstIn.punch_time : lastPunchGlobal.punch_time;
-        const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
-
-        // INITIAL FALLBACK
-        // 1. Employee shift NOT assign and overtime allow -> default day cutoff time
-        // 4. Employee shift NOT assign and overtime NOT allow -> default day cutoff time
-        const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
-        let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
-
-        // CHECK IF OVERTIME ALLOWED
-        const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
-
-        // GET SHIFT DETAILS IF AVAILABLE
-        let hasShift = false;
-        let shiftEnd = null;
-        console.log(`[Punch] Last IN Day: ${lastInDate} | Shift ID: ${lastInDay ? lastInDay.shift_id : 'N/A'} | Overtime Allowed: ${isOvertimeAllowed}`);
-        if (lastInDay && lastInDay.shift_id) {
-          const lastShift = await commonQuery.findOneRecord(ShiftTemplate, lastInDay.shift_id, {
-            attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
-          }, transaction, false, {});
-          if (lastShift) {
-            hasShift = true;
-            shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
-            if (lastShift.end_time < lastShift.start_time) {
-              shiftEnd = shiftEnd.add(1, 'day');
-            }
+      // GET SHIFT DETAILS IF AVAILABLE
+      let hasShift = false;
+      let shiftEnd = null;
+      console.log(`[Punch] Last Punch Day: ${lastInDate} | Shift ID: ${lastInDay ? lastInDay.shift_id : 'N/A'} | Overtime Allowed: ${isOvertimeAllowed}`);
+      if (lastInDay && lastInDay.shift_id) {
+        const lastShift = await commonQuery.findOneRecord(ShiftTemplate, { id: lastInDay.shift_id, company_id: employee.company_id }, {
+          attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
+        }, transaction, false, {});
+        if (lastShift) {
+          hasShift = true;
+          shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+          if (lastShift.end_time < lastShift.start_time) {
+            shiftEnd = shiftEnd.add(1, 'day');
           }
-        }
-
-        // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
-        if (hasShift) {
-          if (isOvertimeAllowed) {
-            // 2. Employee shift assign AND overtime allow -> Use template max overtime mins directly
-            const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
-            cutoffTime = otCutoff;
-            console.log(`[Punch] Overtime Allowed: Using template max overtime mins. Shift End: ${shiftEnd.format('HH:mm')}, OT Cutoff: ${otCutoff.format('HH:mm')}`);
-          } else {
-            // 3. Employee shift assign BUT overtime NOT allow -> Shift End Cutoff Hours
-            const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
-            cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
-            console.log(`[Punch] Overtime Not Allowed: Using shift cutoff hours. Shift End: ${shiftEnd.format('HH:mm')}, Cutoff: ${cutoffTime.format('HH:mm')}`);
-          }
-        }
-
-        // UNIFIED DECISION based purely on final calculated cutoffTime
-        if (dayjs(now).isBefore(cutoffTime)) {
-          punchType = "OUT";
-          console.log(`[Punch] Toggle Decision: OUT (Before cutoff ${cutoffTime.format('HH:mm')})`);
-        } else {
-          punchType = "IN";
-          console.log(`[Punch] Toggle Decision: IN (After cutoff ${cutoffTime.format('HH:mm')})`);
         }
       }
-    } else {
+
+      // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
+      if (hasShift) {
+        if (isOvertimeAllowed) {
+          const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+          cutoffTime = otCutoff;
+          console.log(`[Punch] Overtime Allowed: Using template max overtime mins. Shift End: ${shiftEnd.format('HH:mm')}, OT Cutoff: ${otCutoff.format('HH:mm')}`);
+        } else {
+          const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
+          cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
+          console.log(`[Punch] Overtime Not Allowed: Using shift cutoff hours. Shift End: ${shiftEnd.format('HH:mm')}, Cutoff: ${cutoffTime.format('HH:mm')}`);
+        }
+      }
+
+      if (dayjs(now).isBefore(cutoffTime)) {
+        isWithinLogicalDay = true;
+        punchType = lastPunchGlobal.punch_type === "IN" ? "OUT" : "IN";
+        console.log(`[Punch] Toggle Decision (before cutoff ${cutoffTime.format('HH:mm')}): last=${lastPunchGlobal.punch_type} -> ${punchType}`);
+      }
+    }
+
+    if (!isWithinLogicalDay) {
       // 🚀 Check if this is an evening punch-out without a morning punch-in
-      // Only check if lastPunchGlobal is null, or if lastPunchGlobal is OUT but occurred > 12 hours ago.
-      if (!lastPunchGlobal || (lastPunchGlobal.punch_type === "OUT" && hoursSinceLast > 12)) {
-        const currentDate = dayjs(now).format("YYYY-MM-DD");
-        const yesterdayDate = dayjs(now).subtract(1, "day").format("YYYY-MM-DD");
+      const currentDate = dayjs(now).format("YYYY-MM-DD");
+      const yesterdayDate = dayjs(now).subtract(1, "day").format("YYYY-MM-DD");
 
-        const getCandidateShift = async (dateStr) => {
-          const dow = dayjs(dateStr).day();
-          const empShiftRecord = await commonQuery.findOneRecord(EmployeeShift, {
-            employee_id: employeeId,
-            day_of_week: dow,
-            status: 0,
-          }, {}, transaction, false, {});
+      const getCandidateShift = async (dateStr) => {
+        const dow = dayjs(dateStr).day();
+        const empShiftRecord = await commonQuery.findOneRecord(EmployeeShift, {
+          employee_id: employeeId,
+          day_of_week: dow,
+          status: 0,
+        }, {}, transaction, false, {});
 
-          let shiftTemp = null;
-          if (empShiftRecord) {
-            shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, empShiftRecord.shift_id, {}, transaction, false, {});
-          } else if (employee.shift_template) {
-            shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, {});
-          }
-          return shiftTemp;
-        };
-
-        const todayShift = await getCandidateShift(currentDate);
-        const yesterdayShift = await getCandidateShift(yesterdayDate);
-        console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
-        let yesterdayShiftEnd = null;
-        if (yesterdayShift) {
-          yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
-          if (yesterdayShift.is_night_shift || yesterdayShift.end_time < yesterdayShift.start_time) {
-            yesterdayShiftEnd = yesterdayShiftEnd.add(1, 'day');
-          }
+        let shiftTemp = null;
+        if (empShiftRecord) {
+          shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, { id: empShiftRecord.shift_id, company_id: employee.company_id }, {}, transaction, false, {});
+        } else if (employee.shift_template) {
+          shiftTemp = await commonQuery.findOneRecord(ShiftTemplate, { id: employee.shift_template, company_id: employee.company_id }, {}, transaction, false, {});
         }
+        return shiftTemp;
+      };
 
-        let todayShiftEnd = null;
-        if (todayShift) {
-          todayShiftEnd = dayjs(`${currentDate} ${todayShift.end_time}`);
-          if (todayShift.is_night_shift || todayShift.end_time < todayShift.start_time) {
-            todayShiftEnd = todayShiftEnd.add(1, 'day');
-          }
+      const todayShift = await getCandidateShift(currentDate);
+      const yesterdayShift = await getCandidateShift(yesterdayDate);
+      console.log(`[Punch] Candidate Shifts - Today: ${todayShift ? todayShift.shift_name : 'N/A'}, Yesterday: ${yesterdayShift ? yesterdayShift.shift_name : 'N/A'}`);
+      let yesterdayShiftEnd = null;
+      if (yesterdayShift) {
+        yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
+        if (yesterdayShift.is_night_shift || yesterdayShift.end_time < yesterdayShift.start_time) {
+          yesterdayShiftEnd = yesterdayShiftEnd.add(1, 'day');
         }
+      }
 
-        let foundShiftMatch = false;
-
-        // Check yesterday's shift first (for night shifts ending today)
-        if (yesterdayShiftEnd) {
-          const windowStart = yesterdayShiftEnd.subtract(180, 'minute');
-          const windowEnd = yesterdayShiftEnd.add(240, 'minute');
-          const currentPunchTime = dayjs(now);
-
-          if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
-            punchType = "OUT";
-            targetDayDate = yesterdayDate;
-            isForgotPunchIn = true;
-            foundShiftMatch = true;
-            console.log(`[Punch] Direct Punch-Out Match (Yesterday Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
-          }
+      let todayShiftEnd = null;
+      if (todayShift) {
+        todayShiftEnd = dayjs(`${currentDate} ${todayShift.end_time}`);
+        if (todayShift.is_night_shift || todayShift.end_time < todayShift.start_time) {
+          todayShiftEnd = todayShiftEnd.add(1, 'day');
         }
+      }
 
-        // Check today's shift if not matched yet
-        console.log(`[Punch] Checking today's shift end for potential punch-out match...`, { todayShiftEnd: todayShiftEnd ? todayShiftEnd.format('YYYY-MM-DD HH:mm') : 'N/A' });
-        if (!foundShiftMatch && todayShiftEnd) {
-          const windowStart = todayShiftEnd.subtract(180, 'minute');
-          const windowEnd = todayShiftEnd.add(240, 'minute');
-          const currentPunchTime = dayjs(now);
+      let foundShiftMatch = false;
 
-          if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
-            punchType = "OUT";
-            targetDayDate = currentDate;
-            isForgotPunchIn = true;
-            foundShiftMatch = true;
-            console.log(`[Punch] Direct Punch-Out Match (Today Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
-          }
+      // Check yesterday's shift first (for night shifts ending today)
+      if (yesterdayShiftEnd) {
+        const windowStart = yesterdayShiftEnd.subtract(180, 'minute');
+        const windowEnd = yesterdayShiftEnd.add(240, 'minute');
+        const currentPunchTime = dayjs(now);
+
+        if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+          punchType = "OUT";
+          targetDayDate = yesterdayDate;
+          isForgotPunchIn = true;
+          foundShiftMatch = true;
+          console.log(`[Punch] Direct Punch-Out Match (Yesterday Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
+        }
+      }
+
+      // Check today's shift if not matched yet
+      console.log(`[Punch] Checking today's shift end for potential punch-out match...`, { todayShiftEnd: todayShiftEnd ? todayShiftEnd.format('YYYY-MM-DD HH:mm') : 'N/A' });
+      if (!foundShiftMatch && todayShiftEnd) {
+        const windowStart = todayShiftEnd.subtract(180, 'minute');
+        const windowEnd = todayShiftEnd.add(240, 'minute');
+        const currentPunchTime = dayjs(now);
+
+        if (currentPunchTime.isAfter(windowStart) && currentPunchTime.isBefore(windowEnd)) {
+          punchType = "OUT";
+          targetDayDate = currentDate;
+          isForgotPunchIn = true;
+          foundShiftMatch = true;
+          console.log(`[Punch] Direct Punch-Out Match (Today Shift): OUT (Punch is within shift end window ${windowStart.format('hh:mm A')} - ${windowEnd.format('hh:mm A')} without a morning IN punch)`);
         }
       }
 
@@ -647,7 +600,7 @@ async function punch(employeeId, meta, transaction = null) {
 
   // Use explicitly provided shift id if available (e.g. from manual punch UI)
   if (meta.shift_id) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, meta.shift_id, {}, transaction, false, {});
+    shift = await commonQuery.findOneRecord(ShiftTemplate, { id: meta.shift_id, company_id: employee.company_id, status: 0 }, {}, transaction, false, {});
   }
 
   // Dynamic lookup ONLY if branch is selected AND it is different from employee's base branch
@@ -657,9 +610,9 @@ async function punch(employeeId, meta, transaction = null) {
 
   if (!shift) {
     if (empShift) {
-      shift = await commonQuery.findOneRecord(ShiftTemplate, empShift.shift_id, {}, transaction, false, {});
+      shift = await commonQuery.findOneRecord(ShiftTemplate, { id: empShift.shift_id, company_id: employee.company_id }, {}, transaction, false, {});
     } else if (employee.shift_template) {
-      shift = await commonQuery.findOneRecord(ShiftTemplate, employee.shift_template, {}, transaction, false, {});
+      shift = await commonQuery.findOneRecord(ShiftTemplate, { id: employee.shift_template, company_id: employee.company_id }, {}, transaction, false, {});
     }
   }
 
@@ -869,7 +822,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     if (meta.preFetchedShiftTemplates && meta.preFetchedShiftTemplates.has(sId)) {
       return meta.preFetchedShiftTemplates.get(sId);
     }
-    return await commonQuery.findOneRecord(ShiftTemplate, sId, { include: shiftInclude }, transaction, false, {});
+    return await commonQuery.findOneRecord(ShiftTemplate, { id: sId, company_id: employee.company_id }, { include: shiftInclude }, transaction, false, {});
   };
 
   if (meta.shift_id) {
@@ -1514,7 +1467,10 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // --- REFACTORED WORKED TIME & BREAK CALCULATION ---
-  const firstIn = allDayPunches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
+  const firstPunch = allDayPunches[0];
+  const firstIn = (firstPunch && String(firstPunch.punch_type || "").toUpperCase() === "OUT")
+    ? null
+    : allDayPunches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
   const lastOut = [...allDayPunches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
   const lastPunch = allDayPunches[allDayPunches.length - 1];
   const lastPunchTypeRaw = lastPunch ? String(lastPunch.punch_type || "").toUpperCase() : null;
@@ -2632,7 +2588,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     attendance_date: date,
     shift_id: meta.forceShiftIdNull ? null : (shift ? shift.id : null),
     first_in: firstIn ? dayjs(firstIn.punch_time).format("HH:mm:ss") : null,
-    last_out: (template?.allow_multiple_punches && lastPunchTypeRaw === "IN") ? null : (lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null),
+    last_out: lastOut ? dayjs(lastOut.punch_time).format("HH:mm:ss") : null,
     worked_minutes: (!lastOut) ? 0 : Math.floor(
       (shift && shift.shift_type === "Flexible Shift")
         ? Math.max(0, finalWorkedMinutes - totalOtMins)
@@ -2799,12 +2755,12 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
 
   let shift = null;
   if (meta.shift_id) {
-    shift = await commonQuery.findOneRecord(ShiftTemplate, { id: meta.shift_id, company_id: commonMeta.company_id, branch_id: commonMeta.branch_id, status: 0 }, {}, transaction, false, {});
+    shift = await commonQuery.findOneRecord(ShiftTemplate, { id: meta.shift_id, company_id: employee?.company_id || commonMeta.company_id, status: 0 }, {}, transaction, false, {});
   }
 
   if (!shift && commonMeta.branch_id && parseInt(commonMeta.branch_id) !== parseInt(employee?.branch_id)) {
     const pTime = inTime ? parseDateTime(inTime, date) : (outTime ? parseDateTime(outTime, date) : new Date(date));
-    shift = await findMatchingShift(commonMeta.branch_id, commonMeta.company_id, pTime, transaction);
+    shift = await findMatchingShift(commonMeta.branch_id, employee?.company_id || commonMeta.company_id, pTime, transaction);
   }
 
   const attendanceDay = meta.existingDay || await commonQuery.findOneRecord(AttendanceDay, {

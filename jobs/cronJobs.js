@@ -325,6 +325,7 @@ const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
 const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily attendance irregularity alert task...');
     const { AttendanceDay, User, Notification } = require("../models");
+    const notificationService = require("../services/notificationService");
 
     const refDate = asOf ? dayjs(asOf) : dayjs();
     const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
@@ -366,20 +367,21 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
                 title = "Missing Punch-Out Alert";
                 message = `You have a missing punch-out on ${dateStr}. Please review and regularize.`;
             } else {
-                message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
-            }
+                message = `You have a missing punch on ${dateStr}. Please review and regularize.`;
+            } 
 
             //Date-based Deduplication
             const existingNotification = await Notification.findOne({
                 where: {
                     user_id: user.id,
                     type: "ATTENDANCE_IRREGULARITY",
-                    message: { [Op.like]: `%${dateStr}%` }
+                    message: { [Op.like]: `%${dateStr}%` },
+                    status: 0
                 }
             });
 
             if (!existingNotification) {
-                await Notification.create({
+                await notificationService.createNotification({
                     user_id: user.id,
                     company_id: record.company_id || user.company_id,
                     branch_id: record.branch_id || user.branch_id,
