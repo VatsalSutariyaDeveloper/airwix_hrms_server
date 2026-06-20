@@ -224,15 +224,15 @@ async function punch(employeeId, meta, transaction = null) {
         const lon1 = parseFloat(meta.longitude);
 
         const R = 6371e3; // metres
-        const phi1 = lat1 * Math.PI/180;
-        const phi2 = areaLat * Math.PI/180;
-        const deltaPhi = (areaLat-lat1) * Math.PI/180;
-        const deltaLambda = (areaLon-lon1) * Math.PI/180;
+        const phi1 = lat1 * Math.PI / 180;
+        const phi2 = areaLat * Math.PI / 180;
+        const deltaPhi = (areaLat - lat1) * Math.PI / 180;
+        const deltaLambda = (areaLon - lon1) * Math.PI / 180;
 
-        const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
-                  Math.cos(phi1) * Math.cos(phi2) *
-                  Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+          Math.cos(phi1) * Math.cos(phi2) *
+          Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         const distance = R * c;
 
         if (distance > areaRadius) {
@@ -793,12 +793,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   const LeaveBalanceService = require("../services/leaveBalanceService");
 
   // 1. Fetch Employee and Templates early for configuration
-  const employee = meta.employee || await commonQuery.findOneRecord(Employee, employeeId, {
-    include: [
-      { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
-      { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
-    ],
-  }, transaction, false, {});
+  let employee = meta.employee;
+  if (!employee || (employee.employeeAttendanceTemplate === undefined && employee.attendanceTemplate === undefined)) {
+    employee = await commonQuery.findOneRecord(Employee, employeeId, {
+      include: [
+        { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+      ],
+    }, transaction, false, {});
+  }
   if (!employee) return;
   const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
 
@@ -2346,6 +2349,29 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     }
   }
 
+  // Rule: Only mark ABSENT if the shift has already ended. 
+  // Otherwise, they are considered "Currently Working".
+  let hasShiftEnded = true;
+  const today = dayjs().format("YYYY-MM-DD");
+
+  const isNightShift = shift && (shift.is_night_shift || shift.end_time < shift.start_time);
+  const isCurrentlyWorkingDay = date === today || (isNightShift && dayjs(date).add(1, 'day').format('YYYY-MM-DD') === today);
+
+  if (shift && isCurrentlyWorkingDay) {
+    let shiftEndTime = dayjs(`${date} ${shift.end_time}`);
+    if (shift.end_time < shift.start_time) {
+      shiftEndTime = shiftEndTime.add(1, 'day');
+    }
+
+    // If current time is before shift end + 2 hours buffer, treat as PRESENT (Working)
+    if (dayjs().isBefore(shiftEndTime.add(2, 'hour'))) {
+      hasShiftEnded = false;
+    }
+  } else if (!shift && date === today) {
+    // No shift defined, and it's today. Avoid marking absent until the day is over.
+    hasShiftEnded = false;
+  }
+
   let status = 5; // Default ABSENT
   let autoAbsentReason = null;
 
@@ -2354,26 +2380,6 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   if (lastPunchType === "IN") {
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
-      // Rule: Only mark ABSENT if the shift has already ended. 
-      // Otherwise, they are considered "Currently Working".
-      let hasShiftEnded = true;
-      const today = dayjs().format("YYYY-MM-DD");
-
-      if (shift && date === today) {
-        let shiftEndTime = dayjs(`${date} ${shift.end_time}`);
-        if (shift.end_time < shift.start_time) {
-          shiftEndTime = shiftEndTime.add(1, 'day');
-        }
-
-        // If current time is before shift end + 2 hours buffer, treat as PRESENT (Working)
-        if (dayjs().isBefore(shiftEndTime.add(2, 'hour'))) {
-          hasShiftEnded = false;
-        }
-      } else if (!shift && date === today) {
-        // No shift defined, and it's today. Avoid marking absent until the day is over.
-        hasShiftEnded = false;
-      }
-
       if (hasShiftEnded) {
         status = 10; // NOT MARKED
         autoAbsentReason = "Not Marked: Mandatory punch-out missing";
@@ -2392,8 +2398,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const hasOutOnly = allDayPunches.some(p => p.punch_type === 'OUT') && !allDayPunches.some(p => p.punch_type === 'IN');
 
     if (hasOutOnly) {
-      status = 0; // PRESENT
-      autoAbsentReason = "Present: Only punch-out recorded (forgot punch-in)";
+      if (template && template.require_punch_out && hasShiftEnded) {
+        status = 10; // NOT MARKED
+        autoAbsentReason = "Not Marked: Mandatory punch-in missing";
+      } else {
+        status = 0; // PRESENT
+        autoAbsentReason = "Present: Only punch-out recorded (forgot punch-in)";
+      }
     } else if (shift && shiftWorkedMins === 0 && template && !meta.isHolidayCompOff) {
       meta.skipFineCalculation = true; // Flag to skip fine calculation
       meta.forceShiftIdNull = true; // Flag to set shift_id to null in attendance_day
@@ -2653,6 +2664,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     attendancePayload.leave_session = meta.leave_session || existingDay2?.leave_session;
   }
   else {
+
     // Explicitly clear leave category/session when day is set to Present/Absent/Other
     attendancePayload.leave_category_id = null;
     attendancePayload.leave_session = null;
@@ -2660,11 +2672,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
   if (existingDay2) {
     // [User Request] Skip rebuild for past finalized data if automated
-    // Automated/Cron runs use user_id 0 or undefined. We only allow rebuilding if current status is Absent (5) or Incomplete (9).
+    // Automated/Cron runs use user_id 0 or undefined. We only allow rebuilding if current status is Absent (5), Incomplete (9), or Not Marked (10).
+    // Additionally, we do NOT skip if the day has a missing punch-in or punch-out.
     const isCronRun = (meta.user_id === 0 || meta.user_id === undefined);
-    const isSpecialStatus = [5, 9].includes(parseInt(existingDay2.status));
+    const isSpecialStatus = [5, 9, 10].includes(parseInt(existingDay2.status));
+    const hasMissingPunch = (existingDay2.first_in === null && existingDay2.last_out !== null) || (existingDay2.first_in !== null && existingDay2.last_out === null);
 
-    if (isCronRun && !isSpecialStatus && !meta.forceRebuild) {
+    if (isCronRun && !isSpecialStatus && !hasMissingPunch && !meta.forceRebuild) {
       console.log(`[Rebuild] Skipping automated rebuild for finalized record ${existingDay2.id} (Status: ${existingDay2.status}) for ${employeeId} on ${date}`);
       return;
     }

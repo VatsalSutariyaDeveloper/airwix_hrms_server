@@ -62,7 +62,19 @@ exports.create = async (req, res) => {
         // Upload all files first to get the saved filenames
         let savedFiles = {};
         if (req.files && Object.keys(req.files).length > 0) {
-            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+            const filesArray = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+            for (const file of filesArray) {
+                const tempReq = { file };
+                const saved = await uploadFile(tempReq, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+                const filename = saved[file.fieldname];
+                if (filename) {
+                    if (savedFiles[file.fieldname]) {
+                        savedFiles[file.fieldname] += ',' + filename;
+                    } else {
+                        savedFiles[file.fieldname] = filename;
+                    }
+                }
+            }
         }
 
         // Create Parent
@@ -300,7 +312,19 @@ exports.update = async (req, res) => {
 
         let savedFiles = {};
         if (req.files && Object.keys(req.files).length > 0) {
-            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+            const filesArray = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+            for (const file of filesArray) {
+                const tempReq = { file };
+                const saved = await uploadFile(tempReq, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+                const filename = saved[file.fieldname];
+                if (filename) {
+                    if (savedFiles[file.fieldname]) {
+                        savedFiles[file.fieldname] += ',' + filename;
+                    } else {
+                        savedFiles[file.fieldname] = filename;
+                    }
+                }
+            }
         }
 
         let totalAmount = 0;

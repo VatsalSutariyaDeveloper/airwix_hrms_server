@@ -324,81 +324,122 @@ const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
 
 const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily attendance irregularity alert task...');
-    const { AttendanceDay, User, Notification } = require("../models");
     const notificationService = require("../services/notificationService");
+    const { AttendanceDay, User, Notification, ShiftTemplate, EmployeeShift, Employee } = require("../models");
 
     const refDate = asOf ? dayjs(asOf) : dayjs();
-    const targetDate = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+    const yesterday = refDate.subtract(1, 'day').format('YYYY-MM-DD');
+    const dayBeforeYesterday = refDate.subtract(2, 'day').format('YYYY-MM-DD');
+    const targetDates = [dayBeforeYesterday, yesterday];
 
-    console.log(`[Cron] Checking attendance irregularities/absences for ${targetDate}...`);
+    let totalSentCount = 0;
 
-    //Updated query: Status 5 is Absent
-    const irregularities = await AttendanceDay.findAll({
-        where: {
-            attendance_date: targetDate,
-            [Op.or]: [
-                { status: { [Op.in]: [0, 1, 5, 9, 10, 12, 13] } }, // 5 = Absent
-                { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
-                { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
-            ],
-            status: { [Op.notIn]: [3, 4, 6] } // 4 is Holiday, 3 is WO, 6 is Leave
-        }
-    });
-
-    let sentCount = 0;
-    for (const record of irregularities) {
-        try {
-            const user = await User.findOne({ where: { employee_id: record.employee_id, status: 0 } });
-            if (!user) continue;
-
-            const dateStr = dayjs(targetDate).format("DD MMM YYYY");
-
-            //Logic: Differentiate Absent, Missing Punch-In, and Missing Punch-Out
-            let title = "Missing Punch Alert";
-            let message = "";
-
-            if (record.status === 5) {
-                title = "Attendance Marked Absent";
-                message = `Your attendance for ${dateStr} has been marked as Absent. Please apply for regularization if this is incorrect.`;
-            } else if (record.first_in === null && record.last_out !== null) {
-                title = "Missing Punch-In Alert";
-                message = `You have a missing punch-in on ${dateStr}. Please review and regularize.`;
-            } else if (record.first_in !== null && record.last_out === null) {
-                title = "Missing Punch-Out Alert";
-                message = `You have a missing punch-out on ${dateStr}. Please review and regularize.`;
-            } else {
-                message = `You have a missing punch on ${dateStr}. Please review and regularize.`;
-            } 
-
-            //Date-based Deduplication
-            const existingNotification = await Notification.findOne({
-                where: {
-                    user_id: user.id,
-                    type: "ATTENDANCE_IRREGULARITY",
-                    message: { [Op.like]: `%${dateStr}%` },
-                    status: 0
-                }
-            });
-
-            if (!existingNotification) {
-                await notificationService.createNotification({
-                    user_id: user.id,
-                    company_id: record.company_id || user.company_id,
-                    branch_id: record.branch_id || user.branch_id,
-                    title: title,
-                    message: message,
-                    type: "ATTENDANCE_IRREGULARITY",
-                    reference_id: record.id,
-                    status_code: 1,
-                    redirect_url: "/dashboard"
-                });
-                sentCount++;
+    for (const targetDate of targetDates) {
+        console.log(`[Cron] Checking attendance irregularities/absences for ${targetDate}...`);
+        //Updated query: Status 5 is Absent
+        const irregularities = await AttendanceDay.findAll({
+            where: {
+                attendance_date: targetDate,
+                [Op.or]: [
+                    { status: { [Op.in]: [0, 1, 5, 9, 10, 12, 13] } }, // 5 = Absent
+                    { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
+                    { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
+                ],
+                status: { [Op.notIn]: [3, 4, 6] } // 4 is Holiday, 3 is WO, 6 is Leave
             }
-        } catch (err) {
-            console.error(`[Cron] Failed to notify ${record.employee_id}:`, err.message);
+        });
+
+        for (const record of irregularities) {
+            try {
+                // Check if this is an active night shift currently running/crossing midnight.
+                // If it is active, skip sending notification for this date run (will check/send in a future run when no longer active).
+                let isCurrentActiveNightShift = false;
+                let shiftId = record.shift_id;
+
+                if (!shiftId) {
+                    const dayOfWeek = dayjs(targetDate).day();
+                    const empShift = await EmployeeShift.findOne({
+                        where: { employee_id: record.employee_id, day_of_week: dayOfWeek, status: 0 }
+                    });
+                    if (empShift && empShift.shift_id) {
+                        shiftId = empShift.shift_id;
+                    } else {
+                        const emp = await Employee.findByPk(record.employee_id, { attributes: ['shift_template'] });
+                        if (emp && emp.shift_template) {
+                            shiftId = emp.shift_template;
+                        }
+                    }
+                }
+
+                if (shiftId) {
+                    const shift = await ShiftTemplate.findByPk(shiftId);
+                    if (shift) {
+                        const isNightShift = shift.is_night_shift || shift.end_time < shift.start_time;
+                        if (isNightShift) {
+                            let shiftEndTime = dayjs(`${targetDate} ${shift.end_time}`).add(1, 'day');
+                            // If current time is before shift end + 2 hours buffer, it's an active night shift.
+                            if (dayjs().isBefore(shiftEndTime.add(2, 'hour'))) {
+                                isCurrentActiveNightShift = true;
+                            }
+                        }
+                    }
+                }
+
+                if (isCurrentActiveNightShift) {
+                    console.log(`[Cron] Skipping active night shift employee alert for emp ${record.employee_id} on target date ${targetDate}`);
+                    continue;
+                }
+
+                const user = await User.findOne({ where: { employee_id: record.employee_id, status: 0 } });
+                if (!user) continue;
+
+                const dateStr = dayjs(targetDate).format("DD MMM YYYY");
+
+                //Logic: Differentiate Absent, Missing Punch-In, and Missing Punch-Out
+                let title = "Missing Punch Alert";
+                let message = "";
+
+                if (record.status === 5) {
+                    title = "Attendance Marked Absent";
+                    message = `Your attendance for ${dateStr} has been marked as Absent. Please apply for regularization if this is incorrect.`;
+                } else if (record.first_in === null && record.last_out !== null) {
+                    title = "Missing Punch-In Alert";
+                    message = `You have a missing punch-in on ${dateStr}. Please review and regularize.`;
+                } else if (record.first_in !== null && record.last_out === null) {
+                    title = "Missing Punch-Out Alert";
+                    message = `You have a missing punch-out on ${dateStr}. Please review and regularize.`;
+                } else {
+                    message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
+                }
+
+                //Date-based Deduplication
+                const existingNotification = await Notification.findOne({
+                    where: {
+                        user_id: user.id,
+                        type: "ATTENDANCE_IRREGULARITY",
+                        message: { [Op.like]: `%${dateStr}%` }
+                    }
+                });
+                if (!existingNotification) {
+                    await notificationService.createNotification({
+                        user_id: user.id,
+                        company_id: record.company_id || user.company_id,
+                        branch_id: record.branch_id || user.branch_id,
+                        title: title,
+                        message: message,
+                        type: "ATTENDANCE_IRREGULARITY",
+                        reference_id: record.id,
+                        status_code: 1,
+                        redirect_url: "/dashboard"
+                    });
+                    totalSentCount++;
+                }
+            } catch (err) {
+                console.error(`[Cron] Failed to notify ${record.employee_id} on ${targetDate}:`, err.message);
+            }
         }
     }
-    console.log(`✅ Sent ${sentCount} attendance/absence notifications.`);
+    console.log(`✅ Sent ${totalSentCount} attendance/absence notifications.`);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

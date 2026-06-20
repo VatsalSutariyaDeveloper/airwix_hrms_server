@@ -334,15 +334,25 @@ async function resolvePendingApprovers(request, type) {
 
             case "REIMBURSEMENT": {
                 // Fetches company settings ONLY when needed
-                const companySettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId });
-                rawConfig = companySettings ? (companySettings.reimbursement_approval_config || []) : [];
+                const companySettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "reimbursement_approval_config" });
+                rawConfig = companySettings ? (companySettings.settings_value || []) : [];
                 break;
             }
 
             case "LEAVE_ENCASHMENT": {
-                // Fetches leave encashment approval config from company settings
-                const encashmentSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "leave_encashment_approval_config" });
+                // Fetches leave encashment approval config from company settings (supporting both names due to client mismatch)
+                let encashmentSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "leave_encashment_approval_config" });
+                if (!encashmentSettings) {
+                    encashmentSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "encashment_approval_config" });
+                }
                 rawConfig = encashmentSettings ? (encashmentSettings.settings_value || []) : [];
+                break;
+            }
+
+            case "REGULARIZATION": {
+                // Fetches regularization approval config from company settings
+                const regularizationSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "regularization_approval_config" });
+                rawConfig = regularizationSettings ? (regularizationSettings.settings_value || []) : [];
                 break;
             }
         }

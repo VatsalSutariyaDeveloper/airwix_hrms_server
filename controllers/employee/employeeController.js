@@ -252,7 +252,6 @@ exports.create = async (req, res) => {
         // Validate Required Fields
         const requiredFields = {
             first_name: "First Name",
-            joining_date: "Joining Date",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -4191,9 +4190,9 @@ exports.transfer = async (req, res) => {
  */
 exports.getTeamEmployees = async (req, res) => {
     try {
-        const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || 
-            req.user.is_reporting_manager || 
-            req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || 
+        const isSupervisorOrManager = req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ||
+            req.user.is_reporting_manager ||
+            req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ||
             req.user.is_attendance_supervisor;
 
         if (!isSupervisorOrManager) {

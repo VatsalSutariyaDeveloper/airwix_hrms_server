@@ -1,10 +1,12 @@
-const { validateRequest, commonQuery, handleError, Op } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, Op, getCompanySetting } = require("../../helpers");
 const notificationService = require("../../services/notificationService");
 const { constants } = require("../../helpers/constants");
-const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate } = require("../../models");
+const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, CompanySettings } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const attendanceController = require("./attendanceController");
+
 
 // 1. Create Attendance Regularization  Request
 exports.create = async (req, res) => {
@@ -234,7 +236,7 @@ exports.getPendingApprovals = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id"],
                     },
                     {
                         model: User,
@@ -258,13 +260,18 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
-            // Get leave template if employee has one (attendance regularization  uses same template as leave)
-            const template = employee?.leaveTemplate;
+            // Fetch regularization approval config from company settings
             const currentLevel = request.current_level || 1;
-            const config = template ? (template.approval_config || []) : [];
+            const companySettings = await getCompanySetting(employee.company_id || req.user.company_id);
+            const config = companySettings ? (companySettings.regularization_approval_config || []) : [];
 
             let currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) currentStage = { type: "ANYONE" };
+
+            // Normalize stage type (e.g. "3" -> "REPORTING_MANAGER", "admin" -> "ADMIN")
+            let stageType = (currentStage.type || "").toString().toUpperCase();
+            if (stageType === "3") stageType = "REPORTING_MANAGER";
+            if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
 
             // Reset authorization for each request to prevent cross-contamination
             let isAuthorized = false;
@@ -273,7 +280,7 @@ exports.getPendingApprovals = async (req, res) => {
             if (req.user.is_super_admin && !isOwnRequest) {
                 isAuthorized = true;
             } else {
-                switch (currentStage.type) {
+                switch (stageType) {
                     case 'REPORTING_MANAGER':
                     case 'ATTENDANCE_SUPERVISOR':
                         if (
@@ -323,7 +330,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, remarks } = req.body;
+        const { approval_status, remarks, proposed_attendance_data } = req.body;
 
         const request = await commonQuery.findOneRecord(AttendanceRegularization , { id }, {
             include: [{ model: Employee, as: "employee" }]
@@ -336,22 +343,28 @@ exports.updateStatus = async (req, res) => {
 
         let newStatus = approval_status;
         let newLevel = request.current_level || 1;
+        let isBypass = false;
 
         // Multi-level Approval Logic (Assuming same pattern if template defines it)
         if (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) {
-            const employee = await commonQuery.findOneRecord(Employee, request.employee_id, {
-                include: [
-                    { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
-                    { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
-                ]
-            }, transaction);
+            let maxLevel = 1;
+            const companyId = request.employee?.company_id || request.company_id || req.user.company_id;
+            const companySettings = await getCompanySetting(companyId);
 
-            const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
-            const maxLevel = template ? (template.attendance_regularization_approval_level || 1) : 1;
+            if (companySettings && companySettings.regularization_approval_level) {
+                maxLevel = Number(companySettings.regularization_approval_level);
+            }
+            console.log("[updateStatus] regularization - companyId:", companyId, "maxLevel:", maxLevel, "current_level:", request.current_level || 1);
 
-            if ((request.current_level || 1) < maxLevel) {
+            if ((request.current_level || 1) < maxLevel && !req.user?.is_super_admin) {
                 newStatus = constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED;
                 newLevel = (request.current_level || 1) + 1;
+            } else {
+                newStatus = constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED;
+                if (req.user?.is_super_admin && (request.current_level || 1) < maxLevel) {
+                    isBypass = true;
+                    newLevel = maxLevel;
+                }
             }
         }
 
@@ -361,7 +374,8 @@ exports.updateStatus = async (req, res) => {
             action: (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) ? "APPROVED" : "REJECTED",
             by: req.user.id,
             at: new Date(),
-            remarks: remarks || ""
+            remarks: remarks || "",
+            ...(isBypass ? { note: "Bypassed remaining levels via Super Admin" } : {})
         });
 
         await commonQuery.updateRecordById(AttendanceRegularization , id, {
@@ -369,7 +383,8 @@ exports.updateStatus = async (req, res) => {
             current_level: newLevel,
             approval_history: history,
             approved_by: req.user.id,
-            approval_remark: remarks || ""
+            approval_remark: remarks || "",
+            proposed_attendance_data: proposed_attendance_data || request.proposed_attendance_data
         }, transaction);
 
         // Send Notification to Employee
@@ -389,13 +404,44 @@ exports.updateStatus = async (req, res) => {
             }, transaction);
         }
 
-        // Rebuild attendance day if fully approved just like leave-request
+        // Rebuild/Update attendance day if fully approved
+        let runUpdateAttendanceDay = false;
+        let finalProposedData = null;
+
         if (Number(newStatus) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED || newStatus === "APPROVED") {
-            const attDate = dayjs(request.attendance_date).format('YYYY-MM-DD');
-            await rebuildAttendanceDay(request.employee_id, attDate, { user_id: req.user?.id }, transaction);
+            finalProposedData = proposed_attendance_data || request.proposed_attendance_data;
+            if (finalProposedData) {
+                runUpdateAttendanceDay = true;
+            } else {
+                const attDate = dayjs(request.attendance_date).format('YYYY-MM-DD');
+                await rebuildAttendanceDay(request.employee_id, attDate, { user_id: req.user?.id }, transaction);
+            }
         }
 
         await transaction.commit();
+
+        if (runUpdateAttendanceDay && finalProposedData) {
+            const mockReq = {
+                body: {
+                    ...finalProposedData,
+                    employee_id: request.employee_id,
+                    attendance_date: dayjs(request.attendance_date).format('YYYY-MM-DD'),
+                    force_status: true
+                },
+                user: {
+                    id: req.user.id,
+                    company_id: req.user.company_id,
+                    branch_id: req.user.branch_id
+                }
+            };
+            const mockRes = {
+                ok: (data) => {},
+                error: (code, message) => { throw new Error(message || code); },
+                success: (msg) => {}
+            };
+            await attendanceController.updateAttendanceDay(mockReq, mockRes);
+        }
+
         return res.success(constants.UPDATED);
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();

@@ -42,13 +42,13 @@ exports.markAsRead = async (req, res) => {
 };
 
 /**
- * Clear all notifications (mark as deleted)
+ * Clear all notifications (permanently delete)
  */
 exports.clearAll = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        await commonQuery.updateRecordById(Notification, { user_id: userId }, { status: 2, is_read: 1 }, null);
+        await commonQuery.hardDeleteRecords(Notification, { user_id: userId }, null);
 
         return res.ok({ success: true });
     } catch (err) {
@@ -57,7 +57,7 @@ exports.clearAll = async (req, res) => {
 };
 
 /**
- * Clear a single notification (mark as deleted)
+ * Clear a single notification (permanently delete)
  */
 exports.clear = async (req, res) => {
     try {
@@ -68,7 +68,7 @@ exports.clear = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "Notification ID is required");
         }
 
-        await commonQuery.updateRecordById(Notification, { id, user_id: userId }, { status: 2, is_read: 1 }, null);
+        await commonQuery.hardDeleteRecords(Notification, { id, user_id: userId }, null);
 
         return res.ok({ success: true });
     } catch (err) {
