@@ -4,7 +4,7 @@ const { constants } = require("../../helpers/constants");
 const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, CompanySettings } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
-const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 const attendanceController = require("./attendanceController");
 
 
@@ -273,39 +273,13 @@ exports.getPendingApprovals = async (req, res) => {
             if (stageType === "3") stageType = "REPORTING_MANAGER";
             if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
 
-            // Reset authorization for each request to prevent cross-contamination
-            let isAuthorized = false;
             const isOwnRequest = (request.employee_id === req.user.employee_id);
-
-            if (req.user.is_super_admin && !isOwnRequest) {
-                isAuthorized = true;
-            } else {
-                switch (stageType) {
-                    case 'REPORTING_MANAGER':
-                    case 'ATTENDANCE_SUPERVISOR':
-                        if (
-                            ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
-                            ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id)
-                        ) {
-                            isAuthorized = true;
-                        }
-                        break;
-                    case 'ADMIN':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'EMPLOYER':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'ANYONE':
-                        if (employee.reporting_manager === req.user.id ||
-                            employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin ||
-                            req.user.is_super_admin) {
-                            isAuthorized = true;
-                        }
-                        break;
-                }
-            }
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType,
+                isOwnRequest
+            });
             
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
@@ -341,47 +315,47 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        let newStatus = approval_status;
-        let newLevel = request.current_level || 1;
-        let isBypass = false;
-
-        // Multi-level Approval Logic (Assuming same pattern if template defines it)
+        let maxLevel = 1;
         if (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) {
-            let maxLevel = 1;
             const companyId = request.employee?.company_id || request.company_id || req.user.company_id;
             const companySettings = await getCompanySetting(companyId);
 
             if (companySettings && companySettings.regularization_approval_level) {
                 maxLevel = Number(companySettings.regularization_approval_level);
             }
-            console.log("[updateStatus] regularization - companyId:", companyId, "maxLevel:", maxLevel, "current_level:", request.current_level || 1);
-
-            if ((request.current_level || 1) < maxLevel && !req.user?.is_super_admin) {
-                newStatus = constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED;
-                newLevel = (request.current_level || 1) + 1;
-            } else {
-                newStatus = constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED;
-                if (req.user?.is_super_admin && (request.current_level || 1) < maxLevel) {
-                    isBypass = true;
-                    newLevel = maxLevel;
-                }
-            }
         }
 
-        const history = request.approval_history || [];
-        history.push({
+        const isApproved = Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED;
+        const historyItem = {
             level: request.current_level || 1,
-            action: (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) ? "APPROVED" : "REJECTED",
+            action: isApproved ? "APPROVED" : "REJECTED",
             by: req.user.id,
             at: new Date(),
-            remarks: remarks || "",
-            ...(isBypass ? { note: "Bypassed remaining levels via Super Admin" } : {})
+            remarks: remarks || ""
+        };
+
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel: request.current_level || 1,
+            totalLevels: maxLevel,
+            isSuperAdmin: req.user?.is_super_admin,
+            approvalHistory: request.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.ATTENDANCE_REGULARIZATION_STATUS.REJECTED,
+                CANCELLED: constants.ATTENDANCE_REGULARIZATION_STATUS.CANCELLED
+            },
+            historyItem,
+            bypassOptions: {
+                attachToNewItem: true
+            }
         });
 
         await commonQuery.updateRecordById(AttendanceRegularization , id, {
             approval_status: newStatus,
             current_level: newLevel,
-            approval_history: history,
+            approval_history: updatedHistory,
             approved_by: req.user.id,
             approval_remark: remarks || "",
             proposed_attendance_data: proposed_attendance_data || request.proposed_attendance_data

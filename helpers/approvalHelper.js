@@ -409,6 +409,152 @@ async function resolvePendingApprovers(request, type) {
     };
 }
 
+/**
+ * Calculates progression state for a multi-level approval request.
+ * 
+ * @param {Object} options
+ * @param {String|Number} options.targetStatus - The requested action (e.g. APPROVED, REJECTED, CANCELLED constants)
+ * @param {Number} options.currentLevel - The current approval level
+ * @param {Number} options.totalLevels - The maximum/configured levels of approval
+ * @param {Boolean} options.isSuperAdmin - Whether the action is performed by a super admin
+ * @param {Array} options.approvalHistory - Current approval history array
+ * @param {Object} options.statusMapping - Map containing keys: APPROVED, PARTIALLY_APPROVED, REJECTED, CANCELLED
+ * @param {Object} options.historyItem - The template/attributes of the history item to push (must include action, by/approved_by, etc.)
+ * @param {Object} options.bypassOptions - Controlling how super-admin bypass is noted:
+ *                 - {Boolean} attachToPreviousItem: If true, sets note on the last item in history *before* pushing the new one.
+ *                 - {Boolean} attachToNewItem: If true, includes note inside the pushed history item itself.
+ *                 - {String} note: The note text, defaults to "Bypassed remaining levels via Super Admin"
+ * @returns {Object} { newStatus, newLevel, isBypass, updatedHistory }
+ */
+function getNextApprovalState({
+    targetStatus,
+    currentLevel,
+    totalLevels,
+    isSuperAdmin,
+    approvalHistory = [],
+    statusMapping,
+    historyItem,
+    bypassOptions = {}
+}) {
+    const isApproved = String(targetStatus) === String(statusMapping.APPROVED) || targetStatus === "APPROVED";
+    
+    let newStatus;
+    let newLevel = currentLevel;
+    let isBypass = false;
+    
+    if (isApproved) {
+        if (currentLevel < totalLevels && !isSuperAdmin) {
+            newStatus = statusMapping.PARTIALLY_APPROVED;
+            newLevel = currentLevel + 1;
+        } else {
+            newStatus = statusMapping.APPROVED;
+            if (isSuperAdmin && currentLevel < totalLevels) {
+                isBypass = true;
+                newLevel = totalLevels;
+            } else {
+                newLevel = totalLevels;
+            }
+        }
+    } else {
+        const isRejected = targetStatus === "REJECTED" || String(targetStatus) === String(statusMapping.REJECTED);
+        newStatus = isRejected ? statusMapping.REJECTED : statusMapping.CANCELLED;
+    }
+    
+    const updatedHistory = [...(approvalHistory || [])];
+    
+    if (historyItem) {
+        const itemToPush = { ...historyItem };
+        
+        if (isBypass) {
+            const noteText = bypassOptions.note || "Bypassed remaining levels via Super Admin";
+            
+            if (bypassOptions.attachToNewItem) {
+                itemToPush.note = noteText;
+            } else if (bypassOptions.attachToPreviousItem && updatedHistory.length > 0) {
+                updatedHistory[updatedHistory.length - 1] = {
+                    ...updatedHistory[updatedHistory.length - 1],
+                    note: noteText
+                };
+            }
+        }
+        
+        updatedHistory.push(itemToPush);
+        
+        // Default bypass mode (after push, like leave / reimbursement)
+        if (isBypass && !bypassOptions.attachToNewItem && !bypassOptions.attachToPreviousItem && updatedHistory.length > 0) {
+            updatedHistory[updatedHistory.length - 1].note = bypassOptions.note || "Bypassed remaining levels via Super Admin";
+        }
+    }
+    
+    return {
+        newStatus,
+        newLevel,
+        isBypass,
+        updatedHistory
+    };
+}
+
+/**
+ * Verifies if a user is authorized to approve/reject a request at the current template stage.
+ * 
+ * @param {Object} options
+ * @param {Object} options.user - The logged-in user object (req.user)
+ * @param {Object} options.employee - The employee record associated with the request (with reporting_manager, etc.)
+ * @param {String} options.stageType - The type of stage (REPORTING_MANAGER, ATTENDANCE_SUPERVISOR, ADMIN, EMPLOYER, ANYONE)
+ * @param {Boolean} options.isOwnRequest - True if the employee ID of the request matches the user's employee ID
+ * @param {Boolean} options.useEmployeeIdForManager - If true, compares employee.reporting_manager against user.employee_id instead of user.id
+ * @param {Boolean} options.allowCrossRoleManagerSupervisor - If true, allows either reporting manager or supervisor to match for manager/supervisor stage types (resignation flow)
+ * @returns {Boolean}
+ */
+function isUserAuthorizedForStage({
+    user,
+    employee,
+    stageType,
+    isOwnRequest = false,
+    useEmployeeIdForManager = false,
+    allowCrossRoleManagerSupervisor = false
+}) {
+    const isSuperAdmin = (user.role_key === 'BUSINESS_ADMIN' && user.is_super_admin) || user.is_super_admin;
+    if (isSuperAdmin && !isOwnRequest) {
+        return true;
+    }
+    
+    let type = (stageType || "ANYONE").toString().toUpperCase();
+    if (type === "3") type = "REPORTING_MANAGER";
+    if (type === "4") type = "ATTENDANCE_SUPERVISOR";
+    
+    const managerId = useEmployeeIdForManager ? user.employee_id : user.id;
+    const supervisorId = useEmployeeIdForManager ? user.employee_id : user.id;
+    const isAdmin = user.role_key === 'ADMIN' || user.is_admin || isSuperAdmin;
+    
+    const isMatchReportingManager = employee.reporting_manager === managerId;
+    const isMatchAttendanceSupervisor = employee.attendance_supervisor === supervisorId;
+    
+    switch (type) {
+        case 'REPORTING_MANAGER':
+        case 'ATTENDANCE_SUPERVISOR':
+            if (allowCrossRoleManagerSupervisor) {
+                return isMatchReportingManager || isMatchAttendanceSupervisor;
+            }
+            return (
+                ((user.role_key === 'REPORTING_MANAGER' || user.is_reporting_manager) && isMatchReportingManager) ||
+                ((user.role_key === 'ATTENDANCE_SUPERVISOR' || user.is_attendance_supervisor) && isMatchAttendanceSupervisor)
+            );
+            
+        case 'ADMIN':
+        case 'EMPLOYER':
+            return isAdmin;
+            
+        case 'ANYONE':
+            return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
+            
+        default:
+            return false;
+    }
+}
+
 module.exports = {
-    resolvePendingApprovers
+    resolvePendingApprovers,
+    getNextApprovalState,
+    isUserAuthorizedForStage
 };

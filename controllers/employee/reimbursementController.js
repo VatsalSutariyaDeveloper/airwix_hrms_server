@@ -3,7 +3,7 @@ const { validateRequest, commonQuery, handleError, uploadFile, fileExists, forma
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
 const { Op } = require("sequelize");
-const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 
 
 
@@ -455,35 +455,48 @@ exports.updateStatus = async (req, res) => {
         const currentLevel = reimbursement.current_level;
         const history = reimbursement.approval_history || [];
 
-        // 4. Handle Approval Logic
-        if (String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED") {
-            history.push({
-                level: currentLevel,
-                approved_by: req.user?.id,
-                approved_at: new Date(),
-                action: "APPROVED",
-                remark: approval_remark
-            });
+        const isApproved = String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED";
+        const historyItem = isApproved ? {
+            level: currentLevel,
+            approved_by: req.user?.id,
+            approved_at: new Date(),
+            action: "APPROVED",
+            remark: approval_remark
+        } : {
+            level: currentLevel,
+            action: approval_status,
+            by: req.user?.id,
+            at: new Date(),
+            remark: approval_remark
+        };
 
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel,
+            totalLevels,
+            isSuperAdmin: req.user?.is_super_admin,
+            approvalHistory: reimbursement.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED,
+                CANCELLED: constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED
+            },
+            historyItem
+        });
+
+        // 4. Handle Approval Logic
+        if (isApproved) {
             const updateData = {
-                approval_history: history,
+                approval_history: updatedHistory,
                 approval_remark: approval_remark || "",
-                payment_type: payment_type
+                payment_type: payment_type,
+                approval_status: newStatus,
+                current_level: newLevel
             };
 
-            // Partial vs Final Approval
-            if (currentLevel < totalLevels && !req.user?.is_super_admin) {
-                updateData.approval_status = constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED;
-                updateData.current_level = currentLevel + 1;
-            } else {
-                updateData.approval_status = constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED;
+            if (newStatus === constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) {
                 updateData.approved_by = approved_by || req.user?.id;
-
-                if (req.user?.is_super_admin && currentLevel < totalLevels) {
-                    if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
-                    updateData.approval_history = history;
-                    updateData.current_level = totalLevels;
-                }
 
                 const finalPaymentType = payment_type !== undefined ? Number(payment_type) : reimbursement.payment_type;
                 // Create PaymentHistory entry for instant payment (payment_type = 2)
@@ -508,28 +521,11 @@ exports.updateStatus = async (req, res) => {
 
             await commonQuery.updateRecordById(Reimbursement, reimbursement.id, updateData, transaction);
         }        // 6. Handle Rejection / Cancellation
-        else if (
-            String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED) ||
-            String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED) ||
-            approval_status === "REJECTED" ||
-            approval_status === "CANCELLED"
-        ) {
-            history.push({
-                level: currentLevel,
-                action: approval_status,
-                by: req.user?.id,
-                at: new Date(),
-                remark: approval_remark
-            });
-
-            const targetStatus = (approval_status === "REJECTED" || Number(approval_status) === constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED)
-                ? constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED
-                : constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED;
-
+        else {
             await commonQuery.updateRecordById(Reimbursement, reimbursement.id, {
-                approval_status: targetStatus,
+                approval_status: newStatus,
                 approval_remark: approval_remark || "",
-                approval_history: history
+                approval_history: updatedHistory
             }, transaction);
         }
 
@@ -639,17 +635,11 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
-            let isAuthorized = false;
-            if (req.user.is_super_admin) {
-                isAuthorized = true;
-            } else {
-                // Simplified authorization logic for Reimbursement
-                if (employee.reporting_manager === req.user.id ||
-                    employee.attendance_supervisor === req.user.id ||
-                    req.user.is_admin) {
-                    isAuthorized = true;
-                }
-            }
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType: 'ANYONE'
+            });
 
             if (isAuthorized) {
                 const raw = request.get({ plain: true });

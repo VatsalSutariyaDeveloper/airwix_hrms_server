@@ -3,7 +3,7 @@ const { constants } = require("../../helpers/constants");
 const { sequelize, OutDutyRequest, User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, RolePermission } = require("../../models");
 const dayjs = require("dayjs");
 const notificationService = require("../../services/notificationService");
-const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 
 const getApproversForOutDutyRequest = async (employeeId, currentLevel, transaction) => {
     try {
@@ -522,42 +522,13 @@ exports.getPendingApprovals = async (req, res) => {
             if (!currentStage) currentStage = { type: "ANYONE" };
 
             // Reset authorization for each request to prevent cross-contamination
-            let isAuthorized = false;
             const isOwnRequest = (request.employee_id === req.user.employee_id);
-
-            console.log("OutDuty Request:", request.id, "Employee:", employee.id,
-                "User ID:", req.user.id, "Role:", req.user.role_id,
-                "Stage:", currentStage.type, "Config:", currentStage);
-
-            if (req.user.is_super_admin && !isOwnRequest) {
-                isAuthorized = true;
-            } else {
-                switch (currentStage.type) {
-                    case 'REPORTING_MANAGER':
-                    case 'ATTENDANCE_SUPERVISOR':
-                        if (
-                            ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
-                            ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id)
-                        ) {
-                            isAuthorized = true;
-                        }
-                        break;
-                    case 'ADMIN':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'EMPLOYER':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'ANYONE':
-                        if (employee.reporting_manager === req.user.id ||
-                            employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin ||
-                            req.user.is_super_admin) {
-                            isAuthorized = true;
-                        }
-                        break;
-                }
-            }
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType: currentStage.type,
+                isOwnRequest
+            });
 
             console.log("Request", request.id, "Authorized:", isAuthorized);
 
@@ -594,10 +565,7 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
-        let newStatus = approval_status;
-        let newLevel = outDutyRequest.current_out_duty_level;
-
-        // Multi-level Approval Logic
+        let maxLevel = 1;
         if (approval_status === constants.OUT_DUTY_STATUS.APPROVED) {
             const employee = await commonQuery.findOneRecord(Employee, outDutyRequest.employee_id, {
                 include: [
@@ -607,33 +575,40 @@ exports.updateStatus = async (req, res) => {
             }, transaction);
 
             const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
-            const maxLevel = template ? (template.out_duty_approval_level || 1) : 1;
-
-            if (req.user.is_super_admin) {
-                newStatus = constants.OUT_DUTY_STATUS.APPROVED;
-                newLevel = maxLevel;
-                if (outDutyRequest.current_out_duty_level < maxLevel && outDutyRequest.approval_history && outDutyRequest.approval_history.length > 0) {
-                    outDutyRequest.approval_history[outDutyRequest.approval_history.length - 1].note = "Bypassed remaining levels via Super Admin";
-                }
-            } else if (outDutyRequest.current_out_duty_level < maxLevel) {
-                newStatus = constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED;
-                newLevel = outDutyRequest.current_out_duty_level + 1;
-            }
+            maxLevel = template ? (template.out_duty_approval_level || 1) : 1;
         }
 
-        const history = outDutyRequest.approval_history || [];
-        history.push({
+        const isApproved = approval_status === constants.OUT_DUTY_STATUS.APPROVED;
+        const historyItem = {
             level: outDutyRequest.current_out_duty_level,
-            action: approval_status === constants.OUT_DUTY_STATUS.APPROVED ? "APPROVED" : "REJECTED",
+            action: isApproved ? "APPROVED" : "REJECTED",
             by: req.user.id,
             at: new Date(),
             remarks: remarks || ""
+        };
+
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel: outDutyRequest.current_out_duty_level,
+            totalLevels: maxLevel,
+            isSuperAdmin: req.user.is_super_admin,
+            approvalHistory: outDutyRequest.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.OUT_DUTY_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.OUT_DUTY_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.OUT_DUTY_STATUS.REJECTED,
+                CANCELLED: constants.OUT_DUTY_STATUS.CANCELLED
+            },
+            historyItem,
+            bypassOptions: {
+                attachToPreviousItem: true
+            }
         });
 
         await commonQuery.updateRecordById(OutDutyRequest, id, {
             approval_status: newStatus,
             current_out_duty_level: newLevel,
-            approval_history: history,
+            approval_history: updatedHistory,
             approved_by: req.user.id,
             approval_remark: remarks || ""
         }, transaction);

@@ -8,7 +8,7 @@ const isSameOrBefore = require("dayjs/plugin/isSameOrBefore");
 dayjs.extend(isSameOrBefore);
 const LeaveBalanceService = require("../../../services/leaveBalanceService");
 const notificationService = require("../../../services/notificationService");
-const { resolvePendingApprovers } = require("../../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../../helpers/approvalHelper");
 
 const getApproversForLeaveRequest = async (employeeId, currentLevel, transaction) => {
     try {
@@ -1204,18 +1204,40 @@ exports.updateStatus = async (req, res) => {
         const currentLevel = leaveRequest.current_level;
         const totalLevels = template?.approval_levels || 1;
 
-        if (String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED") {
-            const history = leaveRequest.approval_history || [];
-            history.push({
-                level: currentLevel,
-                approved_by: req.user?.id,
-                approved_at: new Date(),
-                action: "APPROVED"
-            });
+        const isApproved = String(approval_status) === String(constants.LEAVE_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED";
+        const historyItem = isApproved ? {
+            level: currentLevel,
+            approved_by: req.user?.id,
+            approved_at: new Date(),
+            action: "APPROVED"
+        } : {
+            level: currentLevel,
+            action: (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? "REJECTED" : "CANCELLED",
+            by: req.user?.id,
+            at: new Date()
+        };
 
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel,
+            totalLevels,
+            isSuperAdmin: req.user?.is_super_admin,
+            approvalHistory: leaveRequest.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.LEAVE_APPROVAL_STATUS.REJECTED,
+                CANCELLED: constants.LEAVE_APPROVAL_STATUS.CANCELLED
+            },
+            historyItem
+        });
+
+        if (isApproved) {
             const updateData = {
-                approval_history: history,
-                approval_remark: approval_remark || ""
+                approval_history: updatedHistory,
+                approval_remark: approval_remark || "",
+                approval_status: newStatus,
+                current_level: newLevel
             };
 
             if (leaveRequest.request_type === 'CREDIT' && total_days !== undefined) {
@@ -1224,18 +1246,8 @@ exports.updateStatus = async (req, res) => {
                 leaveRequest.total_days = parsedDays; // Update local reference for subsequent balance adjustment
             }
 
-            if (currentLevel < totalLevels && !req.user?.is_super_admin) {
-                updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED;
-                updateData.current_level = currentLevel + 1;
-            } else {
-                updateData.approval_status = constants.LEAVE_APPROVAL_STATUS.APPROVED;
+            if (newStatus === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
                 updateData.approved_by = approved_by || req.user?.id;
-
-                if (req.user?.is_super_admin && currentLevel < totalLevels) {
-                    if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
-                    updateData.approval_history = history;
-                    updateData.current_level = totalLevels;
-                }
             }
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, updateData, transaction);
 
@@ -1342,20 +1354,11 @@ exports.updateStatus = async (req, res) => {
                 }
             }
 
-            const actionStr = (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? "REJECTED" : "CANCELLED";
-            const history = leaveRequest.approval_history || [];
-            history.push({
-                level: currentLevel,
-                action: actionStr,
-                by: req.user?.id,
-                at: new Date()
-            });
-
             await commonQuery.updateRecordById(LeaveRequest, leaveRequest.id, {
-                approval_status: (approval_status === "REJECTED" || Number(approval_status) === constants.LEAVE_APPROVAL_STATUS.REJECTED) ? constants.LEAVE_APPROVAL_STATUS.REJECTED : constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                approval_status: newStatus,
                 approved_by: approved_by || req.user?.id,
                 approval_remark: approval_remark || "",
-                approval_history: history
+                approval_history: updatedHistory
             }, transaction);
 
             // Send Notification to Employee
@@ -1461,39 +1464,13 @@ exports.getPendingApprovals = async (req, res) => {
             let currentStage = config.find(c => c.level === currentLevel);
             if (!currentStage) currentStage = { type: "ANYONE" };
 
-            let isAuthorized = false;
             const isOwnRequest = (request.employee_id === req.user.employee_id);
-
-            if (req.user.is_super_admin && !isOwnRequest) {
-                isAuthorized = true;
-            } else {
-                switch (currentStage.type) {
-                    case 'REPORTING_MANAGER':
-                    case 'ATTENDANCE_SUPERVISOR':
-                        if (
-                            ((req.user.role_key === constants.ROLE_KEYS.REPORTING_MANAGER || req.user.is_reporting_manager) && employee.reporting_manager === req.user.id) ||
-                            ((req.user.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR || req.user.is_attendance_supervisor) && employee.attendance_supervisor === req.user.id)
-                        ) {
-                            isAuthorized = true;
-                        }
-                        break;
-                    case 'ADMIN':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'EMPLOYER':
-                        if (req.user.is_admin || req.user.is_super_admin) isAuthorized = true;
-                        break;
-                    case 'ANYONE':
-                        // Anyone of Reporting Manager, Supervisor, Admin, etc.
-                        if (employee.reporting_manager === req.user.id ||
-                            employee.attendance_supervisor === req.user.id ||
-                            req.user.is_admin ||
-                            req.user.is_super_admin) {
-                            isAuthorized = true;
-                        }
-                        break;
-                }
-            }
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType: currentStage.type,
+                isOwnRequest
+            });
 
             if (isAuthorized) {
                 const raw = request.get({ plain: true });

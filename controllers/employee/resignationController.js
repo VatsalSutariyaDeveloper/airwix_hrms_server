@@ -24,7 +24,7 @@ const {
 const dayjs = require("dayjs");
 const emailService = require("../../services/emailService");
 const notificationService = require("../../services/notificationService");
-const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 
 /**
  * Controller for Managing Employee Resignations & Exit Lifecycle
@@ -201,42 +201,54 @@ exports.handleAction = async (req, res) => {
             return res.error(constants.PERMISSION_DENIED, { message: "You are not authorized to approve this request at the current level." });
         }
 
-        // 2. Process Action
-        const history = resignation.approval_history || [];
-        const actionType = approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED ? "APPROVED" : "REJECTED";
-
-        history.push({
+        const isApproved = approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
+        const historyItem = {
             level: currentLevel,
-            action: actionType,
+            action: isApproved ? "APPROVED" : "REJECTED",
             by: req.user.id,
             user_name: req.user.user_name,
             at: new Date(),
             remarks
+        };
+
+        const isSuperAdmin = req.user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && req.user.is_super_admin;
+
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel,
+            totalLevels,
+            isSuperAdmin,
+            approvalHistory: resignation.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.RESIGNATION_APPROVAL_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.RESIGNATION_APPROVAL_STATUS.REJECTED,
+                CANCELLED: constants.RESIGNATION_APPROVAL_STATUS.CANCELLED
+            },
+            historyItem
         });
 
-        if (approval_status === constants.RESIGNATION_APPROVAL_STATUS.APPROVED) {
-            const updateData = { approval_history: history };
-            const isSuperAdmin = req.user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && req.user.is_super_admin;
+        if (newStatus === constants.RESIGNATION_APPROVAL_STATUS.APPROVED) {
+            const approvedLWD = approved_lwd || resignation.preferred_lwd;
+            // Update employee status
+            await commonQuery.updateRecordById(Employee, resignation.employee_id, {
+                exit_date: approvedLWD,
+                status: constants.STATUS_EMPLOYEE_EXIT,
+                resignation_status: 2
+            }, transaction);
 
-            if (isSuperAdmin || currentLevel >= totalLevels) {
-                // Final Approval (Super Admin override or last level reached)
-                updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.APPROVED;
-                updateData.current_level = totalLevels;
-                updateData.approved_lwd = approved_lwd || resignation.preferred_lwd;
-
-                // Update employee status
-                await commonQuery.updateRecordById(Employee, resignation.employee_id, {
-                    exit_date: updateData.approved_lwd,
-                    status: constants.STATUS_EMPLOYEE_EXIT,
-                    resignation_status: 2
-                }, transaction);
-            } else {
-                // Move to next level
-                updateData.approval_status = constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED;
-                updateData.current_level = currentLevel + 1;
-            }
-
-            await commonQuery.updateRecordById(EmployeeResignation, id, updateData, transaction);
+            await commonQuery.updateRecordById(EmployeeResignation, id, {
+                approval_history: updatedHistory,
+                approval_status: newStatus,
+                current_level: newLevel,
+                approved_lwd: approvedLWD
+            }, transaction);
+        } else if (newStatus === constants.RESIGNATION_APPROVAL_STATUS.PARTIALLY_APPROVED) {
+            await commonQuery.updateRecordById(EmployeeResignation, id, {
+                approval_history: updatedHistory,
+                approval_status: newStatus,
+                current_level: newLevel
+            }, transaction);
 
             // Notification logic
             try {
@@ -559,24 +571,13 @@ exports.getResignationHistory = async (req, res) => {
  * Check if a user is authorized to approve/reject at a given stage
  */
 const isUserAuthorizedForResignation = (user, employee, stage) => {
-    const isSuperAdmin = user.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN && user.is_super_admin;
-    if (isSuperAdmin) return true;
-
-    const { type } = stage || { type: "ANYONE" };
-    const employeeId = user.employee_id;
-    const isAdmin = user.role_key === constants.ROLE_KEYS.ADMIN;
-
-    switch (type) {
-        case 'REPORTING_MANAGER':
-        case 'ATTENDANCE_SUPERVISOR':
-            return employee.reporting_manager === employeeId || employee.attendance_supervisor === employeeId;
-        case 'ADMIN':
-            return isAdmin;
-        case 'ANYONE':
-            return employee.reporting_manager === employeeId || employee.attendance_supervisor === employeeId || isAdmin;
-        default:
-            return false;
-    }
+    return isUserAuthorizedForStage({
+        user,
+        employee,
+        stageType: stage?.type,
+        useEmployeeIdForManager: true,
+        allowCrossRoleManagerSupervisor: true
+    });
 };
 
 /**
