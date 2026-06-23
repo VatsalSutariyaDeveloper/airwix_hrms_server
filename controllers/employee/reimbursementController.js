@@ -1,11 +1,21 @@
 const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
-const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime } = require("../../helpers");
+const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime, deleteFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
 const { Op } = require("sequelize");
-const { resolvePendingApprovers } = require("../../helpers/approvalHelper");
+const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 
 
+
+// Helper to parse comma-separated bills_docs and generate array of verified URLs
+const getBillsDocsUrls = (bills_docs) => {
+    if (!bills_docs) return [];
+    return bills_docs.split(',').map(f => {
+        return fileExists(constants.REIMBURSEMENT_DOC_FOLDER, f)
+            ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${f}`
+            : null;
+    }).filter(Boolean);
+};
 
 // Create a Reimbursement Request
 exports.create = async (req, res) => {
@@ -38,7 +48,6 @@ exports.create = async (req, res) => {
 
             if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
             if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
-            if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
 
             if (Object.keys(itemErrors).length === 0) {
                 totalAmount += parseFloat(item.amount);
@@ -53,7 +62,19 @@ exports.create = async (req, res) => {
         // Upload all files first to get the saved filenames
         let savedFiles = {};
         if (req.files && Object.keys(req.files).length > 0) {
-            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+            const filesArray = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+            for (const file of filesArray) {
+                const tempReq = { file };
+                const saved = await uploadFile(tempReq, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+                const filename = saved[file.fieldname];
+                if (filename) {
+                    if (savedFiles[file.fieldname]) {
+                        savedFiles[file.fieldname] += ',' + filename;
+                    } else {
+                        savedFiles[file.fieldname] = filename;
+                    }
+                }
+            }
         }
 
         // Create Parent
@@ -61,11 +82,11 @@ exports.create = async (req, res) => {
             employee_id: POST.employee_id,
             total_amount: totalAmount,
             date: new Date(), // Set claim date as today
+            expense_date: POST.expense_date || null, // Explicitly save parent expense_date
             description: POST.description || "",
             approval_status: constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING,
             current_level: 1,
-            approval_history: [],
-            payment_type: POST.payment_type || 1
+            approval_history: []
         }, transaction);
 
         // Map files and insert items
@@ -85,7 +106,7 @@ exports.create = async (req, res) => {
                 reimbursement_id: reimbursement.id,
                 expense_type: item.expense_type,
                 amount: parseFloat(item.amount),
-                expense_date: item.expense_date,
+                expense_date: POST.expense_date || null,
                 description: item.description || "",
                 bills_docs: uploadedFile,
                 user_id: req.user?.id
@@ -143,21 +164,11 @@ exports.getAll = async (req, res) => {
         // Add document URL
         data.items = await Promise.all((data?.items || []).map(async row => {
             const raw = row.get ? row.get({ plain: true }) : row;
-            if (raw.bills_docs) {
-                const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, raw.bills_docs);
-                raw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${raw.bills_docs}` : null;
-            } else {
-                raw.bills_docs_url = null;
-            }
+            raw.bills_docs_url = getBillsDocsUrls(raw.bills_docs);
 
             if (raw.items && Array.isArray(raw.items)) {
                 raw.items = raw.items.map(child => {
-                    if (child.bills_docs) {
-                        const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
-                        child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
-                    } else {
-                        child.bills_docs_url = null;
-                    }
+                    child.bills_docs_url = getBillsDocsUrls(child.bills_docs);
                     return child;
                 });
             }
@@ -200,27 +211,20 @@ exports.getById = async (req, res) => {
         const raw = reimbursement.get({ plain: true });
 
         // Add document URL
-        if (raw.bills_docs) {
-            const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, raw.bills_docs);
-            raw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${raw.bills_docs}` : null;
-        } else {
-            raw.bills_docs_url = null;
-        }
+        raw.bills_docs_url = getBillsDocsUrls(raw.bills_docs);
 
         if (raw.items && Array.isArray(raw.items)) {
             raw.items = raw.items.map(child => {
-                if (child.bills_docs) {
-                    const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
-                    child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
-                } else {
-                    child.bills_docs_url = null;
-                }
+                child.bills_docs_url = getBillsDocsUrls(child.bills_docs);
                 return child;
             });
         }
 
         // Applied date (date request was submitted) — same as summary endpoint
         raw.applied_date = raw.createdAt;
+
+        // Actual expense date — stored directly on the parent record
+        raw.expense_date = raw.expense_date || null;
 
         // Resolve pending approver details
         if (raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PENDING || raw.approval_status === constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED) {
@@ -272,7 +276,7 @@ exports.update = async (req, res) => {
             }
             if (!item.expense_type) itemErrors[`items[${i}].expense_type`] = "Expense Type is required";
             if (!item.amount || parseFloat(item.amount) <= 0) itemErrors[`items[${i}].amount`] = "Amount must be greater than zero";
-            if (!item.expense_date) itemErrors[`items[${i}].expense_date`] = "Expense date is required";
+
 
             if (item.id) incomingIds.add(Number(item.id));
         }
@@ -291,6 +295,14 @@ exports.update = async (req, res) => {
         for (const existing of existingItems) {
             if (!incomingIds.has(existing.id)) {
                 toDeleteIds.push(existing.id);
+
+                // Also delete physical files for the removed item
+                if (existing.bills_docs) {
+                    const oldFiles = existing.bills_docs.split(',').filter(Boolean);
+                    for (const oldFile of oldFiles) {
+                        await deleteFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, oldFile);
+                    }
+                }
             }
         }
 
@@ -300,7 +312,19 @@ exports.update = async (req, res) => {
 
         let savedFiles = {};
         if (req.files && Object.keys(req.files).length > 0) {
-            savedFiles = await uploadFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+            const filesArray = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+            for (const file of filesArray) {
+                const tempReq = { file };
+                const saved = await uploadFile(tempReq, res, constants.REIMBURSEMENT_DOC_FOLDER, transaction);
+                const filename = saved[file.fieldname];
+                if (filename) {
+                    if (savedFiles[file.fieldname]) {
+                        savedFiles[file.fieldname] += ',' + filename;
+                    } else {
+                        savedFiles[file.fieldname] = filename;
+                    }
+                }
+            }
         }
 
         let totalAmount = 0;
@@ -320,7 +344,30 @@ exports.update = async (req, res) => {
                     return res.error("INVALID_OPERATION", { message: `Item ID ${itemId} does not exist in this reimbursement` });
                 }
 
-                const finalReceipt = uploadedFile || existing.bills_docs;
+                let keptFiles = [];
+                if (item.existing_bills !== undefined) {
+                    const existingArr = Array.isArray(item.existing_bills) ? item.existing_bills : [item.existing_bills];
+                    keptFiles = existingArr.map(url => url.split('/').pop()).filter(Boolean);
+                } else if (existing.bills_docs) {
+                    // Fallback if existing_bills wasn't sent
+                    keptFiles = existing.bills_docs.split(',');
+                }
+
+                // Delete physical files that were removed from the array
+                if (existing.bills_docs) {
+                    const oldFiles = existing.bills_docs.split(',').filter(Boolean);
+                    for (const oldFile of oldFiles) {
+                        if (!keptFiles.includes(oldFile)) {
+                            await deleteFile(req, res, constants.REIMBURSEMENT_DOC_FOLDER, oldFile);
+                        }
+                    }
+                }
+
+                if (uploadedFile) {
+                    keptFiles.push(...uploadedFile.split(','));
+                }
+
+                const finalReceipt = keptFiles.length > 0 ? keptFiles.join(',') : null;
 
                 await commonQuery.updateRecordById(ReimbursementItem, itemId, {
                     expense_type: item.expense_type,
@@ -355,6 +402,7 @@ exports.update = async (req, res) => {
         if (POST.description !== undefined) parentUpdate.description = POST.description;
         if (POST.payment_type !== undefined) parentUpdate.payment_type = POST.payment_type;
         parentUpdate.total_amount = totalAmount;
+        if (POST.expense_date !== undefined) parentUpdate.expense_date = POST.expense_date;
 
         await commonQuery.updateRecordById(Reimbursement, id, parentUpdate, transaction);
 
@@ -407,38 +455,52 @@ exports.updateStatus = async (req, res) => {
         const currentLevel = reimbursement.current_level;
         const history = reimbursement.approval_history || [];
 
-        // 4. Handle Approval Logic
-        if (String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED") {
-            history.push({
-                level: currentLevel,
-                approved_by: req.user?.id,
-                approved_at: new Date(),
-                action: "APPROVED",
-                remark: approval_remark
-            });
+        const isApproved = String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED";
+        const historyItem = isApproved ? {
+            level: currentLevel,
+            approved_by: req.user?.id,
+            approved_at: new Date(),
+            action: "APPROVED",
+            remark: approval_remark
+        } : {
+            level: currentLevel,
+            action: approval_status,
+            by: req.user?.id,
+            at: new Date(),
+            remark: approval_remark
+        };
 
+        const { newStatus, newLevel, updatedHistory } = getNextApprovalState({
+            targetStatus: approval_status,
+            currentLevel,
+            totalLevels,
+            isSuperAdmin: req.user?.is_super_admin,
+            approvalHistory: reimbursement.approval_history || [],
+            statusMapping: {
+                APPROVED: constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED,
+                PARTIALLY_APPROVED: constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                REJECTED: constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED,
+                CANCELLED: constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED
+            },
+            historyItem
+        });
+
+        // 4. Handle Approval Logic
+        if (isApproved) {
             const updateData = {
-                approval_history: history,
+                approval_history: updatedHistory,
                 approval_remark: approval_remark || "",
-                payment_type: payment_type
+                payment_type: payment_type,
+                approval_status: newStatus,
+                current_level: newLevel
             };
 
-            // Partial vs Final Approval
-            if (currentLevel < totalLevels && !req.user?.is_super_admin) {
-                updateData.approval_status = constants.REIMBURSEMENT_APPROVAL_STATUS.PARTIALLY_APPROVED;
-                updateData.current_level = currentLevel + 1;
-            } else {
-                updateData.approval_status = constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED;
+            if (newStatus === constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) {
                 updateData.approved_by = approved_by || req.user?.id;
 
-                if (req.user?.is_super_admin && currentLevel < totalLevels) {
-                    if (history.length > 0) history[history.length - 1].note = "Bypassed remaining levels via Super Admin";
-                    updateData.approval_history = history;
-                    updateData.current_level = totalLevels;
-                }
-
+                const finalPaymentType = payment_type !== undefined ? Number(payment_type) : reimbursement.payment_type;
                 // Create PaymentHistory entry for instant payment (payment_type = 2)
-                if (reimbursement.payment_type === 2) {
+                if (finalPaymentType === 2) {
                     const reimbursementDate = dayjs(reimbursement.date);
                     await commonQuery.createRecord(PaymentHistory, {
                         employee_id: reimbursement.employee_id,
@@ -450,34 +512,20 @@ exports.updateStatus = async (req, res) => {
                         payment_type: "Reimbursement",
                         payment_mode: "Bank",
                         status: 1, // Adjusted/Paid
+                        company_id: reimbursement.company_id || req.user?.company_id,
+                        branch_id: reimbursement.branch_id || req.user?.branch_id || 0,
+                        user_id: req.user?.id || reimbursement.user_id || 0
                     }, transaction);
                 }
             }
 
             await commonQuery.updateRecordById(Reimbursement, reimbursement.id, updateData, transaction);
         }        // 6. Handle Rejection / Cancellation
-        else if (
-            String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED) ||
-            String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED) ||
-            approval_status === "REJECTED" ||
-            approval_status === "CANCELLED"
-        ) {
-            history.push({
-                level: currentLevel,
-                action: approval_status,
-                by: req.user?.id,
-                at: new Date(),
-                remark: approval_remark
-            });
-
-            const targetStatus = (approval_status === "REJECTED" || Number(approval_status) === constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED)
-                ? constants.REIMBURSEMENT_APPROVAL_STATUS.REJECTED
-                : constants.REIMBURSEMENT_APPROVAL_STATUS.CANCELLED;
-
+        else {
             await commonQuery.updateRecordById(Reimbursement, reimbursement.id, {
-                approval_status: targetStatus,
+                approval_status: newStatus,
                 approval_remark: approval_remark || "",
-                approval_history: history
+                approval_history: updatedHistory
             }, transaction);
         }
 
@@ -587,17 +635,11 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
-            let isAuthorized = false;
-            if (req.user.is_super_admin) {
-                isAuthorized = true;
-            } else {
-                // Simplified authorization logic for Reimbursement
-                if (employee.reporting_manager === req.user.id ||
-                    employee.attendance_supervisor === req.user.id ||
-                    req.user.is_admin) {
-                    isAuthorized = true;
-                }
-            }
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType: 'ANYONE'
+            });
 
             if (isAuthorized) {
                 const raw = request.get({ plain: true });
@@ -613,21 +655,11 @@ exports.getPendingApprovals = async (req, res) => {
                 const statusLabel = statusLabels[raw.approval_status] || "PENDING";
                 raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level})`;
 
-                if (raw.bills_docs) {
-                    const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, raw.bills_docs);
-                    raw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${raw.bills_docs}` : null;
-                } else {
-                    raw.bills_docs_url = null;
-                }
+                raw.bills_docs_url = getBillsDocsUrls(raw.bills_docs);
 
                 if (raw.items && Array.isArray(raw.items)) {
                     raw.items = raw.items.map(child => {
-                        if (child.bills_docs) {
-                            const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, child.bills_docs);
-                            child.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${child.bills_docs}` : null;
-                        } else {
-                            child.bills_docs_url = null;
-                        }
+                        child.bills_docs_url = getBillsDocsUrls(child.bills_docs);
                         return child;
                     });
                 }
@@ -670,6 +702,10 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
+
+        // Soft delete associated PaymentHistory entries for these reimbursements
+        await commonQuery.softDeleteById(PaymentHistory, { ref_id: ids, payment_type: "Reimbursement" }, transaction);
+
         await transaction.commit();
         return res.success(constants.DELETED);
     } catch (err) {
@@ -756,12 +792,7 @@ exports.getReimbursementSummary = async (req, res) => {
             if (reimbursement.items && Array.isArray(reimbursement.items)) {
                 mappedItems = reimbursement.items.map(child => {
                     const childRaw = child.get ? child.get({ plain: true }) : child;
-                    if (childRaw.bills_docs) {
-                        const exists = fileExists(constants.REIMBURSEMENT_DOC_FOLDER, childRaw.bills_docs);
-                        childRaw.bills_docs_url = exists ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${childRaw.bills_docs}` : null;
-                    } else {
-                        childRaw.bills_docs_url = null;
-                    }
+                    childRaw.bills_docs_url = getBillsDocsUrls(childRaw.bills_docs);
                     return childRaw;
                 });
             }

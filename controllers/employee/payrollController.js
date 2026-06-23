@@ -171,10 +171,11 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Step A: Aggregate Counts
     let presentDays = 0, halfDays = 0, uncategorizedHalfDays = 0, absentDays = 0, leaveDays = 0, holidays = 0, totalFine = 0, totalOTMins = 0, totalWorkedMins = 0, totalOTAmount = 0;
     let unpaidLeaveDays = 0, compoffLeaveDays = 0;
+    const countedWeeklyOffs = new Set();
 
     // A.0 Calculate Weekly Offs and Holidays using common function
     const offDays = await calculateEmployeeOffDays(employee_id, month, year, transaction);
-    let weeklyOffs = offDays.goneWeeklyOffs;
+    let weeklyOffs = 0;
 
     // Prefetch leave configurations to identify Unpaid or CompOff status
     const leaveBalances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
@@ -263,6 +264,15 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                     uncategorizedHalfDays++;
                 }
                 break;
+            case 3: case 8: {
+                const dayKey = dayjs(day.attendance_date).format('YYYY-MM-DD');
+                const today = dayjs().format('YYYY-MM-DD');
+                if (dayKey <= today && !countedWeeklyOffs.has(dayKey)) {
+                    weeklyOffs++;
+                    countedWeeklyOffs.add(dayKey);
+                }
+                break;
+            }
             case 4:
                 holidays++;
                 attendanceHolidayDates.add(dayjs(day.attendance_date).format('YYYY-MM-DD'));
@@ -334,7 +344,13 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
         daysInCalculation = daysInMonth - offDays.totalWeeklyOffs;
     }
 
-    const payableDaysValue = totalPresentDays + leaveDays + holidays;
+    let payableDaysValue = 0;
+    if (template.lwp_calculation_basis === "WORKING_DAYS" && salaryType !== "Daily") {
+        payableDaysValue = totalPresentDays + leaveDays + holidays;
+    } else {
+        payableDaysValue = totalPresentDays + leaveDays + holidays + week
+        lyOffs;
+    }
 
     let actualDaysValue = 0;
     if (template.lwp_calculation_basis === "WORKING_DAYS") {
@@ -2554,14 +2570,17 @@ exports.getPayslipById = async (req, res) => {
         const template = await commonQuery.findOneRecord(EmployeeSalaryTemplate, { employee_id: payslip.employee_id });
         const basis = template?.lwp_calculation_basis || 'DAYS_IN_MONTH';
 
-        let payableDaysValue = 0;
-        if (basis === "WORKING_DAYS") {
-            payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
-        } else if (basis === "FIXED_30_DAYS") {
-            payableDaysValue = 30 - lwpDays;
-        } else {
-            const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
-            payableDaysValue = daysInMonth - lwpDays;
+        // Use stored payable days or calculate if not available
+        let payableDaysValue = parseFloat(payslip.pd_days);
+        if (isNaN(payableDaysValue) || payableDaysValue === null) {
+            if (basis === "WORKING_DAYS") {
+                payableDaysValue = presentDays + (halfDays * 0.5) + leaveDays + holidays;
+            } else if (basis === "FIXED_30_DAYS") {
+                payableDaysValue = 30 - lwpDays;
+            } else {
+                const daysInMonth = dayjs(`${payslip.year}-${payslip.month}-01`).daysInMonth();
+                payableDaysValue = daysInMonth - lwpDays;
+            }
         }
         const payableDays = parseFloat(payableDaysValue);
 

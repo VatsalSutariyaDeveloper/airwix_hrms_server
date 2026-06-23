@@ -70,6 +70,7 @@ if (cluster.isMaster) {
   const notificationRoutes = require("./routes/notificationRoutes");
   const hrDashboardRoutes = require("./routes/hrDashboardRoutes");
   const masterAdminRoutes = require("./routes/masterAdminRoutes");
+  const visitorRoutes = require("./routes/visitorRoutes");
 
   const app = express();
   const { requestContext } = require("./utils/requestContext.js");
@@ -141,6 +142,7 @@ if (cluster.isMaster) {
   app.use("/api/system-logs", systemLogRoutes);
   app.use("/api/announcements", announcementRoutes);
   app.use("/api/notifications", notificationRoutes);
+  app.use("/api/visitor", visitorRoutes);
 
   // 🔍 404 JSON Fallback Handler for undefined routes
   app.use((req, res, next) => {

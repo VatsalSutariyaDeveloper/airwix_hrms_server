@@ -722,6 +722,15 @@ const runWorker = async () => {
             });
         }
 
+        const stateMap = new Map();
+        const uniqueStatesSet = new Set();
+        resolvedRows.forEach((item) => {
+            const r = item.record;
+            if (r.permanent_state_id) uniqueStatesSet.add(String(r.permanent_state_id).trim());
+            if (r.present_state_id) uniqueStatesSet.add(String(r.present_state_id).trim());
+        });
+        const uniqueStates = Array.from(uniqueStatesSet);
+
         // Find existing states only (don't create new states)
         const existingStates = await commonQuery.findAllRecords(
             StateMaster,
