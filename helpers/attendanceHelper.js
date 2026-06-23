@@ -199,7 +199,6 @@ async function punch(employeeId, meta, transaction = null) {
       let areaLat = null;
       let areaLon = null;
       let areaRadius = null;
-      let areaLabel = "work location";
 
       if (template.location_latitude != null && template.location_longitude != null) {
         areaLat = parseFloat(template.location_latitude);
@@ -213,7 +212,6 @@ async function punch(employeeId, meta, transaction = null) {
             areaLat = parseFloat(branch.latitude);
             areaLon = parseFloat(branch.longitude);
             areaRadius = parseInt(branch.radius_meters) || 100;
-            areaLabel = "branch";
           }
         }
       }
@@ -236,7 +234,7 @@ async function punch(employeeId, meta, transaction = null) {
         const distance = R * c;
 
         if (distance > areaRadius) {
-          throw new Err(`You are too far from your ${areaLabel} to punch. You are ~${distance.toFixed(0)}m away (allowed: ${areaRadius}m).`);
+          throw new Err(`You are outside the allowed punch range (${distance.toFixed(0)}mm away, limit: ${areaRadius}m).`);
         }
       }
     }
@@ -1347,13 +1345,13 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const existingDay = await commonQuery.findOneRecord(AttendanceDay, {
       employee_id: employeeId,
       attendance_date: date,
-    }, { attributes: ['id', 'status', 'worked_minutes', 'fine_minutes', 'overtime_minutes', 'total_break_minutes', 'overtime_amount', 'fine_amount', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction, false, {});
+    }, { attributes: ['id', 'status', 'user_id', 'worked_minutes', 'fine_minutes', 'overtime_minutes', 'total_break_minutes', 'overtime_amount', 'fine_amount', 'overtime_data', 'fine_data', 'first_in', 'last_out', 'leave_category_id', 'leave_session', 'note'] }, transaction, false, {});
 
     // [FIX] Priority for status: forcedStatus > manualStatus (from existingDay) > defaults
     // This ensures manual overrides from the controller are respected during rebuild.
     if (meta.forcedStatus !== undefined && meta.forcedStatus !== null) {
       emptyStatus = Number(meta.forcedStatus);
-    } else if (existingDay) {
+    } else if (existingDay && existingDay.user_id > 0) {
       emptyStatus = existingDay.status;
     }
 
@@ -2677,8 +2675,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     const isCronRun = (meta.user_id === 0 || meta.user_id === undefined);
     const isSpecialStatus = [5, 9, 10].includes(parseInt(existingDay2.status));
     const hasMissingPunch = (existingDay2.first_in === null && existingDay2.last_out !== null) || (existingDay2.first_in !== null && existingDay2.last_out === null);
+    const statusChangedAndAutomated = (status !== parseInt(existingDay2.status)) && (!existingDay2.user_id || existingDay2.user_id === 0);
 
-    if (isCronRun && !isSpecialStatus && !hasMissingPunch && !meta.forceRebuild) {
+    if (isCronRun && !isSpecialStatus && !hasMissingPunch && !statusChangedAndAutomated && !meta.forceRebuild) {
       console.log(`[Rebuild] Skipping automated rebuild for finalized record ${existingDay2.id} (Status: ${existingDay2.status}) for ${employeeId} on ${date}`);
       return;
     }
@@ -3354,7 +3353,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       Employee,
       { id: { [Op.in]: missingEmpIds } },
       {
-        attributes: ['id', 'company_id', 'branch_id', 'shift_template'],
+        attributes: ['id', 'company_id', 'branch_id', 'shift_template', 'weekly_off_template'],
         include: [
           {
             model: EmployeeAttendanceTemplate,
@@ -3390,9 +3389,11 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   ]);
 
   const empShiftMap = new Map(employeeShifts.map(s => [s.employee_id, s]));
+  const templateIds = [...new Set(employees.map(emp => emp.weekly_off_template).filter(id => id && id > 0))];
+  const companyIds = [...new Set(employees.map(emp => emp.company_id).filter(id => id && id > 0))];
 
   // 3. Fetch all potential non-working day triggers in bulk
-  const [holidays, weeklyOffs, leaveRequests, outDutyRequests] = await Promise.all([
+  const [holidays, weeklyOffs, leaveRequests, outDutyRequests, templateWeeklyOffs] = await Promise.all([
     commonQuery.findAllRecords(
       EmployeeHoliday,
       {
@@ -3410,6 +3411,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
         day_of_week: dayjs(date).day(),
         status: 0,
         is_off: true,
+        company_id: companyIds.length > 0 ? { [Op.in]: companyIds } : undefined,
         [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
       },
       {},
@@ -3438,7 +3440,20 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       },
       {},
       transaction
-    )
+    ),
+    templateIds.length > 0 ? commonQuery.findAllRecords(
+      WeeklyOffTemplateDay,
+      {
+        template_id: { [Op.in]: templateIds },
+        day_of_week: dayjs(date).day(),
+        status: 0,
+        is_off: true,
+        company_id: companyIds.length > 0 ? { [Op.in]: companyIds } : undefined,
+        [Op.or]: [{ week_no: 0 }, { week_no: Math.ceil(dayjs(date).date() / 7) }]
+      },
+      {},
+      transaction
+    ) : []
   ]);
 
   // MAPS: employeeId -> Record
@@ -3446,6 +3461,12 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   const weeklyOffMap = new Map(weeklyOffs.map(w => [w.employee_id, w]));
   const leaveMap = new Map(leaveRequests.map(l => [l.employee_id, l]));
   const outDutyMap = new Map(outDutyRequests.map(o => [o.employee_id, o]));
+  const offTemplateIds = new Set(templateWeeklyOffs.map(tw => tw.template_id));
+
+  console.log("holidayMap", holidayMap);
+  console.log("weeklyOffMap", weeklyOffMap);
+  console.log("leaveMap", leaveMap);
+  console.log("outDutyMap", outDutyMap);
 
   const payloads = [];
   for (const emp of employees) {
@@ -3463,7 +3484,7 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
     } else if (holidayMap.has(emp.id)) {
       status = 4; // HOLIDAY
       // note = `System: Holiday auto-detected (${holidayMap.get(emp.id).name || 'Holiday'})`;
-    } else if (weeklyOffMap.has(emp.id)) {
+    } else if (weeklyOffMap.has(emp.id) || (emp.weekly_off_template && offTemplateIds.has(emp.weekly_off_template))) {
       status = 3; // WEEKLY_OFF
       // note = "System: Weekly Off auto-detected";
     } else {

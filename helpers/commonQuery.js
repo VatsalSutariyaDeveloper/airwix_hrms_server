@@ -106,7 +106,6 @@ function resolveTenantConfig(requireTenantFields, defaultApplyHierarchy) {
 }
 
 async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, model = null) {
-  console.log("DEBUG buildWhere modelName:", model?.name, "tenantConfig:", tenantConfig, "ctx:", JSON.stringify(getContext()));
   let where = {};
 
   // --- 1. Normalize Input ---

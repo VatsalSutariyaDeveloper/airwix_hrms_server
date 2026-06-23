@@ -83,7 +83,10 @@ exports.dropdownList = async (req, res) => {
       RolePermission,
       { 
         status: 0,
-        role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] },
+        [Op.or]: [
+          { role_key: { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] } },
+          { role_key: null }
+        ],
         ...(!req.user.is_super_admin ? { company_id: req.user.company_id } : {})
       },
       { 

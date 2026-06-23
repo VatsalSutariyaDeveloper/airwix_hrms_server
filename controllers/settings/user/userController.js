@@ -924,9 +924,10 @@ exports.getAll = async (req, res) => {
     } else if (req.body.filter?.role === "employee" || !req.body.filter?.role_key) {
       // Show everyone EXCEPT Business Admin and Admin for the main tab
       extraFilters[Op.and].push({
-        '$RolePermission.role_key$': { 
-          [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] 
-        },
+        [Op.or]: [
+          { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
+          { '$RolePermission.role_key$': null }
+        ],
         company_id: company_id,
         branch_id: req.user.branch_id
       });
@@ -1027,7 +1028,12 @@ exports.dropdownList = async (req, res) => {
         )
       ],
       [Op.and]: [
-        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
+        {
+          [Op.or]: [
+            { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN] } },
+            { '$RolePermission.role_key$': null }
+          ]
+        },
         { company_id: company_id },
         { branch_id: req.user.branch_id }
       ]
@@ -1059,7 +1065,12 @@ exports.getUserEmployeeList = async (req, res) => {
         )
       ],
       [Op.and]: [
-        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.REPORTING_MANAGER, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR] } },
+        {
+          [Op.or]: [
+            { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN, constants.ROLE_KEYS.REPORTING_MANAGER, constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR] } },
+            { '$RolePermission.role_key$': null }
+          ]
+        },
         { company_id: company_id },
         { branch_id: req.user.branch_id }
       ]
@@ -1091,7 +1102,12 @@ exports.getUserListForAnnouncement = async (req, res) => {
         )
       ],
       [Op.and]: [
-        { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] } },
+        {
+          [Op.or]: [
+            { '$RolePermission.role_key$': { [Op.notIn]: [constants.ROLE_KEYS.BUSINESS_ADMIN] } },
+            { '$RolePermission.role_key$': null }
+          ]
+        },
         { company_id: company_id },
         { branch_id: req.user.branch_id }
       ]

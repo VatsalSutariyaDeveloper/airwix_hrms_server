@@ -252,6 +252,7 @@ exports.create = async (req, res) => {
         // Validate Required Fields
         const requiredFields = {
             first_name: "First Name",
+            joining_date: "Joining Date",
         };
 
         const errors = await validateRequest(POST, requiredFields, {
@@ -1942,8 +1943,6 @@ exports.assignTemplate = async (req, res) => {
                 Employee,
                 where,
                 ['id'], // Only select ID
-                null,
-                false
             );
 
             employees = allMatchingEmployees.map(emp => ({
@@ -2678,7 +2677,7 @@ exports.registerFace = async (req, res) => {
                 const parsed = typeof employee.face_descriptor === 'string'
                     ? JSON.parse(employee.face_descriptor)
                     : employee.face_descriptor;
-                if (Array.isArray(parsed)) {
+                if (Array.isArray(parsed) && parsed.length > 0) {
                     if (Array.isArray(parsed[0])) {
                         faceDescriptors = [...parsed];
                     } else {
@@ -3678,6 +3677,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: EmployeeAttendanceTemplate,
                     as: 'employeeAttendanceTemplate',
+                    where: { status: 0 },
                     attributes: ['id', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins']
                 },
                 {
@@ -3696,12 +3696,14 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: EmployeeHoliday,
                     as: 'employeeHolidays',
+                    where: { status: 0 },
                     attributes: ['id', 'name', 'date', 'holiday_type'],
                     separate: true
                 },
                 {
                     model: EmployeeWeeklyOff,
                     as: 'employeeWeeklyOffs',
+                    where: { status: 0 },
                     attributes: ['id', 'day_of_week', 'week_no', 'is_off'],
                     separate: true
                 },
@@ -3733,7 +3735,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             employee_name: emp.first_name,
             employee_code: emp.employee_code,
             face_descriptor: emp.face_descriptor,
-            has_face_descriptor: !!emp.face_descriptor,
+            has_face_descriptor: emp.face_descriptor && emp.face_descriptor.length > 0 ? true : false,
             access_branches: emp.access_branches,
             organization_id: emp.company?.organization_id,
             company_id: emp.company_id,
@@ -3971,7 +3973,7 @@ exports.deleteFaceImage = async (req, res) => {
                 const parsed = typeof employee.face_descriptor === 'string'
                     ? JSON.parse(employee.face_descriptor)
                     : employee.face_descriptor;
-                if (Array.isArray(parsed)) {
+                if (Array.isArray(parsed) && parsed.length > 0) {
                     if (Array.isArray(parsed[0])) {
                         faceDescriptors = [...parsed];
                     } else {
@@ -4000,7 +4002,7 @@ exports.deleteFaceImage = async (req, res) => {
 
         const updateData = {
             registered_face_images: faceImages,
-            face_descriptor: JSON.stringify(faceDescriptors)
+            face_descriptor: faceDescriptors.length > 0 ? JSON.stringify(faceDescriptors) : null
         };
 
         // If the deleted image was the active profile image, clear it or set to the next available
