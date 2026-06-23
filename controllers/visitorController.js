@@ -23,9 +23,10 @@ exports.createPass = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Missing required fields");
     }
 
-    // Resolve host employee: employees can only host for themselves, admins can host for anyone
+    // Resolve host employee: employees can only host for themselves, admins/security/hr can host for anyone
     let resolvedHostEmployeeId = req.user?.employee_id;
-    if (host_employee_id && (req.user?.is_super_admin || !resolvedHostEmployeeId)) {
+    const isSecurityOrAdmin = req.user?.is_super_admin || (req.user?.RolePermission?.role_key && ["admin", "security", "hr"].includes(req.user.RolePermission.role_key.toLowerCase()));
+    if (host_employee_id && (isSecurityOrAdmin || !resolvedHostEmployeeId)) {
       resolvedHostEmployeeId = host_employee_id;
     }
 
