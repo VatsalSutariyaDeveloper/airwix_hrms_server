@@ -81,6 +81,22 @@ exports.getPasses = async (req, res) => {
     const { status, search, start_date, end_date } = req.query;
     const companyId = req.user?.company_id;
 
+    // Auto-expire/cancel passes whose scheduled_end_time has passed and status is still 0 (Scheduled)
+    try {
+      await VisitorPass.update(
+        { status: 4 }, // Cancelled / Expired
+        {
+          where: {
+            company_id: companyId,
+            status: 0,
+            scheduled_end_time: { [Op.lt]: new Date() }
+          }
+        }
+      );
+    } catch (expireErr) {
+      console.error("Error auto-expiring visitor passes in getPasses:", expireErr);
+    }
+
     const whereClause = {
       company_id: companyId
     };
@@ -138,6 +154,23 @@ exports.getPassByCodeOrPhone = async (req, res) => {
     }
 
     const companyId = req.user?.company_id;
+
+    // Auto-expire/cancel passes whose scheduled_end_time has passed and status is still 0 (Scheduled)
+    try {
+      await VisitorPass.update(
+        { status: 4 }, // Cancelled / Expired
+        {
+          where: {
+            company_id: companyId,
+            status: 0,
+            scheduled_end_time: { [Op.lt]: new Date() }
+          }
+        }
+      );
+    } catch (expireErr) {
+      console.error("Error auto-expiring visitor passes in getPassByCodeOrPhone:", expireErr);
+    }
+
     const pass = await commonQuery.findOneRecord(VisitorPass, {
       company_id: companyId,
       [Op.or]: [
