@@ -1,7 +1,8 @@
-const { VisitorPass, Employee, CompanyMaster } = require("../models");
+const { VisitorPass, Employee, CompanyMaster, User } = require("../models");
 const commonQuery = require("../helpers/commonQuery");
 const { handleError, sequelize, constants, Op, uploadFile, uploadBase64File } = require("../helpers");
 const dayjs = require("dayjs");
+const notificationService = require("../services/notificationService");
 
 exports.createPass = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -23,9 +24,10 @@ exports.createPass = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Missing required fields");
     }
 
-    // Resolve host employee: employees can only host for themselves, admins can host for anyone
+    // Resolve host employee: employees can only host for themselves, admins/security/hr can host for anyone
     let resolvedHostEmployeeId = req.user?.employee_id;
-    if (host_employee_id && (req.user?.is_super_admin || !resolvedHostEmployeeId)) {
+    const isSecurityOrAdmin = req.user?.is_super_admin || (req.user?.RolePermission?.role_key && ["admin", "security", "hr"].includes(req.user.RolePermission.role_key.toLowerCase()));
+    if (host_employee_id && (isSecurityOrAdmin || !resolvedHostEmployeeId)) {
       resolvedHostEmployeeId = host_employee_id;
     }
 
@@ -87,7 +89,7 @@ exports.getPasses = async (req, res) => {
     // Let's check role: if they have employee panel access, check if role is normal staff
     // For simplicity, we filter by host_employee_id if employee_id exists and user is not super admin
     const isSecurityOrAdmin = req.user?.is_super_admin || (req.user?.RolePermission?.role_key && ["admin", "security", "hr"].includes(req.user.RolePermission.role_key.toLowerCase()));
-    
+
     if (!isSecurityOrAdmin && req.user?.employee_id) {
       whereClause.host_employee_id = req.user.employee_id;
     }
@@ -202,6 +204,26 @@ exports.punchIn = async (req, res) => {
 
     const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, updateData, transaction);
     await transaction.commit();
+
+    // Send instant notification to the host user
+    try {
+      const hostUser = await commonQuery.findOneRecord(User, {
+        employee_id: pass.host_employee_id
+      });
+      if (hostUser && hostUser.id) {
+        await notificationService.createNotification({
+          user_id: hostUser.id,
+          title: "Visitor Checked In",
+          message: `${pass.visitor_name} has arrived to meet you.`,
+          type: "VISITOR_CHECKED_IN",
+          reference_id: pass.id,
+          company_id: pass.company_id,
+          branch_id: pass.branch_id
+        });
+      }
+    } catch (notifError) {
+      console.error("Error sending check-in notification to host:", notifError);
+    }
 
     return res.success("Visitor checked in successfully", updatedPass);
   } catch (error) {
