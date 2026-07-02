@@ -11,6 +11,210 @@ const LeaveBalanceService = require("../../services/leaveBalanceService");
 const notificationService = require("../../services/notificationService");
 dayjs.extend(customParseFormat);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADAPTIVE FACE LEARNING (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+const ADAPTIVE_LEARN = {
+  enabled: true,
+  minScore: 75,        // best-match score (percent) required to learn from a punch
+  minMargin: 8,        // best must beat 2nd-best by this many percent points
+  dupSimilarity: 0.97, // skip if new vector is ~identical to an existing template
+  maxTemplates: 5,     // gallery cap (matches registerFace); oldest dropped beyond this
+};
+
+// Cosine similarity (0..1) for two equal-length numeric vectors.
+function adaptiveCosineSim(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+async function maybeLearnFaceTemplate(punchData, punchImage, transaction) {
+  if (!ADAPTIVE_LEARN.enabled) return;
+  const empId = punchData.employee_id;
+
+  // Need an image so the learned template is also viewable in the employee's
+  // registered faces (also keeps face_descriptor and registered_face_images aligned).
+  if (!punchImage) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: no punch image — skipped`);
+    return;
+  }
+
+  // 1. Parse the punch face vector. Flutter sends `face_vector`; accept
+  //    `face_descriptor` too for forward-compat.
+  let raw = punchData.face_vector != null ? punchData.face_vector : punchData.face_descriptor;
+  if (raw == null) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: no face vector on punch — skipped`);
+    return;
+  }
+  let newVec = raw;
+  if (typeof newVec === 'string') {
+    try { newVec = JSON.parse(newVec); } catch (e) {
+      console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: bad vector JSON — skipped`);
+      return;
+    }
+  }
+  if (!Array.isArray(newVec) || newVec.length < 10 || Array.isArray(newVec[0])) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: vector is not a 1D array — skipped`);
+    return;
+  }
+
+  // 2. Eligibility: high score AND clear margin over the runner-up.
+  const score = parseFloat(punchData.match_score);
+  let matches = punchData.matches;
+  if (typeof matches === 'string') { try { matches = JSON.parse(matches); } catch (e) { matches = null; } }
+  let margin = ADAPTIVE_LEARN.minMargin; // if only one candidate, no ambiguity → treat as ok
+  if (Array.isArray(matches) && matches.length >= 2) {
+    const best = parseFloat(matches[0] && matches[0].match_score);
+    const second = parseFloat(matches[1] && matches[1].match_score);
+    if (!isNaN(best) && !isNaN(second)) margin = best - second;
+  }
+  if (!(score >= ADAPTIVE_LEARN.minScore) || !(margin >= ADAPTIVE_LEARN.minMargin)) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: not eligible (score=${isNaN(score) ? 'n/a' : score.toFixed(1)}%, margin=${margin.toFixed(1)}pts; need score≥${ADAPTIVE_LEARN.minScore}%, margin≥${ADAPTIVE_LEARN.minMargin}pts)`);
+    return;
+  }
+
+  // 3. Load employee + existing gallery.
+  const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, transaction, false, {});
+  if (!employee) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: employee not found — skipped`);
+    return;
+  }
+
+  let gallery = [];
+  if (employee.face_descriptor) {
+    try {
+      const parsed = typeof employee.face_descriptor === 'string'
+        ? JSON.parse(employee.face_descriptor) : employee.face_descriptor;
+      if (Array.isArray(parsed)) gallery = Array.isArray(parsed[0]) ? [...parsed] : [parsed];
+    } catch (e) { gallery = []; }
+  }
+
+  let images = [];
+  if (employee.registered_face_images) {
+    try {
+      const parsed = typeof employee.registered_face_images === 'string'
+        ? JSON.parse(employee.registered_face_images) : employee.registered_face_images;
+      if (Array.isArray(parsed)) images = [...parsed];
+    } catch (e) { images = []; }
+  }
+
+  // 4. Dedup: skip if too similar to an existing template (no new information).
+  let maxSim = 0;
+  for (const v of gallery) {
+    const s = adaptiveCosineSim(newVec, v);
+    if (s > maxSim) maxSim = s;
+  }
+  if (maxSim >= ADAPTIVE_LEARN.dupSimilarity) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: near-duplicate of an existing look (sim=${(maxSim * 100).toFixed(2)}%) — skipped`);
+    return;
+  }
+
+  // 5. Copy the punch image into the employee image folder so the learned face is
+  //    viewable in the employee's registered faces (visibility + keeps arrays aligned).
+  let learnedImage = null;
+  try {
+    const srcPath = path.join(process.cwd(), "uploads", constants.ATTENDANCE_FOLDER, punchImage);
+    const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true, mode: 0o777 });
+    fs.copyFileSync(srcPath, path.join(destDir, punchImage));
+    learnedImage = punchImage;
+  } catch (copyErr) {
+    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: could not copy punch image (${copyErr.message}) — skipped`);
+    return;
+  }
+
+  // 6. Append + cap (drop oldest of BOTH arrays together to stay index-aligned).
+  gallery.push(newVec);
+  images.push(learnedImage);
+  let dropped = 0;
+  while (gallery.length > ADAPTIVE_LEARN.maxTemplates) { gallery.shift(); dropped++; }
+  while (images.length > ADAPTIVE_LEARN.maxTemplates) { images.shift(); }
+
+  employee.changed('registered_face_images', true);
+  employee.changed('face_descriptor', true);
+  await employee.update({
+    registered_face_images: images,
+    face_descriptor: JSON.stringify(gallery),
+  }, { transaction });
+
+  console.log(`[AdaptiveLearn] ✅ Emp #${empId} (${employee.first_name || ''}): LEARNED new template — gallery now ${gallery.length}${dropped ? `, dropped ${dropped} oldest` : ''} | score=${score.toFixed(1)}%, margin=${margin.toFixed(1)}pts, closestExisting=${(maxSim * 100).toFixed(2)}%, image=${learnedImage}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALIGNED FACE TEMPLATES (v2 devices) — stored in employees.aligned_face_templates
+// (own JSONB column; face_descriptor is never touched by this flow)
+// ─────────────────────────────────────────────────────────────────────────────
+const ALIGNED_TEMPLATES = {
+  maxPerEmployee: 8,   // server keeps more than the device cap (5) as shared pool
+  dupSimilarity: 0.97, // skip near-identical vectors
+};
+
+// Lazy column creation — no migration needed, idempotent per tenant DB.
+async function ensureAlignedTemplatesColumn() {
+  await sequelize.query(
+    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_templates JSONB'
+  );
+}
+
+/**
+ * SYNC ALIGNED FACE TEMPLATES (v2 attendance devices)
+ * Body: { templates: [{ employee_id, vector }] }
+ */
+exports.saveFaceTemplates = async (req, res) => {
+  try {
+    await ensureAlignedTemplatesColumn();
+  } catch (colErr) {
+    console.error("ensureAlignedTemplatesColumn failed:", colErr.message);
+  }
+  try {
+    const items = Array.isArray(req.body.templates) ? req.body.templates : [];
+    if (items.length === 0) {
+      return res.error(constants.VALIDATION_ERROR, { message: "No templates provided" });
+    }
+
+    let saved = 0;
+    for (const item of items) {
+      const empId = parseInt(item.employee_id);
+      let vec = item.vector;
+      if (typeof vec === 'string') {
+        try { vec = JSON.parse(vec); } catch (e) { vec = null; }
+      }
+      if (!empId || !Array.isArray(vec) || vec.length < 10 || Array.isArray(vec[0])) continue;
+
+      const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+      if (!employee) continue;
+
+      let list = Array.isArray(employee.aligned_face_templates)
+        ? [...employee.aligned_face_templates] : [];
+
+      let dup = false;
+      for (const t of list) {
+        if (adaptiveCosineSim(vec, t) >= ALIGNED_TEMPLATES.dupSimilarity) { dup = true; break; }
+      }
+      if (dup) continue;
+
+      list.push(vec);
+      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+
+      employee.changed('aligned_face_templates', true);
+      await employee.update({ aligned_face_templates: list });
+      saved++;
+      console.log(`[AlignedTemplates] ✅ Emp #${empId} (${employee.first_name || ''}): template saved — now ${list.length}/${ALIGNED_TEMPLATES.maxPerEmployee}${list.length >= 2 ? ' (MIGRATED to aligned matching)' : ''}`);
+    }
+
+    return res.success(constants.ACTION_SUCCESSFUL, { saved });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
 /**
  * PUNCH (IN/OUT)
  */
@@ -159,7 +363,7 @@ exports.syncPunches = async (req, res) => {
             longitude: punchData.longitude || null,
             device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
-            face_descriptor: punchData.face_descriptor || null,
+            face_descriptor: punchData.face_vector || punchData.face_descriptor || null,
             match_score: punchData.match_score || null,
             bypassGapCheck: true,
             skipRebuild: false,
@@ -216,6 +420,13 @@ exports.syncPunches = async (req, res) => {
           type: result.punchType
         });
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
+
+        // ── ADAPTIVE FACE LEARNING ──
+        try {
+          await maybeLearnFaceTemplate(punchData, punchImage, transaction);
+        } catch (learnErr) {
+          console.error(`[AdaptiveLearn] ⚠️ Emp #${punchData.employee_id}: learning step failed (non-fatal):`, learnErr.message);
+        }
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
         const isRecoverableSyncError = punchErr.message === "Employee not found";
@@ -2479,7 +2690,7 @@ exports.getFaceRecognitionErrors = async (req, res) => {
  */
 exports.resolveFaceRecognitionError = async (req, res) => {
   try {
-    const { id, status } = req.body;
+    const { id, status, employee_id } = req.body;
 
     if (!id) {
       return res.error(constants.VALIDATION_ERROR, "ID is required");
@@ -2491,16 +2702,58 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Face recognition error log not found");
     }
 
+    const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
+    // Admin-confirmed identity → v2 kiosks turn this photo into a face template
+    if (employee_id) updateData.employee_id = parseInt(employee_id);
+
     await commonQuery.updateRecordById(
       FaceRecognitionError,
       id,
-      { status: status !== undefined ? status : 1 }, // 1 = Resolved
+      updateData,
       null,
       false,
       { company_id: true }
     );
 
     return res.ok({ message: "Face recognition error status updated successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Verified Face Errors (v2 kiosks) — resolved audits with admin-confirmed
+ * identity, pulled by kiosks to learn templates for users who keep failing.
+ */
+exports.getVerifiedFaceErrors = async (req, res) => {
+  try {
+    const afterId = parseInt(req.body.after_id) || 0;
+
+    const rows = await FaceRecognitionError.findAll({
+      where: {
+        id: { [Op.gt]: afterId },
+        status: 1,
+        employee_id: { [Op.ne]: null },
+        company_id: req.user.company_id,
+      },
+      attributes: ['id', 'employee_id', 'image'],
+      order: [['id', 'ASC']],
+      limit: 20,
+      raw: true,
+    });
+
+    const folder = constants.FACE_ERROR_FOLDER || "employee/face_errors/";
+    const items = rows.map(r => ({
+      id: r.id,
+      employee_id: r.employee_id,
+      image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
+    }));
+
+    if (items.length > 0) {
+      console.log(`[VerifiedAudits] 📤 Sent ${items.length} verified audit(s) after #${afterId} to device (user #${req.user.id})`);
+    }
+
+    return res.success(constants.ACTION_SUCCESSFUL, { items });
   } catch (err) {
     return handleError(err, res, req);
   }

@@ -192,6 +192,11 @@ module.exports = (sequelize, DataTypes) => {
             defaultValue: [],
             comment: "Stores list of registered face image filenames"
         },
+        aligned_face_templates: {
+            type: DataTypes.JSONB,
+            defaultValue: null,
+            comment: "2D array of landmark-aligned vectors learned by v2 devices"
+        },
 
         // Resignation Related
         is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },
