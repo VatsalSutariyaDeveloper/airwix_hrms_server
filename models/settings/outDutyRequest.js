@@ -41,6 +41,10 @@ module.exports = (sequelize, DataTypes) => {
                 defaultValue: 0,
                 comment: "0=Full Day, 1=Session 1, 2=Session 2"
             },
+            start_from_time: { type: DataTypes.STRING, allowNull: true },
+            start_to_time: { type: DataTypes.STRING, allowNull: true },
+            end_from_time: { type: DataTypes.STRING, allowNull: true },
+            end_to_time: { type: DataTypes.STRING, allowNull: true },
             status: { type: DataTypes.SMALLINT, defaultValue: 0 },
         },
         {

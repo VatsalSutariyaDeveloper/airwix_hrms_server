@@ -603,7 +603,7 @@ exports.getCompanySettingsData = async (req, res) => {
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['show_accuracy', 'punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage']
+        [Op.in]: ['show_accuracy', 'punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage', 'face_engine_version']
       },
       status: 0
     }, {
@@ -715,8 +715,12 @@ exports.getCompanySettingsData = async (req, res) => {
       }
     }
 
+    const faceEngineVersionSetting = settings.find(s => s.settings_name === 'face_engine_version');
+    const faceEngineVersion = faceEngineVersionSetting ? faceEngineVersionSetting.settings_value : 'v1';
+
     const response = {
       settings: settings,
+      face_engine_version: faceEngineVersion,
       enble_out_duty: enableOutDuty,
       fines_allowed: finesAllowed,
       overtime_allowed: overtimeAllowed,

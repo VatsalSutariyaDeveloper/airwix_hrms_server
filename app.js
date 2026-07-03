@@ -94,7 +94,7 @@ if (cluster.isMaster) {
   app.use(responseFormatter);
   app.use(tenantMiddleware);
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "500mb" }));
 
   app.use((err, req, res, next) => {
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
@@ -104,7 +104,7 @@ if (cluster.isMaster) {
     next();
   });
 
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.urlencoded({ extended: true, limit: "500mb" }));
   app.use("/uploads", express.static(path.join(__dirname, "uploads")));
   app.use(normalizeNullValues);
 

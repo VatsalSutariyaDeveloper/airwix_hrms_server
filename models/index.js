@@ -14,14 +14,6 @@ function initModels(prefix) {
   // Get the sequelize connection for this prefix
   const seq = createConnectionByPrefix(prefix);
 
-  // Self-healing database updates for visitor_passes table column nullability
-  seq.query("ALTER TABLE visitor_passes ALTER COLUMN scheduled_start_time DROP NOT NULL")
-    .then(() => console.log(`[DB Migration - ${prefix}] Drop NOT NULL constraint on visitor_passes.scheduled_start_time`))
-    .catch(err => console.log(`[DB Migration Info - ${prefix}] scheduled_start_time alteration skipped/already updated:`, err.message));
-  seq.query("ALTER TABLE visitor_passes ALTER COLUMN scheduled_end_time DROP NOT NULL")
-    .then(() => console.log(`[DB Migration - ${prefix}] Drop NOT NULL constraint on visitor_passes.scheduled_end_time`))
-    .catch(err => console.log(`[DB Migration Info - ${prefix}] scheduled_end_time alteration skipped/already updated:`, err.message));
-  
   // Administration models
   const ModuleMaster = require("./administration/permission/moduleMaster")(seq, DataTypes);
   const ModuleEntityMaster = require("./administration/permission/moduleEntityMaster")(seq, DataTypes);

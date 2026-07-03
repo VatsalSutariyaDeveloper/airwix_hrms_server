@@ -127,6 +127,12 @@ exports.create = async (req, res) => {
             req.body.employee_id = req.user.employee_id
         }
 
+        try {
+            await OutDutyRequest.sync({ alter: true });
+        } catch (syncErr) {
+            console.error("Failed to sync OutDutyRequest table:", syncErr.message);
+        }
+
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
         if (errors) {
@@ -183,6 +189,10 @@ exports.create = async (req, res) => {
             { ...req.body, start_session, end_session, approval_status: approvalStatus, current_out_duty_level: 1, approval_history: [] },
             transaction
         )
+
+        if (approvalStatus === constants.OUT_DUTY_STATUS.APPROVED) {
+            await generatePunchesAndRebuild(outDutyRequest, req.user ? req.user.id : (outDutyRequest.user_id || 0), transaction);
+        }
 
         // Notify approval level users
         await sendApprovalNotifications(outDutyRequest, employee, "CREATE", transaction);
@@ -638,6 +648,10 @@ exports.updateStatus = async (req, res) => {
             }, outDutyRequest.employee, "CREATE", transaction);
         }
 
+        if (newStatus === constants.OUT_DUTY_STATUS.APPROVED) {
+            await generatePunchesAndRebuild(outDutyRequest, req.user.id, transaction);
+        }
+
         await transaction.commit();
         return res.success(constants.UPDATED);
     } catch (err) {
@@ -775,7 +789,11 @@ exports.getOutDutySummary = async (req, res) => {
                 status: statusMap[outDuty.approval_status],
                 status_color: colorMap[outDuty.approval_status] || "#F59E0B",
                 approved_by: outDuty.approvedBy?.user_name || null,
-                approval_remark: outDuty.approval_remark || ""
+                approval_remark: outDuty.approval_remark || "",
+                start_from_time: outDuty.start_from_time || null,
+                start_to_time: outDuty.start_to_time || null,
+                end_from_time: outDuty.end_from_time || null,
+                end_to_time: outDuty.end_to_time || null
             });
         });
 
@@ -829,5 +847,135 @@ exports.delete = async (req, res) => {
     } catch (err) {
         await transaction.rollback();
         return handleError(err, res, req);
+    }
+};
+
+const generatePunchesAndRebuild = async (outDutyRequest, userId, transaction) => {
+    const { getOrCreateAttendanceDay, rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
+    const { AttendancePunch } = require("../../models");
+
+    let currentDate = dayjs(outDutyRequest.start_date);
+    const endDate = dayjs(outDutyRequest.end_date);
+
+    while (currentDate.isBefore(endDate) || currentDate.isSame(endDate)) {
+        const dateStr = currentDate.format("YYYY-MM-DD");
+        let dayRecord = null;
+
+        // For start date, if start_session is 3 (Time), generate IN/OUT punches
+        if (dateStr === outDutyRequest.start_date && outDutyRequest.start_session === 3) {
+            dayRecord = await getOrCreateAttendanceDay(outDutyRequest.employee_id, dateStr, {
+                company_id: outDutyRequest.company_id,
+                branch_id: outDutyRequest.branch_id,
+                user_id: userId
+            }, transaction);
+
+            if (outDutyRequest.start_from_time) {
+                const inTime = dayjs(`${dateStr} ${outDutyRequest.start_from_time}`).toDate();
+                const punchExists = await commonQuery.findOneRecord(AttendancePunch, {
+                    employee_id: outDutyRequest.employee_id,
+                    day_id: dayRecord.id,
+                    punch_type: "IN",
+                    punch_time: inTime
+                }, {}, transaction, false, {});
+                
+                if (!punchExists) {
+                    await commonQuery.createRecord(AttendancePunch, {
+                        employee_id: outDutyRequest.employee_id,
+                        day_id: dayRecord.id,
+                        punch_type: "IN",
+                        punch_time: inTime,
+                        user_id: userId,
+                        company_id: outDutyRequest.company_id || 0,
+                        branch_id: outDutyRequest.branch_id || 0
+                    }, transaction);
+                }
+            }
+
+            if (outDutyRequest.start_to_time) {
+                const outTime = dayjs(`${dateStr} ${outDutyRequest.start_to_time}`).toDate();
+                const punchExists = await commonQuery.findOneRecord(AttendancePunch, {
+                    employee_id: outDutyRequest.employee_id,
+                    day_id: dayRecord.id,
+                    punch_type: "OUT",
+                    punch_time: outTime
+                }, {}, transaction, false, {});
+
+                if (!punchExists) {
+                    await commonQuery.createRecord(AttendancePunch, {
+                        employee_id: outDutyRequest.employee_id,
+                        day_id: dayRecord.id,
+                        punch_type: "OUT",
+                        punch_time: outTime,
+                        user_id: userId,
+                        company_id: outDutyRequest.company_id || 0,
+                        branch_id: outDutyRequest.branch_id || 0
+                    }, transaction);
+                }
+            }
+        }
+
+        // For end date, if end_session is 3 (Time), generate IN/OUT punches
+        if (dateStr === outDutyRequest.end_date && outDutyRequest.end_session === 3) {
+            if (!dayRecord) {
+                dayRecord = await getOrCreateAttendanceDay(outDutyRequest.employee_id, dateStr, {
+                    company_id: outDutyRequest.company_id,
+                    branch_id: outDutyRequest.branch_id,
+                    user_id: userId
+                }, transaction);
+            }
+
+            if (outDutyRequest.end_from_time) {
+                const inTime = dayjs(`${dateStr} ${outDutyRequest.end_from_time}`).toDate();
+                const punchExists = await commonQuery.findOneRecord(AttendancePunch, {
+                    employee_id: outDutyRequest.employee_id,
+                    day_id: dayRecord.id,
+                    punch_type: "IN",
+                    punch_time: inTime
+                }, {}, transaction, false, {});
+
+                if (!punchExists) {
+                    await commonQuery.createRecord(AttendancePunch, {
+                        employee_id: outDutyRequest.employee_id,
+                        day_id: dayRecord.id,
+                        punch_type: "IN",
+                        punch_time: inTime,
+                        user_id: userId,
+                        company_id: outDutyRequest.company_id || 0,
+                        branch_id: outDutyRequest.branch_id || 0
+                    }, transaction);
+                }
+            }
+
+            if (outDutyRequest.end_to_time) {
+                const outTime = dayjs(`${dateStr} ${outDutyRequest.end_to_time}`).toDate();
+                const punchExists = await commonQuery.findOneRecord(AttendancePunch, {
+                    employee_id: outDutyRequest.employee_id,
+                    day_id: dayRecord.id,
+                    punch_type: "OUT",
+                    punch_time: outTime
+                }, {}, transaction, false, {});
+
+                if (!punchExists) {
+                    await commonQuery.createRecord(AttendancePunch, {
+                        employee_id: outDutyRequest.employee_id,
+                        day_id: dayRecord.id,
+                        punch_type: "OUT",
+                        punch_time: outTime,
+                        user_id: userId,
+                        company_id: outDutyRequest.company_id || 0,
+                        branch_id: outDutyRequest.branch_id || 0
+                    }, transaction);
+                }
+            }
+        }
+
+        // Rebuild the day record to recalculate status based on the generated punches and/or out duty requests
+        await rebuildAttendanceDay(outDutyRequest.employee_id, dateStr, {
+            user_id: userId,
+            company_id: outDutyRequest.company_id,
+            branch_id: outDutyRequest.branch_id
+        }, transaction);
+
+        currentDate = currentDate.add(1, 'day');
     }
 };

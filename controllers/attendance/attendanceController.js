@@ -11,16 +11,6 @@ const LeaveBalanceService = require("../../services/leaveBalanceService");
 const notificationService = require("../../services/notificationService");
 dayjs.extend(customParseFormat);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADAPTIVE FACE LEARNING (Phase 2)
-// ─────────────────────────────────────────────────────────────────────────────
-const ADAPTIVE_LEARN = {
-  enabled: true,
-  minScore: 75,        // best-match score (percent) required to learn from a punch
-  minMargin: 8,        // best must beat 2nd-best by this many percent points
-  dupSimilarity: 0.97, // skip if new vector is ~identical to an existing template
-  maxTemplates: 5,     // gallery cap (matches registerFace); oldest dropped beyond this
-};
 
 // Cosine similarity (0..1) for two equal-length numeric vectors.
 function adaptiveCosineSim(a, b) {
@@ -33,118 +23,6 @@ function adaptiveCosineSim(a, b) {
   }
   if (na === 0 || nb === 0) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
-}
-
-async function maybeLearnFaceTemplate(punchData, punchImage, transaction) {
-  if (!ADAPTIVE_LEARN.enabled) return;
-  const empId = punchData.employee_id;
-
-  // Need an image so the learned template is also viewable in the employee's
-  // registered faces (also keeps face_descriptor and registered_face_images aligned).
-  if (!punchImage) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: no punch image — skipped`);
-    return;
-  }
-
-  // 1. Parse the punch face vector. Flutter sends `face_vector`; accept
-  //    `face_descriptor` too for forward-compat.
-  let raw = punchData.face_vector != null ? punchData.face_vector : punchData.face_descriptor;
-  if (raw == null) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: no face vector on punch — skipped`);
-    return;
-  }
-  let newVec = raw;
-  if (typeof newVec === 'string') {
-    try { newVec = JSON.parse(newVec); } catch (e) {
-      console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: bad vector JSON — skipped`);
-      return;
-    }
-  }
-  if (!Array.isArray(newVec) || newVec.length < 10 || Array.isArray(newVec[0])) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: vector is not a 1D array — skipped`);
-    return;
-  }
-
-  // 2. Eligibility: high score AND clear margin over the runner-up.
-  const score = parseFloat(punchData.match_score);
-  let matches = punchData.matches;
-  if (typeof matches === 'string') { try { matches = JSON.parse(matches); } catch (e) { matches = null; } }
-  let margin = ADAPTIVE_LEARN.minMargin; // if only one candidate, no ambiguity → treat as ok
-  if (Array.isArray(matches) && matches.length >= 2) {
-    const best = parseFloat(matches[0] && matches[0].match_score);
-    const second = parseFloat(matches[1] && matches[1].match_score);
-    if (!isNaN(best) && !isNaN(second)) margin = best - second;
-  }
-  if (!(score >= ADAPTIVE_LEARN.minScore) || !(margin >= ADAPTIVE_LEARN.minMargin)) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: not eligible (score=${isNaN(score) ? 'n/a' : score.toFixed(1)}%, margin=${margin.toFixed(1)}pts; need score≥${ADAPTIVE_LEARN.minScore}%, margin≥${ADAPTIVE_LEARN.minMargin}pts)`);
-    return;
-  }
-
-  // 3. Load employee + existing gallery.
-  const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, transaction, false, {});
-  if (!employee) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: employee not found — skipped`);
-    return;
-  }
-
-  let gallery = [];
-  if (employee.face_descriptor) {
-    try {
-      const parsed = typeof employee.face_descriptor === 'string'
-        ? JSON.parse(employee.face_descriptor) : employee.face_descriptor;
-      if (Array.isArray(parsed)) gallery = Array.isArray(parsed[0]) ? [...parsed] : [parsed];
-    } catch (e) { gallery = []; }
-  }
-
-  let images = [];
-  if (employee.registered_face_images) {
-    try {
-      const parsed = typeof employee.registered_face_images === 'string'
-        ? JSON.parse(employee.registered_face_images) : employee.registered_face_images;
-      if (Array.isArray(parsed)) images = [...parsed];
-    } catch (e) { images = []; }
-  }
-
-  // 4. Dedup: skip if too similar to an existing template (no new information).
-  let maxSim = 0;
-  for (const v of gallery) {
-    const s = adaptiveCosineSim(newVec, v);
-    if (s > maxSim) maxSim = s;
-  }
-  if (maxSim >= ADAPTIVE_LEARN.dupSimilarity) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: near-duplicate of an existing look (sim=${(maxSim * 100).toFixed(2)}%) — skipped`);
-    return;
-  }
-
-  // 5. Copy the punch image into the employee image folder so the learned face is
-  //    viewable in the employee's registered faces (visibility + keeps arrays aligned).
-  let learnedImage = null;
-  try {
-    const srcPath = path.join(process.cwd(), "uploads", constants.ATTENDANCE_FOLDER, punchImage);
-    const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER);
-    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true, mode: 0o777 });
-    fs.copyFileSync(srcPath, path.join(destDir, punchImage));
-    learnedImage = punchImage;
-  } catch (copyErr) {
-    console.log(`[AdaptiveLearn] ⏭️  Emp #${empId}: could not copy punch image (${copyErr.message}) — skipped`);
-    return;
-  }
-
-  // 6. Append + cap (drop oldest of BOTH arrays together to stay index-aligned).
-  gallery.push(newVec);
-  images.push(learnedImage);
-  let dropped = 0;
-  while (gallery.length > ADAPTIVE_LEARN.maxTemplates) { gallery.shift(); dropped++; }
-  while (images.length > ADAPTIVE_LEARN.maxTemplates) { images.shift(); }
-
-  employee.changed('registered_face_images', true);
-  employee.changed('face_descriptor', true);
-  await employee.update({
-    registered_face_images: images,
-    face_descriptor: JSON.stringify(gallery),
-  }, { transaction });
-
-  console.log(`[AdaptiveLearn] ✅ Emp #${empId} (${employee.first_name || ''}): LEARNED new template — gallery now ${gallery.length}${dropped ? `, dropped ${dropped} oldest` : ''} | score=${score.toFixed(1)}%, margin=${margin.toFixed(1)}pts, closestExisting=${(maxSim * 100).toFixed(2)}%, image=${learnedImage}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -420,13 +298,6 @@ exports.syncPunches = async (req, res) => {
           type: result.punchType
         });
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
-
-        // ── ADAPTIVE FACE LEARNING ──
-        try {
-          await maybeLearnFaceTemplate(punchData, punchImage, transaction);
-        } catch (learnErr) {
-          console.error(`[AdaptiveLearn] ⚠️ Emp #${punchData.employee_id}: learning step failed (non-fatal):`, learnErr.message);
-        }
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
         const isRecoverableSyncError = punchErr.message === "Employee not found";
@@ -571,7 +442,7 @@ exports.getAttendanceSummary = async (req, res) => {
     //             Employee,
     //             employeeWhere,
     //             { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
-    //             null, 
+    //             null,
     //         );
 
 
@@ -579,10 +450,10 @@ exports.getAttendanceSummary = async (req, res) => {
     //           await bulkSyncAttendanceDays(
     //             employeesToSync.map(e => e.id),
     //             targetDate,
-    //             { 
-    //               user_id: req.user.id, 
-    //               company_id: req.user.company_id, 
-    //               branch_id: req.user.branch_id 
+    //             {
+    //               user_id: req.user.id,
+    //               company_id: req.user.company_id,
+    //               branch_id: req.user.branch_id
     //             }
     //           );
     //         }
@@ -2262,7 +2133,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       //     // Check Weekly Off
       //     const dayOfWeek = dayObj.day(); // 0 is Sunday
       //     const weekOfMonth = Math.ceil(dayObj.date() / 7);
-      //     const isWO = employeeWeeklyOffs.find(wo => 
+      //     const isWO = employeeWeeklyOffs.find(wo =>
       //       wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
       //     );
       //     if (isWO) {
@@ -2386,12 +2257,12 @@ exports.getLeaveSummary = async (req, res) => {
         groupedHistory.push(group);
       }
 
-      // Only count approved leaves in the monthly header count if needed, 
+      // Only count approved leaves in the monthly header count if needed,
       // but usually the header shows total requested in that month
       // Sum up days for the month. Credits (Earned) are added, Debits (Taken) are subtracted or just shown?
-      // Usually "total_days" in summary means total leave days taken. 
+      // Usually "total_days" in summary means total leave days taken.
       // But if we want to show net change or just total volume, we need to decide.
-      // User said "look like earned leave not deducted leave". 
+      // User said "look like earned leave not deducted leave".
       // Let's keep total_days as volume but differentiate in the items.
       // Sum up only "Taken" (DEBIT) leaves for the monthly header count.
       // This avoids negative counts (like -1) when only earned leaves exist.
