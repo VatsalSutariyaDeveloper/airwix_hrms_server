@@ -69,6 +69,19 @@ module.exports = (sequelize, DataTypes) => {
     security_remarks: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    visitor_type: {
+      type: DataTypes.ENUM("VISITOR", "CONTRACTOR", "TPI"),
+      defaultValue: "VISITOR",
+      allowNull: false
+    },
+    valid_from: {
+      type: DataTypes.DATEONLY,
+      allowNull: true
+    },
+    valid_to: {
+      type: DataTypes.DATEONLY,
+      allowNull: true
     }
   }, {
     tableName: "visitor_passes",
@@ -88,6 +101,10 @@ module.exports = (sequelize, DataTypes) => {
     VisitorPass.belongsTo(models.BranchMaster, {
       foreignKey: "branch_id",
       as: "branch"
+    });
+    VisitorPass.hasMany(models.VisitorAttendance, {
+      foreignKey: "visitor_pass_id",
+      as: "attendances"
     });
   };
 

@@ -135,6 +135,7 @@ function initModels(prefix) {
 
   const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(seq, DataTypes);
   const CompanySettings = require("./settings/companySettings")(seq, DataTypes);
+  const VisitorAttendance = require("./visitorAttendance")(seq, DataTypes);
 
   // Collect all models in one db object
   const db = {
@@ -228,7 +229,8 @@ function initModels(prefix) {
     ReimbursementItem,
     CompanySettings,
     FaceRecognitionError,
-    VisitorPass
+    VisitorPass,
+    VisitorAttendance,
   };
 
   Object.keys(db).forEach(modelName => {

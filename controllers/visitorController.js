@@ -1,4 +1,4 @@
-const { VisitorPass, Employee, CompanyMaster, User } = require("../models");
+const { VisitorPass, Employee, CompanyMaster, User, VisitorAttendance } = require("../models");
 const commonQuery = require("../helpers/commonQuery");
 const { handleError, sequelize, constants, Op, uploadFile, uploadBase64File } = require("../helpers");
 const dayjs = require("dayjs");
@@ -16,12 +16,23 @@ exports.createPass = async (req, res) => {
       scheduled_start_time,
       scheduled_end_time,
       remarks,
-      host_employee_id
+      host_employee_id,
+      visitor_type,
+      valid_from,
+      valid_to
     } = req.body;
 
     if (!visitor_name || !visitor_phone || !purpose) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, "Missing required fields");
+    }
+
+    const type = visitor_type || "VISITOR";
+    if (["CONTRACTOR", "TPI"].includes(type)) {
+      if (!valid_from || !valid_to) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Valid From and Valid To are required for Contractor/TPI");
+      }
     }
 
     // Resolve host employee: employees can only host for themselves, admins/security/hr can host for anyone
@@ -42,8 +53,9 @@ exports.createPass = async (req, res) => {
     const passCode = `VP-${datePart}-${randPart}`;
 
     let visitorPhoto = null;
-    if (req.file) {
-      visitorPhoto = await uploadFile(req, res, "visitor_passes", transaction);
+    if (req.file || (req.files && Object.keys(req.files).length > 0)) {
+      const uploadResult = await uploadFile(req, res, "visitor_passes", transaction);
+      visitorPhoto = (uploadResult && uploadResult.visitor_photo) ? uploadResult.visitor_photo : uploadResult;
     } else if (req.body.visitor_photo) {
       visitorPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
     }
@@ -62,6 +74,9 @@ exports.createPass = async (req, res) => {
       remarks,
       company_id: req.user?.company_id,
       branch_id: req.user?.branch_id || req.body.branch_id || 0,
+      visitor_type: type,
+      valid_from: ["CONTRACTOR", "TPI"].includes(type) ? valid_from : null,
+      valid_to: ["CONTRACTOR", "TPI"].includes(type) ? valid_to : null,
       status: 0 // Scheduled
     };
 
@@ -134,6 +149,11 @@ exports.getPasses = async (req, res) => {
           model: Employee,
           as: "host",
           attributes: ["id", "first_name", "employee_code"]
+        },
+        {
+          model: VisitorAttendance,
+          as: "attendances",
+          required: false
         }
       ],
       order: [["scheduled_start_time", "DESC"]]
@@ -212,30 +232,69 @@ exports.punchIn = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Visitor pass not found");
     }
 
+    const isMultiEntry = pass.visitor_type === "CONTRACTOR" || pass.visitor_type === "TPI";
+
+    if (isMultiEntry) {
+      if (pass.status !== 0 && pass.status !== 3) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Visitor pass must be Scheduled or Checked Out to Punch In");
+      }
+      const today = dayjs().startOf('day');
+      const validFrom = pass.valid_from ? dayjs(pass.valid_from).startOf('day') : null;
+      const validTo = pass.valid_to ? dayjs(pass.valid_to).startOf('day') : null;
+
+      if (validFrom && validTo) {
+        if (today.isBefore(validFrom) || today.isAfter(validTo)) {
+          await transaction.rollback();
+          return res.error(constants.VALIDATION_ERROR, "Pass has expired or is not yet valid.");
+        }
+      }
+    } else {
     if (pass.status !== 0) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, "Visitor pass must be in Scheduled state to Punch In");
+      }
     }
 
-    let visitorPhoto = pass.visitor_photo;
-    if (req.file) {
-      visitorPhoto = await uploadFile(req, res, "visitor_passes", transaction);
+    let uploadedPhoto = null;
+    if (req.file || (req.files && Object.keys(req.files).length > 0)) {
+      const uploadResult = await uploadFile(req, res, "visitor_passes", transaction);
+      uploadedPhoto = (uploadResult && uploadResult.visitor_photo) ? uploadResult.visitor_photo : uploadResult;
     } else if (req.body.visitor_photo) {
-      visitorPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
+      uploadedPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
     }
 
     const updateData = {
-      status: 1, // Checked In
-      check_in_time: new Date()
+      status: 1 // Checked In
     };
-    if (visitorPhoto) {
-      updateData.visitor_photo = visitorPhoto;
+    if (!isMultiEntry) {
+      updateData.check_in_time = new Date();
+    if (uploadedPhoto) {
+      updateData.visitor_photo = uploadedPhoto;
     }
     if (req.body.security_remarks) {
       updateData.security_remarks = req.body.security_remarks;
+      }
     }
 
     const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, updateData, transaction);
+    
+    if (isMultiEntry) {
+      if (!req.body.visitor_name || !req.body.visitor_phone) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Visitor name and phone are required for Contractor/TPI punch in.");
+      }
+      await commonQuery.createRecord(VisitorAttendance, {
+        visitor_pass_id: pass.id,
+        visitor_name: req.body.visitor_name,
+        visitor_phone: req.body.visitor_phone,
+        visitor_photo: uploadedPhoto || req.body.existing_photo || null,
+        check_in_time: new Date(),
+        security_remarks: req.body.security_remarks || null,
+        status: 1
+      }, transaction);
+    }
+
     await transaction.commit();
 
     // Send instant notification to the host user
@@ -280,6 +339,8 @@ exports.punchOut = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Visitor pass not found");
     }
 
+    const isMultiEntry = pass.visitor_type === "CONTRACTOR" || pass.visitor_type === "TPI";
+
     if (pass.status !== 1) {
       await transaction.rollback();
       return res.error(constants.VALIDATION_ERROR, "Visitor must be Checked In to Punch Out");
@@ -287,8 +348,23 @@ exports.punchOut = async (req, res) => {
 
     const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, {
       status: 3, // Checked Out
-      check_out_time: new Date()
+      ...(isMultiEntry ? {} : { check_out_time: new Date() })
     }, transaction);
+
+    if (isMultiEntry) {
+      const activeAttendance = await commonQuery.findOneRecord(VisitorAttendance, {
+        visitor_pass_id: pass.id,
+        status: 1,
+        check_out_time: null
+      }, { order: [["check_in_time", "DESC"]] }, transaction);
+
+      if (activeAttendance) {
+        await commonQuery.updateRecordById(VisitorAttendance, { id: activeAttendance.id }, {
+          status: 3,
+          check_out_time: new Date()
+        }, transaction);
+      }
+    }
 
     await transaction.commit();
     return res.success("Visitor checked out successfully", updatedPass);
@@ -332,7 +408,10 @@ exports.updatePass = async (req, res) => {
       purpose,
       scheduled_start_time,
       scheduled_end_time,
-      remarks
+      remarks,
+      visitor_type,
+      valid_from,
+      valid_to
     } = req.body;
 
     const updateData = {};
@@ -344,10 +423,30 @@ exports.updatePass = async (req, res) => {
     if (scheduled_start_time) updateData.scheduled_start_time = new Date(scheduled_start_time);
     if (scheduled_end_time) updateData.scheduled_end_time = new Date(scheduled_end_time);
     if (remarks !== undefined) updateData.remarks = remarks;
+    if (visitor_type) updateData.visitor_type = visitor_type;
+    
+    // If the visitor type is being updated to Contractor/TPI, enforce valid_from/to
+    const type = visitor_type || pass.visitor_type;
+    if (["CONTRACTOR", "TPI"].includes(type)) {
+      if (valid_from) updateData.valid_from = valid_from;
+      if (valid_to) updateData.valid_to = valid_to;
+      if (!updateData.valid_from && !pass.valid_from) {
+          await transaction.rollback();
+          return res.error(constants.VALIDATION_ERROR, "Valid From is required for Contractor/TPI");
+      }
+      if (!updateData.valid_to && !pass.valid_to) {
+          await transaction.rollback();
+          return res.error(constants.VALIDATION_ERROR, "Valid To is required for Contractor/TPI");
+      }
+    } else {
+       updateData.valid_from = null;
+       updateData.valid_to = null;
+    }
 
     let visitorPhoto = null;
-    if (req.file) {
-      visitorPhoto = await uploadFile(req, res, "visitor_passes", transaction);
+    if (req.file || (req.files && Object.keys(req.files).length > 0)) {
+      const uploadResult = await uploadFile(req, res, "visitor_passes", transaction);
+      visitorPhoto = (uploadResult && uploadResult.visitor_photo) ? uploadResult.visitor_photo : uploadResult;
       updateData.visitor_photo = visitorPhoto;
     } else if (req.body.visitor_photo) {
       visitorPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
