@@ -14,14 +14,6 @@ function initModels(prefix) {
   // Get the sequelize connection for this prefix
   const seq = createConnectionByPrefix(prefix);
 
-  // Self-healing database updates for visitor_passes table column nullability
-  seq.query("ALTER TABLE visitor_passes ALTER COLUMN scheduled_start_time DROP NOT NULL")
-    .then(() => console.log(`[DB Migration - ${prefix}] Drop NOT NULL constraint on visitor_passes.scheduled_start_time`))
-    .catch(err => console.log(`[DB Migration Info - ${prefix}] scheduled_start_time alteration skipped/already updated:`, err.message));
-  seq.query("ALTER TABLE visitor_passes ALTER COLUMN scheduled_end_time DROP NOT NULL")
-    .then(() => console.log(`[DB Migration - ${prefix}] Drop NOT NULL constraint on visitor_passes.scheduled_end_time`))
-    .catch(err => console.log(`[DB Migration Info - ${prefix}] scheduled_end_time alteration skipped/already updated:`, err.message));
-  
   // Administration models
   const ModuleMaster = require("./administration/permission/moduleMaster")(seq, DataTypes);
   const ModuleEntityMaster = require("./administration/permission/moduleEntityMaster")(seq, DataTypes);
@@ -80,6 +72,7 @@ function initModels(prefix) {
   const WeeklyOffTemplateDay = require("./settings/weeklyOffTemplateDay")(seq, DataTypes);
   const EmployeeShift = require("./attendance/employeeShift")(seq, DataTypes);
   const FaceRecognitionError = require("./attendance/faceRecognitionError")(seq, DataTypes);
+  const AttendanceApproval = require("./attendance/attendanceApproval")(seq, DataTypes);
 
   // Employee models
   const Employee = require("./employee")(seq, DataTypes);
@@ -143,6 +136,7 @@ function initModels(prefix) {
 
   const CanteenAttendance = require("./canteenAttendance/canteenAttendance")(seq, DataTypes);
   const CompanySettings = require("./settings/companySettings")(seq, DataTypes);
+  const VisitorAttendance = require("./visitorAttendance")(seq, DataTypes);
 
   // Collect all models in one db object
   const db = {
@@ -236,7 +230,9 @@ function initModels(prefix) {
     ReimbursementItem,
     CompanySettings,
     FaceRecognitionError,
-    VisitorPass
+    VisitorPass,
+    VisitorAttendance,
+    AttendanceApproval,
   };
 
   Object.keys(db).forEach(modelName => {

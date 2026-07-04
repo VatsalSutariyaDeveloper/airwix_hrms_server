@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization, AttendanceApproval, CompanyConfigration, CompanySettings } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -10,6 +10,88 @@ const customParseFormat = require('dayjs/plugin/customParseFormat');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const notificationService = require("../../services/notificationService");
 dayjs.extend(customParseFormat);
+
+
+// Cosine similarity (0..1) for two equal-length numeric vectors.
+function adaptiveCosineSim(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALIGNED FACE TEMPLATES (v2 devices) — stored in employees.aligned_face_templates
+// (own JSONB column; face_descriptor is never touched by this flow)
+// ─────────────────────────────────────────────────────────────────────────────
+const ALIGNED_TEMPLATES = {
+  maxPerEmployee: 8,   // server keeps more than the device cap (5) as shared pool
+  dupSimilarity: 0.97, // skip near-identical vectors
+};
+
+// Lazy column creation — no migration needed, idempotent per tenant DB.
+async function ensureAlignedTemplatesColumn() {
+  await sequelize.query(
+    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_templates JSONB'
+  );
+}
+
+/**
+ * SYNC ALIGNED FACE TEMPLATES (v2 attendance devices)
+ * Body: { templates: [{ employee_id, vector }] }
+ */
+exports.saveFaceTemplates = async (req, res) => {
+  try {
+    await ensureAlignedTemplatesColumn();
+  } catch (colErr) {
+    console.error("ensureAlignedTemplatesColumn failed:", colErr.message);
+  }
+  try {
+    const items = Array.isArray(req.body.templates) ? req.body.templates : [];
+    if (items.length === 0) {
+      return res.error(constants.VALIDATION_ERROR, { message: "No templates provided" });
+    }
+
+    let saved = 0;
+    for (const item of items) {
+      const empId = parseInt(item.employee_id);
+      let vec = item.vector;
+      if (typeof vec === 'string') {
+        try { vec = JSON.parse(vec); } catch (e) { vec = null; }
+      }
+      if (!empId || !Array.isArray(vec) || vec.length < 10 || Array.isArray(vec[0])) continue;
+
+      const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+      if (!employee) continue;
+
+      let list = Array.isArray(employee.aligned_face_templates)
+        ? [...employee.aligned_face_templates] : [];
+
+      let dup = false;
+      for (const t of list) {
+        if (adaptiveCosineSim(vec, t) >= ALIGNED_TEMPLATES.dupSimilarity) { dup = true; break; }
+      }
+      if (dup) continue;
+
+      list.push(vec);
+      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+
+      employee.changed('aligned_face_templates', true);
+      await employee.update({ aligned_face_templates: list });
+      saved++;
+      console.log(`[AlignedTemplates] ✅ Emp #${empId} (${employee.first_name || ''}): template saved — now ${list.length}/${ALIGNED_TEMPLATES.maxPerEmployee}${list.length >= 2 ? ' (MIGRATED to aligned matching)' : ''}`);
+    }
+
+    return res.success(constants.ACTION_SUCCESSFUL, { saved });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
 
 /**
  * PUNCH (IN/OUT)
@@ -159,7 +241,7 @@ exports.syncPunches = async (req, res) => {
             longitude: punchData.longitude || null,
             device_id: resolvedDeviceId || (punchData.device_id || null),
             image_name: punchImage,
-            face_descriptor: punchData.face_descriptor || null,
+            face_descriptor: punchData.face_vector || punchData.face_descriptor || null,
             match_score: punchData.match_score || null,
             bypassGapCheck: true,
             skipRebuild: false,
@@ -218,56 +300,49 @@ exports.syncPunches = async (req, res) => {
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
-        const isRecoverableSyncError = punchErr.message === "Employee not found";
-        if (isRecoverableSyncError) {
-          console.warn(`[SyncPunches] Skipping punch for missing employee ${punchData.employee_id}.`);
-          results.push({
-            employee_id: punchData.employee_id,
-            punch_time: punchData.punch_time,
-            success: false,
-            error: punchErr.message,
-            code: "EMPLOYEE_NOT_FOUND"
-          });
-          continue;
+        const errMsg = String(punchErr.message || "");
+
+        // Classified by TYPE, not message: Sequelize/DB errors are transient
+        // system failures → fail the batch so the device retries everything.
+        const isSystemError = punchErr.name && String(punchErr.name).startsWith("Sequelize");
+        if (isSystemError) {
+          await transaction.rollback();
+          return handleError(punchErr, res, req);
         }
 
-        // 1. Rollback the entire transaction immediately for non-recoverable errors
-        await transaction.rollback();
-
-        // 2. Alert System: Notify all admins/business admins of this company about this critical offline sync failure
+        // Everything else is a business rejection (Already Punched, shift
+        // window, cooldown, leave block, ...) — record per punch, surface on
+        // the audit dashboard as an ACTIVE error, and keep processing.
+        console.warn(`[SyncPunches] ⛔ REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
         try {
-          // const admins = await commonQuery.findAllRecords(User, {}, {
-          //   include: [
-          //     {
-          //       model: RolePermission,
-          //       as: "RolePermission",
-          //       where: {
-          //         role_key: {
-          //           [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
-          //         }
-          //       },
-          //       attributes: []
-          //     }
-          //   ],
-          //   attributes: ["id"]
-          // }, null, { company_id: true });
-
-          for (const admin of admins) {
-            await notificationService.createNotification({
-              user_id: 1, // System
-              title: "🚨 Critical Sync Punch Failure",
-              message: `Offline punch sync failed for Employee ID: ${punchData.employee_id} at ${punchData.punch_time}. Error: ${punchErr.message}`,
-              type: "CRITICAL_SYNC_ERROR",
-              company_id: req.user.company_id,
-              branch_id: req.user.branch_id
-            });
+          let rejImage = null;
+          if (punchData.image && punchData.image.trim() !== "") {
+            rejImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
           }
-        } catch (notifErr) {
-          console.error("[SyncPunches Critical Error Alert] Failed to dispatch admin alert notifications:", notifErr.message);
+          await commonQuery.createRecord(FaceRecognitionError, {
+            image: rejImage,
+            accuracy: punchData.match_score || null,
+            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
+            company_id: req.user.company_id || 0,
+            branch_id: req.user.branch_id || 0,
+            employee_id: punchData.employee_id || null,
+            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
+            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
+            status: 0, // Active — admin must see the rejection
+            matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
+            message: `Punch rejected: ${errMsg}`,
+          }, transaction);
+        } catch (logErr) {
+          console.error("[SyncPunches] Failed to store rejection audit:", logErr.message);
         }
-
-        // 3. Centralized Developer Log + Database Error Logging + HTTP Non-Success Response
-        return handleError(punchErr, res, req);
+        results.push({
+          employee_id: punchData.employee_id,
+          punch_time: punchData.punch_time,
+          success: false,
+          error: errMsg,
+          code: "REJECTED"
+        });
+        continue;
       }
     }
 
@@ -360,7 +435,7 @@ exports.getAttendanceSummary = async (req, res) => {
     //             Employee,
     //             employeeWhere,
     //             { attributes: ['id', 'company_id', 'branch_id', "joining_date"] },
-    //             null, 
+    //             null,
     //         );
 
 
@@ -368,10 +443,10 @@ exports.getAttendanceSummary = async (req, res) => {
     //           await bulkSyncAttendanceDays(
     //             employeesToSync.map(e => e.id),
     //             targetDate,
-    //             { 
-    //               user_id: req.user.id, 
-    //               company_id: req.user.company_id, 
-    //               branch_id: req.user.branch_id 
+    //             {
+    //               user_id: req.user.id,
+    //               company_id: req.user.company_id,
+    //               branch_id: req.user.branch_id
     //             }
     //           );
     //         }
@@ -464,7 +539,10 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
-        order: [['first_name', 'ASC']],
+        order: [
+          [sequelize.literal(`"attendanceDays"."updated_at"`), 'DESC NULLS LAST'],
+          ['first_name', 'ASC']
+        ],
         attributes: [
           'id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches",
           ...summaryAttributes
@@ -523,7 +601,7 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('branch_name', day.branch?.branch_name);
 
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
             const h = itemHolidays.find(h => h.employee_id === emp.id);
@@ -661,6 +739,65 @@ exports.updateAttendanceDay = async (req, res) => {
       await t.rollback();
       return res.error(constants.VALIDATION_ERROR, errors);
     }
+
+    // --- ATTENDANCE APPROVAL INTERCEPTION LOGIC ---
+    // Note: Checking req.user.role_id, req.user.is_superadmin, req.user.is_admin
+    const configRecords = await commonQuery.findAllRecords(
+      CompanySettings,
+      { company_id: req.user.company_id, settings_name: { [Op.in]: ['attendance_approval_level', 'attendance_approval_exempt_roles'] } },
+      { attributes: ['settings_name', 'settings_value'] }, 
+      t
+    );
+
+    let approvalRequired = false;
+    let exemptRoles = [];
+    configRecords.forEach(c => {
+      if (c.settings_name === 'attendance_approval_level' && c.settings_value != null && c.settings_value !== 'null') approvalRequired = true;
+      if (c.settings_name === 'attendance_approval_exempt_roles' && c.settings_value) {
+        try { 
+            exemptRoles = typeof c.settings_value === 'string' ? JSON.parse(c.settings_value) : c.settings_value; 
+        } catch (e) { }
+      }
+    });
+
+    const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+
+    if (approvalRequired && !isExempt && !req.user.is_superadmin && !req.body.is_approved_request) {
+      // Look for an existing pending request for this employee on this date
+      const existingReq = await commonQuery.findOneRecord(
+        AttendanceApproval,
+        {
+          employee_id: req.body.employee_id,
+          attendance_date: req.body.attendance_date,
+          approval_status: { [Op.in]: [0, 1] } // PENDING or PARTIALLY_APPROVED
+        },
+        {}, t
+      );
+
+      if (existingReq) {
+        // Update the existing request with the newly proposed changes
+        await commonQuery.updateRecordById(
+          AttendanceApproval,
+          existingReq.id,
+          { proposed_attendance_data: req.body },
+          t
+        );
+      } else {
+        // Create a new request
+        await commonQuery.createRecord(AttendanceApproval, {
+          employee_id: req.body.employee_id,
+          attendance_date: req.body.attendance_date,
+          proposed_attendance_data: req.body,
+          approval_status: 0,
+          current_level: 1,
+          user_id: req.user.id,
+          company_id: req.user.company_id
+        }, t);
+      }
+      await t.commit();
+      return res.success({}, "Attendance update sent for approval.");
+    }
+    // --- END ATTENDANCE APPROVAL INTERCEPTION LOGIC ---
 
     let {
       employee_id,
@@ -1956,7 +2093,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           shiftTimeStr = `${Math.floor(diffMins / 60)}:${(diffMins % 60).toString().padStart(2, '0')} Hrs`;
         }
 
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {
@@ -2051,7 +2188,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       //     // Check Weekly Off
       //     const dayOfWeek = dayObj.day(); // 0 is Sunday
       //     const weekOfMonth = Math.ceil(dayObj.date() / 7);
-      //     const isWO = employeeWeeklyOffs.find(wo => 
+      //     const isWO = employeeWeeklyOffs.find(wo =>
       //       wo.day_of_week === dayOfWeek && (wo.week_no === 0 || wo.week_no === weekOfMonth) && wo.is_off && wo.status === 0
       //     );
       //     if (isWO) {
@@ -2175,12 +2312,12 @@ exports.getLeaveSummary = async (req, res) => {
         groupedHistory.push(group);
       }
 
-      // Only count approved leaves in the monthly header count if needed, 
+      // Only count approved leaves in the monthly header count if needed,
       // but usually the header shows total requested in that month
       // Sum up days for the month. Credits (Earned) are added, Debits (Taken) are subtracted or just shown?
-      // Usually "total_days" in summary means total leave days taken. 
+      // Usually "total_days" in summary means total leave days taken.
       // But if we want to show net change or just total volume, we need to decide.
-      // User said "look like earned leave not deducted leave". 
+      // User said "look like earned leave not deducted leave".
       // Let's keep total_days as volume but differentiate in the items.
       // Sum up only "Taken" (DEBIT) leaves for the monthly header count.
       // This avoids negative counts (like -1) when only earned leaves exist.
@@ -2479,7 +2616,7 @@ exports.getFaceRecognitionErrors = async (req, res) => {
  */
 exports.resolveFaceRecognitionError = async (req, res) => {
   try {
-    const { id, status } = req.body;
+    const { id, status, employee_id } = req.body;
 
     if (!id) {
       return res.error(constants.VALIDATION_ERROR, "ID is required");
@@ -2491,16 +2628,58 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Face recognition error log not found");
     }
 
+    const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
+    // Admin-confirmed identity → v2 kiosks turn this photo into a face template
+    if (employee_id) updateData.employee_id = parseInt(employee_id);
+
     await commonQuery.updateRecordById(
       FaceRecognitionError,
       id,
-      { status: status !== undefined ? status : 1 }, // 1 = Resolved
+      updateData,
       null,
       false,
       { company_id: true }
     );
 
     return res.ok({ message: "Face recognition error status updated successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * Verified Face Errors (v2 kiosks) — resolved audits with admin-confirmed
+ * identity, pulled by kiosks to learn templates for users who keep failing.
+ */
+exports.getVerifiedFaceErrors = async (req, res) => {
+  try {
+    const afterId = parseInt(req.body.after_id) || 0;
+
+    const rows = await FaceRecognitionError.findAll({
+      where: {
+        id: { [Op.gt]: afterId },
+        status: 1,
+        employee_id: { [Op.ne]: null },
+        company_id: req.user.company_id,
+      },
+      attributes: ['id', 'employee_id', 'image'],
+      order: [['id', 'ASC']],
+      limit: 20,
+      raw: true,
+    });
+
+    const folder = constants.FACE_ERROR_FOLDER || "employee/face_errors/";
+    const items = rows.map(r => ({
+      id: r.id,
+      employee_id: r.employee_id,
+      image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
+    }));
+
+    if (items.length > 0) {
+      console.log(`[VerifiedAudits] 📤 Sent ${items.length} verified audit(s) after #${afterId} to device (user #${req.user.id})`);
+    }
+
+    return res.success(constants.ACTION_SUCCESSFUL, { items });
   } catch (err) {
     return handleError(err, res, req);
   }
@@ -3118,4 +3297,3 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
     return handleError(err, res, req);
   }
 };
-

@@ -325,7 +325,7 @@ const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
 const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily attendance irregularity alert task...');
     const notificationService = require("../services/notificationService");
-    const { AttendanceDay, User, Notification, ShiftTemplate, EmployeeShift, Employee } = require("../models");
+    const { AttendanceDay, User, Notification, ShiftTemplate, EmployeeShift, Employee, AttendanceRegularization, LeaveRequest, OutDutyRequest } = require("../models");
 
     const refDate = asOf ? dayjs(asOf) : dayjs();
     const yesterday = refDate.subtract(1, 'day').format('YYYY-MM-DD');
@@ -351,6 +351,10 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
 
         for (const record of irregularities) {
             try {
+                if (record.first_in !== null && record.last_out !== null) {
+                    continue;
+                }
+
                 // Check if this is an active night shift currently running/crossing midnight.
                 // If it is active, skip sending notification for this date run (will check/send in a future run when no longer active).
                 let isCurrentActiveNightShift = false;
@@ -393,6 +397,48 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
                 const user = await User.findOne({ where: { employee_id: record.employee_id, status: 0 } });
                 if (!user) continue;
 
+                // Check if they have a pending/approved regularization, leave, or out-duty request for this date to avoid false alarms
+                const hasPendingOrApprovedRegularization = await AttendanceRegularization.findOne({
+                    where: {
+                        employee_id: record.employee_id,
+                        attendance_date: targetDate,
+                        approval_status: { [Op.in]: [0, 1, 3] },
+                        status: 0
+                    }
+                });
+                if (hasPendingOrApprovedRegularization) {
+                    console.log(`[Cron] Skipping notification for emp ${record.employee_id} on ${targetDate} due to pending/approved regularization request`);
+                    continue;
+                }
+
+                const hasPendingOrApprovedLeave = await LeaveRequest.findOne({
+                    where: {
+                        employee_id: record.employee_id,
+                        start_date: { [Op.lte]: targetDate },
+                        end_date: { [Op.gte]: targetDate },
+                        approval_status: { [Op.in]: [0, 1, 3] },
+                        status: 0
+                    }
+                });
+                if (hasPendingOrApprovedLeave) {
+                    console.log(`[Cron] Skipping notification for emp ${record.employee_id} on ${targetDate} due to pending/approved leave request`);
+                    continue;
+                }
+
+                const hasPendingOrApprovedOutDuty = await OutDutyRequest.findOne({
+                    where: {
+                        employee_id: record.employee_id,
+                        start_date: { [Op.lte]: targetDate },
+                        end_date: { [Op.gte]: targetDate },
+                        approval_status: { [Op.in]: [0, 1, 3] },
+                        status: 0
+                    }
+                });
+                if (hasPendingOrApprovedOutDuty) {
+                    console.log(`[Cron] Skipping notification for emp ${record.employee_id} on ${targetDate} due to pending/approved out-duty request`);
+                    continue;
+                }
+
                 const dateStr = dayjs(targetDate).format("DD MMM YYYY");
 
                 //Logic: Differentiate Absent, Missing Punch-In, and Missing Punch-Out
@@ -408,9 +454,7 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
                 } else if (record.first_in !== null && record.last_out === null) {
                     title = "Missing Punch-Out Alert";
                     message = `You have a missing punch-out on ${dateStr}. Please review and regularize.`;
-                } else {
-                    message = `You have a missing punch-in or punch-out on ${dateStr}. Please review and regularize.`;
-                }
+                } 
 
                 //Date-based Deduplication
                 const existingNotification = await Notification.findOne({

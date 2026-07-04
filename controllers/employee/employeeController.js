@@ -2815,6 +2815,16 @@ exports.registerFace = async (req, res) => {
 
         await transaction.commit();
 
+        // New enrolled look → stale learned templates must not linger
+        try {
+            await Employee.update(
+                { aligned_face_templates: null },
+                { where: { id: employeeId } }
+            );
+        } catch (e) {
+            console.log('aligned_face_templates clear skipped:', e.message);
+        }
+
         writeLogToFile('face_recognition.log', `[REGISTER_SUCCESS_OFFLINE_AI] ID: ${employeeId}, Filename: ${filename}`);
 
         return res.success("Face Registered Successfully", {
@@ -3730,12 +3740,28 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             order: [['first_name', 'ASC']]
         });
 
+        // Aligned templates column (v2 devices) — additive; failure never breaks the list
+        let alignedByEmp = {};
+        try {
+            const rows = await Employee.findAll({
+                where: { id: { [Op.in]: employees.map(e => e.id) } },
+                attributes: ['id', 'aligned_face_templates'],
+                raw: true,
+            });
+            for (const r of rows) {
+                if (Array.isArray(r.aligned_face_templates)) {
+                    alignedByEmp[r.id] = r.aligned_face_templates;
+                }
+            }
+        } catch (e) { alignedByEmp = {}; } // column may not exist yet in this tenant
+
         const employeeList = employees.map(emp => ({
             id: emp.id,
             employee_name: emp.first_name,
             employee_code: emp.employee_code,
             face_descriptor: emp.face_descriptor,
             has_face_descriptor: emp.face_descriptor && emp.face_descriptor.length > 0 ? true : false,
+            aligned_face_templates: alignedByEmp[emp.id] || [],
             access_branches: emp.access_branches,
             organization_id: emp.company?.organization_id,
             company_id: emp.company_id,

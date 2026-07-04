@@ -383,7 +383,8 @@ exports.sessionData = async (req, res) => {
       branch: currentBranch,
       total_company_branches: totalCompanyBranches,
       employeeSettings: employeeSettings || [],
-      company_settings: companySettingsList || []
+      company_settings: companySettingsList || [],
+      selectedCompanyIds: req.user.selectedCompanyIds || (currentCompany ? [currentCompany.id] : [])
     };
 
     await transaction.commit();
@@ -401,7 +402,7 @@ exports.switchCompany = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { user_id } = getContext();
-    const company_id = req.query.company_id;
+    const company_id = req.body.company_id;
 
     if (!company_id) {
       await transaction.rollback();
@@ -420,27 +421,27 @@ exports.switchCompany = async (req, res) => {
       return res.error(constants.NOT_FOUND, { message: "User not found." });
     }
 
-    // 2. Validate Access
-    const isAdminUser = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
-    const companyAccessList = normalizeCompanyAccess(user.company_access || "");
-    if (!isAdminUser && !companyAccessList.includes(String(company_id))) {
-      await transaction.rollback();
-      return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
-    }
-
-    // 3. Validate Company (Standard Sequelize)
+    // 2. Validate Company (Standard Sequelize)
     const company = await CompanyMaster.findOne({
       where: {
         id: company_id,
         status: { [Op.ne]: 2 }
       },
-      attributes: ['id', 'organization_id'],
+      attributes: ['id', 'organization_id', 'company_id'],
       transaction
     });
 
     if (!company) {
       await transaction.rollback();
       return res.error(constants.NOT_FOUND, { message: "Selected company is inactive or not found." });
+    }
+
+    // 3. Validate Access
+    const isAdminUser = user.is_super_admin || user.RolePermission?.role_key === constants.ROLE_KEYS.BUSINESS_ADMIN || user.RolePermission?.role_key === constants.ROLE_KEYS.ADMIN;
+    const companyAccessList = normalizeCompanyAccess(user.company_access || "");
+    if (!isAdminUser && !companyAccessList.includes(String(company_id)) && !companyAccessList.includes(String(company.company_id))) {
+      await transaction.rollback();
+      return res.error(constants.FORBIDDEN, { message: "You do not have access to this company." });
     }
 
     // --- Find a Valid Branch for the NEW Company (Standard Sequelize) ---
@@ -477,11 +478,20 @@ exports.switchCompany = async (req, res) => {
       }
     }
 
+    let selected_company_ids = Array.isArray(req.body.selected_company_ids) 
+      ? [...req.body.selected_company_ids] 
+      : [];
+
+    if (!selected_company_ids.includes(company_id) && !selected_company_ids.includes(String(company_id)) && !selected_company_ids.includes(Number(company_id))) {
+      selected_company_ids.unshift(company_id);
+    }
+
     const newToken = generateToken({
       ...(user.get ? user.get({ plain: true }) : user),
       role_key: user.RolePermission?.role_key,
       is_attendance_supervisor: user.is_attendance_supervisor,
-      is_reporting_manager: user.is_reporting_manager
+      is_reporting_manager: user.is_reporting_manager,
+      selectedCompanyIds: selected_company_ids
     }, company_id, "web login");
 
     clearUserCache(user.user_id || user.id);
@@ -492,7 +502,8 @@ exports.switchCompany = async (req, res) => {
       token: newToken,
       message: "Switched company successfully",
       current_company_id: company_id,
-      current_branch_id: newBranchId
+      current_branch_id: newBranchId,
+      selected_company_ids
     });
 
   } catch (err) {
@@ -603,7 +614,7 @@ exports.getCompanySettingsData = async (req, res) => {
     // Fetch specific company settings
     const settings = await commonQuery.findAllRecords(CompanySettings, {
       settings_name: {
-        [Op.in]: ['show_accuracy', 'punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage']
+        [Op.in]: ['show_accuracy', 'punch_cooldown_seconds', 'leave_past_datelimit', 'face_accuracy_matcher_percentage', 'face_engine_version']
       },
       status: 0
     }, {
@@ -715,8 +726,12 @@ exports.getCompanySettingsData = async (req, res) => {
       }
     }
 
+    const faceEngineVersionSetting = settings.find(s => s.settings_name === 'face_engine_version');
+    const faceEngineVersion = faceEngineVersionSetting ? faceEngineVersionSetting.settings_value : 'v1';
+
     const response = {
       settings: settings,
+      face_engine_version: faceEngineVersion,
       enble_out_duty: enableOutDuty,
       fines_allowed: finesAllowed,
       overtime_allowed: overtimeAllowed,

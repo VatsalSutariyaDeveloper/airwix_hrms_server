@@ -12,7 +12,7 @@ exports.getNotifications = async (req, res) => {
             status: { [Op.ne]: 2 } // Not deleted
         }, {
             order: [['created_at', 'DESC']]
-        }, null);
+        }, null, false);
 
         return res.ok(personalNotifications);
     } catch (err) {
@@ -29,10 +29,10 @@ exports.markAsRead = async (req, res) => {
 
         const notification = await commonQuery.findOneRecord(Notification, {
             id
-        }, {}, null);
+        }, {}, null, false, false);
 
         if (notification && notification.is_read === 0) {
-            await commonQuery.updateRecordById(Notification, notification.id, { is_read: 1 }, null);
+            await commonQuery.updateRecordById(Notification, notification.id, { is_read: 1 }, null, false);
         }
 
         return res.ok({ success: true });
@@ -48,7 +48,7 @@ exports.clearAll = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        await commonQuery.hardDeleteRecords(Notification, { user_id: userId }, null);
+        await commonQuery.hardDeleteRecords(Notification, { user_id: userId }, null, false);
 
         return res.ok({ success: true });
     } catch (err) {
@@ -68,7 +68,7 @@ exports.clear = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, "Notification ID is required");
         }
 
-        await commonQuery.hardDeleteRecords(Notification, { id, user_id: userId }, null);
+        await commonQuery.hardDeleteRecords(Notification, { id, user_id: userId }, null, false);
 
         return res.ok({ success: true });
     } catch (err) {

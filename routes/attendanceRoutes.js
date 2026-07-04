@@ -3,9 +3,11 @@ const router = express.Router();
 const { bufferImage } = require("../helpers/fileUpload");
 
 const attendanceController  = require("../controllers/attendance/attendanceController");
+const attendanceApprovalController = require("../controllers/attendance/attendanceApprovalController");
 
 router.post("/punch", bufferImage("image"), attendanceController.attendancePunch);
 router.post("/sync-punches", attendanceController.syncPunches);
+router.post("/face-templates/sync", attendanceController.saveFaceTemplates);
 router.post("/summary", attendanceController.getAttendanceSummary);
 router.post("/update-day", attendanceController.updateAttendanceDay);
 router.post("/bulk-update-day", attendanceController.bulkUpdateAttendanceDay);
@@ -23,6 +25,12 @@ router.post("/self-irregularities", attendanceController.getSelfIrregularities);
 router.post("/face-recognition-error", bufferImage("image"), attendanceController.storeFaceRecognitionError);
 router.post("/face-recognition-errors/list", attendanceController.getFaceRecognitionErrors);
 router.post("/face-recognition-errors/resolve", attendanceController.resolveFaceRecognitionError);
+router.post("/face-recognition-errors/verified", attendanceController.getVerifiedFaceErrors);
 router.post("/face-recognition-errors/delete", attendanceController.deleteFaceRecognitionError);
+
+// Attendance Approval Routes
+router.post("/approval/list", attendanceApprovalController.listApprovals);
+router.post("/approval/approve", attendanceApprovalController.approveRequest);
+router.post("/approval/reject", attendanceApprovalController.rejectRequest);
 
 module.exports = router;

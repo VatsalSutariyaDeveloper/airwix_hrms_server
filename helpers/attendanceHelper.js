@@ -184,60 +184,74 @@ async function punch(employeeId, meta, transaction = null) {
       throw new Error("Not allowed to punch at this branch");
     }
   }
-  const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+  const template = employee.employeeAttendanceTemplate;
 
   // --- ATTENDANCE MODE VALIDATION (LOCATION & SELFIE) ---
   if (template) {
     const mode = template.mode;
-    if (mode === 'LOCATION_BASED' || mode === 'SELFIE_AND_LOCATION') {
-      if (!meta.latitude || !meta.longitude) {
-        throw new Err("Location access is required to punch attendance. Please enable location and try again.");
-      }
+    if ((mode === 'LOCATION_BASED' || mode === 'SELFIE_AND_LOCATION') && !meta.device_id) {
+      // Check if employee has an approved out-duty request for this date to bypass location checks
+      const hasOutDuty = await commonQuery.findOneRecord(OutDutyRequest, {
+        employee_id: employeeId,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
+        start_date: { [Op.lte]: targetDayDate },
+        end_date: { [Op.gte]: targetDayDate },
+        status: 0
+      }, {}, transaction, false, {});
 
-      // Resolve the allowed area: prefer the template's own area, else fall back
-      // to the employee's branch geofence.
-      let areaLat = null;
-      let areaLon = null;
-      let areaRadius = null;
-
-      if (template.location_latitude != null && template.location_longitude != null) {
-        areaLat = parseFloat(template.location_latitude);
-        areaLon = parseFloat(template.location_longitude);
-        areaRadius = parseInt(template.location_radius_meters) || 100;
+      if (hasOutDuty) {
+        console.log(`[Punch] Bypassing location validation for employee ${employeeId} due to approved out-duty request.`);
       } else {
-        const resolvedBranchId = meta.branch_id || employee.branch_id;
-        if (resolvedBranchId) {
-          const branch = await commonQuery.findOneRecord(BranchMaster, resolvedBranchId, {}, transaction, false, {});
-          if (branch && branch.latitude != null && branch.longitude != null) {
-            areaLat = parseFloat(branch.latitude);
-            areaLon = parseFloat(branch.longitude);
-            areaRadius = parseInt(branch.radius_meters) || 100;
+        if (!meta.latitude || !meta.longitude) {
+          throw new Err("Location access is required to punch attendance. Please enable location and try again.");
+        }
+
+        // Resolve the allowed area: prefer the template's own area, else fall back
+        // to the employee's branch geofence.
+        let areaLat = null;
+        let areaLon = null;
+        let areaRadius = null;
+
+        if (template.location_latitude != null && template.location_longitude != null) {
+          areaLat = parseFloat(template.location_latitude);
+          areaLon = parseFloat(template.location_longitude);
+          areaRadius = parseInt(template.location_radius_meters) || 100;
+        } else {
+          const resolvedBranchId = meta.branch_id || employee.branch_id;
+          if (resolvedBranchId) {
+            const branch = await commonQuery.findOneRecord(BranchMaster, resolvedBranchId, {}, transaction, false, {});
+            if (branch && branch.latitude != null && branch.longitude != null) {
+              areaLat = parseFloat(branch.latitude);
+              areaLon = parseFloat(branch.longitude);
+              areaRadius = parseInt(branch.radius_meters) || 100;
+            }
+          }
+        }
+
+        // Only enforce when an allowed area is actually configured.
+        if (areaLat != null && areaLon != null) {
+          const lat1 = parseFloat(meta.latitude);
+          const lon1 = parseFloat(meta.longitude);
+
+          const R = 6371e3; // metres
+          const phi1 = lat1 * Math.PI / 180;
+          const phi2 = areaLat * Math.PI / 180;
+          const deltaPhi = (areaLat - lat1) * Math.PI / 180;
+          const deltaLambda = (areaLon - lon1) * Math.PI / 180;
+
+          const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+
+          if (distance > areaRadius) {
+            throw new Err(`You are outside the allowed punch range (${distance.toFixed(0)}m away, limit: ${areaRadius}m).`);
           }
         }
       }
-
-      // Only enforce when an allowed area is actually configured.
-      if (areaLat != null && areaLon != null) {
-        const lat1 = parseFloat(meta.latitude);
-        const lon1 = parseFloat(meta.longitude);
-
-        const R = 6371e3; // metres
-        const phi1 = lat1 * Math.PI / 180;
-        const phi2 = areaLat * Math.PI / 180;
-        const deltaPhi = (areaLat - lat1) * Math.PI / 180;
-        const deltaLambda = (areaLon - lon1) * Math.PI / 180;
-
-        const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-          Math.cos(phi1) * Math.cos(phi2) *
-          Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        const distance = R * c;
-
-        if (distance > areaRadius) {
-          throw new Err(`You are outside the allowed punch range (${distance.toFixed(0)}mm away, limit: ${areaRadius}m).`);
-        }
-      }
     }
+
     if (mode === 'SELFIE_BASED' || mode === 'SELFIE_AND_LOCATION') {
       if (!meta.image_name) {
         throw new Err("A selfie is required to punch attendance for this mode.");
@@ -346,55 +360,15 @@ async function punch(employeeId, meta, transaction = null) {
         id: lastPunchGlobal.day_id,
       }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
 
-      // 🚀 Rule: Calculate cutoff based on the FIRST punch of this logical day
-      const firstPunch = await commonQuery.findOneRecord(AttendancePunch, {
-        day_id: lastPunchGlobal.day_id,
-        status: 0
-      }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
+      // Calculate time difference and same-day calendar check
+      const hoursSinceLast = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "hour", true));
+      const isSameDay = dayjs(now).format("YYYY-MM-DD") === dayjs(lastPunchGlobal.punch_time).format("YYYY-MM-DD");
+      const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
 
-      const startTime = firstPunch ? firstPunch.punch_time : lastPunchGlobal.punch_time;
-      const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
-
-      const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
-      let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
-
-      // CHECK IF OVERTIME ALLOWED
-      const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
-
-      // GET SHIFT DETAILS IF AVAILABLE
-      let hasShift = false;
-      let shiftEnd = null;
-      console.log(`[Punch] Last Punch Day: ${lastInDate} | Shift ID: ${lastInDay ? lastInDay.shift_id : 'N/A'} | Overtime Allowed: ${isOvertimeAllowed}`);
-      if (lastInDay && lastInDay.shift_id) {
-        const lastShift = await commonQuery.findOneRecord(ShiftTemplate, { id: lastInDay.shift_id, company_id: employee.company_id }, {
-          attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
-        }, transaction, false, {});
-        if (lastShift) {
-          hasShift = true;
-          shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
-          if (lastShift.end_time < lastShift.start_time) {
-            shiftEnd = shiftEnd.add(1, 'day');
-          }
-        }
-      }
-
-      // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
-      if (hasShift) {
-        if (isOvertimeAllowed) {
-          const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
-          cutoffTime = otCutoff;
-          console.log(`[Punch] Overtime Allowed: Using template max overtime mins. Shift End: ${shiftEnd.format('HH:mm')}, OT Cutoff: ${otCutoff.format('HH:mm')}`);
-        } else {
-          const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
-          cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
-          console.log(`[Punch] Overtime Not Allowed: Using shift cutoff hours. Shift End: ${shiftEnd.format('HH:mm')}, Cutoff: ${cutoffTime.format('HH:mm')}`);
-        }
-      }
-
-      if (dayjs(now).isBefore(cutoffTime)) {
+      if (isSameDay || hoursSinceLast < shiftCutoffHours) {
         isWithinLogicalDay = true;
         punchType = lastPunchGlobal.punch_type === "IN" ? "OUT" : "IN";
-        console.log(`[Punch] Toggle Decision (before cutoff ${cutoffTime.format('HH:mm')}): last=${lastPunchGlobal.punch_type} -> ${punchType}`);
+        console.log(`[Punch] Toggle Decision: last=${lastPunchGlobal.punch_type} (hours elapsed: ${hoursSinceLast.toFixed(2)}, sameDay: ${isSameDay}) -> ${punchType}`);
       }
     }
 
@@ -559,6 +533,7 @@ async function punch(employeeId, meta, transaction = null) {
   }
 
   // 1️⃣.2️⃣ MULTIPLE PUNCH RESTRICTION
+  console.log("template.allow_multiple_punches:", template ? template.allow_multiple_punches : "N/A", "isHalfDayOutDuty:", isHalfDayOutDuty);
   // [MOD] Bypass multiple punch restriction if there is an approved half-day out-duty request
   if (punchType === "IN" && template && !template.allow_multiple_punches && !isHalfDayOutDuty) {
     // Find the last IN (Globally)
@@ -761,7 +736,7 @@ async function punch(employeeId, meta, transaction = null) {
   // 4.1 Send Notification
   try {
     const { User: UserModel } = require("../models");
-    const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, transaction);
+    const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, null);
 
     if (targetUser) {
       await notificationService.createNotification({
@@ -773,7 +748,7 @@ async function punch(employeeId, meta, transaction = null) {
         status_code: 0,
         company_id: employee.company_id,
         branch_id: employee.branch_id
-      }, transaction);
+      }, null);
     }
   } catch (err) {
     console.error("Punch Notification Error:", err.message);
@@ -2379,8 +2354,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
       if (hasShiftEnded) {
-        status = 10; // NOT MARKED
-        autoAbsentReason = "Not Marked: Mandatory punch-out missing";
+        status = 14; // MISS PUNCH
+        autoAbsentReason = "Miss Punch: Mandatory punch-out missing";
       } else {
         status = 0; // PRESENT (Currently Working)
       }
@@ -2397,8 +2372,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (hasOutOnly) {
       if (template && template.require_punch_out && hasShiftEnded) {
-        status = 10; // NOT MARKED
-        autoAbsentReason = "Not Marked: Mandatory punch-in missing";
+        status = 14; // MISS PUNCH
+        autoAbsentReason = "Miss Punch: Mandatory punch-in missing";
       } else {
         status = 0; // PRESENT
         autoAbsentReason = "Present: Only punch-out recorded (forgot punch-in)";

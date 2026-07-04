@@ -38,7 +38,7 @@ const employeeController = require("../controllers/employee/employeeController")
 
 //Session Data
 router.get("/user-access/session-data", userAccessController.sessionData);
-router.get("/switch-company", userAccessController.switchCompany);
+router.post("/switch-company", userAccessController.switchCompany);
 router.get("/switch-branch", userAccessController.switchBranch);
 router.get("/device-data", userAccessController.getCompanySettingsData);
 

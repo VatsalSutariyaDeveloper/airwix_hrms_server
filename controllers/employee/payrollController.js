@@ -348,8 +348,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     if (template.lwp_calculation_basis === "WORKING_DAYS" && salaryType !== "Daily") {
         payableDaysValue = totalPresentDays + leaveDays + holidays;
     } else {
-        payableDaysValue = totalPresentDays + leaveDays + holidays + week
-        lyOffs;
+        payableDaysValue = totalPresentDays + leaveDays + holidays + weeklyOffs;
     }
 
     let actualDaysValue = 0;
