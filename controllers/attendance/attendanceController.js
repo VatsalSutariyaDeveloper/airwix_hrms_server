@@ -608,7 +608,7 @@ exports.getAttendanceSummary = async (req, res) => {
           day.setDataValue('branch_name', day.branch?.branch_name);
 
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
           let statusText = statusMap[day.status] || "Pending";
           if (day.status === 4) {
             const h = itemHolidays.find(h => h.employee_id === emp.id);
@@ -2041,7 +2041,7 @@ exports.getMonthlyAttendance = async (req, res) => {
           shiftTimeStr = `${Math.floor(diffMins / 60)}:${(diffMins % 60).toString().padStart(2, '0')} Hrs`;
         }
 
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
         if (attendanceDay.status === 6) {

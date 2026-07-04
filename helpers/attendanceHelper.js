@@ -2340,8 +2340,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
       if (hasShiftEnded) {
-        status = 10; // NOT MARKED
-        autoAbsentReason = "Not Marked: Mandatory punch-out missing";
+        status = 14; // MISS PUNCH
+        autoAbsentReason = "Miss Punch: Mandatory punch-out missing";
       } else {
         status = 0; // PRESENT (Currently Working)
       }
@@ -2358,8 +2358,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (hasOutOnly) {
       if (template && template.require_punch_out && hasShiftEnded) {
-        status = 10; // NOT MARKED
-        autoAbsentReason = "Not Marked: Mandatory punch-in missing";
+        status = 14; // MISS PUNCH
+        autoAbsentReason = "Miss Punch: Mandatory punch-in missing";
       } else {
         status = 0; // PRESENT
         autoAbsentReason = "Present: Only punch-out recorded (forgot punch-in)";
