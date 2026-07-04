@@ -72,6 +72,7 @@ function initModels(prefix) {
   const WeeklyOffTemplateDay = require("./settings/weeklyOffTemplateDay")(seq, DataTypes);
   const EmployeeShift = require("./attendance/employeeShift")(seq, DataTypes);
   const FaceRecognitionError = require("./attendance/faceRecognitionError")(seq, DataTypes);
+  const AttendanceApproval = require("./attendance/attendanceApproval")(seq, DataTypes);
 
   // Employee models
   const Employee = require("./employee")(seq, DataTypes);
@@ -231,6 +232,7 @@ function initModels(prefix) {
     FaceRecognitionError,
     VisitorPass,
     VisitorAttendance,
+    AttendanceApproval,
   };
 
   Object.keys(db).forEach(modelName => {

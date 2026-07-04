@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization, AttendanceApproval, CompanyConfigration, CompanySettings } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -746,6 +746,65 @@ exports.updateAttendanceDay = async (req, res) => {
       await t.rollback();
       return res.error(constants.VALIDATION_ERROR, errors);
     }
+
+    // --- ATTENDANCE APPROVAL INTERCEPTION LOGIC ---
+    // Note: Checking req.user.role_id, req.user.is_superadmin, req.user.is_admin
+    const configRecords = await commonQuery.findAllRecords(
+      CompanySettings,
+      { company_id: req.user.company_id, settings_name: { [Op.in]: ['attendance_approval_level', 'attendance_approval_exempt_roles'] } },
+      { attributes: ['settings_name', 'settings_value'] }, 
+      t
+    );
+
+    let approvalRequired = false;
+    let exemptRoles = [];
+    configRecords.forEach(c => {
+      if (c.settings_name === 'attendance_approval_level' && c.settings_value != null && c.settings_value !== 'null') approvalRequired = true;
+      if (c.settings_name === 'attendance_approval_exempt_roles' && c.settings_value) {
+        try { 
+            exemptRoles = typeof c.settings_value === 'string' ? JSON.parse(c.settings_value) : c.settings_value; 
+        } catch (e) { }
+      }
+    });
+
+    const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+
+    if (approvalRequired && !isExempt && !req.user.is_superadmin && !req.body.is_approved_request) {
+      // Look for an existing pending request for this employee on this date
+      const existingReq = await commonQuery.findOneRecord(
+        AttendanceApproval,
+        {
+          employee_id: req.body.employee_id,
+          attendance_date: req.body.attendance_date,
+          approval_status: { [Op.in]: [0, 1] } // PENDING or PARTIALLY_APPROVED
+        },
+        {}, t
+      );
+
+      if (existingReq) {
+        // Update the existing request with the newly proposed changes
+        await commonQuery.updateRecordById(
+          AttendanceApproval,
+          existingReq.id,
+          { proposed_attendance_data: req.body },
+          t
+        );
+      } else {
+        // Create a new request
+        await commonQuery.createRecord(AttendanceApproval, {
+          employee_id: req.body.employee_id,
+          attendance_date: req.body.attendance_date,
+          proposed_attendance_data: req.body,
+          approval_status: 0,
+          current_level: 1,
+          user_id: req.user.id,
+          company_id: req.user.company_id
+        }, t);
+      }
+      await t.commit();
+      return res.success({}, "Attendance update sent for approval.");
+    }
+    // --- END ATTENDANCE APPROVAL INTERCEPTION LOGIC ---
 
     let {
       employee_id,

@@ -355,6 +355,13 @@ async function resolvePendingApprovers(request, type) {
                 rawConfig = regularizationSettings ? (regularizationSettings.settings_value || []) : [];
                 break;
             }
+
+            case "ATTENDANCE_APPROVAL": {
+                // Fetches attendance approval config from company settings
+                const attendanceSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "attendance_approval_config" });
+                rawConfig = attendanceSettings ? (attendanceSettings.settings_value || []) : [];
+                break;
+            }
         }
 
         // 3. Safety Check: Parse JSON if the database returns a string
