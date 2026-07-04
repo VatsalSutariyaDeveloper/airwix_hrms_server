@@ -300,56 +300,49 @@ exports.syncPunches = async (req, res) => {
         console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
-        const isRecoverableSyncError = punchErr.message === "Employee not found";
-        if (isRecoverableSyncError) {
-          console.warn(`[SyncPunches] Skipping punch for missing employee ${punchData.employee_id}.`);
-          results.push({
-            employee_id: punchData.employee_id,
-            punch_time: punchData.punch_time,
-            success: false,
-            error: punchErr.message,
-            code: "EMPLOYEE_NOT_FOUND"
-          });
-          continue;
+        const errMsg = String(punchErr.message || "");
+
+        // Classified by TYPE, not message: Sequelize/DB errors are transient
+        // system failures → fail the batch so the device retries everything.
+        const isSystemError = punchErr.name && String(punchErr.name).startsWith("Sequelize");
+        if (isSystemError) {
+          await transaction.rollback();
+          return handleError(punchErr, res, req);
         }
 
-        // 1. Rollback the entire transaction immediately for non-recoverable errors
-        await transaction.rollback();
-
-        // 2. Alert System: Notify all admins/business admins of this company about this critical offline sync failure
+        // Everything else is a business rejection (Already Punched, shift
+        // window, cooldown, leave block, ...) — record per punch, surface on
+        // the audit dashboard as an ACTIVE error, and keep processing.
+        console.warn(`[SyncPunches] ⛔ REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
         try {
-          // const admins = await commonQuery.findAllRecords(User, {}, {
-          //   include: [
-          //     {
-          //       model: RolePermission,
-          //       as: "RolePermission",
-          //       where: {
-          //         role_key: {
-          //           [Op.in]: [constants.ROLE_KEYS.BUSINESS_ADMIN, constants.ROLE_KEYS.ADMIN]
-          //         }
-          //       },
-          //       attributes: []
-          //     }
-          //   ],
-          //   attributes: ["id"]
-          // }, null, { company_id: true });
-
-          for (const admin of admins) {
-            await notificationService.createNotification({
-              user_id: 1, // System
-              title: "🚨 Critical Sync Punch Failure",
-              message: `Offline punch sync failed for Employee ID: ${punchData.employee_id} at ${punchData.punch_time}. Error: ${punchErr.message}`,
-              type: "CRITICAL_SYNC_ERROR",
-              company_id: req.user.company_id,
-              branch_id: req.user.branch_id
-            });
+          let rejImage = null;
+          if (punchData.image && punchData.image.trim() !== "") {
+            rejImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
           }
-        } catch (notifErr) {
-          console.error("[SyncPunches Critical Error Alert] Failed to dispatch admin alert notifications:", notifErr.message);
+          await commonQuery.createRecord(FaceRecognitionError, {
+            image: rejImage,
+            accuracy: punchData.match_score || null,
+            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
+            company_id: req.user.company_id || 0,
+            branch_id: req.user.branch_id || 0,
+            employee_id: punchData.employee_id || null,
+            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
+            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
+            status: 0, // Active — admin must see the rejection
+            matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
+            message: `Punch rejected: ${errMsg}`,
+          }, transaction);
+        } catch (logErr) {
+          console.error("[SyncPunches] Failed to store rejection audit:", logErr.message);
         }
-
-        // 3. Centralized Developer Log + Database Error Logging + HTTP Non-Success Response
-        return handleError(punchErr, res, req);
+        results.push({
+          employee_id: punchData.employee_id,
+          punch_time: punchData.punch_time,
+          success: false,
+          error: errMsg,
+          code: "REJECTED"
+        });
+        continue;
       }
     }
 
@@ -3304,4 +3297,3 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
     return handleError(err, res, req);
   }
 };
-

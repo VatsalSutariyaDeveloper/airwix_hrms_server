@@ -189,55 +189,69 @@ async function punch(employeeId, meta, transaction = null) {
   // --- ATTENDANCE MODE VALIDATION (LOCATION & SELFIE) ---
   if (template) {
     const mode = template.mode;
-    if (mode === 'LOCATION_BASED' || mode === 'SELFIE_AND_LOCATION') {
-      if (!meta.latitude || !meta.longitude) {
-        throw new Err("Location access is required to punch attendance. Please enable location and try again.");
-      }
+    if ((mode === 'LOCATION_BASED' || mode === 'SELFIE_AND_LOCATION') && !meta.device_id) {
+      // Check if employee has an approved out-duty request for this date to bypass location checks
+      const hasOutDuty = await commonQuery.findOneRecord(OutDutyRequest, {
+        employee_id: employeeId,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
+        start_date: { [Op.lte]: targetDayDate },
+        end_date: { [Op.gte]: targetDayDate },
+        status: 0
+      }, {}, transaction, false, {});
 
-      // Resolve the allowed area: prefer the template's own area, else fall back
-      // to the employee's branch geofence.
-      let areaLat = null;
-      let areaLon = null;
-      let areaRadius = null;
-
-      if (template.location_latitude != null && template.location_longitude != null) {
-        areaLat = parseFloat(template.location_latitude);
-        areaLon = parseFloat(template.location_longitude);
-        areaRadius = parseInt(template.location_radius_meters) || 100;
+      if (hasOutDuty) {
+        console.log(`[Punch] Bypassing location validation for employee ${employeeId} due to approved out-duty request.`);
       } else {
-        const resolvedBranchId = meta.branch_id || employee.branch_id;
-        if (resolvedBranchId) {
-          const branch = await commonQuery.findOneRecord(BranchMaster, resolvedBranchId, {}, transaction, false, {});
-          if (branch && branch.latitude != null && branch.longitude != null) {
-            areaLat = parseFloat(branch.latitude);
-            areaLon = parseFloat(branch.longitude);
-            areaRadius = parseInt(branch.radius_meters) || 100;
+        if (!meta.latitude || !meta.longitude) {
+          throw new Err("Location access is required to punch attendance. Please enable location and try again.");
+        }
+
+        // Resolve the allowed area: prefer the template's own area, else fall back
+        // to the employee's branch geofence.
+        let areaLat = null;
+        let areaLon = null;
+        let areaRadius = null;
+
+        if (template.location_latitude != null && template.location_longitude != null) {
+          areaLat = parseFloat(template.location_latitude);
+          areaLon = parseFloat(template.location_longitude);
+          areaRadius = parseInt(template.location_radius_meters) || 100;
+        } else {
+          const resolvedBranchId = meta.branch_id || employee.branch_id;
+          if (resolvedBranchId) {
+            const branch = await commonQuery.findOneRecord(BranchMaster, resolvedBranchId, {}, transaction, false, {});
+            if (branch && branch.latitude != null && branch.longitude != null) {
+              areaLat = parseFloat(branch.latitude);
+              areaLon = parseFloat(branch.longitude);
+              areaRadius = parseInt(branch.radius_meters) || 100;
+            }
+          }
+        }
+
+        // Only enforce when an allowed area is actually configured.
+        if (areaLat != null && areaLon != null) {
+          const lat1 = parseFloat(meta.latitude);
+          const lon1 = parseFloat(meta.longitude);
+
+          const R = 6371e3; // metres
+          const phi1 = lat1 * Math.PI / 180;
+          const phi2 = areaLat * Math.PI / 180;
+          const deltaPhi = (areaLat - lat1) * Math.PI / 180;
+          const deltaLambda = (areaLon - lon1) * Math.PI / 180;
+
+          const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+
+          if (distance > areaRadius) {
+            throw new Err(`You are outside the allowed punch range (${distance.toFixed(0)}m away, limit: ${areaRadius}m).`);
           }
         }
       }
-
-      // Only enforce when an allowed area is actually configured.
-      if (areaLat != null && areaLon != null) {
-        const lat1 = parseFloat(meta.latitude);
-        const lon1 = parseFloat(meta.longitude);
-
-        const R = 6371e3; // metres
-        const phi1 = lat1 * Math.PI / 180;
-        const phi2 = areaLat * Math.PI / 180;
-        const deltaPhi = (areaLat - lat1) * Math.PI / 180;
-        const deltaLambda = (areaLon - lon1) * Math.PI / 180;
-
-        const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-          Math.cos(phi1) * Math.cos(phi2) *
-          Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        const distance = R * c;
-
-        if (distance > areaRadius) {
-          throw new Err(`You are outside the allowed punch range (${distance.toFixed(0)}mm away, limit: ${areaRadius}m).`);
-        }
-      }
     }
+
     if (mode === 'SELFIE_BASED' || mode === 'SELFIE_AND_LOCATION') {
       if (!meta.image_name) {
         throw new Err("A selfie is required to punch attendance for this mode.");
@@ -722,7 +736,7 @@ async function punch(employeeId, meta, transaction = null) {
   // 4.1 Send Notification
   try {
     const { User: UserModel } = require("../models");
-    const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, transaction);
+    const targetUser = await commonQuery.findOneRecord(UserModel, { employee_id: employeeId }, {}, null);
 
     if (targetUser) {
       await notificationService.createNotification({
@@ -734,7 +748,7 @@ async function punch(employeeId, meta, transaction = null) {
         status_code: 0,
         company_id: employee.company_id,
         branch_id: employee.branch_id
-      }, transaction);
+      }, null);
     }
   } catch (err) {
     console.error("Punch Notification Error:", err.message);
