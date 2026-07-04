@@ -129,7 +129,7 @@ exports.create = async (req, res) => {
     }
     
     // Find the last company to determine the next sequential code.
-    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, { status: { [Op.or]: [0,1,2]} }, {}, transaction, false, {});
+    const lastCompany = await commonQuery.findOneRecord(CompanyMaster, { status: { [Op.or]: [0,1,2]} }, { order: [['id', 'DESC']] }, transaction, false, {});
 
     let nextNumber = 1;
     if (lastCompany && lastCompany.company_code) {

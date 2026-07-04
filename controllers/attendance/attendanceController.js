@@ -546,7 +546,10 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
-        order: [['first_name', 'ASC']],
+        order: [
+          [sequelize.literal(`"attendanceDays"."updated_at"`), 'DESC NULLS LAST'],
+          ['first_name', 'ASC']
+        ],
         attributes: [
           'id', 'first_name', 'profile_image', 'employee_code', 'employee_type', 'worker_type', 'shift_template', 'status', 'holiday_template', 'weekly_off_template', "branch_id", "access_branches",
           ...summaryAttributes
