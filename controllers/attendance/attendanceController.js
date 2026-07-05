@@ -161,8 +161,7 @@ exports.attendancePunch = async (req, res) => {
  */
 exports.syncPunches = async (req, res) => {
   try {
-    // Ensure FaceRecognitionError table exists in this tenant database
-    await FaceRecognitionError.sync();
+    await FaceRecognitionError.sync({ alter: true });
   } catch (syncErr) {
     console.error("Failed to sync FaceRecognitionError table on syncPunches startup:", syncErr.message);
   }
@@ -311,30 +310,10 @@ exports.syncPunches = async (req, res) => {
         }
 
         // Everything else is a business rejection (Already Punched, shift
-        // window, cooldown, leave block, ...) — record per punch, surface on
-        // the audit dashboard as an ACTIVE error, and keep processing.
+        // window, cooldown, leave block, ...). These are NOT face recognition
+        // errors — the face was recognized fine, the punch was just blocked
+        // for operational reasons. Don't pollute the face errors table.
         console.warn(`[SyncPunches] ⛔ REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
-        try {
-          let rejImage = null;
-          if (punchData.image && punchData.image.trim() !== "") {
-            rejImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
-          }
-          await commonQuery.createRecord(FaceRecognitionError, {
-            image: rejImage,
-            accuracy: punchData.match_score || null,
-            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
-            company_id: req.user.company_id || 0,
-            branch_id: req.user.branch_id || 0,
-            employee_id: punchData.employee_id || null,
-            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
-            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
-            status: 0, // Active — admin must see the rejection
-            matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
-            message: `Punch rejected: ${errMsg}`,
-          }, transaction);
-        } catch (logErr) {
-          console.error("[SyncPunches] Failed to store rejection audit:", logErr.message);
-        }
         results.push({
           employee_id: punchData.employee_id,
           punch_time: punchData.punch_time,
@@ -2420,15 +2399,16 @@ exports.updateAttendanceNote = async (req, res) => {
  */
 exports.storeFaceRecognitionError = async (req, res) => {
   try {
-    // Ensure FaceRecognitionError table exists in this tenant database
-    await FaceRecognitionError.sync();
+    await FaceRecognitionError.sync({ alter: true });
   } catch (syncErr) {
     console.error("Failed to sync FaceRecognitionError table on storeFaceRecognitionError startup:", syncErr.message);
   }
 
   const t = await sequelize.transaction();
   try {
-    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
+    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage, face_descriptor, vector: vectorField } = req.body;
+    const rawVec = vectorField || face_descriptor;
+    console.log(`[storeFaceRecognitionError] 📐 vector present: ${!!rawVec}, type: ${typeof rawVec}, body keys: ${Object.keys(req.body).join(', ')}`);
     const finalMessage = message || massage || null;
 
     if (!time) {
@@ -2478,7 +2458,8 @@ exports.storeFaceRecognitionError = async (req, res) => {
       longitude: longitude ? parseFloat(longitude) : null,
       status: 0, // Active
       matches: matches ? (typeof matches === 'string' ? JSON.parse(matches) : matches) : null,
-      message: finalMessage
+      message: finalMessage,
+      vector: rawVec ? (typeof rawVec === 'string' ? JSON.parse(rawVec) : rawVec) : null,
     }, { transaction: t });
 
     await t.commit();
@@ -2514,7 +2495,7 @@ exports.getFaceRecognitionErrors = async (req, res) => {
   try {
     // Ensure FaceRecognitionError table exists in this tenant database
     try {
-      await FaceRecognitionError.sync();
+      await FaceRecognitionError.sync({ alter: true });
     } catch (syncErr) {
       console.error("Failed to sync FaceRecognitionError table on getFaceRecognitionErrors startup:", syncErr.message);
     }
@@ -2629,7 +2610,6 @@ exports.resolveFaceRecognitionError = async (req, res) => {
     }
 
     const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
-    // Admin-confirmed identity → v2 kiosks turn this photo into a face template
     if (employee_id) updateData.employee_id = parseInt(employee_id);
 
     await commonQuery.updateRecordById(
@@ -2640,6 +2620,33 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       false,
       { company_id: true }
     );
+
+    const empId = parseInt(employee_id);
+    const vec = faceError.vector;
+    if (empId && Array.isArray(vec) && vec.length >= 10) {
+      try {
+        await ensureAlignedTemplatesColumn();
+        const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+        if (employee) {
+          let list = Array.isArray(employee.aligned_face_templates)
+            ? [...employee.aligned_face_templates] : [];
+
+          let dup = false;
+          for (const t of list) {
+            if (adaptiveCosineSim(vec, t) >= ALIGNED_TEMPLATES.dupSimilarity) { dup = true; break; }
+          }
+          if (!dup) {
+            list.push(vec);
+            while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+            employee.changed('aligned_face_templates', true);
+            await employee.update({ aligned_face_templates: list });
+            console.log(`[Resolve→Template] ✅ Emp #${empId}: descriptor from error #${id} saved as aligned template — now ${list.length}/${ALIGNED_TEMPLATES.maxPerEmployee}`);
+          }
+        }
+      } catch (tplErr) {
+        console.error(`[Resolve→Template] ⚠️ Failed to save template for emp #${empId}:`, tplErr.message);
+      }
+    }
 
     return res.ok({ message: "Face recognition error status updated successfully" });
   } catch (err) {
@@ -2662,7 +2669,7 @@ exports.getVerifiedFaceErrors = async (req, res) => {
         employee_id: { [Op.ne]: null },
         company_id: req.user.company_id,
       },
-      attributes: ['id', 'employee_id', 'image'],
+      attributes: ['id', 'employee_id', 'image', 'vector'],
       order: [['id', 'ASC']],
       limit: 20,
       raw: true,
@@ -2673,6 +2680,7 @@ exports.getVerifiedFaceErrors = async (req, res) => {
       id: r.id,
       employee_id: r.employee_id,
       image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
+      vector: r.vector || null,
     }));
 
     if (items.length > 0) {
