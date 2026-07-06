@@ -22,6 +22,7 @@ const PUBLIC_ROUTE_KEYWORDS = [
   "/employee/face-punch",
   "/notifications",
   "/visitor",
+  "/attendance/face-recognition-error",
 ];
 
 module.exports = async function checkPermission(req, res, next) {

@@ -40,9 +40,9 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   FaceRecognitionError.associate = (models) => {
-    FaceRecognitionError.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company" });
-    FaceRecognitionError.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch" });
-    FaceRecognitionError.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
+    FaceRecognitionError.belongsTo(models.CompanyMaster, { foreignKey: "company_id", as: "company", constraints: false });
+    FaceRecognitionError.belongsTo(models.BranchMaster, { foreignKey: "branch_id", as: "branch", constraints: false });
+    FaceRecognitionError.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee", constraints: false });
   };
 
   return FaceRecognitionError;
