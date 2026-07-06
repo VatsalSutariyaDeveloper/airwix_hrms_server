@@ -9,7 +9,21 @@ const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 const notificationService = require("../../services/notificationService");
+const { getCompanySetting } = require("../../helpers");
+
 dayjs.extend(customParseFormat);
+const syncedTenants = new Set();
+async function ensureFaceRecognitionErrorSynced(tenantPrefix) {
+  const cacheKey = `${tenantPrefix || 'default'}_FaceRecognitionError`;
+  if (!syncedTenants.has(cacheKey)) {
+    try {
+      await FaceRecognitionError.sync({ alter: true });
+      syncedTenants.add(cacheKey);
+    } catch (syncErr) {
+      console.error("Failed to sync FaceRecognitionError table on demand:", syncErr.message);
+    }
+  }
+}
 
 
 // Cosine similarity (0..1) for two equal-length numeric vectors.
@@ -128,24 +142,35 @@ exports.attendancePunch = async (req, res) => {
 
     // --- [FIX] Resolve Device ID for Attendance Devices ---
     let resolvedDeviceId = req.body.device_id || null;
-    if (['attendance', 'canteen'].includes(req.user?.access)) {
+    if (req.user && ['attendance', 'canteen'].includes(req.user.access)) {
       const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, t, false, {});
       resolvedDeviceId = device ? device.id : req.user.id; // Fallback to User ID if not found
+    }
+
+    let companyId = req.user?.company_id || req.body.company_id || null;
+    let branchId = req.user?.branch_id || req.body.branch_id || null;
+
+    if (!companyId || !branchId) {
+      const emp = await commonQuery.findOneRecord(Employee, { id: req.body.employee_id }, { attributes: ["company_id", "branch_id"] }, t, false, {});
+      if (emp) {
+        if (!companyId) companyId = emp.company_id;
+        if (!branchId) branchId = emp.branch_id;
+      }
     }
 
     const result = await punch(
       req.body.employee_id,
       {
         ...req.body,
-        user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
-        company_id: req.user.company_id,
-        branch_id: req.user.branch_id,
+        user_id: req.user?.access === 'attendance' ? null : (req.user?.id || null),
+        company_id: companyId,
+        branch_id: branchId,
         ip_address: req.ip,
         latitude: req.body.latitude || null,
         longitude: req.body.longitude || null,
         device_id: resolvedDeviceId,
         image_name: punchImage,
-        access: req.user.access
+        access: req.user?.access || 'master-admin'
       }, t);
 
     await t.commit();
@@ -160,13 +185,7 @@ exports.attendancePunch = async (req, res) => {
  * SYNC PUNCHES (Offline Sync)
  */
 exports.syncPunches = async (req, res) => {
-  try {
-    // Ensure FaceRecognitionError table exists in this tenant database
-    await FaceRecognitionError.sync();
-  } catch (syncErr) {
-    console.error("Failed to sync FaceRecognitionError table on syncPunches startup:", syncErr.message);
-  }
-
+  await ensureFaceRecognitionErrorSynced(req.tenantPrefix);
   const transaction = await sequelize.transaction();
   try {
     const { punches } = req.body;
@@ -182,7 +201,7 @@ exports.syncPunches = async (req, res) => {
     // Resolve Device ID once for the entire sync batch
     let resolvedDeviceId = null;
     console.log("req.user", req.user)
-    if (['attendance', 'canteen'].includes(req.user?.access)) {
+    if (req.user?.access && ['attendance', 'canteen'].includes(req.user.access)) {
       const device = await commonQuery.findOneRecord(DeviceMaster, { user_id: req.user.id }, { attributes: ["id"] }, transaction, false, {});
       resolvedDeviceId = device ? device.id : req.user.id;
       console.log(`[SyncPunches] Resolved DeviceMaster ID: ${resolvedDeviceId} from User ID: ${req.user.id}`);
@@ -229,13 +248,24 @@ exports.syncPunches = async (req, res) => {
           punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, transaction);
         }
 
+        let punchCompanyId = req.user?.company_id || req.body.company_id || punchData.company_id || null;
+        let punchBranchId = req.user?.branch_id || req.body.branch_id || punchData.branch_id || null;
+
+        if (!punchCompanyId || !punchBranchId) {
+          const emp = await commonQuery.findOneRecord(Employee, { id: punchData.employee_id }, { attributes: ["company_id", "branch_id"] }, transaction, false, {});
+          if (emp) {
+            if (!punchCompanyId) punchCompanyId = emp.company_id;
+            if (!punchBranchId) punchBranchId = emp.branch_id;
+          }
+        }
+
         const result = await punch(
           punchData.employee_id,
           {
             ...punchData,
-            user_id: req.user?.access === 'attendance' ? 0 : req.user.id,
-            company_id: req.user.company_id,
-            branch_id: req.user.branch_id,
+            user_id: req.user?.access === 'attendance' ? null : (req.user?.id || null),
+            company_id: punchCompanyId,
+            branch_id: punchBranchId,
             ip_address: punchData.ip_address || req.ip,
             latitude: punchData.latitude || null,
             longitude: punchData.longitude || null,
@@ -245,7 +275,7 @@ exports.syncPunches = async (req, res) => {
             match_score: punchData.match_score || null,
             bypassGapCheck: true,
             skipRebuild: false,
-            access: req.user.access
+            access: req.user?.access || 'master-admin'
           },
           transaction
         );
@@ -285,7 +315,7 @@ exports.syncPunches = async (req, res) => {
           longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
           status: 1,
           matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
-          message: punchData.message || punchData.massage || null
+          message: punchData.message || null
         }, transaction);
 
         console.log(`[SyncPunches] ✅ Stored FaceRecognitionError as Resolved for Emp=${punchData.employee_id}`);
@@ -311,30 +341,10 @@ exports.syncPunches = async (req, res) => {
         }
 
         // Everything else is a business rejection (Already Punched, shift
-        // window, cooldown, leave block, ...) — record per punch, surface on
-        // the audit dashboard as an ACTIVE error, and keep processing.
+        // window, cooldown, leave block, ...). These are NOT face recognition
+        // errors — the face was recognized fine, the punch was just blocked
+        // for operational reasons. Don't pollute the face errors table.
         console.warn(`[SyncPunches] ⛔ REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
-        try {
-          let rejImage = null;
-          if (punchData.image && punchData.image.trim() !== "") {
-            rejImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
-          }
-          await commonQuery.createRecord(FaceRecognitionError, {
-            image: rejImage,
-            accuracy: punchData.match_score || null,
-            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
-            company_id: req.user.company_id || 0,
-            branch_id: req.user.branch_id || 0,
-            employee_id: punchData.employee_id || null,
-            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
-            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
-            status: 0, // Active — admin must see the rejection
-            matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
-            message: `Punch rejected: ${errMsg}`,
-          }, transaction);
-        } catch (logErr) {
-          console.error("[SyncPunches] Failed to store rejection audit:", logErr.message);
-        }
         results.push({
           employee_id: punchData.employee_id,
           punch_time: punchData.punch_time,
@@ -407,6 +417,16 @@ exports.getAttendanceSummary = async (req, res) => {
         }
       ]
     };
+
+    if (effectiveStatus === 14) {
+      joiningDateFilter[Op.and].push({
+        [Op.or]: [
+          { '$attendanceDays.status$': 14 },
+          { '$attendanceDays.status$': null },
+          { '$attendanceDays.id$': null }
+        ]
+      });
+    }
 
     // Create a shared employee filter for all summary queries
     const employeeWhere = {
@@ -488,12 +508,14 @@ exports.getAttendanceSummary = async (req, res) => {
           {
             model: AttendanceDay,
             as: "attendanceDays",
-            required: effectiveStatus !== -1,
+            required: effectiveStatus !== -1 && effectiveStatus !== 14,
             where: {
               attendance_date: targetDate,
               ...(effectiveStatus === -1
                 ? { status: { [Op.ne]: 2 } }
-                : { status: effectiveStatus }),
+                : effectiveStatus === 14
+                  ? {}
+                  : { status: effectiveStatus }),
             },
             duplicating: false,
             include: [
@@ -549,7 +571,7 @@ exports.getAttendanceSummary = async (req, res) => {
         ],
         subQuery: false // Required for window functions to work correctly with pagination
       },
-      true,
+      { company_id: true },
       "createdAt",
       joiningDateFilter
     );
@@ -560,7 +582,7 @@ exports.getAttendanceSummary = async (req, res) => {
       const dayOfWeek = dayjs(targetDate).day();
       const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
 
-      const [itemHolidays, itemWeeklyOffs, itemOutDuties] = await Promise.all([
+      const [itemHolidays, itemWeeklyOffs, itemOutDuties, itemLeaves, itemApprovals] = await Promise.all([
         commonQuery.findAllRecords(EmployeeHoliday, {
           employee_id: { [Op.in]: itemIds },
           date: targetDate,
@@ -579,12 +601,30 @@ exports.getAttendanceSummary = async (req, res) => {
           start_date: { [Op.lte]: targetDate },
           end_date: { [Op.gte]: targetDate },
           status: 0
+        }),
+        commonQuery.findAllRecords(LeaveRequest, {
+          employee_id: { [Op.in]: itemIds },
+          approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+          start_date: { [Op.lte]: targetDate },
+          end_date: { [Op.gte]: targetDate },
+          request_type: 'DEBIT',
+          is_encashment: false,
+          status: 0
+        }, {
+          include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['id', 'leave_category_name'] }]
+        }),
+        commonQuery.findAllRecords(AttendanceApproval, {
+          employee_id: { [Op.in]: itemIds },
+          attendance_date: targetDate,
+          company_id: req.user.company_id,
+          status: 0
         })
       ]);
 
       const itemHolidayMap = new Set(itemHolidays.map(h => h.employee_id));
       const itemWeeklyOffMap = new Set(itemWeeklyOffs.map(w => w.employee_id));
       const itemOutDutyMap = new Set(itemOutDuties.map(o => o.employee_id));
+      const itemApprovalsMap = new Map(itemApprovals.map(a => [a.employee_id, a]));
 
       employeesResult.items.forEach(emp => {
         if (emp.profile_image) {
@@ -593,25 +633,46 @@ exports.getAttendanceSummary = async (req, res) => {
           emp.setDataValue('profile_image_url', null);
         }
 
+        const approval = itemApprovalsMap.get(emp.id);
+        if (approval) {
+          emp.setDataValue('approval_status', approval.approval_status);
+          emp.setDataValue('approval_id', approval.id);
+          emp.setDataValue('approval_reason', approval.reason);
+          emp.setDataValue('proposed_attendance_data', approval.proposed_attendance_data);
+        }
+
         const day = emp.attendanceDays?.[0];
         if (day) {
+          const isOutDutyApproved = itemOutDutyMap.has(emp.id);
+          const approvedLeave = itemLeaves.find(l => l.employee_id === emp.id);
+
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
-          day.setDataValue('is_out_duty_approved', itemOutDutyMap.has(emp.id));
+          day.setDataValue('is_out_duty_approved', isOutDutyApproved);
+          day.setDataValue('is_leave_approved', !!approvedLeave);
           day.setDataValue('branch_name', day.branch?.branch_name);
 
           // Enhanced Status Text logic (Same as monthly summary)
-          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
+          const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Miss Punch", 12: "Out Duty", 13: "Half Out Duty", 14: "Not Marked" };
           let statusText = statusMap[day.status] || "Pending";
-          if (day.status === 4) {
-            const h = itemHolidays.find(h => h.employee_id === emp.id);
-            statusText = h ? h.name : "Holiday";
-          } else if (day.status === 6) {
-            statusText = day.leaveCategory?.leave_category_name || "Leave";
-          } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
-            statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
-          } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
-            statusText = day.leaveCategory.leave_category_name;
+
+          if (isOutDutyApproved && approvedLeave) {
+            const leaveCategoryName = approvedLeave.category?.leave_category_name || "Leave";
+            statusText = `Out Duty / ${leaveCategoryName}`;
+            day.setDataValue('leaveCategory', approvedLeave.category);
+          } else if (isOutDutyApproved) {
+            statusText = "Out Duty";
+          } else {
+            if (day.status === 4) {
+              const h = itemHolidays.find(h => h.employee_id === emp.id);
+              statusText = h ? h.name : "Holiday";
+            } else if (day.status === 6) {
+              statusText = day.leaveCategory?.leave_category_name || "Leave";
+            } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
+              statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
+            } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
+              statusText = day.leaveCategory.leave_category_name;
+            }
           }
           day.setDataValue('status_text', statusText);
 
@@ -742,24 +803,17 @@ exports.updateAttendanceDay = async (req, res) => {
 
     // --- ATTENDANCE APPROVAL INTERCEPTION LOGIC ---
     // Note: Checking req.user.role_id, req.user.is_superadmin, req.user.is_admin
-    const configRecords = await commonQuery.findAllRecords(
-      CompanySettings,
-      { company_id: req.user.company_id, settings_name: { [Op.in]: ['attendance_approval_level', 'attendance_approval_exempt_roles'] } },
-      { attributes: ['settings_name', 'settings_value'] }, 
-      t
-    );
-
+    const settings = await getCompanySetting(req.user.company_id);
+    console.log("Attendance Approval Settings:", settings);
     let approvalRequired = false;
     let exemptRoles = [];
-    configRecords.forEach(c => {
-      if (c.settings_name === 'attendance_approval_level' && c.settings_value != null && c.settings_value !== 'null') approvalRequired = true;
-      if (c.settings_name === 'attendance_approval_exempt_roles' && c.settings_value) {
-        try { 
-            exemptRoles = typeof c.settings_value === 'string' ? JSON.parse(c.settings_value) : c.settings_value; 
-        } catch (e) { }
-      }
-    });
-
+    if (settings.attendance_approval_level != null && settings.attendance_approval_level !== 'null') approvalRequired = true;
+    if (settings.attendance_approval_exempt_roles) {
+      exemptRoles = typeof settings.attendance_approval_exempt_roles === 'string' ? JSON.parse(settings.attendance_approval_exempt_roles) : settings.attendance_approval_exempt_roles; 
+    }
+    console.log("settings.attendance_approval_level:", settings.attendance_approval_level, "settings.attendance_approval_exempt_roles:", settings.attendance_approval_exempt_roles);
+    console.log("User Role ID:", req.user.role_id, "Is Superadmin:", req.user.is_superadmin, "Is Admin:", req.user.is_admin);
+    console.log("Approval Required:", approvalRequired, "Exempt Roles:", exemptRoles);
     const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
 
     if (approvalRequired && !isExempt && !req.user.is_superadmin && !req.body.is_approved_request) {
@@ -779,7 +833,10 @@ exports.updateAttendanceDay = async (req, res) => {
         await commonQuery.updateRecordById(
           AttendanceApproval,
           existingReq.id,
-          { proposed_attendance_data: req.body },
+          { 
+            proposed_attendance_data: req.body,
+            reason: req.body.note || req.body.reason || existingReq.reason
+          },
           t
         );
       } else {
@@ -788,6 +845,7 @@ exports.updateAttendanceDay = async (req, res) => {
           employee_id: req.body.employee_id,
           attendance_date: req.body.attendance_date,
           proposed_attendance_data: req.body,
+          reason: req.body.note || req.body.reason || null,
           approval_status: 0,
           current_level: 1,
           user_id: req.user.id,
@@ -2000,11 +2058,30 @@ exports.getMonthlyAttendance = async (req, res) => {
         status: 0
       }, {}, null, tenantOptions);
     }
-    const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
+    const [monthlyOutDuties, monthlyLeaves] = await Promise.all([
+      commonQuery.findAllRecords(OutDutyRequest, {
+        employee_id,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
+        start_date: { [Op.lte]: endDate },
+        end_date: { [Op.gte]: startDate },
+        status: 0
+      }, {}, null, tenantOptions),
+      commonQuery.findAllRecords(LeaveRequest, {
+        employee_id,
+        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+        start_date: { [Op.lte]: endDate },
+        end_date: { [Op.gte]: startDate },
+        request_type: 'DEBIT',
+        is_encashment: false,
+        status: 0
+      }, {
+        include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['id', 'leave_category_name'] }]
+      }, null, tenantOptions)
+    ]);
+
+    const approvalRequests = await commonQuery.findAllRecords(AttendanceApproval, {
       employee_id,
-      approval_status: constants.OUT_DUTY_STATUS.APPROVED,
-      start_date: { [Op.lte]: endDate },
-      end_date: { [Op.gte]: startDate },
+      attendance_date: { [Op.between]: [startDate, endDate] },
       status: 0
     }, {}, null, tenantOptions);
 
@@ -2040,6 +2117,9 @@ exports.getMonthlyAttendance = async (req, res) => {
       // const dayPunches = attendanceDay?.attendancePunches ? [...attendanceDay.attendancePunches].sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time)) : [];
       const dayPunches = attendanceDay?.attendancePunches || [];
 
+      const isOutDutyApproved = !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date);
+      const approvedLeave = monthlyLeaves.find(l => curDate >= l.start_date && curDate <= l.end_date);
+
       let dayData = {
         date_display: dayObj.format("DD MMM"),
         day_display: dayObj.format("dddd"),
@@ -2051,7 +2131,8 @@ exports.getMonthlyAttendance = async (req, res) => {
         day_status: null, // Default Not Marked
         status: "Not Marked",
         note: null,
-        is_out_duty_approved: !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
+        is_out_duty_approved: isOutDutyApproved,
+        is_leave_approved: !!approvedLeave,
         punches: []
       };
 
@@ -2093,18 +2174,26 @@ exports.getMonthlyAttendance = async (req, res) => {
           shiftTimeStr = `${Math.floor(diffMins / 60)}:${(diffMins % 60).toString().padStart(2, '0')} Hrs`;
         }
 
-        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
+        const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Miss Punch", 12: "Out Duty", 13: "Half Out Duty", 14: "Not Marked" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
-        if (attendanceDay.status === 6) {
-          statusText = attendanceDay.leaveCategory?.leave_category_name || "Leave";
-        } else if (attendanceDay.status === 4) {
-          const h = employeeHolidays.find(h => h.date === curDate);
-          statusText = h ? h.name : "Holiday";
-        } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
-          statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
-        } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
-          statusText = attendanceDay.leaveCategory.leave_category_name;
+        if (isOutDutyApproved && approvedLeave) {
+          const leaveCategoryName = approvedLeave.category?.leave_category_name || "Leave";
+          statusText = `Out Duty / ${leaveCategoryName}`;
+          attendanceDay.leaveCategory = approvedLeave.category;
+        } else if (isOutDutyApproved) {
+          statusText = "Out Duty";
+        } else {
+          if (attendanceDay.status === 6) {
+            statusText = attendanceDay.leaveCategory?.leave_category_name || "Leave";
+          } else if (attendanceDay.status === 4) {
+            const h = employeeHolidays.find(h => h.date === curDate);
+            statusText = h ? h.name : "Holiday";
+          } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
+            statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
+          } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
+            statusText = attendanceDay.leaveCategory.leave_category_name;
+          }
         }
 
         let timeRange = "0:00 Hrs";
@@ -2202,6 +2291,14 @@ exports.getMonthlyAttendance = async (req, res) => {
       //       summary.absent++;
       //   }
       // }
+
+      const dayApproval = approvalRequests.find(ar => ar.attendance_date === curDate);
+      if (dayApproval) {
+        dayData.approval_status = dayApproval.approval_status;
+        dayData.approval_id = dayApproval.id;
+        dayData.proposed_status = dayApproval.proposed_attendance_data?.status;
+        dayData.approval_reason = dayApproval.reason;
+      }
 
       allDays.push(dayData);
     }
@@ -2419,17 +2516,12 @@ exports.updateAttendanceNote = async (req, res) => {
  * Store Face Recognition Error Log
  */
 exports.storeFaceRecognitionError = async (req, res) => {
-  try {
-    // Ensure FaceRecognitionError table exists in this tenant database
-    await FaceRecognitionError.sync();
-  } catch (syncErr) {
-    console.error("Failed to sync FaceRecognitionError table on storeFaceRecognitionError startup:", syncErr.message);
-  }
-
+  await ensureFaceRecognitionErrorSynced(req.tenantPrefix);
   const t = await sequelize.transaction();
   try {
-    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, massage } = req.body;
-    const finalMessage = message || massage || null;
+    console.log("Storing Face Recognition Error Log...",req.body);
+    const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, face_vector } = req.body;
+    const finalMessage = message || null;
 
     if (!time) {
       await t.rollback();
@@ -2478,6 +2570,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
       longitude: longitude ? parseFloat(longitude) : null,
       status: 0, // Active
       matches: matches ? (typeof matches === 'string' ? JSON.parse(matches) : matches) : null,
+      face_vector: face_vector ? (typeof face_vector === 'string' ? JSON.parse(face_vector) : face_vector) : null,
       message: finalMessage
     }, { transaction: t });
 
@@ -2497,6 +2590,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
         latitude: faceError.latitude,
         longitude: faceError.longitude,
         matches: faceError.matches,
+        face_vector: faceError.face_vector,
         message: faceError.message
       }
     });
@@ -2511,14 +2605,8 @@ exports.storeFaceRecognitionError = async (req, res) => {
  * Get Face Recognition Error Logs (Paginated & Filtered)
  */
 exports.getFaceRecognitionErrors = async (req, res) => {
+  await ensureFaceRecognitionErrorSynced(req.tenantPrefix);
   try {
-    // Ensure FaceRecognitionError table exists in this tenant database
-    try {
-      await FaceRecognitionError.sync();
-    } catch (syncErr) {
-      console.error("Failed to sync FaceRecognitionError table on getFaceRecognitionErrors startup:", syncErr.message);
-    }
-
     const { page, limit, startDate, endDate } = req.body;
     let where = {};
     if (startDate && endDate) {
@@ -2558,7 +2646,7 @@ exports.getFaceRecognitionErrors = async (req, res) => {
           {
             model: Employee,
             as: "employee",
-            attributes: ["id", "first_name", "employee_code", "profile_image"],
+            attributes: ["id", "first_name", "employee_code", "profile_image", "registered_face_images"],
             required: false
           },
           {
@@ -2585,7 +2673,20 @@ exports.getFaceRecognitionErrors = async (req, res) => {
       }
 
       if (item.employee) {
-        const profileImageUrl = item.employee.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${item.employee.profile_image}` : null;
+        let profileImage = item.employee.profile_image;
+        if (!profileImage && item.employee.registered_face_images) {
+          try {
+            const parsed = typeof item.employee.registered_face_images === 'string'
+              ? JSON.parse(item.employee.registered_face_images)
+              : item.employee.registered_face_images;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              profileImage = parsed[0];
+            }
+          } catch (e) {
+            console.error("Error parsing registered_face_images:", e);
+          }
+        }
+        const profileImageUrl = profileImage ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${profileImage}` : null;
         if (typeof item.employee.setDataValue === 'function') {
           item.employee.setDataValue('profile_image_url', profileImageUrl);
         } else {
@@ -2629,7 +2730,6 @@ exports.resolveFaceRecognitionError = async (req, res) => {
     }
 
     const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
-    // Admin-confirmed identity → v2 kiosks turn this photo into a face template
     if (employee_id) updateData.employee_id = parseInt(employee_id);
 
     await commonQuery.updateRecordById(
@@ -2640,6 +2740,112 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       false,
       { company_id: true }
     );
+
+    const empId = parseInt(employee_id);
+    const vec = faceError.face_vector;
+    if (empId) {
+      try {
+        await ensureAlignedTemplatesColumn();
+        const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+        if (employee) {
+          const empUpdateData = {};
+
+          // A. Store the face_vector in aligned_face_templates (keeping original logic intact)
+          if (Array.isArray(vec) && vec.length >= 10) {
+            let list = Array.isArray(employee.aligned_face_templates)
+              ? [...employee.aligned_face_templates] : [];
+
+            let dup = false;
+            for (const t of list) {
+              if (adaptiveCosineSim(vec, t) >= ALIGNED_TEMPLATES.dupSimilarity) { dup = true; break; }
+            }
+            if (!dup) {
+              list.push(vec);
+              while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+              empUpdateData.aligned_face_templates = list;
+              employee.changed('aligned_face_templates', true);
+            }
+          }
+
+          // B. Copy the physical image and save to registered_face_images / profile_image
+          const filename = faceError.image;
+          if (filename) {
+            const sourcePath = path.join(process.cwd(), "uploads", constants.FACE_ERROR_FOLDER || "employee/face_errors/", filename);
+            const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+            const destPath = path.join(destDir, filename);
+
+            if (!fs.existsSync(destDir)) {
+              fs.mkdirSync(destDir, { recursive: true });
+            }
+
+            if (fs.existsSync(sourcePath)) {
+              fs.copyFileSync(sourcePath, destPath);
+            }
+
+            // Maintain array of registered face images, limiting to 5
+            let faceImages = [];
+            if (employee.registered_face_images) {
+              try {
+                const parsed = typeof employee.registered_face_images === 'string'
+                  ? JSON.parse(employee.registered_face_images)
+                  : employee.registered_face_images;
+                if (Array.isArray(parsed)) {
+                  faceImages = [...parsed];
+                }
+              } catch (e) {
+                faceImages = [];
+              }
+            }
+
+            faceImages.push(filename);
+            while (faceImages.length > 5) {
+              const oldestFile = faceImages.shift();
+              if (oldestFile) {
+                try {
+                  const oldPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, oldestFile);
+                  if (fs.existsSync(oldPath)) {
+                    fs.unlinkSync(oldPath);
+                  }
+                } catch (e) {
+                  console.log('Failed to delete oldest face image file:', e);
+                }
+              }
+            }
+
+            empUpdateData.registered_face_images = faceImages;
+            employee.changed('registered_face_images', true);
+
+            const updateProfileImg = !employee.profile_image;
+            if (updateProfileImg) {
+              empUpdateData.profile_image = filename;
+            }
+
+            await employee.update(empUpdateData);
+
+            if (updateProfileImg) {
+              // Synchronize with associated User
+              const associatedUser = await commonQuery.findOneRecord(User, { employee_id: empId }, {});
+              if (associatedUser && !associatedUser.profile_image) {
+                const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+                const userDestPath = path.join(userDestDir, filename);
+                if (fs.existsSync(destPath)) {
+                  if (!fs.existsSync(userDestDir)) {
+                    fs.mkdirSync(userDestDir, { recursive: true });
+                  }
+                  fs.copyFileSync(destPath, userDestPath);
+                }
+                await associatedUser.update({ profile_image: filename });
+              }
+            }
+          } else if (Object.keys(empUpdateData).length > 0) {
+            await employee.update(empUpdateData);
+          }
+          console.log(`[Resolve→Template] ✅ Emp #${empId} verification synchronized.`);
+        }
+      } catch (tplErr) {
+        console.error(`[Resolve→Template] ⚠️ Failed to save template/image for emp #${empId}:`, tplErr.message);
+      }
+    }
 
     return res.ok({ message: "Face recognition error status updated successfully" });
   } catch (err) {
@@ -2662,7 +2868,7 @@ exports.getVerifiedFaceErrors = async (req, res) => {
         employee_id: { [Op.ne]: null },
         company_id: req.user.company_id,
       },
-      attributes: ['id', 'employee_id', 'image'],
+      attributes: ['id', 'employee_id', 'image', ['face_vector', 'vector']],
       order: [['id', 'ASC']],
       limit: 20,
       raw: true,
@@ -2673,6 +2879,7 @@ exports.getVerifiedFaceErrors = async (req, res) => {
       id: r.id,
       employee_id: r.employee_id,
       image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
+      vector: r.vector || null,
     }));
 
     if (items.length > 0) {
@@ -2780,7 +2987,7 @@ exports.getIrregularities = async (req, res) => {
     const whereClause = {
       company_id: companyId,
       [Op.or]: [
-        { status: { [Op.in]: [9, 10] } },
+        { status: { [Op.in]: [9, 10, 14] } },
         {
           [Op.and]: [
             { status: 0 },
@@ -2964,7 +3171,7 @@ exports.getIrregularitiesCount = async (req, res) => {
         [Op.lt]: dayjs().format('YYYY-MM-DD')
       },
       [Op.or]: [
-        { status: { [Op.in]: [9, 10] } },
+        { status: { [Op.in]: [9, 10, 14] } },
         { [Op.and]: [{ status: 0 }, { first_in: null }, { last_out: null }] },
         { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
         { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
@@ -3075,7 +3282,7 @@ exports.getSelfIrregularities = async (req, res) => {
       company_id: companyId,
       employee_id: ownEmpId,
       [Op.or]: [
-        { status: { [Op.in]: [9, 10] } },
+        { status: { [Op.in]: [9, 10, 14] } },
         {
           [Op.and]: [
             { status: 0 },
@@ -3235,7 +3442,7 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
         [Op.between]: [startDate, endDate]
       },
       [Op.or]: [
-        { status: { [Op.in]: [9, 10] } },
+        { status: { [Op.in]: [9, 10, 14] } },
         {
           [Op.and]: [
             { status: 0 },

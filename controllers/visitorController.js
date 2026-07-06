@@ -527,3 +527,77 @@ exports.cancelPass = async (req, res) => {
     return handleError(error, req, res);
   }
 };
+
+exports.getPublicPass = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pass = await commonQuery.findOneRecord(VisitorPass, { id }, {
+      include: [
+        {
+          model: Employee,
+          as: "host",
+          attributes: ["id", "first_name", "employee_code"]
+        }
+      ]
+    }, null, false, false);
+
+    if (!pass) {
+      return res.error(constants.NOT_FOUND, "Visitor pass not found");
+    }
+
+    return res.success("Visitor pass found", pass);
+  } catch (error) {
+    console.error("Error in getPublicPass:", error);
+    return handleError(error, req, res);
+  }
+};
+
+exports.sendPass = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pass = await commonQuery.findOneRecord(VisitorPass, {
+      id,
+      company_id: req.user?.company_id
+    }, {
+      include: [
+        {
+          model: Employee,
+          as: "host",
+          attributes: ["id", "first_name", "employee_code"]
+        }
+      ]
+    });
+
+    if (!pass) {
+      return res.error(constants.NOT_FOUND, "Visitor pass not found");
+    }
+
+    const hostName = pass.host?.first_name || "Employee";
+    const startTimeFormatted = pass.scheduled_start_time ? dayjs(pass.scheduled_start_time).format("DD-MM-YYYY hh:mm A") : "N/A";
+    const publicLink = `${process.env.FRONTEND_URL || "http://localhost:5173/"}visitor/pass/${pass.id}`;
+
+    const message = `Hello ${pass.visitor_name},
+Your visitor pass for meeting ${hostName} has been generated.
+Scheduled Time: ${startTimeFormatted}
+Pass Code: ${pass.pass_code}
+
+Please download your pass using the link below:
+${publicLink}`;
+
+    // Send WhatsApp
+    const { sendWhatsappMessage } = require("../helpers/whatsappService");
+    await sendWhatsappMessage(pass.visitor_phone, message);
+
+    // Send SMS (Log to console)
+    console.log(`\n--- [SMS SEND LOG] ---`);
+    console.log(`To: ${pass.visitor_phone}`);
+    console.log(`Message: ${message}`);
+    console.log(`----------------------\n`);
+
+    return res.success("Visitor pass sent successfully", { message });
+  } catch (error) {
+    console.error("Error in sendPass:", error);
+    return handleError(error, req, res);
+  }
+};
+

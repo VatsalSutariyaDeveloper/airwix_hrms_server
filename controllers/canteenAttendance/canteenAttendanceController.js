@@ -1,4 +1,4 @@
-const { CanteenAttendance, Employee, Sequelize, sequelize } = require("../../models");
+const { CanteenAttendance, Employee, Sequelize, sequelize, EmployeeAttendanceTemplate, AttendanceTemplate } = require("../../models");
 const { validateRequest, commonQuery, handleError } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { Op } = Sequelize;
@@ -150,16 +150,35 @@ exports.getSummary = async (req, res) => {
                         where: { date: date },
                         attributes: ["id", "employee_id", "date", "status", "created_at"],
                         required: false
+                    },
+                    {
+                        model: EmployeeAttendanceTemplate,
+                        as: "employeeAttendanceTemplate",
+                        required: false
+                    },
+                    {
+                        model: AttendanceTemplate,
+                        as: "attendanceTemplate",
+                        required: false
                     }
                 ],
                 attributes: ["id", "first_name", "employee_code", "employee_type", "worker_type", "profile_image"],
             }
       );
-
+ 
     const presentEmployees = [];
     const absentEmployees = [];
-
+    let totalStaffCount = 0;
+ 
     allEmployees.items.forEach(employee => {
+        const activeTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+        const allowCanteenAccess = activeTemplate ? (activeTemplate.allow_canteen_access === true || activeTemplate.allow_canteen_access === 1) : false;
+ 
+        // Skip the employee if they don't have canteen access
+        if (!allowCanteenAccess) return;
+ 
+        totalStaffCount++;
+ 
         // Get plain employee data to avoid circular references
         const plainEmployee = employee.get ? employee.get({ plain: true }) : employee;
         
@@ -170,7 +189,7 @@ exports.getSummary = async (req, res) => {
                 ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${plainEmployee.profile_image}` 
                 : null
         };
-
+ 
         if (employee.canteenAttendances && employee.canteenAttendances.length > 0) {
             const hasPresentStatus = employee.canteenAttendances.some(att => att.status === 0);
             if (hasPresentStatus) {
@@ -216,7 +235,7 @@ exports.getSummary = async (req, res) => {
     const result = {
         presentCount: presentEmployees.length,
         absentCount: absentEmployees.length,
-        totalStaffCount: allEmployees.items.length,
+        totalStaffCount: totalStaffCount,
         guestCount: guestAttendance.length,
         presentEmployeeData: presentEmployees,
         absentEmployeeData: absentEmployees

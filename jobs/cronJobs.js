@@ -341,7 +341,7 @@ const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
             where: {
                 attendance_date: targetDate,
                 [Op.or]: [
-                    { status: { [Op.in]: [0, 1, 5, 9, 10, 12, 13] } }, // 5 = Absent
+                    { status: { [Op.in]: [0, 1, 5, 9, 12, 10, 14, 13] } }, // 5 = Absent
                     { [Op.and]: [{ first_in: null }, { last_out: { [Op.ne]: null } }] },
                     { [Op.and]: [{ first_in: { [Op.ne]: null } }, { last_out: null }] }
                 ],

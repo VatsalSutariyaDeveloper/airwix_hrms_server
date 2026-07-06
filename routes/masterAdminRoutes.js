@@ -42,9 +42,12 @@ router.use("/administration", masterAdminAdministrationRoutes);
 
 // --- System Logs ---
 router.post("/system-logs/database", ctrl.getDatabaseLogs);
+router.post("/system-logs/database/clear", ctrl.clearDatabaseLogs);
 router.post("/system-logs/api", ctrl.getApiLogs);
+router.post("/system-logs/api/clear", ctrl.clearApiLogs);
 router.get("/system-logs/files", ctrl.getLogFiles);
 router.get("/system-logs/file-content", ctrl.getLogFileContent);
+router.post("/system-logs/files/clear", ctrl.clearLogFile);
 
 // --- Cache ---
 router.post("/clear-cache", ctrl.clearCache);

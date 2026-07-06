@@ -189,7 +189,7 @@ exports.logQuery = async (logData, mainTransaction = null) => {
     const logPayload = {
         entity_name: logData.entity_name,
         action_type: logData.action_type,
-        user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
+        user_id: (logData.access_type === 'attendance' || logData.access_type === 'canteen' || ctx?.access === 'attendance' || ctx?.access === 'canteen') ? null : sanitizeUserId(logData.user_id || ctx?.user_id),
         company_id: logData.company_id || ctx?.company_id,
         branch_id: logData.branch_id || ctx?.branch_id,
         record_id: logData.record_id,
@@ -243,7 +243,7 @@ exports.logError = async (logData, transaction = null) => {
     await Logs.create({
       entity_name: logData.entity_name || "SERVER_ERROR",
       action_type: "ERROR",
-      user_id: sanitizeUserId(logData.user_id || ctx?.user_id),
+      user_id: (logData.access_type === 'attendance' || logData.access_type === 'canteen' || ctx?.access === 'attendance' || ctx?.access === 'canteen') ? null : sanitizeUserId(logData.user_id || ctx?.user_id),
       company_id: logData.company_id || ctx?.company_id,
       branch_id: logData.branch_id || ctx?.branch_id,
       record_id: null,

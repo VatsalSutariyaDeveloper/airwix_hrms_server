@@ -9,9 +9,9 @@ const DEBUG_SQL = process.env.DEBUG_SQL === "true";
 
 // Capture stack at the entry of these functions to bypass async stack loss
 const captureCaller = () => {
-    const stack = new Error().stack.split("\n");
-    // [0] Error, [1] captureCaller, [2] commonQuery function, [3] ACTUAL CALLER
-    return stack[3] ? stack[3].trim().replace(/^at /, "") : "unknown";
+  const stack = new Error().stack.split("\n");
+  // [0] Error, [1] captureCaller, [2] commonQuery function, [3] ACTUAL CALLER
+  return stack[3] ? stack[3].trim().replace(/^at /, "") : "unknown";
 };
 
 /**
@@ -72,9 +72,9 @@ function withDebug(options = {}, transaction = null, capture = null) {
   opts.logging = (sql, queryObject) => {
     const bind = queryObject.bind || queryObject.parameters || [];
     const formatted = formatSQL(sql, bind);
-    
+
     if (capture && typeof capture === 'object') {
-        capture.sql = formatted; 
+      capture.sql = formatted;
     }
 
     if (DEBUG_SQL) {
@@ -144,7 +144,7 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
   }
 
   // Temporary override if needed
-  settings = { enable_user_wise_data: false, enable_branch_wise_data: true };
+  settings = { enable_user_wise_data: false, enable_branch_wise_data: false };
   const { enable_user_wise_data, enable_branch_wise_data } = settings;
 
 
@@ -153,10 +153,14 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
   const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
 
   if (tenantConfig === true) {
-    if (ctx.company_id && hasCompanyField) {
+    const activeCompanyIds = (ctx.selected_company_ids && ctx.selected_company_ids.length > 0)
+      ? ctx.selected_company_ids.map(Number)
+      : (ctx.company_id ? [Number(ctx.company_id)] : []);
+
+    if (activeCompanyIds.length > 0 && hasCompanyField) {
       if (where.company_id === undefined) {
-        where.company_id = ctx.company_id;
-      } else if (!ctx.is_super_admin) {
+        where.company_id = activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds };
+      } else {
         let requested = [];
         if (Array.isArray(where.company_id)) {
           requested = where.company_id;
@@ -165,8 +169,14 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
         } else {
           requested = [where.company_id];
         }
-        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
-        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
+        
+        const isPrimaryQuery = requested.some(id => Number(id) === Number(ctx.company_id));
+        if (isPrimaryQuery) {
+          where.company_id = activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds };
+        } else {
+          const intersected = requested.filter(id => activeCompanyIds.includes(Number(id)));
+          where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : (activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds });
+        }
       }
     }
     if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {
@@ -268,12 +278,12 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
     console.log(`Hierarchy Filter Applied - Supervisor: ${isSupervisor}, Manager: ${isManager}, User ID: ${ctx.user_id}`);
     if (isSupervisor || isManager) {
       const modelName = model?.name;
-      
+
       // Define hierarchy conditions
       const hierarchyConditions = [];
       if (isSupervisor) hierarchyConditions.push({ attendance_supervisor: ctx.user_id });
       if (isManager) hierarchyConditions.push({ reporting_manager: ctx.user_id });
-      const hierarchyWhere = hierarchyConditions.length > 1 ? { [Op.or]: hierarchyConditions } : hierarchyConditions[0]; 
+      const hierarchyWhere = hierarchyConditions.length > 1 ? { [Op.or]: hierarchyConditions } : hierarchyConditions[0];
       console.log("Hierarchy Where Clause:", JSON.stringify(hierarchyWhere));
       if (modelName === "Employee") {
         // Restrict Employee table directly
@@ -288,14 +298,13 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
           modelName: "Employee",
           where: hierarchyWhere
         };
-        
+
         // Construct the Op.in clause to limit employee_id
         const restrictedEmployeeIdsCondition = sequelize.literal(
-          `("${modelName}"."employee_id" IN (SELECT id FROM employees WHERE status != 2 AND (${
-            [
-              isSupervisor ? `attendance_supervisor = ${ctx.user_id}` : null,
-              isManager ? `reporting_manager = ${ctx.user_id}` : null
-            ].filter(Boolean).join(" OR ")
+          `("${modelName}"."employee_id" IN (SELECT id FROM employees WHERE status != 2 AND (${[
+            isSupervisor ? `attendance_supervisor = ${ctx.user_id}` : null,
+            isManager ? `reporting_manager = ${ctx.user_id}` : null
+          ].filter(Boolean).join(" OR ")
           })))`
         );
 
@@ -346,7 +355,7 @@ async function normalizeInclude(includeArray) {
 
   return Promise.all(
     includeArray.map(async (inc) => {
-      const newInc = { ...inc }; 
+      const newInc = { ...inc };
       const newWhere = { ...(newInc.where || {}) };
 
       if (newWhere.status === undefined && inc.model && inc.model.rawAttributes && inc.model.rawAttributes.status) {
@@ -354,7 +363,7 @@ async function normalizeInclude(includeArray) {
       }
 
       newInc.where = newWhere;
-      newInc.required = newInc.required === true; 
+      newInc.required = newInc.required === true;
 
       if (newInc.include) {
         newInc.include = await normalizeInclude(newInc.include);
@@ -367,20 +376,20 @@ async function normalizeInclude(includeArray) {
 
 // Normalizes order clause to handle dotted notation like [['state.state_name', 'ASC']]
 function normalizeOrder(order) {
-    if (!order || !Array.isArray(order)) return order;
+  if (!order || !Array.isArray(order)) return order;
 
-    return order.map(item => {
-        if (!Array.isArray(item)) return item;
-        
-        let [col, dir] = item;
-        // If col is a string and contains a dot, split it
-        // Example: ['state.state_name', 'ASC'] -> ['state', 'state_name', 'ASC']
-        if (typeof col === 'string' && col.includes('.')) {
-            const parts = col.split('.');
-            return [...parts, dir];
-        }
-        return item;
-    });
+  return order.map(item => {
+    if (!Array.isArray(item)) return item;
+
+    let [col, dir] = item;
+    // If col is a string and contains a dot, split it
+    // Example: ['state.state_name', 'ASC'] -> ['state', 'state_name', 'ASC']
+    if (typeof col === 'string' && col.includes('.')) {
+      const parts = col.split('.');
+      return [...parts, dir];
+    }
+    return item;
+  });
 }
 
 /**
@@ -391,7 +400,7 @@ function normalizeOrder(order) {
 
 module.exports = {
   // 1. Create Record
-  createRecord: async (model, data, transaction = null, requireTenantFields=true, batch_id = null) => {
+  createRecord: async (model, data, transaction = null, requireTenantFields = true, batch_id = null) => {
     const caller = captureCaller();
     let enrichedData = { ...data }
     let commonData = {
@@ -405,7 +414,7 @@ module.exports = {
 
     let ctx = {};
     if (!isEmptyObj) {
-      ctx = getContext();  
+      ctx = getContext();
     }
 
     const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
@@ -447,7 +456,7 @@ module.exports = {
   },
 
   // 2. Bulk Create
-  bulkCreate: async (Model, dataArray, extraFields, transaction = null, requireTenantFields=true, batch_id = null) => {
+  bulkCreate: async (Model, dataArray, extraFields, transaction = null, requireTenantFields = true, batch_id = null) => {
     const caller = captureCaller();
     if (!Array.isArray(dataArray) || !dataArray.length) return [];
     let enriched = dataArray.map((item) => ({ ...item, ...extraFields }));
@@ -461,11 +470,11 @@ module.exports = {
 
     let ctx = {};
     if (!isEmptyObj) {
-      ctx = getContext();  
+      ctx = getContext();
     }
 
     let attachCompany = false, attachUser = false, attachBranch = false;
-    
+
     const hasCompanyField = !Model || !Model.rawAttributes || !!Model.rawAttributes.company_id;
     const hasBranchField = !Model || !Model.rawAttributes || !!Model.rawAttributes.branch_id;
     const hasUserField = !Model || !Model.rawAttributes || !!Model.rawAttributes.user_id;
@@ -523,24 +532,24 @@ module.exports = {
   },
 
   // 3. Update Record
-  updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields=true, batch_id = null) => {
+  updateRecordById: async (model, whereInput, data, transaction = null, forceReload = false, requireTenantFields = true, batch_id = null) => {
     const caller = captureCaller();
     if (!whereInput || !model || !data) throw new Error("Invalid params for update");
-    let condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model); 
-    
+    let condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model);
+
     let safeData = { ...data };
     let commonData = {
       user_id: data.user_id,
       company_id: data.company_id,
       branch_id: data.branch_id,
     };
-    
+
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
     const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
 
     let ctx = {};
     if (!isEmptyObj) {
-      ctx = getContext();  
+      ctx = getContext();
     }
 
     const hasCompanyField = !model || !model.rawAttributes || !!model.rawAttributes.company_id;
@@ -560,7 +569,7 @@ module.exports = {
     let oldRecord = null;
     try {
       oldRecord = await model.findOne({ where: condition, transaction, raw: true });
-    } catch (e) {}
+    } catch (e) { }
     if (!oldRecord) return null;
     const capture = {};
     const [count] = await model.update(
@@ -597,14 +606,14 @@ module.exports = {
   },
 
   // 4. Soft Delete
-  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields=true, batch_id = null) => {
+  softDeleteById: async (model, whereInput, transaction = null, requireTenantFields = true, batch_id = null) => {
     const caller = captureCaller();
     const isObj = typeof requireTenantFields === "object" && requireTenantFields !== null;
     const isEmptyObj = isObj && Object.keys(requireTenantFields).length === 0;
 
     let ctx = {};
     if (!isEmptyObj) {
-      ctx = getContext();  
+      ctx = getContext();
     }
     const condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), false, model);
 
@@ -674,8 +683,8 @@ module.exports = {
       ...(safeOptions.subQuery !== undefined
         ? { subQuery: safeOptions.subQuery }
         : safeOptions.group
-        ? { subQuery: false }
-        : {}),
+          ? { subQuery: false }
+          : {}),
       ...(safeOptions.raw && { raw: safeOptions.raw }),
       ...(safeOptions.nest && { nest: safeOptions.nest }),
     }, transaction);
@@ -688,7 +697,7 @@ module.exports = {
     const caller = captureCaller();
     const safeOptions = options || {};
     const where = await buildWhere(filters, resolveTenantConfig(requireTenantFields, false), !!safeOptions.skipStatus, model);
-    
+
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
     const result = await model.count(withDebug({
@@ -708,7 +717,7 @@ module.exports = {
     const caller = captureCaller();
     const safeOptions = options || {};
     const condition = await buildWhere(whereInput, resolveTenantConfig(requireTenantFields, false), !!safeOptions.skipStatus, model);
-    
+
     const attributesOption = buildAttributes(safeOptions);
     const includeOption = safeOptions.include ? await normalizeInclude(safeOptions.include) : [];
 
@@ -796,12 +805,12 @@ module.exports = {
     return model.max(field, { where, transaction });
   },
 
-    // 10. ADVANCED PAGINATION
-async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
+  // 10. ADVANCED PAGINATION
+  async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenantFields = true, dateField = "createdAt", customWhere = {}) {
     const resolvedTenant = resolveTenantConfig(requireTenantFields, true);
     if (model.name === 'Employee' && options.attributes && Array.isArray(options.attributes)) {
-        if (!options.attributes.includes('company_id')) options.attributes.push('company_id');
-        if (!options.attributes.includes('branch_id')) options.attributes.push('branch_id');
+      if (!options.attributes.includes('company_id')) options.attributes.push('company_id');
+      if (!options.attributes.includes('branch_id')) options.attributes.push('branch_id');
     }
     const caller = captureCaller();
     try {
@@ -873,89 +882,89 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       if (normalizedSearch && searchFields.length > 0) {
         const attributeMap = new Map();
         if (options.attributes && Array.isArray(options.attributes)) {
-            options.attributes.forEach(attr => {
-                if (Array.isArray(attr)) attributeMap.set(attr[1], attr[0]);
-                else if (typeof attr === 'string') attributeMap.set(attr.split('.').pop(), attr);
-            });
+          options.attributes.forEach(attr => {
+            if (Array.isArray(attr)) attributeMap.set(attr[1], attr[0]);
+            else if (typeof attr === 'string') attributeMap.set(attr.split('.').pop(), attr);
+          });
         }
 
         const orConditions = searchFields.map((key) => {
-            const config = standardizedConfig.find(f => f.key === key);
-            if (!config) return null;
-            
-            let dbCol;
-            
-            // 1. Check if the key exists directly in attributeMap (handled aliases)
-            if (attributeMap.has(config.key)) {
-                const mapped = attributeMap.get(config.key);
-                dbCol = (typeof mapped === 'string' && !mapped.includes('.'))
-                        ? `${model.name}.${mapped}`
-                        : mapped;
-            } 
-            // 2. Handle dotted notation
-            else if (typeof config.key === 'string' && config.key.includes('.')) {
-                const parts = config.key.split('.');
-                const prefix = parts[0].toLowerCase();
-                const field = parts.slice(1).join('.');
-                
-                // If prefix refers to the main model (e.g. "user.email" -> "User.email")
-                if (prefix === 'user' || prefix === model.name.toLowerCase()) {
-                    const mapped = attributeMap.get(field);
-                    // Force prefix even if found in attributeMap (if the mapping is simple)
-                    dbCol = (mapped && typeof mapped === 'string' && mapped.includes('.')) 
-                            ? mapped 
-                            : `${model.name}.${field}`;
-                } 
-                // If the suffix exists in attributeMap (common for aliases like employee_code)
-                else if (attributeMap.has(field)) {
-                    dbCol = attributeMap.get(field);
-                }
-                // Dotted notation for associations
-                else {
-                    const associations = options.include || [];
-                    const match = associations.find(inc => inc.as?.toLowerCase() === prefix);
-                    if (match) {
-                        dbCol = `${match.as}.${field}`;
-                    } else {
-                        dbCol = config.key; // Fallback
-                    }
-                }
-            } 
-            // 3. Simple field name - prefix with main model name to prevent ambiguity
-            else {
-                dbCol = `${model.name}.${config.key}`;
-            }
-            
-            const likeVal = `%${normalizedSearch}%`;
-            if (typeof dbCol === 'string') {
-                const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
-                const colName = finalKey.replace(/\$/g, '');
-                
-                // 🚀 Advanced Date Search: Use 'FM' (Fill Mode) to support non-padded dates like 4/21 (instead of 04/21)
-                if (colName.includes('created_at') || colName.includes('updated_at') || colName.includes('_date')) {
-                    const formats = [
-                        'FMDD-FMMM-YYYY, FMHH12:MI:SS AM', 
-                        'FMDD/FMMM/YYYY, FMHH12:MI:SS AM', 
-                        'FMMM/FMDD/YYYY, FMHH12:MI:SS AM',
-                        'MM/DD/YYYY, HH12:MI:SS AM',
-                        'YYYY-MM-DD HH24:MI:SS'
-                    ];
-                    // Convert timezone to Asia/Kolkata first since the UI displays in local (IST) time
-                    const tzCol = sequelize.fn('timezone', 'Asia/Kolkata', sequelize.col(colName));
-                    return {
-                        [Op.or]: formats.map(fmt => 
-                            sequelize.where(sequelize.fn('to_char', tzCol, fmt), { [Op.iLike]: likeVal })
-                        )
-                    };
-                }
+          const config = standardizedConfig.find(f => f.key === key);
+          if (!config) return null;
 
-                return sequelize.where(
-                    sequelize.cast(sequelize.col(colName), 'TEXT'),
-                    { [Op.iLike]: likeVal }
-                );
-            } else {
-                return sequelize.where(dbCol, { [Op.iLike]: likeVal });
+          let dbCol;
+
+          // 1. Check if the key exists directly in attributeMap (handled aliases)
+          if (attributeMap.has(config.key)) {
+            const mapped = attributeMap.get(config.key);
+            dbCol = (typeof mapped === 'string' && !mapped.includes('.'))
+              ? `${model.name}.${mapped}`
+              : mapped;
+          }
+          // 2. Handle dotted notation
+          else if (typeof config.key === 'string' && config.key.includes('.')) {
+            const parts = config.key.split('.');
+            const prefix = parts[0].toLowerCase();
+            const field = parts.slice(1).join('.');
+
+            // If prefix refers to the main model (e.g. "user.email" -> "User.email")
+            if (prefix === 'user' || prefix === model.name.toLowerCase()) {
+              const mapped = attributeMap.get(field);
+              // Force prefix even if found in attributeMap (if the mapping is simple)
+              dbCol = (mapped && typeof mapped === 'string' && mapped.includes('.'))
+                ? mapped
+                : `${model.name}.${field}`;
             }
+            // If the suffix exists in attributeMap (common for aliases like employee_code)
+            else if (attributeMap.has(field)) {
+              dbCol = attributeMap.get(field);
+            }
+            // Dotted notation for associations
+            else {
+              const associations = options.include || [];
+              const match = associations.find(inc => inc.as?.toLowerCase() === prefix);
+              if (match) {
+                dbCol = `${match.as}.${field}`;
+              } else {
+                dbCol = config.key; // Fallback
+              }
+            }
+          }
+          // 3. Simple field name - prefix with main model name to prevent ambiguity
+          else {
+            dbCol = `${model.name}.${config.key}`;
+          }
+
+          const likeVal = `%${normalizedSearch}%`;
+          if (typeof dbCol === 'string') {
+            const finalKey = dbCol.includes('.') && !dbCol.startsWith('$') ? `$${dbCol}$` : dbCol;
+            const colName = finalKey.replace(/\$/g, '');
+
+            // 🚀 Advanced Date Search: Use 'FM' (Fill Mode) to support non-padded dates like 4/21 (instead of 04/21)
+            if (colName.includes('created_at') || colName.includes('updated_at') || colName.includes('_date')) {
+              const formats = [
+                'FMDD-FMMM-YYYY, FMHH12:MI:SS AM',
+                'FMDD/FMMM/YYYY, FMHH12:MI:SS AM',
+                'FMMM/FMDD/YYYY, FMHH12:MI:SS AM',
+                'MM/DD/YYYY, HH12:MI:SS AM',
+                'YYYY-MM-DD HH24:MI:SS'
+              ];
+              // Convert timezone to Asia/Kolkata first since the UI displays in local (IST) time
+              const tzCol = sequelize.fn('timezone', 'Asia/Kolkata', sequelize.col(colName));
+              return {
+                [Op.or]: formats.map(fmt =>
+                  sequelize.where(sequelize.fn('to_char', tzCol, fmt), { [Op.iLike]: likeVal })
+                )
+              };
+            }
+
+            return sequelize.where(
+              sequelize.cast(sequelize.col(colName), 'TEXT'),
+              { [Op.iLike]: likeVal }
+            );
+          } else {
+            return sequelize.where(dbCol, { [Op.iLike]: likeVal });
+          }
         }).filter(Boolean);
 
         if (orConditions.length > 0) filters[Op.or] = orConditions;
@@ -965,24 +974,24 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       if (customWhere && (Object.keys(customWhere).length > 0 || Object.getOwnPropertySymbols(customWhere).length > 0)) {
         // If both Search and Custom Filter use [Op.or], we must use [Op.and] to combine them
         if (filters[Op.or] && customWhere[Op.or]) {
-            filters = {
-                [Op.and]: [
-                    { [Op.or]: filters[Op.or] },      // The Search conditions
-                    { [Op.or]: customWhere[Op.or] }   // The Custom conditions
-                ],
-                ...filters,
-                ...customWhere
-            };
-            delete filters[Op.or]; // Remove top-level collision
-            delete customWhere[Op.or]; // Ensure we don't overwrite
+          filters = {
+            [Op.and]: [
+              { [Op.or]: filters[Op.or] },      // The Search conditions
+              { [Op.or]: customWhere[Op.or] }   // The Custom conditions
+            ],
+            ...filters,
+            ...customWhere
+          };
+          delete filters[Op.or]; // Remove top-level collision
+          delete customWhere[Op.or]; // Ensure we don't overwrite
         } else {
-            // Safe merge including Symbols
-            filters = { ...filters, ...customWhere };
-            // Manually copy Symbols (like Op.or) just in case
-            const symbols = Object.getOwnPropertySymbols(customWhere);
-            for (const sym of symbols) {
-                filters[sym] = customWhere[sym];
-            }
+          // Safe merge including Symbols
+          filters = { ...filters, ...customWhere };
+          // Manually copy Symbols (like Op.or) just in case
+          const symbols = Object.getOwnPropertySymbols(customWhere);
+          for (const sym of symbols) {
+            filters[sym] = customWhere[sym];
+          }
         }
       }
 
@@ -992,17 +1001,17 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       if (reqBody?.sortBy && sortableFields.includes(reqBody?.sortBy)) {
         const sortKey = reqBody.sortBy;
         if (sortKey.includes('.')) {
-            const parts = sortKey.split('.');
-            order = [[...parts, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
+          const parts = sortKey.split('.');
+          order = [[...parts, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
         } else {
-            order = [[sortKey, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
+          order = [[sortKey, reqBody.sortDirection === "descending" ? "DESC" : "ASC"]];
         }
       }
 
       // Execution
       let data = await module.exports.findAllRecords(
         model,
-        filters, 
+        filters,
         { ...options, skip, limit, order, subQuery: false, __caller: caller, skipStatus: !!options.skipStatus },
         null,
         resolvedTenant
@@ -1011,43 +1020,43 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       // 👇 AUTO-INJECT BRANCH NAME (if branch_id=0 and model has branch_id field)
       const context = getContext();
       if (context.branch_id === 0 && Array.isArray(data) && data.length > 0 && model.rawAttributes.branch_id) {
-          try {
-              const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined && Number(id) > 0))];
-              let branchMap = {};
-              if (branchIds.length > 0) {
-                  const branches = await sequelize.models.BranchMaster.findAll({
-                      where: { id: { [Op.in]: branchIds } },
-                      attributes: ['id', 'branch_name'],
-                      raw: true
-                  });
-                  branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
-              }
-              data = data.map(item => {
-                  const itemJson = item.get ? item.get({ plain: true }) : item;
-                  return {
-                      ...itemJson,
-                      branch_name: branchMap[itemJson.branch_id] || "N/A"
-                  };
-              });
-          } catch (err) {
-              console.error("Auto branch_name enrichment failed:", err.message);
+        try {
+          const branchIds = [...new Set(data.map(item => (item.get ? item.get('branch_id') : item.branch_id)).filter(id => id !== null && id !== undefined && Number(id) > 0))];
+          let branchMap = {};
+          if (branchIds.length > 0) {
+            const branches = await sequelize.models.BranchMaster.findAll({
+              where: { id: { [Op.in]: branchIds } },
+              attributes: ['id', 'branch_name'],
+              raw: true
+            });
+            branchMap = Object.fromEntries(branches.map(b => [b.id, b.branch_name]));
           }
+          data = data.map(item => {
+            const itemJson = item.get ? item.get({ plain: true }) : item;
+            return {
+              ...itemJson,
+              branch_name: branchMap[itemJson.branch_id] || "N/A"
+            };
+          });
+        } catch (err) {
+          console.error("Auto branch_name enrichment failed:", err.message);
+        }
       }
 
       // Sticky Includes (Logic preserved)
       if (reqBody?.include && typeof reqBody?.include === "object") {
         const includeConditions = [];
         for (const [key, value] of Object.entries(reqBody?.include)) {
-            if (Array.isArray(value) && value.length > 0) includeConditions.push({ [key]: { [Op.in]: value } });
-            else if (value) includeConditions.push({ [key]: value });
+          if (Array.isArray(value) && value.length > 0) includeConditions.push({ [key]: { [Op.in]: value } });
+          else if (value) includeConditions.push({ [key]: value });
         }
         if (includeConditions.length > 0) {
-            // we intentionally bypass default status filtering for include logic
-            const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, resolvedTenant, true, model);
-            const extraRecords = await model.findAll({ where: stickyWhere, ...options });
-            const existingIds = new Set(data.map(d => String(d.id)));
-            const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));
-            data = [...data, ...filteredExtras];
+          // we intentionally bypass default status filtering for include logic
+          const stickyWhere = await buildWhere({ [Op.or]: includeConditions }, resolvedTenant, true, model);
+          const extraRecords = await model.findAll({ where: stickyWhere, ...options });
+          const existingIds = new Set(data.map(d => String(d.id)));
+          const filteredExtras = extraRecords.filter(r => !existingIds.has(String(r.id)));
+          data = [...data, ...filteredExtras];
         }
       }
 
@@ -1062,10 +1071,10 @@ async fetchPaginatedData(model, reqBody, fieldConfig, options = {}, requireTenan
       // Calculations
       let totals = {};
       if (options?.sumField && Array.isArray(data)) {
-         const calculateSum = (field) => data.reduce((sum, row) => sum + (Number((row.get ? row.get(field) : row[field]) || 0) || 0), 0);
-         if (typeof options.sumField === "string") totals[options.sumField] = calculateSum(options.sumField);
-         else if (Array.isArray(options.sumField)) options.sumField.forEach(f => totals[f] = calculateSum(f));
-         else if (typeof options.sumField === "object") Object.entries(options.sumField).forEach(([a, f]) => totals[a] = calculateSum(f));
+        const calculateSum = (field) => data.reduce((sum, row) => sum + (Number((row.get ? row.get(field) : row[field]) || 0) || 0), 0);
+        if (typeof options.sumField === "string") totals[options.sumField] = calculateSum(options.sumField);
+        else if (Array.isArray(options.sumField)) options.sumField.forEach(f => totals[f] = calculateSum(f));
+        else if (typeof options.sumField === "object") Object.entries(options.sumField).forEach(([a, f]) => totals[a] = calculateSum(f));
       }
 
       return {

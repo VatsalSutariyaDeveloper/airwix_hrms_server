@@ -82,6 +82,15 @@ module.exports = (sequelize, DataTypes) => {
     valid_to: {
       type: DataTypes.DATEONLY,
       allowNull: true
+    },
+    visitor_photo_url: {
+      type: DataTypes.VIRTUAL,
+      get() {
+        const photo = this.getDataValue("visitor_photo");
+        if (!photo) return null;
+        const fileServerUrl = process.env.FILE_SERVER_URL || "";
+        return `${fileServerUrl}visitor_passes/${photo}`;
+      }
     }
   }, {
     tableName: "visitor_passes",

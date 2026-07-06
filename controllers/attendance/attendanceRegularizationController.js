@@ -432,7 +432,7 @@ exports.getById = async (req, res) => {
                 {
                     model: Employee,
                     as: "employee",
-                    attributes: ["id", "first_name", "employee_code"],
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id"],
                     required: false
                 },
                 {

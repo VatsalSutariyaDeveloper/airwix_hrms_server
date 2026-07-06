@@ -4,6 +4,20 @@ const { sequelize, OutDutyRequest, User, Employee, EmployeeAttendanceTemplate, A
 const dayjs = require("dayjs");
 const notificationService = require("../../services/notificationService");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
+const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
+
+const syncedOutDutyTenants = new Set();
+async function ensureOutDutyRequestSynced(tenantPrefix) {
+    const cacheKey = `${tenantPrefix || 'default'}_OutDutyRequest`;
+    if (!syncedOutDutyTenants.has(cacheKey)) {
+        try {
+            await OutDutyRequest.sync({ alter: true });
+            syncedOutDutyTenants.add(cacheKey);
+        } catch (syncErr) {
+            console.error("Failed to sync OutDutyRequest table:", syncErr.message);
+        }
+    }
+}
 
 const getApproversForOutDutyRequest = async (employeeId, currentLevel, transaction) => {
     try {
@@ -56,8 +70,10 @@ const getApproversForOutDutyRequest = async (employeeId, currentLevel, transacti
 
         return [...userIds];
     } catch (err) {
-        console.error("Error in getApproversForOutDutyRequest:", err);
-        return [];
+        console.error("❌ Error in getApproversForOutDutyRequest:", err.message);
+        if (err.sql) console.error("Failed SQL:", err.sql);
+        if (err.parent) console.error("Parent Error:", err.parent);
+        throw err;
     }
 };
 
@@ -107,13 +123,19 @@ const sendApprovalNotifications = async (outDutyRequest, employee, actionType, t
             }, transaction);
         }
     } catch (err) {
-        console.error("Error sending approval level notifications:", err);
+        console.error("❌ Error sending approval level notifications:", err.message);
+        if (err.sql) console.error("Failed SQL:", err.sql);
+        throw err;
     }
 };
 
 
 exports.create = async (req, res) => {
-    const transaction = await sequelize.transaction();
+    const transaction = await sequelize.transaction({
+        logging: (sql) => {
+            console.log("\x1b[33m📝 [OUT DUTY TRANSACTION SQL]:\x1b[0m", sql);
+        }
+    });
     try {
 
         const requiredFields = {
@@ -127,11 +149,7 @@ exports.create = async (req, res) => {
             req.body.employee_id = req.user.employee_id
         }
 
-        try {
-            await OutDutyRequest.sync({ alter: true });
-        } catch (syncErr) {
-            console.error("Failed to sync OutDutyRequest table:", syncErr.message);
-        }
+        await ensureOutDutyRequestSynced(req.tenantPrefix);
 
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 
@@ -197,11 +215,31 @@ exports.create = async (req, res) => {
         // Notify approval level users
         await sendApprovalNotifications(outDutyRequest, employee, "CREATE", transaction);
 
+        if (approvalStatus === constants.OUT_DUTY_STATUS.APPROVED) {
+            const start = dayjs(start_date);
+            const end = dayjs(end_date);
+            const diff = end.diff(start, 'day');
+            const todayStr = dayjs().format('YYYY-MM-DD');
+            for (let i = 0; i <= diff; i++) {
+                const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+                if (targetDate <= todayStr) {
+                    await rebuildAttendanceDay(employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                }
+            }
+        }
+
         await transaction.commit();
         return res.success(constants.SUCCESS, { message: "Out Duty request created successfully" });
     }
     catch (err) {
         await transaction.rollback();
+        console.error("❌ Controller Error in OutDutyRequest.create:", err.message);
+        if (err.sql) {
+            console.error("Failed SQL Query in transaction:", err.sql);
+        }
+        if (err.parent) {
+            console.error("Database details:", err.parent);
+        }
         return handleError(err, res, req);
     }
 }
@@ -298,7 +336,7 @@ exports.getById = async (req, res) => {
                 {
                     model: Employee,
                     as: "employee",
-                    attributes: ["id", "first_name", "employee_code"],
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id"],
                     include: [
                         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
                         { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
@@ -651,6 +689,22 @@ exports.updateStatus = async (req, res) => {
         if (newStatus === constants.OUT_DUTY_STATUS.APPROVED) {
             await generatePunchesAndRebuild(outDutyRequest, req.user.id, transaction);
         }
+        // if (
+        //     Number(newStatus) === constants.OUT_DUTY_STATUS.APPROVED ||
+        //     Number(newStatus) === constants.OUT_DUTY_STATUS.REJECTED ||
+        //     Number(newStatus) === constants.OUT_DUTY_STATUS.CANCELLED
+        // ) {
+        //     const start = dayjs(outDutyRequest.start_date);
+        //     const end = dayjs(outDutyRequest.end_date);
+        //     const diff = end.diff(start, 'day');
+        //     const todayStr = dayjs().format('YYYY-MM-DD');
+        //     for (let i = 0; i <= diff; i++) {
+        //         const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+        //         if (targetDate <= todayStr) {
+        //             await rebuildAttendanceDay(outDutyRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+        //         }
+        //     }
+        // }
 
         await transaction.commit();
         return res.success(constants.UPDATED);
@@ -697,6 +751,17 @@ exports.cancelLeave = async (req, res) => {
         const updatedRequest = await commonQuery.findOneRecord(OutDutyRequest, { id }, {}, transaction);
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
         await sendApprovalNotifications(updatedRequest, employee, "CANCEL", transaction);
+
+        const start = dayjs(outDutyRequest.start_date);
+        const end = dayjs(outDutyRequest.end_date);
+        const diff = end.diff(start, 'day');
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        for (let i = 0; i <= diff; i++) {
+            const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
+            if (targetDate <= todayStr) {
+                await rebuildAttendanceDay(outDutyRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+            }
+        }
 
         await transaction.commit();
         return res.success(constants.UPDATED);
@@ -877,7 +942,7 @@ const generatePunchesAndRebuild = async (outDutyRequest, userId, transaction) =>
                     punch_type: "IN",
                     punch_time: inTime
                 }, {}, transaction, false, {});
-                
+
                 if (!punchExists) {
                     await commonQuery.createRecord(AttendancePunch, {
                         employee_id: outDutyRequest.employee_id,

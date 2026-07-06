@@ -11,6 +11,12 @@ const masterSequelize = new Sequelize(
     dialect: 'mysql',
     logging: false, // Optional: disable logging for this connection
     port: process.env.MASTER_DB_PORT,
+    pool: {
+      max: 25,
+      min: 2,
+      acquire: 60000,
+      idle: 10000
+    }
   }
 );
 

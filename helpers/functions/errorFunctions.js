@@ -31,7 +31,8 @@ exports.handleError = async (err, res = null, req = null, isHighRisk = false) =>
 
   // Extract metadata if available
   const body = req?.body || {};
-  const user_id = req?.user?.id || body.user_id || null;
+  const isDevice = req?.user?.access === 'attendance' || req?.user?.access === 'canteen';
+  const user_id = isDevice ? null : (req?.user?.id || body.user_id || null);
   const company_id = req?.user?.company_id || body.company_id || null;
   const branch_id = req?.user?.branch_id || body.branch_id || null;
   const method = req?.method || "N/A";
