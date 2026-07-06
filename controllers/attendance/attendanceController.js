@@ -539,7 +539,7 @@ exports.getAttendanceSummary = async (req, res) => {
       const dayOfWeek = dayjs(targetDate).day();
       const weekNo = Math.ceil(dayjs(targetDate).date() / 7);
 
-      const [itemHolidays, itemWeeklyOffs, itemOutDuties] = await Promise.all([
+      const [itemHolidays, itemWeeklyOffs, itemOutDuties, itemLeaves] = await Promise.all([
         commonQuery.findAllRecords(EmployeeHoliday, {
           employee_id: { [Op.in]: itemIds },
           date: targetDate,
@@ -558,6 +558,17 @@ exports.getAttendanceSummary = async (req, res) => {
           start_date: { [Op.lte]: targetDate },
           end_date: { [Op.gte]: targetDate },
           status: 0
+        }),
+        commonQuery.findAllRecords(LeaveRequest, {
+          employee_id: { [Op.in]: itemIds },
+          approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+          start_date: { [Op.lte]: targetDate },
+          end_date: { [Op.gte]: targetDate },
+          request_type: 'DEBIT',
+          is_encashment: false,
+          status: 0
+        }, {
+          include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['id', 'leave_category_name'] }]
         })
       ]);
 
@@ -574,23 +585,36 @@ exports.getAttendanceSummary = async (req, res) => {
 
         const day = emp.attendanceDays?.[0];
         if (day) {
+          const isOutDutyApproved = itemOutDutyMap.has(emp.id);
+          const approvedLeave = itemLeaves.find(l => l.employee_id === emp.id);
+
           day.setDataValue('is_scheduled_holiday', itemHolidayMap.has(emp.id));
           day.setDataValue('is_scheduled_weekly_off', itemWeeklyOffMap.has(emp.id));
-          day.setDataValue('is_out_duty_approved', itemOutDutyMap.has(emp.id));
+          day.setDataValue('is_out_duty_approved', isOutDutyApproved);
+          day.setDataValue('is_leave_approved', !!approvedLeave);
           day.setDataValue('branch_name', day.branch?.branch_name);
 
           // Enhanced Status Text logic (Same as monthly summary)
           const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 7: "Overtime", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
           let statusText = statusMap[day.status] || "Pending";
-          if (day.status === 4) {
-            const h = itemHolidays.find(h => h.employee_id === emp.id);
-            statusText = h ? h.name : "Holiday";
-          } else if (day.status === 6) {
-            statusText = day.leaveCategory?.leave_category_name || "Leave";
-          } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
-            statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
-          } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
-            statusText = day.leaveCategory.leave_category_name;
+
+          if (isOutDutyApproved && approvedLeave) {
+            const leaveCategoryName = approvedLeave.category?.leave_category_name || "Leave";
+            statusText = `Out Duty / ${leaveCategoryName}`;
+            day.setDataValue('leaveCategory', approvedLeave.category);
+          } else if (isOutDutyApproved) {
+            statusText = "Out Duty";
+          } else {
+            if (day.status === 4) {
+              const h = itemHolidays.find(h => h.employee_id === emp.id);
+              statusText = h ? h.name : "Holiday";
+            } else if (day.status === 6) {
+              statusText = day.leaveCategory?.leave_category_name || "Leave";
+            } else if (day.status === 1 && day.leaveCategory?.leave_category_name) {
+              statusText = `Half Day / ${day.leaveCategory.leave_category_name}`;
+            } else if (day.status === 0 && day.leaveCategory?.leave_category_name) {
+              statusText = day.leaveCategory.leave_category_name;
+            }
           }
           day.setDataValue('status_text', statusText);
 
@@ -1979,13 +2003,26 @@ exports.getMonthlyAttendance = async (req, res) => {
         status: 0
       }, {}, null, tenantOptions);
     }
-    const monthlyOutDuties = await commonQuery.findAllRecords(OutDutyRequest, {
-      employee_id,
-      approval_status: constants.OUT_DUTY_STATUS.APPROVED,
-      start_date: { [Op.lte]: endDate },
-      end_date: { [Op.gte]: startDate },
-      status: 0
-    }, {}, null, tenantOptions);
+    const [monthlyOutDuties, monthlyLeaves] = await Promise.all([
+      commonQuery.findAllRecords(OutDutyRequest, {
+        employee_id,
+        approval_status: constants.OUT_DUTY_STATUS.APPROVED,
+        start_date: { [Op.lte]: endDate },
+        end_date: { [Op.gte]: startDate },
+        status: 0
+      }, {}, null, tenantOptions),
+      commonQuery.findAllRecords(LeaveRequest, {
+        employee_id,
+        approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+        start_date: { [Op.lte]: endDate },
+        end_date: { [Op.gte]: startDate },
+        request_type: 'DEBIT',
+        is_encashment: false,
+        status: 0
+      }, {
+        include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['id', 'leave_category_name'] }]
+      }, null, tenantOptions)
+    ]);
 
     const summary = {
       present: 0,
@@ -2019,6 +2056,9 @@ exports.getMonthlyAttendance = async (req, res) => {
       // const dayPunches = attendanceDay?.attendancePunches ? [...attendanceDay.attendancePunches].sort((a,b) => new Date(a.punch_time) - new Date(b.punch_time)) : [];
       const dayPunches = attendanceDay?.attendancePunches || [];
 
+      const isOutDutyApproved = !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date);
+      const approvedLeave = monthlyLeaves.find(l => curDate >= l.start_date && curDate <= l.end_date);
+
       let dayData = {
         date_display: dayObj.format("DD MMM"),
         day_display: dayObj.format("dddd"),
@@ -2030,7 +2070,8 @@ exports.getMonthlyAttendance = async (req, res) => {
         day_status: null, // Default Not Marked
         status: "Not Marked",
         note: null,
-        is_out_duty_approved: !!monthlyOutDuties.find(od => curDate >= od.start_date && curDate <= od.end_date),
+        is_out_duty_approved: isOutDutyApproved,
+        is_leave_approved: !!approvedLeave,
         punches: []
       };
 
@@ -2075,15 +2116,23 @@ exports.getMonthlyAttendance = async (req, res) => {
         const statusMap = { 0: "Present", 1: "Half Day", 3: "Weekly Off", 4: "Holiday", 5: "Absent", 6: "Leave", 9: "Incomplete", 10: "Not Marked", 12: "Out Duty", 13: "Half Out Duty", 14: "Miss Punch" };
         let statusText = statusMap[attendanceDay.status] || "Unknown";
 
-        if (attendanceDay.status === 6) {
-          statusText = attendanceDay.leaveCategory?.leave_category_name || "Leave";
-        } else if (attendanceDay.status === 4) {
-          const h = employeeHolidays.find(h => h.date === curDate);
-          statusText = h ? h.name : "Holiday";
-        } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
-          statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
-        } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
-          statusText = attendanceDay.leaveCategory.leave_category_name;
+        if (isOutDutyApproved && approvedLeave) {
+          const leaveCategoryName = approvedLeave.category?.leave_category_name || "Leave";
+          statusText = `Out Duty / ${leaveCategoryName}`;
+          attendanceDay.leaveCategory = approvedLeave.category;
+        } else if (isOutDutyApproved) {
+          statusText = "Out Duty";
+        } else {
+          if (attendanceDay.status === 6) {
+            statusText = attendanceDay.leaveCategory?.leave_category_name || "Leave";
+          } else if (attendanceDay.status === 4) {
+            const h = employeeHolidays.find(h => h.date === curDate);
+            statusText = h ? h.name : "Holiday";
+          } else if (attendanceDay.status === 1 && attendanceDay.leaveCategory?.leave_category_name) {
+            statusText = `Half Day / ${attendanceDay.leaveCategory.leave_category_name}`;
+          } else if (attendanceDay.status === 0 && attendanceDay.leaveCategory?.leave_category_name) {
+            statusText = attendanceDay.leaveCategory.leave_category_name;
+          }
         }
 
         let timeRange = "0:00 Hrs";

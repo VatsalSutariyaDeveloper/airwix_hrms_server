@@ -1139,7 +1139,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       if (isHalfDay) {
         // [MOD] If worked on a half-day leave day, preserve the leave (Status 1: Half Day) 
         // and do not cancel the leave request.
-        meta.forcedStatus = 1;
+        if (![12, 13].includes(Number(meta.forcedStatus))) {
+          meta.forcedStatus = 1;
+        }
         meta.leave_category_id = approvedLeave.leave_category_id;
         meta.leave_session = (approvedLeave.start_date === date) ? approvedLeave.start_session : approvedLeave.end_session;
         // meta.overrideAutomationNote = "System: Half-Day attendance on half-day leave";
@@ -1150,7 +1152,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         if (approvedLeave.reason === "Auto-generated from Attendance") {
           await LeaveBalanceService.syncLeaveRecord(employeeId, date, approvedLeave.leave_category_id, 0, transaction);
         } else {
-          meta.forcedStatus = finalStatus;
+          if (![12, 13].includes(Number(meta.forcedStatus))) {
+            meta.forcedStatus = finalStatus;
+          }
           meta.leave_category_id = approvedLeave.leave_category_id;
           meta.leave_session = approvedLeave.leave_session;
         }
@@ -1158,7 +1162,9 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     } else if (isSpecialStatus && (hasPunches || isWorkingForced || [0, 1].includes(finalStatus))) {
       // Rule Triggered: Force status even for Present/Half Day overrides on approved leave.
       // This allows the later forcedStatus handling to apply for leave approved with Override Attendance Status set to Present/Half Day.
-      meta.forcedStatus = finalStatus;
+      if (![12, 13].includes(Number(meta.forcedStatus))) {
+        meta.forcedStatus = finalStatus;
+      }
       meta.leave_category_id = approvedLeave.leave_category_id;
       meta.leave_session = approvedLeave.leave_session;
       if (category && category.leave_category_name) {

@@ -590,7 +590,7 @@ exports.getAttendanceReport = async (req, res) => {
       } else {
         employeeFilter.id = { [Op.in]: allMatchingEmployeeIds };
       }
-      
+
       // Remove search term so fetchPaginatedData doesn't run redundant name search filter
       delete reqBodyCopy.search;
     }
@@ -876,21 +876,39 @@ exports.getAttendanceReport = async (req, res) => {
 
         punches.forEach(punch => {
           if (punch.punch_type === 'IN') {
-            if (currentPair && currentPair.in) {
-              // Start new pair if previous IN didn't have OUT
+            // Previous IN has no OUT
+            if (currentPair) {
               punchPairs.push(currentPair);
             }
-            currentPair = { in: punch.formatted_time, in_device_name: punch.device_name || '-', out: null, out_device_name: '-' };
-          } else if (punch.punch_type === 'OUT' && currentPair && currentPair.in) {
-            currentPair.out = punch.formatted_time;
-            currentPair.out_device_name = punch.device_name || '-';
-            punchPairs.push(currentPair);
-            currentPair = null;
+
+            currentPair = {
+              in: punch.formatted_time,
+              in_device_name: punch.device_name || '-',
+              out: null,
+              out_device_name: '-'
+            };
+          } else if (punch.punch_type === 'OUT') {
+            if (currentPair && currentPair.in) {
+              // Normal IN -> OUT pair
+              currentPair.out = punch.formatted_time;
+              currentPair.out_device_name = punch.device_name || '-';
+
+              punchPairs.push(currentPair);
+              currentPair = null;
+            } else {
+              // OUT exists but IN is missing
+              punchPairs.push({
+                in: null,
+                in_device_name: '-',
+                out: punch.formatted_time,
+                out_device_name: punch.device_name || '-'
+              });
+            }
           }
         });
 
-        // Add the last pair if it has IN but no OUT
-        if (currentPair && currentPair.in) {
+        // Last IN exists but OUT is missing
+        if (currentPair) {
           punchPairs.push(currentPair);
         }
 
