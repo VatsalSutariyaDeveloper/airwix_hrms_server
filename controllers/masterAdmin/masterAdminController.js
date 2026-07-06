@@ -922,6 +922,50 @@ exports.getLogFileContent = async (req, res) => {
   }
 };
 
+exports.clearDatabaseLogs = async (req, res) => {
+  try {
+    const { Logs } = require("../../models");
+    await Logs.destroy({ where: {} });
+    return res.ok({ message: "Database audit logs cleared successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.clearApiLogs = async (req, res) => {
+  try {
+    const { ApiLog } = require("../../models");
+    await ApiLog.destroy({ where: {} });
+    return res.ok({ message: "API request logs cleared successfully" });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.clearLogFile = async (req, res) => {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const { filename } = req.body;
+
+    if (!filename || !/^[a-zA-Z0-9_\-\.]+\.log$/.test(filename)) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+
+    const logDir = path.join(process.cwd(), "uploads", "logs");
+    const filePath = path.join(logDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: "Log file not found" });
+    }
+
+    fs.writeFileSync(filePath, ""); // Clear file content
+    return res.ok({ message: `Log file ${filename} cleared successfully` });
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
 exports.clearCache = async (req, res) => {
   try {
     const cache = require("../../helpers/cache");

@@ -128,6 +128,13 @@ exports.listApprovals = async (req, res) => {
       const raw = request.get({ plain: true });
       raw.approved_by_name = raw.approvedBy?.user_name || null;
 
+      const { AttendanceDay } = require('../../models');
+      const actualDay = await commonQuery.findOneRecord(AttendanceDay, {
+        employee_id: request.employee_id,
+        attendance_date: request.attendance_date
+      });
+      raw.actual_attendance_data = actualDay ? (typeof actualDay.get === 'function' ? actualDay.get({ plain: true }) : actualDay) : null;
+
       const currentLevel = request.current_level || 1;
       const configData = await getAttendanceApprovalConfig(employee.company_id || req.user.company_id);
       const config = configData.config;
@@ -275,6 +282,22 @@ exports.approveRequest = async (req, res) => {
       };
 
       const attendanceupdate = await attendanceController.updateAttendanceDay(simReq, simRes);
+
+      try {
+        const { rebuildAttendanceDay } = require('../../helpers/attendanceHelper');
+        await rebuildAttendanceDay(
+          approvalReq.employee_id,
+          approvalReq.attendance_date,
+          {
+            user_id: req.user.id,
+            company_id: req.user.company_id,
+            branch_id: approvalReq.employee?.branch_id || req.user.branch_id
+          }
+        );
+        console.log(`[ApprovalRebuild] Successfully rebuilt day for Employee ID ${approvalReq.employee_id} on ${approvalReq.attendance_date}`);
+      } catch (rebuildErr) {
+        console.error("[ApprovalRebuild] Failed to rebuild day:", rebuildErr.message);
+      }
     }
 
     return res.success({}, 'Request approved successfully');

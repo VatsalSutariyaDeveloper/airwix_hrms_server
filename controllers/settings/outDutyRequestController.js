@@ -6,6 +6,19 @@ const notificationService = require("../../services/notificationService");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 
+const syncedOutDutyTenants = new Set();
+async function ensureOutDutyRequestSynced(tenantPrefix) {
+    const cacheKey = `${tenantPrefix || 'default'}_OutDutyRequest`;
+    if (!syncedOutDutyTenants.has(cacheKey)) {
+        try {
+            await OutDutyRequest.sync({ alter: true });
+            syncedOutDutyTenants.add(cacheKey);
+        } catch (syncErr) {
+            console.error("Failed to sync OutDutyRequest table:", syncErr.message);
+        }
+    }
+}
+
 const getApproversForOutDutyRequest = async (employeeId, currentLevel, transaction) => {
     try {
         const employee = await commonQuery.findOneRecord(Employee, employeeId, {
@@ -136,11 +149,7 @@ exports.create = async (req, res) => {
             req.body.employee_id = req.user.employee_id
         }
 
-        try {
-            await OutDutyRequest.sync({ alter: true });
-        } catch (syncErr) {
-            console.error("Failed to sync OutDutyRequest table:", syncErr.message);
-        }
+        await ensureOutDutyRequestSynced(req.tenantPrefix);
 
         const errors = await validateRequest(req.body, requiredFields, {}, transaction);
 

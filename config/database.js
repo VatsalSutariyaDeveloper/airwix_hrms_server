@@ -37,8 +37,65 @@ const createConnectionByPrefix = (prefix) => {
           }
         } : false,
       timezone: '+05:30',
+      pool: {
+        max: 25,
+        min: 2,
+        acquire: 60000,
+        idle: 10000
+      }
     }
   );
+
+  const modifyCompanyId = (options) => {
+    if (!options.where) return;
+    
+    let getContext;
+    try {
+      getContext = require("../utils/requestContext").getContext;
+    } catch (e) {
+      return;
+    }
+    
+    const ctx = getContext();
+    if (ctx && ctx.selected_company_ids && ctx.selected_company_ids.length > 0) {
+      const activeCompanyIds = ctx.selected_company_ids.map(Number);
+      
+      if (options.where.company_id !== undefined) {
+        let requested = [];
+        if (Array.isArray(options.where.company_id)) {
+          requested = options.where.company_id;
+        } else if (options.where.company_id && typeof options.where.company_id === 'object') {
+          const keys = Object.getOwnPropertySymbols(options.where.company_id);
+          const opInSymbol = keys.find(sym => sym.toString().includes('in'));
+          const opEqSymbol = keys.find(sym => sym.toString().includes('eq'));
+          
+          if (opInSymbol && Array.isArray(options.where.company_id[opInSymbol])) {
+            requested = options.where.company_id[opInSymbol];
+          } else if (opEqSymbol) {
+            requested = [options.where.company_id[opEqSymbol]];
+          } else {
+            if (Array.isArray(options.where.company_id.in)) {
+              requested = options.where.company_id.in;
+            } else if (options.where.company_id.eq) {
+              requested = [options.where.company_id.eq];
+            } else {
+              return;
+            }
+          }
+        } else {
+          requested = [options.where.company_id];
+        }
+        
+        const isPrimaryQuery = requested.some(id => Number(id) === Number(ctx.company_id));
+        if (isPrimaryQuery) {
+          options.where.company_id = activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Sequelize.Op.in]: activeCompanyIds };
+        }
+      }
+    }
+  };
+
+  sequelize.addHook('beforeFind', modifyCompanyId);
+  sequelize.addHook('beforeCount', modifyCompanyId);
 
   connections[prefix] = sequelize;
   return sequelize;

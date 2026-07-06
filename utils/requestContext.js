@@ -10,6 +10,7 @@ function getContext() {
     return {
       user_id: null,
       company_id: null,
+      selected_company_ids: [],
       organization_id: null,
       branch_id: null,
       branch_access: [],
@@ -30,6 +31,7 @@ function getContext() {
   return {
     user_id: store.userId,
     company_id: store.companyId,
+    selected_company_ids: store.selectedCompanyIds || [],
     organization_id: store.organizationId,
     branch_id: store.branchId,
     branch_access: store.branchAccess,

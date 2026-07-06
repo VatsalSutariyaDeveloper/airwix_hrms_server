@@ -177,7 +177,8 @@ async function authMiddleware(req, res, next) {
       is_admin: decoded.is_admin || decoded.role_key === constants.ROLE_KEYS.ADMIN,
       access: decoded.access || (decoded.role_key ? "employee" : "attendance"),
       device_id: decoded.device_id || null,
-      fcm_token: decoded.fcm_token || null
+      fcm_token: decoded.fcm_token || null,
+      selectedCompanyIds: decoded.selectedCompanyIds || null
     };
 console.log("req.user",req.user)
     requestContext.run(
@@ -185,6 +186,7 @@ console.log("req.user",req.user)
         userId: decoded.id,
         employeeId: decoded.employee_id,
         companyId: decoded.company_id,
+        selectedCompanyIds: decoded.selectedCompanyIds || [],
         organizationId: decoded.organization_id || null, // Link organizationId to context
         branchId: decoded.branch_id,
         branchAccess: decoded.branch_access || "",

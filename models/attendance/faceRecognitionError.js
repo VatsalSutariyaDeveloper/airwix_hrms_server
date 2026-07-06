@@ -21,6 +21,11 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         comment: "Stores array of face matches (employee name and match score)"
       },
+      face_vector: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        comment: "Stores the face embeddings vector"
+      },
       message: {
         type: DataTypes.TEXT,
         allowNull: true,

@@ -153,10 +153,14 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
   const hasUserField = !model || !model.rawAttributes || !!model.rawAttributes.user_id;
 
   if (tenantConfig === true) {
-    if (ctx.company_id && hasCompanyField) {
+    const activeCompanyIds = (ctx.selected_company_ids && ctx.selected_company_ids.length > 0)
+      ? ctx.selected_company_ids.map(Number)
+      : (ctx.company_id ? [Number(ctx.company_id)] : []);
+
+    if (activeCompanyIds.length > 0 && hasCompanyField) {
       if (where.company_id === undefined) {
-        where.company_id = ctx.company_id;
-      } else if (!ctx.is_super_admin) {
+        where.company_id = activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds };
+      } else {
         let requested = [];
         if (Array.isArray(where.company_id)) {
           requested = where.company_id;
@@ -165,8 +169,14 @@ async function buildWhere(whereInput, tenantConfig = true, skipStatus = false, m
         } else {
           requested = [where.company_id];
         }
-        const intersected = requested.filter(id => Number(id) === Number(ctx.company_id));
-        where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : ctx.company_id;
+        
+        const isPrimaryQuery = requested.some(id => Number(id) === Number(ctx.company_id));
+        if (isPrimaryQuery) {
+          where.company_id = activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds };
+        } else {
+          const intersected = requested.filter(id => activeCompanyIds.includes(Number(id)));
+          where.company_id = intersected.length > 0 ? { [Op.in]: intersected } : (activeCompanyIds.length === 1 ? activeCompanyIds[0] : { [Op.in]: activeCompanyIds });
+        }
       }
     }
     if (enable_branch_wise_data === "true" || enable_branch_wise_data === true) {

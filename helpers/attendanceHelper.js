@@ -2360,7 +2360,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // If last punch is IN, check if policy requires a punch out
     if (template && template.require_punch_out) {
       if (hasShiftEnded) {
-        status = 14; // MISS PUNCH
+        status = 10; // MISS PUNCH
         autoAbsentReason = "Miss Punch: Mandatory punch-out missing";
       } else {
         status = 0; // PRESENT (Currently Working)
@@ -2378,7 +2378,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
     if (hasOutOnly) {
       if (template && template.require_punch_out && hasShiftEnded) {
-        status = 14; // MISS PUNCH
+        status = 10; // MISS PUNCH
         autoAbsentReason = "Miss Punch: Mandatory punch-in missing";
       } else {
         status = 0; // PRESENT
@@ -2654,7 +2654,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     // Automated/Cron runs use user_id 0 or undefined. We only allow rebuilding if current status is Absent (5), Incomplete (9), or Not Marked (10).
     // Additionally, we do NOT skip if the day has a missing punch-in or punch-out.
     const isCronRun = (meta.user_id === 0 || meta.user_id === undefined);
-    const isSpecialStatus = [5, 9, 10].includes(parseInt(existingDay2.status));
+    const isSpecialStatus = [5, 9, 10, 14].includes(parseInt(existingDay2.status));
     const hasMissingPunch = (existingDay2.first_in === null && existingDay2.last_out !== null) || (existingDay2.first_in !== null && existingDay2.last_out === null);
     const statusChangedAndAutomated = (status !== parseInt(existingDay2.status)) && (!existingDay2.user_id || existingDay2.user_id === 0);
 

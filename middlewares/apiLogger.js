@@ -50,7 +50,7 @@ const apiLogger = async (req, res, next) => {
       const logData = {
         company_id: store?.companyId || null,
         branch_id: store?.branchId || null,
-        user_id: store?.userId || null,
+        user_id: (store?.access === 'attendance' || store?.access === 'canteen') ? null : (store?.userId || null),
         method: req.method,
         url: req.originalUrl,
         status_code: res.statusCode,
