@@ -336,7 +336,7 @@ exports.getById = async (req, res) => {
                 {
                     model: Employee,
                     as: "employee",
-                    attributes: ["id", "first_name", "employee_code"],
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id"],
                     include: [
                         { model: EmployeeAttendanceTemplate, as: "employeeAttendanceTemplate", where: { status: 0 }, required: false },
                         { model: AttendanceTemplate, as: "attendanceTemplate", required: false }

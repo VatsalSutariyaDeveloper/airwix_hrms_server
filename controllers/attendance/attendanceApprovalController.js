@@ -6,38 +6,30 @@ const { isUserAuthorizedForStage, resolvePendingApprovers } = require('../../hel
 const { Op } = Sequelize;
 
 async function getAttendanceApprovalConfig(companyId) {
-  const companySettings = await getCompanySetting(companyId);
+  const { CompanySettings } = require('../../models');
+  const configRecord = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "attendance_approval_config" }, {}, null, false, false);
+  let config = configRecord ? configRecord.settings_value : [];
+  if (typeof config === "string") {
+    try {
+      config = JSON.parse(config);
+    } catch (e) {
+      config = [];
+    }
+  }
+  if (config && !Array.isArray(config) && typeof config === "object" && Array.isArray(config.approval_config)) {
+    config = config.approval_config;
+  }
+
   let maxLevel = 1;
-  let configArray = [];
+  let configArray = Array.isArray(config) ? config : [];
 
-  if (companySettings) {
-    let hasLevel =
-      companySettings.attendance_approval_level !== undefined &&
-      companySettings.attendance_approval_level !== null &&
-      companySettings.attendance_approval_level !== '';
+  const levelRecord = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "attendance_approval_level" }, {}, null, false, false);
+  const hasLevel = levelRecord && levelRecord.settings_value !== undefined && levelRecord.settings_value !== null && levelRecord.settings_value !== '';
 
-    if (hasLevel) {
-      maxLevel = Number(companySettings.attendance_approval_level);
-    }
-
-    let config = companySettings.attendance_approval_config;
-    if (typeof config === 'string') {
-      try {
-        config = JSON.parse(config);
-      } catch (e) {
-        config = [];
-      }
-    }
-    if (config && !Array.isArray(config) && typeof config === 'object' && Array.isArray(config.approval_config)) {
-      config = config.approval_config;
-    }
-    if (Array.isArray(config)) {
-      configArray = config;
-    }
-
-    if (!hasLevel && configArray.length > 0) {
-      maxLevel = Math.max(...configArray.map(c => Number(c.level || 0)), 1);
-    }
+  if (hasLevel) {
+    maxLevel = Number(levelRecord.settings_value);
+  } else if (configArray.length > 0) {
+    maxLevel = Math.max(...configArray.map(c => Number(c.level || 0)), 1);
   }
 
   return { maxLevel, config: configArray };
@@ -218,17 +210,20 @@ exports.approveRequest = async (req, res) => {
     }
 
     // Fetch config for total levels
+    const { CompanySettings } = require('../../models');
     const config = await commonQuery.findOneRecord(
-      CompanyConfigration,
+      CompanySettings,
       {
         company_id: req.user.company_id,
-        setting_key: 'attendance_approval_level',
+        settings_name: 'attendance_approval_level',
       },
       {},
       t,
+      false, // skipStatus
+      false, // tenantConfig
     );
 
-    const maxLevel = config && config.setting_value ? parseInt(config.setting_value) : 1;
+    const maxLevel = config && config.settings_value ? parseInt(config.settings_value) : 1;
     const currentLevel = approvalReq.current_level || 1;
 
     let history = approvalReq.approval_history || [];

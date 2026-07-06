@@ -196,7 +196,7 @@ exports.getById = async (req, res) => {
         const { id } = req.params;
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {
             include: [
-                { model: Employee, as: "employee", attributes: ["first_name", "employee_code"] },
+                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id"] },
                 { model: ExpenseType, as: "expenseType", attributes: ["name"] },
                 {
                     model: ReimbursementItem,

@@ -1055,7 +1055,7 @@ exports.getById = async (req, res) => {
         const { id } = req.params;
         const leaveRequest = await commonQuery.findOneRecord(LeaveRequest, { id }, {
             include: [
-                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "leave_template"] },
+                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "leave_template", "reporting_manager", "attendance_supervisor", "company_id"] },
                 { model: LeaveTemplateCategory, as: "category" },
                 { model: User, as: "approvedBy", attributes: ["id", "user_name"], required: false }
             ]

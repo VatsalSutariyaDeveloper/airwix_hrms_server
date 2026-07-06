@@ -171,6 +171,42 @@ if (cluster.isMaster) {
     });
   };
 
+  const syncPostgresSequences = async (sequelizeInstance) => {
+    if (sequelizeInstance.options.dialect !== 'postgres') return;
+    
+    try {
+      const [results] = await sequelizeInstance.query(`
+        SELECT 
+          tc.table_name, 
+          kcu.column_name,
+          pg_get_serial_sequence(tc.table_name, kcu.column_name) AS sequence_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu 
+          ON tc.constraint_name = kcu.constraint_name 
+          AND tc.table_schema = kcu.table_schema
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_schema = 'public'
+          AND pg_get_serial_sequence(tc.table_name, kcu.column_name) IS NOT NULL;
+      `);
+
+      for (const row of results) {
+        const { table_name, column_name, sequence_name } = row;
+        await sequelizeInstance.query(`
+          SELECT setval(
+            :sequence, 
+            COALESCE((SELECT MAX("${column_name}") FROM "${table_name}"), 0) + 1, 
+            false
+          );
+        `, {
+          replacements: { sequence: sequence_name }
+        });
+      }
+      console.log("🔄 Automatically synchronized all Postgres sequences.");
+    } catch (err) {
+      console.error("⚠️ Failed to auto-sync Postgres sequences:", err.message);
+    }
+  };
+
   const DB_SYNC_ENABLED = process.env.DB_SYNC === "true";
   if (DB_SYNC_ENABLED) {
     const { createConnectionByPrefix } = require("./config/database");
@@ -178,7 +214,11 @@ if (cluster.isMaster) {
     if (process.env.DB_NAME && !prefixes.includes('')) prefixes.push('');
 
     console.log(`🛠️  DB_SYNC is ENABLED. Syncing ${prefixes.length} environments...`);
-    Promise.all(prefixes.map(prefix => createConnectionByPrefix(prefix).sync()))
+    Promise.all(prefixes.map(async (prefix) => {
+      const connection = createConnectionByPrefix(prefix);
+      await connection.sync();
+      await syncPostgresSequences(connection);
+    }))
       .then(() => {
         console.log("✅ Database checks complete.");
         startServer();

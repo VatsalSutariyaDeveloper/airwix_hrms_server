@@ -297,8 +297,12 @@ async function resolvePendingApprovers(request, type) {
         let employee = request.employee;
         const employeeId = request.employee_id || (employee && employee.id);
 
-        // 1. Fetch complete employee details if missing (Optimized to only include needed templates)
-        if (!employee && employeeId) {
+        const needsLeaveTemplate = type === "LEAVE" && (!employee || !employee.leaveTemplate);
+        const needsAttendanceTemplate = (type === "OUT_DUTY" || type === "REGULARIZATION" || type === "ATTENDANCE_APPROVAL") && (!employee || (!employee.employeeAttendanceTemplate && !employee.attendanceTemplate));
+        const needsResignationTemplate = type === "RESIGNATION" && (!employee || !employee.resignationTemplate);
+
+        // 1. Fetch complete employee details if missing or template is missing
+        if ((!employee || needsLeaveTemplate || needsAttendanceTemplate || needsResignationTemplate) && employeeId) {
             employee = await commonQuery.findOneRecord(Employee, { id: employeeId }, {
                 include: [
                     { model: LeaveTemplate, as: "leaveTemplate" },
@@ -350,16 +354,25 @@ async function resolvePendingApprovers(request, type) {
             }
 
             case "REGULARIZATION": {
-                // Fetches regularization approval config from company settings
-                const regularizationSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "regularization_approval_config" });
-                rawConfig = regularizationSettings ? (regularizationSettings.settings_value || []) : [];
+                const configRecord = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "regularization_approval_config" }, {}, null, false, false);
+                let config = configRecord ? configRecord.settings_value : [];
+                if (typeof config === "string") {
+                    try { config = JSON.parse(config); } catch (e) { config = []; }
+                }
+                rawConfig = config;
                 break;
             }
 
             case "ATTENDANCE_APPROVAL": {
-                // Fetches attendance approval config from company settings
-                const attendanceSettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "attendance_approval_config" });
-                rawConfig = attendanceSettings ? (attendanceSettings.settings_value || []) : [];
+                const configRecord = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "attendance_approval_config" }, {}, null, false, false);
+                let config = configRecord ? configRecord.settings_value : [];
+                if (typeof config === "string") {
+                    try { config = JSON.parse(config); } catch (e) { config = []; }
+                }
+                if (config && !Array.isArray(config) && typeof config === "object" && Array.isArray(config.approval_config)) {
+                    config = config.approval_config;
+                }
+                rawConfig = config;
                 break;
             }
         }
@@ -372,24 +385,31 @@ async function resolvePendingApprovers(request, type) {
         if (!Array.isArray(config)) config = [];
 
         // 4. Identify the Required Approver Role for the Current Level
-        // Defaults to "REPORTING_MANAGER" to prevent the duplicate "ANYONE" bug
-        const stage = config.find(c => c.level === currentLevel) || { type: "REPORTING_MANAGER", label: `Level ${currentLevel}` };
+        // Defaults to "ANYONE" to allow Reporting Manager, Attendance Supervisor, Admin, and Super Admin to approve
+        const stage = config.find(c => Number(c.level) === Number(currentLevel)) || {
+            type: currentLevel > 1 ? "ADMIN" : "ANYONE",
+            label: `Level ${currentLevel}`
+        };
         label = stage.label || `Level ${currentLevel}`;
 
+        let stageType = (stage.type || "REPORTING_MANAGER").toString().toUpperCase();
+        if (stageType === "3") stageType = "REPORTING_MANAGER";
+        if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
+
         // 5. Build the pending_with Array based on the identified stage type
-        if (stage.type === "REPORTING_MANAGER" && employee.reporting_manager) {
+        if (stageType === "REPORTING_MANAGER" && employee.reporting_manager) {
             const info = await getApproverInfo(employee.reporting_manager, companyId);
             if (info) approvers.push({ ...info, type: "Reporting Manager" });
 
-        } else if (stage.type === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
+        } else if (stageType === "ATTENDANCE_SUPERVISOR" && employee.attendance_supervisor) {
             const info = await getApproverInfo(employee.attendance_supervisor, companyId);
             if (info) approvers.push({ ...info, type: "Attendance Supervisor" });
 
-        } else if (stage.type === "ADMIN" || stage.type === "EMPLOYER") {
+        } else if (stageType === "ADMIN" || stageType === "EMPLOYER") {
             const admins = await getAdmins(companyId);
-            admins.forEach(admin => approvers.push({ ...admin, type: stage.type === "EMPLOYER" ? "Employer" : "Admin" }));
+            admins.forEach(admin => approvers.push({ ...admin, type: stageType === "EMPLOYER" ? "Employer" : "Admin" }));
 
-        } else if (stage.type === "ANYONE") {
+        } else if (stageType === "ANYONE") {
             const addedUserIds = new Set();
             if (employee.reporting_manager) {
                 const info = await getApproverInfo(employee.reporting_manager, companyId);
@@ -444,11 +464,11 @@ function getNextApprovalState({
     bypassOptions = {}
 }) {
     const isApproved = String(targetStatus) === String(statusMapping.APPROVED) || targetStatus === "APPROVED";
-    
+
     let newStatus;
     let newLevel = currentLevel;
     let isBypass = false;
-    
+
     if (isApproved) {
         if (currentLevel < totalLevels && !isSuperAdmin) {
             newStatus = statusMapping.PARTIALLY_APPROVED;
@@ -466,15 +486,15 @@ function getNextApprovalState({
         const isRejected = targetStatus === "REJECTED" || String(targetStatus) === String(statusMapping.REJECTED);
         newStatus = isRejected ? statusMapping.REJECTED : statusMapping.CANCELLED;
     }
-    
+
     const updatedHistory = [...(approvalHistory || [])];
-    
+
     if (historyItem) {
         const itemToPush = { ...historyItem };
-        
+
         if (isBypass) {
             const noteText = bypassOptions.note || "Bypassed remaining levels via Super Admin";
-            
+
             if (bypassOptions.attachToNewItem) {
                 itemToPush.note = noteText;
             } else if (bypassOptions.attachToPreviousItem && updatedHistory.length > 0) {
@@ -484,15 +504,15 @@ function getNextApprovalState({
                 };
             }
         }
-        
+
         updatedHistory.push(itemToPush);
-        
+
         // Default bypass mode (after push, like leave / reimbursement)
         if (isBypass && !bypassOptions.attachToNewItem && !bypassOptions.attachToPreviousItem && updatedHistory.length > 0) {
             updatedHistory[updatedHistory.length - 1].note = bypassOptions.note || "Bypassed remaining levels via Super Admin";
         }
     }
-    
+
     return {
         newStatus,
         newLevel,
@@ -525,36 +545,38 @@ function isUserAuthorizedForStage({
     if (isSuperAdmin && !isOwnRequest) {
         return true;
     }
-    
+
     let type = (stageType || "ANYONE").toString().toUpperCase();
     if (type === "3") type = "REPORTING_MANAGER";
     if (type === "4") type = "ATTENDANCE_SUPERVISOR";
-    
+
     const managerId = useEmployeeIdForManager ? user.employee_id : user.id;
     const supervisorId = useEmployeeIdForManager ? user.employee_id : user.id;
     const isAdmin = user.role_key === 'ADMIN' || user.is_admin || isSuperAdmin;
-    
+
     const isMatchReportingManager = employee.reporting_manager === managerId;
     const isMatchAttendanceSupervisor = employee.attendance_supervisor === supervisorId;
-    
+
     switch (type) {
         case 'REPORTING_MANAGER':
+            if (allowCrossRoleManagerSupervisor) {
+                return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
+            }
+            return isMatchReportingManager || isAdmin;
+
         case 'ATTENDANCE_SUPERVISOR':
             if (allowCrossRoleManagerSupervisor) {
-                return isMatchReportingManager || isMatchAttendanceSupervisor;
+                return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
             }
-            return (
-                ((user.role_key === 'REPORTING_MANAGER' || user.is_reporting_manager) && isMatchReportingManager) ||
-                ((user.role_key === 'ATTENDANCE_SUPERVISOR' || user.is_attendance_supervisor) && isMatchAttendanceSupervisor)
-            );
-            
+            return isMatchAttendanceSupervisor || isAdmin;
+
         case 'ADMIN':
         case 'EMPLOYER':
             return isAdmin;
-            
+
         case 'ANYONE':
             return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
-            
+
         default:
             return false;
     }
