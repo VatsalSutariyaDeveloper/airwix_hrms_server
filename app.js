@@ -124,6 +124,11 @@ if (cluster.isMaster) {
   app.use("/api/auth", authRoutes);
   // Master Admin routes — use their own authentication (X-Master-Admin-Key header)
   app.use("/api/master-admin", masterAdminRoutes);
+
+  // Public visitor pass route (no authentication required)
+  const visitorController = require("./controllers/visitorController");
+  app.get("/api/public/visitor/pass/:id", visitorController.getPublicPass);
+
   app.use(authMiddleware);
   app.use(checkPermission);
 

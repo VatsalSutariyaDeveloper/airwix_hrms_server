@@ -32,6 +32,15 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       defaultValue: 0,
       comment: "1: Checked In, 3: Checked Out"
+    },
+    visitor_photo_url: {
+      type: DataTypes.VIRTUAL,
+      get() {
+        const photo = this.getDataValue("visitor_photo");
+        if (!photo) return null;
+        const fileServerUrl = process.env.FILE_SERVER_URL || "";
+        return `${fileServerUrl}visitor_passes/${photo}`;
+      }
     }
   }, {
     tableName: "visitor_attendance",

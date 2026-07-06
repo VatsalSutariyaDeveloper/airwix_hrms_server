@@ -12,5 +12,6 @@ router.post("/punch-out/:id", visitorController.punchOut);
 router.put("/update/:id", bufferImage("visitor_photo"), visitorController.updatePass);
 router.delete("/delete/:id", visitorController.deletePass);
 router.post("/cancel/:id", visitorController.cancelPass);
+router.post("/send-pass/:id", visitorController.sendPass);
 
 module.exports = router;

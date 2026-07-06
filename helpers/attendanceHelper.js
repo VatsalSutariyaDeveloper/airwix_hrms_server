@@ -360,15 +360,55 @@ async function punch(employeeId, meta, transaction = null) {
         id: lastPunchGlobal.day_id,
       }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
 
-      // Calculate time difference and same-day calendar check
-      const hoursSinceLast = Math.abs(dayjs(now).diff(dayjs(lastPunchGlobal.punch_time), "hour", true));
-      const isSameDay = dayjs(now).format("YYYY-MM-DD") === dayjs(lastPunchGlobal.punch_time).format("YYYY-MM-DD");
-      const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
+      // 🚀 Rule: Calculate cutoff based on the FIRST punch of this logical day
+      const firstPunch = await commonQuery.findOneRecord(AttendancePunch, {
+        day_id: lastPunchGlobal.day_id,
+        status: 0
+      }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
 
-      if (isSameDay || hoursSinceLast < shiftCutoffHours) {
+      const startTime = firstPunch ? firstPunch.punch_time : lastPunchGlobal.punch_time;
+      const lastInDate = dayjs(startTime).format("YYYY-MM-DD");
+
+      const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
+      let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
+
+      // CHECK IF OVERTIME ALLOWED
+      const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
+
+      // GET SHIFT DETAILS IF AVAILABLE
+      let hasShift = false;
+      let shiftEnd = null;
+      console.log(`[Punch] Last Punch Day: ${lastInDate} | Shift ID: ${lastInDay ? lastInDay.shift_id : 'N/A'} | Overtime Allowed: ${isOvertimeAllowed}`);
+      if (lastInDay && lastInDay.shift_id) {
+        const lastShift = await commonQuery.findOneRecord(ShiftTemplate, { id: lastInDay.shift_id, company_id: employee.company_id }, {
+          attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
+        }, transaction, false, {});
+        if (lastShift) {
+          hasShift = true;
+          shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+          if (lastShift.end_time < lastShift.start_time) {
+            shiftEnd = shiftEnd.add(1, 'day');
+          }
+        }
+      }
+
+      // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
+      if (hasShift) {
+        if (isOvertimeAllowed) {
+          const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+          cutoffTime = otCutoff;
+          console.log(`[Punch] Overtime Allowed: Using template max overtime mins. Shift End: ${shiftEnd.format('HH:mm')}, OT Cutoff: ${otCutoff.format('HH:mm')}`);
+        } else {
+          const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
+          cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
+          console.log(`[Punch] Overtime Not Allowed: Using shift cutoff hours. Shift End: ${shiftEnd.format('HH:mm')}, Cutoff: ${cutoffTime.format('HH:mm')}`);
+        }
+      }
+
+      if (dayjs(now).isBefore(cutoffTime)) {
         isWithinLogicalDay = true;
         punchType = lastPunchGlobal.punch_type === "IN" ? "OUT" : "IN";
-        console.log(`[Punch] Toggle Decision: last=${lastPunchGlobal.punch_type} (hours elapsed: ${hoursSinceLast.toFixed(2)}, sameDay: ${isSameDay}) -> ${punchType}`);
+        console.log(`[Punch] Toggle Decision (before cutoff ${cutoffTime.format('HH:mm')}): last=${lastPunchGlobal.punch_type} -> ${punchType}`);
       }
     }
 
