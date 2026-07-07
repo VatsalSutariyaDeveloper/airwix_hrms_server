@@ -1090,11 +1090,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let isOutDutyFullDay = false;
 
   if (approvedOutDuty) {
-    if (approvedOutDuty.start_date === date && approvedOutDuty.start_session !== 0) {
+    if (approvedOutDuty.start_date === date && approvedOutDuty.start_session !== 0 && approvedOutDuty.start_session !== 3) {
       isOutDutyHalfDay = true;
-    } else if (approvedOutDuty.end_date === date && approvedOutDuty.end_session !== 0) {
+    } else if (approvedOutDuty.end_date === date && approvedOutDuty.end_session !== 0 && approvedOutDuty.end_session !== 3) {
       isOutDutyHalfDay = true;
-    } else if (parseFloat(approvedOutDuty.total_days) < 1 && approvedOutDuty.start_date === approvedOutDuty.end_date) {
+    } else if (parseFloat(approvedOutDuty.total_days) < 1) {
       isOutDutyHalfDay = true;
     } else {
       isOutDutyFullDay = true;
@@ -1130,10 +1130,23 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         meta.skipFineCalculation = true;
         meta.skipOvertimeCalculation = true;
       } else {
-        meta.forcedStatus = 13; // HALF_OUT_DUTY
-        // For half day out duty, we WANT to calculate fine and OT
-        meta.skipFineCalculation = false;
-        meta.skipOvertimeCalculation = false;
+        const firstInPunch = allDayPunches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
+        const lastOutPunch = [...allDayPunches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
+        let punchDurationMins = 0;
+        if (firstInPunch && lastOutPunch) {
+          punchDurationMins = dayjs(lastOutPunch.punch_time).diff(dayjs(firstInPunch.punch_time), 'minute');
+        }
+
+        const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
+        if (punchDurationMins >= minFullDay) {
+          meta.forcedStatus = 12; // Upgrade to full OUT_DUTY since worked minutes cover a full day
+          meta.skipFineCalculation = true;
+          meta.skipOvertimeCalculation = true;
+        } else {
+          meta.forcedStatus = 13; // HALF_OUT_DUTY
+          meta.skipFineCalculation = false;
+          meta.skipOvertimeCalculation = false;
+        }
       }
     }
   }
@@ -2844,7 +2857,21 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   }
 
   // Support for Multiple Punches
-  if (meta.punches && Array.isArray(meta.punches)) {
+  if (meta.punches && Array.isArray(meta.punches) && meta.punches.length > 0) {
+    if (employee) {
+      const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+      if (template && !template.allow_multiple_punches) {
+        const inPunches = meta.punches.filter(p => p.punch_type === 'IN');
+        const outPunches = meta.punches.filter(p => p.punch_type === 'OUT');
+        const filteredPunches = [];
+        if (inPunches.length > 0) filteredPunches.push(inPunches[0]);
+        if (outPunches.length > 0) filteredPunches.push(outPunches[outPunches.length - 1]);
+        meta.punches = filteredPunches;
+      }
+    }
+  }
+
+  if (meta.punches && Array.isArray(meta.punches) && meta.punches.length > 0) {
     // Fetch all existing punches for this day
     const existingPunches = await commonQuery.findAllRecords(AttendancePunch, {
       day_id: dayId,

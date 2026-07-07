@@ -407,7 +407,7 @@ async function resolvePendingApprovers(request, type) {
 
         } else if (stageType === "ADMIN" || stageType === "EMPLOYER") {
             const admins = await getAdmins(companyId);
-            admins.forEach(admin => approvers.push({ ...admin, type: stageType === "EMPLOYER" ? "Employer" : "Admin" }));
+            admins.forEach(admin => approvers.push({ ...admin, type: admin.role || (stageType === "EMPLOYER" ? "Employer" : "Admin") }));
 
         } else if (stageType === "ANYONE") {
             const addedUserIds = new Set();
@@ -420,7 +420,7 @@ async function resolvePendingApprovers(request, type) {
                 if (info) { approvers.push({ ...info, type: "Attendance Supervisor" }); addedUserIds.add(employee.attendance_supervisor); }
             }
             const admins = await getAdmins(companyId);
-            admins.forEach(admin => approvers.push({ ...admin, type: "Admin" }));
+            admins.forEach(admin => approvers.push({ ...admin, type: admin.role || "Admin" }));
         }
 
     } catch (err) {
@@ -560,22 +560,22 @@ function isUserAuthorizedForStage({
     switch (type) {
         case 'REPORTING_MANAGER':
             if (allowCrossRoleManagerSupervisor) {
-                return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
+                return isMatchReportingManager || isMatchAttendanceSupervisor || isSuperAdmin;
             }
-            return isMatchReportingManager || isAdmin;
+            return isMatchReportingManager || isSuperAdmin;
 
         case 'ATTENDANCE_SUPERVISOR':
             if (allowCrossRoleManagerSupervisor) {
-                return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
+                return isMatchReportingManager || isMatchAttendanceSupervisor || isSuperAdmin;
             }
-            return isMatchAttendanceSupervisor || isAdmin;
+            return isMatchAttendanceSupervisor || isSuperAdmin;
 
         case 'ADMIN':
         case 'EMPLOYER':
             return isAdmin;
 
         case 'ANYONE':
-            return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin;
+            return isMatchReportingManager || isMatchAttendanceSupervisor || isSuperAdmin;
 
         default:
             return false;

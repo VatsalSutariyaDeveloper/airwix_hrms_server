@@ -809,14 +809,19 @@ exports.updateAttendanceDay = async (req, res) => {
     let exemptRoles = [];
     if (settings.attendance_approval_level != null && settings.attendance_approval_level !== 'null') approvalRequired = true;
     if (settings.attendance_approval_exempt_roles) {
-      exemptRoles = typeof settings.attendance_approval_exempt_roles === 'string' ? JSON.parse(settings.attendance_approval_exempt_roles) : settings.attendance_approval_exempt_roles; 
+      exemptRoles = typeof settings.attendance_approval_exempt_roles === 'string' ? JSON.parse(settings.attendance_approval_exempt_roles) : settings.attendance_approval_exempt_roles;
     }
     console.log("settings.attendance_approval_level:", settings.attendance_approval_level, "settings.attendance_approval_exempt_roles:", settings.attendance_approval_exempt_roles);
     console.log("User Role ID:", req.user.role_id, "Is Superadmin:", req.user.is_superadmin, "Is Admin:", req.user.is_admin);
     console.log("Approval Required:", approvalRequired, "Exempt Roles:", exemptRoles);
     const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+    const isSuperAdmin = !!(
+      req.user?.is_super_admin ||
+      req.user?.role_key === 'BUSINESS_ADMIN' ||
+      req.user?.role_id === 1
+    );
 
-    if (approvalRequired && !isExempt && !req.user.is_superadmin && !req.body.is_approved_request) {
+    if (approvalRequired && !isExempt && !isSuperAdmin && !req.body.is_approved_request) {
       // Look for an existing pending request for this employee on this date
       const existingReq = await commonQuery.findOneRecord(
         AttendanceApproval,
@@ -833,7 +838,7 @@ exports.updateAttendanceDay = async (req, res) => {
         await commonQuery.updateRecordById(
           AttendanceApproval,
           existingReq.id,
-          { 
+          {
             proposed_attendance_data: req.body,
             reason: req.body.note || req.body.reason || existingReq.reason
           },
@@ -2519,7 +2524,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
   await ensureFaceRecognitionErrorSynced(req.tenantPrefix);
   const t = await sequelize.transaction();
   try {
-    console.log("Storing Face Recognition Error Log...",req.body);
+    console.log("Storing Face Recognition Error Log...", req.body);
     const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, face_vector } = req.body;
     const finalMessage = message || null;
 

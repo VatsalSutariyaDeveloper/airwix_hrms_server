@@ -1,11 +1,28 @@
 const { validateRequest, commonQuery, handleError, Op, getCompanySetting } = require("../../helpers");
 const notificationService = require("../../services/notificationService");
 const { constants } = require("../../helpers/constants");
-const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, CompanySettings } = require("../../models");
+const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, CompanySettings, AttendanceDay, AttendancePunch } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 const attendanceController = require("./attendanceController");
+
+function normalizeProposedAttendanceData(value) {
+    if (!value) return null;
+    if (typeof value === "string") {
+        try {
+            value = JSON.parse(value);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) {
+        return null;
+    }
+
+    return value;
+}
 
 
 // 1. Create Attendance Regularization  Request
@@ -29,7 +46,7 @@ exports.create = async (req, res) => {
         }
 
         await commonQuery.createRecord(
-            AttendanceRegularization ,
+            AttendanceRegularization,
             req.body,
             transaction
         );
@@ -72,6 +89,12 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
             order: [["attendance_date", "DESC"]]
         }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
+        // Fetch all attendance days to map them
+        const attDays = await commonQuery.findAllRecords(AttendanceDay, {
+            employee_id,
+            company_id: req.user.company_id
+        });
+
         // Group History by Month
         const groupedHistory = [];
         history.forEach(request => {
@@ -109,6 +132,9 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 [constants.ATTENDANCE_REGULARIZATION_STATUS.DELETED]: "#8c8c8c",
             };
 
+            const reqDateStr = dayjs(request.attendance_date).format("YYYY-MM-DD");
+            const attDay = attDays.find(d => dayjs(d.attendance_date).format("YYYY-MM-DD") === reqDateStr);
+
             group.regularizations.push({
                 id: request.id,
                 applied_date: request.createdAt,
@@ -119,7 +145,9 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 status: statusMap[request.approval_status],
                 status_color: colorMap[request.approval_status] || "#F59E0B",
                 approved_by: request.approvedBy?.user_name || null,
-                approval_remark: request.approval_remark || ""
+                approval_remark: request.approval_remark || "",
+                proposed_attendance_data: request.proposed_attendance_data,
+                attendanceDay: attDay ? attDay.get({ plain: true }) : null
             });
         });
 
@@ -315,16 +343,44 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NOT_FOUND);
         }
 
+        if (![constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING, constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED].includes(Number(request.approval_status))) {
+            await transaction.rollback();
+            return res.error("INVALID_OPERATION", { message: "Only pending or partially approved requests can be processed" });
+        }
+
+        const companyId = request.employee?.company_id || request.company_id || req.user.company_id;
+        const companySettings = await getCompanySetting(companyId);
+        const config = companySettings ? (companySettings.regularization_approval_config || []) : [];
+        const currentLevel = request.current_level || 1;
+
+        let currentStage = config.find(c => Number(c.level) === Number(currentLevel));
+        if (!currentStage) currentStage = { type: "ANYONE" };
+
+        let stageType = (currentStage.type || "").toString().toUpperCase();
+        if (stageType === "3") stageType = "REPORTING_MANAGER";
+        if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
+
+        const isOwnRequest = request.employee_id === req.user.employee_id;
+        const isAuthorized = isUserAuthorizedForStage({
+            user: req.user,
+            employee: request.employee,
+            stageType,
+            isOwnRequest
+        });
+
+        if (!isAuthorized) {
+            await transaction.rollback();
+            return res.error("UNAUTHORIZED", { message: "You are not authorized to process this request at the current stage." });
+        }
+
         let maxLevel = 1;
         if (Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED) {
-            const companyId = request.employee?.company_id || request.company_id || req.user.company_id;
-            const companySettings = await getCompanySetting(companyId);
-
             if (companySettings && companySettings.regularization_approval_level) {
                 maxLevel = Number(companySettings.regularization_approval_level);
             }
         }
 
+        const normalizedProposedAttendanceData = normalizeProposedAttendanceData(proposed_attendance_data);
         const isApproved = Number(approval_status) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED;
         const historyItem = {
             level: request.current_level || 1,
@@ -338,7 +394,11 @@ exports.updateStatus = async (req, res) => {
             targetStatus: approval_status,
             currentLevel: request.current_level || 1,
             totalLevels: maxLevel,
-            isSuperAdmin: req.user?.is_super_admin,
+            isSuperAdmin: !!(
+                req.user?.is_super_admin || 
+                req.user?.role_key === 'BUSINESS_ADMIN' || 
+                req.user?.role_id === 1
+            ),
             approvalHistory: request.approval_history || [],
             statusMapping: {
                 APPROVED: constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED,
@@ -352,14 +412,19 @@ exports.updateStatus = async (req, res) => {
             }
         });
 
-        await commonQuery.updateRecordById(AttendanceRegularization , id, {
+        const updateData = {
             approval_status: newStatus,
             current_level: newLevel,
             approval_history: updatedHistory,
             approved_by: req.user.id,
-            approval_remark: remarks || "",
-            proposed_attendance_data: proposed_attendance_data || request.proposed_attendance_data
-        }, transaction);
+            approval_remark: remarks || ""
+        };
+
+        if (normalizedProposedAttendanceData) {
+            updateData.proposed_attendance_data = normalizedProposedAttendanceData;
+        }
+
+        await commonQuery.updateRecordById(AttendanceRegularization , id, updateData, transaction);
 
         // Send Notification to Employee
         const user = await commonQuery.findOneRecord(User, { employee_id: request.employee_id }, {}, transaction);
@@ -383,7 +448,7 @@ exports.updateStatus = async (req, res) => {
         let finalProposedData = null;
 
         if (Number(newStatus) === constants.ATTENDANCE_REGULARIZATION_STATUS.APPROVED || newStatus === "APPROVED") {
-            finalProposedData = proposed_attendance_data || request.proposed_attendance_data;
+            finalProposedData = normalizedProposedAttendanceData || request.proposed_attendance_data;
             if (finalProposedData) {
                 runUpdateAttendanceDay = true;
             } else {
@@ -395,11 +460,20 @@ exports.updateStatus = async (req, res) => {
         await transaction.commit();
 
         if (runUpdateAttendanceDay && finalProposedData) {
+            let parsedProposedData = finalProposedData;
+            if (typeof parsedProposedData === "string") {
+                try {
+                    parsedProposedData = JSON.parse(parsedProposedData);
+                } catch (e) {
+                    console.error("Failed to parse proposed_attendance_data:", e);
+                }
+            }
             const mockReq = {
                 body: {
-                    ...finalProposedData,
+                    ...(parsedProposedData || {}),
                     employee_id: request.employee_id,
                     attendance_date: dayjs(request.attendance_date).format('YYYY-MM-DD'),
+                    is_approved_request: true,
                     force_status: true
                 },
                 user: {
@@ -409,11 +483,15 @@ exports.updateStatus = async (req, res) => {
                 }
             };
             const mockRes = {
-                ok: (data) => {},
+                ok: (data) => console.log("Success:", data),
                 error: (code, message) => { throw new Error(message || code); },
-                success: (msg) => {}
+                success: (msg) => console.log("Success:", msg)
             };
-            await attendanceController.updateAttendanceDay(mockReq, mockRes);
+            try {
+                await attendanceController.updateAttendanceDay(mockReq, mockRes);
+            } catch (err) {
+                console.error("Failed to run updateAttendanceDay:", err);
+            }
         }
 
         return res.success(constants.UPDATED);
@@ -447,6 +525,26 @@ exports.getById = async (req, res) => {
         if (!request) return res.error(constants.NOT_FOUND);
 
         const raw = request.get({ plain: true });
+
+        // Fetch original attendance day data if any
+        if (raw.employee_id && raw.attendance_date) {
+            const attDay = await commonQuery.findOneRecord(AttendanceDay, {
+                employee_id: raw.employee_id,
+                attendance_date: dayjs(raw.attendance_date).format('YYYY-MM-DD')
+            }, {
+                include: [
+                    {
+                        model: AttendancePunch,
+                        as: 'attendancePunches',
+                        required: false
+                    }
+                ]
+            });
+            raw.attendanceDay = attDay ? attDay.get({ plain: true }) : null;
+        } else {
+            raw.attendanceDay = null;
+        }
+
         if (raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PENDING || raw.approval_status === constants.ATTENDANCE_REGULARIZATION_STATUS.PARTIALLY_APPROVED) {
             const pendingDetails = await resolvePendingApprovers(raw, "REGULARIZATION");
             raw.pending_with = pendingDetails.pending_with;
