@@ -1600,7 +1600,8 @@ exports.getAll = async (req, res) => {
                     "profile_image",
                     "created_at",
                     "status",
-                    "onboarding_status"
+                    "onboarding_status",
+                    "aligned_face_templates"
                 ],
                 order: [["first_name", "ASC"]]
             },

@@ -2746,7 +2746,14 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       }
 
       // Validation 1: Employee must be registered with face descriptor
-      const fd = employee.face_descriptor;
+      let fd = employee.face_descriptor;
+      if (fd && typeof fd === 'string') {
+        try {
+          fd = JSON.parse(fd);
+        } catch (e) {
+          fd = null;
+        }
+      }
       const hasFD = Array.isArray(fd) && fd.length > 0;
       if (!hasFD) {
         return res.error(constants.VALIDATION_ERROR, "Employee does not have a registered face. Please register the employee's face first before resolving.");
