@@ -1,7 +1,7 @@
 const { validateRequest, commonQuery, handleError, Op, getCompanySetting } = require("../../helpers");
 const notificationService = require("../../services/notificationService");
 const { constants } = require("../../helpers/constants");
-const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, CompanySettings, AttendanceDay, AttendancePunch } = require("../../models");
+const { sequelize, AttendanceRegularization , User, Employee, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, LeaveTemplateCategory, CompanySettings, AttendanceDay, AttendancePunch } = require("../../models");
 const { rebuildAttendanceDay } = require("../../helpers/attendanceHelper");
 const dayjs = require("dayjs");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
@@ -22,6 +22,46 @@ function normalizeProposedAttendanceData(value) {
     }
 
     return value;
+}
+
+async function enrichProposedAttendanceDataList(items) {
+    if (!items) return;
+    const isArray = Array.isArray(items);
+    const itemList = isArray ? items : [items];
+
+    // Collect all unique leave category IDs
+    const leaveCategoryIds = new Set();
+    itemList.forEach(item => {
+        if (item && item.proposed_attendance_data) {
+            const leaveCategoryId = item.proposed_attendance_data.leave_category_id;
+            if (leaveCategoryId) {
+                leaveCategoryIds.add(leaveCategoryId);
+            }
+        }
+    });
+
+    if (leaveCategoryIds.size > 0) {
+        try {
+            const categories = await commonQuery.findAllRecords(LeaveTemplateCategory, {
+                id: { [Op.in]: Array.from(leaveCategoryIds) }
+            });
+            const categoryMap = {};
+            categories.forEach(cat => {
+                categoryMap[cat.id] = cat.leave_category_name;
+            });
+
+            itemList.forEach(item => {
+                if (item && item.proposed_attendance_data) {
+                    const leaveCategoryId = item.proposed_attendance_data.leave_category_id;
+                    if (leaveCategoryId && categoryMap[leaveCategoryId]) {
+                        item.proposed_attendance_data.leave_category_name = categoryMap[leaveCategoryId];
+                    }
+                }
+            });
+        } catch (err) {
+            console.error("Error enriching proposed_attendance_data leave_category_name:", err.message);
+        }
+    }
 }
 
 
@@ -97,6 +137,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
 
         // Group History by Month
         const groupedHistory = [];
+        const regularizationsList = [];
         history.forEach(request => {
             const monthYear = dayjs(request.attendance_date).format("MMM, YYYY");
             let group = groupedHistory.find(g => g.month_label === monthYear);
@@ -135,7 +176,7 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
             const reqDateStr = dayjs(request.attendance_date).format("YYYY-MM-DD");
             const attDay = attDays.find(d => dayjs(d.attendance_date).format("YYYY-MM-DD") === reqDateStr);
 
-            group.regularizations.push({
+            const regItem = {
                 id: request.id,
                 applied_date: request.createdAt,
                 date: request.attendance_date,
@@ -146,10 +187,15 @@ exports.getAttendanceRegularizationSummary = async (req, res) => {
                 status_color: colorMap[request.approval_status] || "#F59E0B",
                 approved_by: request.approvedBy?.user_name || null,
                 approval_remark: request.approval_remark || "",
-                proposed_attendance_data: request.proposed_attendance_data,
+                proposed_attendance_data: request.proposed_attendance_data ? JSON.parse(JSON.stringify(request.proposed_attendance_data)) : null,
                 attendanceDay: attDay ? attDay.get({ plain: true }) : null
-            });
+            };
+
+            group.regularizations.push(regItem);
+            regularizationsList.push(regItem);
         });
+
+        await enrichProposedAttendanceDataList(regularizationsList);
 
         return res.ok({
             regularization_summary: {
@@ -241,6 +287,8 @@ exports.getAll = async (req, res) => {
             return raw;
         }));
 
+        await enrichProposedAttendanceDataList(data.items);
+
         return res.ok(data);
     } catch (err) {
         return handleError(err, res, req);
@@ -320,6 +368,8 @@ exports.getPendingApprovals = async (req, res) => {
                 pendingForUser.push(raw);
             }
         }
+
+        await enrichProposedAttendanceDataList(pendingForUser);
 
         return res.ok(pendingForUser);
     } catch (err) {
@@ -551,6 +601,8 @@ exports.getById = async (req, res) => {
         } else {
             raw.pending_with = [];
         }
+
+        await enrichProposedAttendanceDataList(raw);
 
         return res.ok(raw);
     } catch (err) {

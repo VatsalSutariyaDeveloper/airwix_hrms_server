@@ -25,7 +25,7 @@ const LeaveTemplateCategory = sequelize.define("LeaveTemplateCategory",{
     is_compoff: {
         type: DataTypes.BOOLEAN,
         defaultValue: false,
-        comment: "true means this category is used for compensatory off credits"
+        comment: "true means this category is used for Comp-Off Leave credits"
     },
     automation_rules: { type: DataTypes.TEXT, allowNull: true },
     status: { type: DataTypes.SMALLINT, defaultValue: 0 },

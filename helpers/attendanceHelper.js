@@ -1875,7 +1875,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
     }
 
-    // --- BYPASS LATE IN / EARLY EXIT FINES FOR FLEXIBLE COMP-OFF ON WEEKLY OFF / HOLIDAY ---
+    // --- BYPASS LATE IN / EARLY EXIT FINES FOR FLEXIBLE Comp-Off Leave ON WEEKLY OFF / HOLIDAY ---
     const isPresentOnOffDayCompOffFlexible = (isWeeklyOff || isHoliday || meta.isWeeklyOff || meta.isHoliday) && (meta.isHolidayCompOff || meta.isHolidayAllowNormal || (shift && shift.shift_type === "Flexible Shift"));
     if (isPresentOnOffDayCompOffFlexible) {
       lateMinutes = 0;
@@ -2733,7 +2733,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     await recalculateMonthAbsentFines(employeeId, date, employee, transaction);
   }
 
-  // [MOD] Auto-adjust pending Comp-Off Credit Requests based on modified punch times
+  // [MOD] Auto-adjust pending Comp-Off Leave Credit Requests based on modified punch times
   if (template && template.holiday_policy === 'COMP_OFF') {
     const existingCompOffRequest = await commonQuery.findOneRecord(LeaveRequest, {
       employee_id: employeeId,
@@ -2773,11 +2773,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
       if (creditValue > 0) {
         if (parseFloat(existingCompOffRequest.total_days) !== creditValue) {
-          console.log(`[Rebuild] Updating pending Comp-Off request ${existingCompOffRequest.id} total_days to ${creditValue}`);
+          console.log(`[Rebuild] Updating pending Comp-Off Leave request ${existingCompOffRequest.id} total_days to ${creditValue}`);
           await commonQuery.updateRecordById(LeaveRequest, existingCompOffRequest.id, { total_days: creditValue }, transaction, false, {});
         }
       } else {
-        console.log(`[Rebuild] Deleting pending Comp-Off request ${existingCompOffRequest.id} as it is no longer eligible.`);
+        console.log(`[Rebuild] Deleting pending Comp-Off Leave request ${existingCompOffRequest.id} as it is no longer eligible.`);
         await LeaveRequest.destroy({ where: { id: existingCompOffRequest.id }, transaction });
       }
     }
@@ -3102,7 +3102,7 @@ async function getApproversForCompOffCredit(employeeId, currentLevel, transactio
 }
 
 /**
- * Creates notifications for the current stage approvers of a Comp-Off credit request.
+ * Creates notifications for the current stage approvers of a Comp-Off Leave credit request.
  */
 async function sendCompOffApprovalNotifications(leaveRequest, employee, transaction) {
   try {
@@ -3124,9 +3124,9 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
     const startDateStr = dayjs(leaveRequest.start_date).format('DD MMM YYYY');
 
     const title = "New Comp Off Credit Request Pending Approval";
-    const message = `${employeeName} has earned a compensatory off credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
+    const message = `${employeeName} has earned a Comp-Off Leave credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
 
-    // Fetch company settings to see if email sending for comp-off credit is enabled
+    // Fetch company settings to see if email sending for Comp-Off Leave credit is enabled
     const { getCompanySetting } = require("../helpers");
     const companySettings = await getCompanySetting(leaveRequest.company_id);
     const sendEmail = companySettings && (
@@ -3174,17 +3174,17 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
           level: leaveRequest.current_level,
           totalLevels
         }).catch(err => {
-          console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+          console.error("[Email] Failed to send Comp-Off Leave credit approval email to:", user.email, err);
         });
       }
     }
   } catch (err) {
-    console.error("Error sending comp-off approval notifications:", err);
+    console.error("Error sending Comp-Off Leave approval notifications:", err);
   }
 }
 
 /**
- * Syncs Compensatory Off credits based on working on holidays/weekly offs.
+ * Syncs Comp-Off Leave credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
   if (!employee) return;
@@ -3291,10 +3291,10 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
         }, transaction);
 
         if (attendanceDay) {
-          attendanceDay.note = "compoff leave generated";
+          attendanceDay.note = "Comp-Off Leave generated";
         }
         await AttendanceDay.update(
-          { note: "compoff leave generated" },
+          { note: "Comp-Off Leave generated" },
           { where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction }
         );
 
@@ -3344,7 +3344,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   const newCategoryId = newDay ? newDay.leave_category_id : null;
   const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
 
-  // --- COMP-OFF CREDIT LOGIC ---
+  // --- Comp-Off Leave CREDIT LOGIC ---
   if (!employee) {
     employee = await commonQuery.findOneRecord(Employee, employeeId, {
       include: [

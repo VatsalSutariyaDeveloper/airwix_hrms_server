@@ -403,7 +403,7 @@ const emailService = {
     },
 
     /**
-     * Send email notification to manager for comp-off leave credit approval
+     * Send email notification to manager for Comp-Off Leave leave credit approval
      */
     sendCompOffCreditApprovalEmail: async (data) => {
         try {
@@ -420,7 +420,7 @@ const emailService = {
             } = data;
 
             const message = `
-                A compensatory off credit request has been submitted by <strong>${employeeName}</strong> and is pending your approval.
+                A Comp-Off Leave credit request has been submitted by <strong>${employeeName}</strong> and is pending your approval.
                 
                 <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0;">
                     <table style="width: 100%; border-collapse: collapse;">
@@ -433,7 +433,7 @@ const emailService = {
                             <td style="color: #1e293b;">${date}</td>
                         </tr>
                         <tr>
-                            <td style="color: #64748b; padding: 5px 0;"><strong>Comp-off Credit Days:</strong></td>
+                            <td style="color: #64748b; padding: 5px 0;"><strong>Comp-Off Leave Credit Days:</strong></td>
                             <td style="color: #1e293b;">${totalDays} ${totalDays === 1 ? 'day' : 'days'}</td>
                         </tr>
                     </table>
@@ -454,10 +454,10 @@ const emailService = {
                 from: `${process.env.EMAIL_COMPANY_NAME || 'Airwix Payroll'} <${process.env.ADMIN_EMAIL}>`,
                 replyTo: employeeEmail ? `"${employeeName}" <${employeeEmail}>` : undefined,
                 email: approverEmail,
-                subject: `Comp-off Credit Approval Request - ${employeeName}`,
+                subject: `Comp-Off Leave Credit Approval Request - ${employeeName}`,
                 message: generateEmailTemplate({
-                    title: 'Comp-off Credit Pending Approval',
-                    subject: `Comp-off Credit Approval Request - ${employeeName}`,
+                    title: 'Comp-Off Leave Credit Pending Approval',
+                    subject: `Comp-Off Leave Credit Approval Request - ${employeeName}`,
                     userName: approverName,
                     message: message,
                     buttonText: 'View Pending Requests',
@@ -466,7 +466,7 @@ const emailService = {
             });
             return true;
         } catch (error) {
-            console.error("Failed to send comp-off credit approval email:", error);
+            console.error("Failed to send Comp-Off Leave credit approval email:", error);
             throw error;
         }
     }

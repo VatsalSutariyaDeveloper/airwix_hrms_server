@@ -2066,7 +2066,7 @@ async function getDayOffInfo(employee, date, transaction) {
 }
 
 /**
- * Syncs Compensatory Off credits based on working on holidays/weekly offs.
+ * Syncs Comp-Off Leave credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
   if (!employee) return;
@@ -2170,7 +2170,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   const newCategoryId = newDay ? newDay.leave_category_id : null;
   const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
 
-  // --- COMP-OFF CREDIT LOGIC ---
+  // --- Comp-Off Leave CREDIT LOGIC ---
   if (!employee) {
     employee = await commonQuery.findOneRecord(Employee, employeeId, {
       include: [

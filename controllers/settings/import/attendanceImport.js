@@ -48,7 +48,7 @@ const normalize = (val) => String(val || '').toLowerCase().replace(/[^a-z0-9]/g,
 const LEAVE_MAPPING = {
     'PL': { name: 'Paid Leave', isPaid: true, isCompoff: false },
     'CL': { name: 'Casual Leave', isPaid: true, isCompoff: false },
-    'COF': { name: 'Compoff Leave', isPaid: true, isCompoff: true },
+    'COF': { name: 'Comp-Off Leave', isPaid: true, isCompoff: true },
     'SOL': { name: 'Short Leave', isPaid: true, isCompoff: false, markPresent: true },
     'LV': { name: 'Leave', isPaid: true, isCompoff: false },
     'L': { name: 'Leave', isPaid: true, isCompoff: false },

@@ -895,7 +895,7 @@ exports.updateAttendanceDay = async (req, res) => {
       t
     );
 
-    // [COMBINED HOLIDAY AND WEEKLY OFF LOGIC (OVERTIME AND COMP-OFF)]
+    // [COMBINED HOLIDAY AND WEEKLY OFF LOGIC (OVERTIME AND Comp-Off Leave)]
     const salaryTemplate = emp?.employeeSalaryTemplate;
     const holidayPolicy = template ? template.holiday_policy : 'BLOCK_ATTENDANCE';
     const lwpBasis = salaryTemplate ? salaryTemplate.lwp_calculation_basis : 'WORKING_DAYS';
@@ -1515,7 +1515,7 @@ exports.deleteAttendanceDay = async (req, res) => {
       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
     }
 
-    // REMOVE ANY PENDING COMP-OFF CREDIT REQUESTS FOR THIS DAY
+    // REMOVE ANY PENDING Comp-Off Leave CREDIT REQUESTS FOR THIS DAY
     await LeaveRequest.destroy({
       where: {
         employee_id,
