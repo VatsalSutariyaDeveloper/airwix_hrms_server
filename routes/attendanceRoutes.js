@@ -7,7 +7,7 @@ const attendanceApprovalController = require("../controllers/attendance/attendan
 
 router.post("/punch", bufferImage("image"), attendanceController.attendancePunch);
 router.post("/sync-punches", attendanceController.syncPunches);
-router.post("/face-templates/sync", attendanceController.saveFaceTemplates);
+router.post("/face-templates/sync", bufferImage(), attendanceController.saveFaceTemplates);
 router.post("/summary", attendanceController.getAttendanceSummary);
 router.post("/update-day", attendanceController.updateAttendanceDay);
 router.post("/bulk-update-day", attendanceController.bulkUpdateAttendanceDay);

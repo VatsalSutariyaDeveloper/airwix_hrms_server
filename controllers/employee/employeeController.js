@@ -2777,10 +2777,7 @@ exports.registerFace = async (req, res) => {
             face_descriptor: JSON.stringify(faceDescriptors) // Store as 2D array matching images
         };
 
-        const updateProfileImg = !employee.profile_image;
-        if (updateProfileImg) {
-            updateData.profile_image = filename;
-        }
+        updateData.profile_image = filename;
 
         // Explicitly flag JSONB fields as changed to force Sequelize UPDATE
         employee.changed('registered_face_images', true);
@@ -2789,11 +2786,10 @@ exports.registerFace = async (req, res) => {
         // 5. Save the new vector directly into the database!
         await employee.update(updateData, { transaction });
 
-        if (updateProfileImg) {
-            // Synchronize with associated User
+        // Synchronize profile image with associated User
+        {
             const associatedUser = await commonQuery.findOneRecord(User, { employee_id: employeeId }, {}, transaction);
-            if (associatedUser && !associatedUser.profile_image) {
-                // Copy photo to USER_IMG_FOLDER to keep both URLs functional
+            if (associatedUser) {
                 const srcPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
                 const destDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
                 const destPath = path.join(destDir, filename);
