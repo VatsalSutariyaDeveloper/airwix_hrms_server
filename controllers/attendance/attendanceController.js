@@ -2734,8 +2734,42 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Face recognition error log not found");
     }
 
+    const empId = parseInt(employee_id);
+    const vec = faceError.face_vector;
+
+    // Validate before marking as resolved
+    if (empId) {
+      await ensureAlignedTemplatesColumn();
+      const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+      if (!employee) {
+        return res.error(constants.NOT_FOUND, "Employee not found");
+      }
+
+      // Validation 1: Employee must be registered with face descriptor
+      const fd = employee.face_descriptor;
+      const hasFD = Array.isArray(fd) && fd.length > 0;
+      if (!hasFD) {
+        return res.error(constants.VALIDATION_ERROR, "Employee does not have a registered face. Please register the employee's face first before resolving.");
+      }
+
+      // Validation 2: The error face must belong to the same person
+      if (Array.isArray(vec) && vec.length >= 10) {
+        const enrolledVectors = Array.isArray(fd[0]) ? fd : [fd];
+        let bestSim = 0;
+        for (const enrolled of enrolledVectors) {
+          if (!Array.isArray(enrolled) || enrolled.length < 10) continue;
+          const sim = adaptiveCosineSim(vec, enrolled);
+          if (sim > bestSim) bestSim = sim;
+        }
+        if (bestSim < 0.45) {
+          return res.error(constants.VALIDATION_ERROR, `This face does not match the selected employee (similarity: ${(bestSim * 100).toFixed(1)}%). Please select the correct employee.`);
+        }
+      }
+    }
+
+    // All validations passed — now mark as resolved
     const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
-    if (employee_id) updateData.employee_id = parseInt(employee_id);
+    if (employee_id) updateData.employee_id = empId;
 
     await commonQuery.updateRecordById(
       FaceRecognitionError,
@@ -2746,16 +2780,13 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       { company_id: true }
     );
 
-    const empId = parseInt(employee_id);
-    const vec = faceError.face_vector;
     if (empId) {
       try {
-        await ensureAlignedTemplatesColumn();
         const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
-        if (employee) {
+        {
           const empUpdateData = {};
 
-          // A. Store the face_vector in aligned_face_templates (keeping original logic intact)
+          // A. Store the face_vector in aligned_face_templates
           if (Array.isArray(vec) && vec.length >= 10) {
             let list = Array.isArray(employee.aligned_face_templates)
               ? [...employee.aligned_face_templates] : [];
@@ -2846,52 +2877,13 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             await employee.update(empUpdateData);
           }
           console.log(`[Resolve→Template] ✅ Emp #${empId} verification synchronized.`);
-        }
+        } // end block
       } catch (tplErr) {
         console.error(`[Resolve→Template] ⚠️ Failed to save template/image for emp #${empId}:`, tplErr.message);
       }
     }
 
     return res.ok({ message: "Face recognition error status updated successfully" });
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-
-/**
- * Verified Face Errors (v2 kiosks) — resolved audits with admin-confirmed
- * identity, pulled by kiosks to learn templates for users who keep failing.
- */
-exports.getVerifiedFaceErrors = async (req, res) => {
-  try {
-    const afterId = parseInt(req.body.after_id) || 0;
-
-    const rows = await FaceRecognitionError.findAll({
-      where: {
-        id: { [Op.gt]: afterId },
-        status: 1,
-        employee_id: { [Op.ne]: null },
-        company_id: req.user.company_id,
-      },
-      attributes: ['id', 'employee_id', 'image', ['face_vector', 'vector']],
-      order: [['id', 'ASC']],
-      limit: 20,
-      raw: true,
-    });
-
-    const folder = constants.FACE_ERROR_FOLDER || "employee/face_errors/";
-    const items = rows.map(r => ({
-      id: r.id,
-      employee_id: r.employee_id,
-      image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
-      vector: r.vector || null,
-    }));
-
-    if (items.length > 0) {
-      console.log(`[VerifiedAudits] 📤 Sent ${items.length} verified audit(s) after #${afterId} to device (user #${req.user.id})`);
-    }
-
-    return res.success(constants.ACTION_SUCCESSFUL, { items });
   } catch (err) {
     return handleError(err, res, req);
   }
