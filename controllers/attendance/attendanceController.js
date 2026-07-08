@@ -53,6 +53,9 @@ async function ensureAlignedTemplatesColumn() {
   await sequelize.query(
     'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_templates JSONB'
   );
+  await sequelize.query(
+    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_images JSONB'
+  );
 }
 
 /**
@@ -117,6 +120,10 @@ exports.saveFaceTemplates = async (req, res) => {
 
       let list = Array.isArray(employee.aligned_face_templates)
         ? [...employee.aligned_face_templates] : [];
+      let imgList = Array.isArray(employee.aligned_face_images)
+        ? [...employee.aligned_face_images] : [];
+      // Ensure parallel arrays are same length (pad with null if out of sync)
+      while (imgList.length < list.length) imgList.push(null);
 
       let dup = false;
       for (const t of list) {
@@ -124,34 +131,44 @@ exports.saveFaceTemplates = async (req, res) => {
       }
       if (dup) continue;
 
-      list.push(vec);
-      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
-
-      const empUpdateData = { aligned_face_templates: list };
-      employee.changed('aligned_face_templates', true);
-
-      // Save the face image to registered_face_images for visual audit
+      // Save the face image for audit trail
+      let savedFilename = null;
       const imageFile = imageMap[`templates[${i}][image]`];
+      const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
       if (imageFile && imageFile.buffer && imageFile.buffer.length > 0) {
         const ext = path.extname(imageFile.originalname || '.jpg').toLowerCase() || '.jpg';
-        const filename = `${Date.now()}_aligned_${empId}${ext}`.replace(/[\/:*?"<>|]/g, "_");
-        const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+        savedFilename = `${Date.now()}_aligned_${empId}${ext}`.replace(/[\/:*?"<>|]/g, "_");
         if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-        fs.writeFileSync(path.join(destDir, filename), imageFile.buffer);
-
-        let faceImages = [];
-        if (employee.registered_face_images) {
-          try {
-            const parsed = typeof employee.registered_face_images === 'string'
-              ? JSON.parse(employee.registered_face_images) : employee.registered_face_images;
-            if (Array.isArray(parsed)) faceImages = parsed;
-          } catch (_) {}
-        }
-        faceImages.push(filename);
-        empUpdateData.registered_face_images = faceImages;
-        employee.changed('registered_face_images', true);
-        console.log(`[AlignedTemplates] 📸 Emp #${empId}: saved audit image ${filename}`);
+        fs.writeFileSync(path.join(destDir, savedFilename), imageFile.buffer);
+        console.log(`[AlignedTemplates] 📸 Emp #${empId}: saved audit image ${savedFilename}`);
       }
+
+      list.push(vec);
+      imgList.push(savedFilename);
+
+      // Evict oldest when over cap — delete the evicted image from disk
+      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) {
+        list.shift();
+        const evictedImg = imgList.shift();
+        if (evictedImg) {
+          const evictPath = path.join(destDir, evictedImg);
+          try {
+            if (fs.existsSync(evictPath)) {
+              fs.unlinkSync(evictPath);
+              console.log(`[AlignedTemplates] 🗑️ Emp #${empId}: evicted image ${evictedImg}`);
+            }
+          } catch (e) {
+            console.error(`[AlignedTemplates] Failed to delete evicted image ${evictedImg}:`, e.message);
+          }
+        }
+      }
+
+      const empUpdateData = {
+        aligned_face_templates: list,
+        aligned_face_images: imgList,
+      };
+      employee.changed('aligned_face_templates', true);
+      employee.changed('aligned_face_images', true);
 
       await employee.update(empUpdateData);
       saved++;
@@ -2865,10 +2882,16 @@ exports.resolveFaceRecognitionError = async (req, res) => {
         {
           const empUpdateData = {};
 
-          // A. Store the face_vector in aligned_face_templates
+          // A. Store the face_vector in aligned_face_templates + aligned_face_images
+          const filename = faceError.image;
+          const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+
           if (Array.isArray(vec) && vec.length >= 10) {
             let list = Array.isArray(employee.aligned_face_templates)
               ? [...employee.aligned_face_templates] : [];
+            let imgList = Array.isArray(employee.aligned_face_images)
+              ? [...employee.aligned_face_images] : [];
+            while (imgList.length < list.length) imgList.push(null);
 
             let dup = false;
             for (const t of list) {
@@ -2876,17 +2899,34 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             }
             if (!dup) {
               list.push(vec);
-              while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+              imgList.push(filename || null);
+
+              while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) {
+                list.shift();
+                const evictedImg = imgList.shift();
+                if (evictedImg) {
+                  try {
+                    const evictPath = path.join(destDir, evictedImg);
+                    if (fs.existsSync(evictPath)) {
+                      fs.unlinkSync(evictPath);
+                      console.log(`[Resolve] 🗑️ Emp #${empId}: evicted aligned image ${evictedImg}`);
+                    }
+                  } catch (e) {
+                    console.error(`[Resolve] Failed to delete evicted image:`, e.message);
+                  }
+                }
+              }
+
               empUpdateData.aligned_face_templates = list;
+              empUpdateData.aligned_face_images = imgList;
               employee.changed('aligned_face_templates', true);
+              employee.changed('aligned_face_images', true);
             }
           }
 
-          // B. Copy the physical image and save to registered_face_images / profile_image
-          const filename = faceError.image;
+          // B. Copy the physical image and save to profile_image
           if (filename) {
             const sourcePath = path.join(process.cwd(), "uploads", constants.FACE_ERROR_FOLDER || "employee/face_errors/", filename);
-            const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
             const destPath = path.join(destDir, filename);
 
             if (!fs.existsSync(destDir)) {
@@ -2897,38 +2937,6 @@ exports.resolveFaceRecognitionError = async (req, res) => {
               fs.copyFileSync(sourcePath, destPath);
             }
 
-            // Maintain array of registered face images, limiting to 5
-            let faceImages = [];
-            if (employee.registered_face_images) {
-              try {
-                const parsed = typeof employee.registered_face_images === 'string'
-                  ? JSON.parse(employee.registered_face_images)
-                  : employee.registered_face_images;
-                if (Array.isArray(parsed)) {
-                  faceImages = [...parsed];
-                }
-              } catch (e) {
-                faceImages = [];
-              }
-            }
-
-            faceImages.push(filename);
-            while (faceImages.length > 5) {
-              const oldestFile = faceImages.shift();
-              if (oldestFile) {
-                try {
-                  const oldPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, oldestFile);
-                  if (fs.existsSync(oldPath)) {
-                    fs.unlinkSync(oldPath);
-                  }
-                } catch (e) {
-                  console.log('Failed to delete oldest face image file:', e);
-                }
-              }
-            }
-
-            empUpdateData.registered_face_images = faceImages;
-            employee.changed('registered_face_images', true);
             empUpdateData.profile_image = filename;
 
             await employee.update(empUpdateData);

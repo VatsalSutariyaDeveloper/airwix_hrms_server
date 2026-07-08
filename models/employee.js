@@ -197,6 +197,11 @@ module.exports = (sequelize, DataTypes) => {
             defaultValue: null,
             comment: "2D array of landmark-aligned vectors learned by v2 devices"
         },
+        aligned_face_images: {
+            type: DataTypes.JSONB,
+            defaultValue: null,
+            comment: "Parallel array of image filenames — index-synced with aligned_face_templates"
+        },
 
         // Resignation Related
         is_on_notice: { type: DataTypes.BOOLEAN, defaultValue: false },
