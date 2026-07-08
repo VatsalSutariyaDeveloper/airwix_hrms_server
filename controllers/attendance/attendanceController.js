@@ -48,6 +48,43 @@ const ALIGNED_TEMPLATES = {
   dupSimilarity: 0.97, // skip near-identical vectors
 };
 
+/**
+ * Diversity-preserving eviction: find the two most-similar templates,
+ * evict the OLDER one (lower index). This keeps distinct looks (beard,
+ * glasses, helmet) and discards redundant daily-punch duplicates.
+ * Parallel imgList stays index-synced — evicted image filename is returned
+ * so the caller can delete it from disk.
+ */
+function evictLeastDiverse(list, imgList, maxLen, destDir, logPrefix) {
+  while (list.length > maxLen) {
+    let evictIdx = 0;
+    let highestSim = -2;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (!Array.isArray(list[i]) || !Array.isArray(list[j])) continue;
+        if (list[i].length !== list[j].length) continue;
+        const sim = adaptiveCosineSim(list[i], list[j]);
+        if (sim > highestSim) {
+          highestSim = sim;
+          evictIdx = i; // older of the most-similar pair
+        }
+      }
+    }
+    list.splice(evictIdx, 1);
+    const evictedImg = imgList.splice(evictIdx, 1)[0];
+    if (evictedImg && destDir) {
+      try {
+        const evictPath = path.join(destDir, evictedImg);
+        if (fs.existsSync(evictPath)) {
+          fs.unlinkSync(evictPath);
+        }
+      } catch (e) {
+        console.error(`${logPrefix} Failed to delete evicted image ${evictedImg}: ${e.message}`);
+      }
+    }
+  }
+}
+
 // Lazy column creation — no migration needed, idempotent per tenant DB.
 async function ensureAlignedTemplatesColumn() {
   await sequelize.query(
@@ -147,21 +184,7 @@ exports.saveFaceTemplates = async (req, res) => {
       imgList.push(savedFilename);
 
       // Evict oldest when over cap — delete the evicted image from disk
-      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) {
-        list.shift();
-        const evictedImg = imgList.shift();
-        if (evictedImg) {
-          const evictPath = path.join(destDir, evictedImg);
-          try {
-            if (fs.existsSync(evictPath)) {
-              fs.unlinkSync(evictPath);
-              console.log(`[AlignedTemplates] 🗑️ Emp #${empId}: evicted image ${evictedImg}`);
-            }
-          } catch (e) {
-            console.error(`[AlignedTemplates] Failed to delete evicted image ${evictedImg}:`, e.message);
-          }
-        }
-      }
+      evictLeastDiverse(list, imgList, ALIGNED_TEMPLATES.maxPerEmployee, destDir, `[AlignedTemplates] Emp #${empId}`);
 
       const empUpdateData = {
         aligned_face_templates: list,
@@ -2821,13 +2844,13 @@ exports.resolveFaceRecognitionError = async (req, res) => {
 
       // Validation 1: Employee must be registered with face descriptor
       let fd = employee.face_descriptor;
-      if (fd && typeof fd === 'string') {
-        try {
-          fd = JSON.parse(fd);
-        } catch (e) {
-          fd = null;
-        }
-      }
+      if (fd && typeof fd === 'string') {
+        try {
+          fd = JSON.parse(fd);
+        } catch (e) {
+          fd = null;
+        }
+      }
       const hasFD = Array.isArray(fd) && fd.length > 0;
       if (!hasFD) {
         return res.error(constants.VALIDATION_ERROR, "Employee does not have a registered face. Please register the employee's face first before resolving.");
@@ -2901,21 +2924,7 @@ exports.resolveFaceRecognitionError = async (req, res) => {
               list.push(vec);
               imgList.push(filename || null);
 
-              while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) {
-                list.shift();
-                const evictedImg = imgList.shift();
-                if (evictedImg) {
-                  try {
-                    const evictPath = path.join(destDir, evictedImg);
-                    if (fs.existsSync(evictPath)) {
-                      fs.unlinkSync(evictPath);
-                      console.log(`[Resolve] 🗑️ Emp #${empId}: evicted aligned image ${evictedImg}`);
-                    }
-                  } catch (e) {
-                    console.error(`[Resolve] Failed to delete evicted image:`, e.message);
-                  }
-                }
-              }
+              evictLeastDiverse(list, imgList, ALIGNED_TEMPLATES.maxPerEmployee, destDir, `[Resolve] Emp #${empId}`);
 
               empUpdateData.aligned_face_templates = list;
               empUpdateData.aligned_face_images = imgList;

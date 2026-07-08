@@ -1601,14 +1601,15 @@ exports.getAll = async (req, res) => {
                     "created_at",
                     "status",
                     "onboarding_status",
-                    "aligned_face_templates"
+                    "aligned_face_templates",
+                    "aligned_face_images"
                 ],
                 order: [["first_name", "ASC"]]
             },
             true,
             "created_at"
         );
-
+ 
         data.items = data.items.map(item => {
             const plain = item.get ? item.get({ plain: true }) : item;
             if (plain.profile_image) {
@@ -1616,6 +1617,25 @@ exports.getAll = async (req, res) => {
             } else {
                 plain.profile_image_url = null;
             }
+ 
+            // Format aligned_face_images to full URLs
+            let faceImages = [];
+            if (plain.aligned_face_images) {
+                try {
+                    const parsed = typeof plain.aligned_face_images === 'string'
+                        ? JSON.parse(plain.aligned_face_images)
+                        : plain.aligned_face_images;
+                    if (Array.isArray(parsed)) {
+                        faceImages = parsed
+                            .filter(img => img !== null && img !== undefined)
+                            .map(imgName => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${imgName}`);
+                    }
+                } catch (e) {
+                    faceImages = [];
+                }
+            }
+            plain.aligned_face_images_urls = faceImages;
+ 
             return plain;
         });
 
