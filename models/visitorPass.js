@@ -21,6 +21,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    company_phone: {
+      type: DataTypes.STRING(20),
+      allowNull: true
+    },
     purpose: {
       type: DataTypes.STRING(255),
       allowNull: false
@@ -83,6 +87,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATEONLY,
       allowNull: true
     },
+    visitor_document: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     visitor_photo_url: {
       type: DataTypes.VIRTUAL,
       get() {
@@ -90,6 +98,15 @@ module.exports = (sequelize, DataTypes) => {
         if (!photo) return null;
         const fileServerUrl = process.env.FILE_SERVER_URL || "";
         return `${fileServerUrl}visitor_passes/${photo}`;
+      }
+    },
+    visitor_document_url: {
+      type: DataTypes.VIRTUAL,
+      get() {
+        const doc = this.getDataValue("visitor_document");
+        if (!doc) return null;
+        const fileServerUrl = process.env.FILE_SERVER_URL || "";
+        return `${fileServerUrl}visitor_passes/${doc}`;
       }
     }
   }, {
