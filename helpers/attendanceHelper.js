@@ -1090,11 +1090,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   let isOutDutyFullDay = false;
 
   if (approvedOutDuty) {
-    if (approvedOutDuty.start_date === date && approvedOutDuty.start_session !== 0) {
+    if (approvedOutDuty.start_date === date && approvedOutDuty.start_session !== 0 && approvedOutDuty.start_session !== 3) {
       isOutDutyHalfDay = true;
-    } else if (approvedOutDuty.end_date === date && approvedOutDuty.end_session !== 0) {
+    } else if (approvedOutDuty.end_date === date && approvedOutDuty.end_session !== 0 && approvedOutDuty.end_session !== 3) {
       isOutDutyHalfDay = true;
-    } else if (parseFloat(approvedOutDuty.total_days) < 1 && approvedOutDuty.start_date === approvedOutDuty.end_date) {
+    } else if (parseFloat(approvedOutDuty.total_days) < 1) {
       isOutDutyHalfDay = true;
     } else {
       isOutDutyFullDay = true;
@@ -1130,10 +1130,23 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
         meta.skipFineCalculation = true;
         meta.skipOvertimeCalculation = true;
       } else {
-        meta.forcedStatus = 13; // HALF_OUT_DUTY
-        // For half day out duty, we WANT to calculate fine and OT
-        meta.skipFineCalculation = false;
-        meta.skipOvertimeCalculation = false;
+        const firstInPunch = allDayPunches.find(p => String(p.punch_type || "").toUpperCase() === "IN");
+        const lastOutPunch = [...allDayPunches].reverse().find(p => String(p.punch_type || "").toUpperCase() === "OUT");
+        let punchDurationMins = 0;
+        if (firstInPunch && lastOutPunch) {
+          punchDurationMins = dayjs(lastOutPunch.punch_time).diff(dayjs(firstInPunch.punch_time), 'minute');
+        }
+
+        const minFullDay = shift ? (shift.min_full_day_minutes || 480) : 480;
+        if (punchDurationMins >= minFullDay) {
+          meta.forcedStatus = 12; // Upgrade to full OUT_DUTY since worked minutes cover a full day
+          meta.skipFineCalculation = true;
+          meta.skipOvertimeCalculation = true;
+        } else {
+          meta.forcedStatus = 13; // HALF_OUT_DUTY
+          meta.skipFineCalculation = false;
+          meta.skipOvertimeCalculation = false;
+        }
       }
     }
   }
@@ -1862,7 +1875,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
       }
     }
 
-    // --- BYPASS LATE IN / EARLY EXIT FINES FOR FLEXIBLE COMP-OFF ON WEEKLY OFF / HOLIDAY ---
+    // --- BYPASS LATE IN / EARLY EXIT FINES FOR FLEXIBLE Comp-Off Leave ON WEEKLY OFF / HOLIDAY ---
     const isPresentOnOffDayCompOffFlexible = (isWeeklyOff || isHoliday || meta.isWeeklyOff || meta.isHoliday) && (meta.isHolidayCompOff || meta.isHolidayAllowNormal || (shift && shift.shift_type === "Flexible Shift"));
     if (isPresentOnOffDayCompOffFlexible) {
       lateMinutes = 0;
@@ -2720,7 +2733,7 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     await recalculateMonthAbsentFines(employeeId, date, employee, transaction);
   }
 
-  // [MOD] Auto-adjust pending Comp-Off Credit Requests based on modified punch times
+  // [MOD] Auto-adjust pending Comp-Off Leave Credit Requests based on modified punch times
   if (template && template.holiday_policy === 'COMP_OFF') {
     const existingCompOffRequest = await commonQuery.findOneRecord(LeaveRequest, {
       employee_id: employeeId,
@@ -2760,11 +2773,11 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
 
       if (creditValue > 0) {
         if (parseFloat(existingCompOffRequest.total_days) !== creditValue) {
-          console.log(`[Rebuild] Updating pending Comp-Off request ${existingCompOffRequest.id} total_days to ${creditValue}`);
+          console.log(`[Rebuild] Updating pending Comp-Off Leave request ${existingCompOffRequest.id} total_days to ${creditValue}`);
           await commonQuery.updateRecordById(LeaveRequest, existingCompOffRequest.id, { total_days: creditValue }, transaction, false, {});
         }
       } else {
-        console.log(`[Rebuild] Deleting pending Comp-Off request ${existingCompOffRequest.id} as it is no longer eligible.`);
+        console.log(`[Rebuild] Deleting pending Comp-Off Leave request ${existingCompOffRequest.id} as it is no longer eligible.`);
         await LeaveRequest.destroy({ where: { id: existingCompOffRequest.id }, transaction });
       }
     }
@@ -2844,7 +2857,21 @@ async function manualPunch(employeeId, date, inTime, outTime, meta, transaction 
   }
 
   // Support for Multiple Punches
-  if (meta.punches && Array.isArray(meta.punches)) {
+  if (meta.punches && Array.isArray(meta.punches) && meta.punches.length > 0) {
+    if (employee) {
+      const template = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
+      if (template && !template.allow_multiple_punches) {
+        const inPunches = meta.punches.filter(p => p.punch_type === 'IN');
+        const outPunches = meta.punches.filter(p => p.punch_type === 'OUT');
+        const filteredPunches = [];
+        if (inPunches.length > 0) filteredPunches.push(inPunches[0]);
+        if (outPunches.length > 0) filteredPunches.push(outPunches[outPunches.length - 1]);
+        meta.punches = filteredPunches;
+      }
+    }
+  }
+
+  if (meta.punches && Array.isArray(meta.punches) && meta.punches.length > 0) {
     // Fetch all existing punches for this day
     const existingPunches = await commonQuery.findAllRecords(AttendancePunch, {
       day_id: dayId,
@@ -3075,7 +3102,7 @@ async function getApproversForCompOffCredit(employeeId, currentLevel, transactio
 }
 
 /**
- * Creates notifications for the current stage approvers of a Comp-Off credit request.
+ * Creates notifications for the current stage approvers of a Comp-Off Leave credit request.
  */
 async function sendCompOffApprovalNotifications(leaveRequest, employee, transaction) {
   try {
@@ -3097,9 +3124,9 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
     const startDateStr = dayjs(leaveRequest.start_date).format('DD MMM YYYY');
 
     const title = "New Comp Off Credit Request Pending Approval";
-    const message = `${employeeName} has earned a compensatory off credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
+    const message = `${employeeName} has earned a Comp-Off Leave credit of ${leaveRequest.total_days} day(s) for working on ${startDateStr}.`;
 
-    // Fetch company settings to see if email sending for comp-off credit is enabled
+    // Fetch company settings to see if email sending for Comp-Off Leave credit is enabled
     const { getCompanySetting } = require("../helpers");
     const companySettings = await getCompanySetting(leaveRequest.company_id);
     const sendEmail = companySettings && (
@@ -3147,17 +3174,17 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
           level: leaveRequest.current_level,
           totalLevels
         }).catch(err => {
-          console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+          console.error("[Email] Failed to send Comp-Off Leave credit approval email to:", user.email, err);
         });
       }
     }
   } catch (err) {
-    console.error("Error sending comp-off approval notifications:", err);
+    console.error("Error sending Comp-Off Leave approval notifications:", err);
   }
 }
 
 /**
- * Syncs Compensatory Off credits based on working on holidays/weekly offs.
+ * Syncs Comp-Off Leave credits based on working on holidays/weekly offs.
  */
 async function syncCompOffCredit(employee, date, status, transaction, attendanceDay = null) {
   if (!employee) return;
@@ -3264,10 +3291,10 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
         }, transaction);
 
         if (attendanceDay) {
-          attendanceDay.note = "compoff leave generated";
+          attendanceDay.note = "Comp-Off Leave generated";
         }
         await AttendanceDay.update(
-          { note: "compoff leave generated" },
+          { note: "Comp-Off Leave generated" },
           { where: { employee_id: employeeId, attendance_date: date, status: { [Op.ne]: 2 } }, transaction }
         );
 
@@ -3317,7 +3344,7 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
   const newCategoryId = newDay ? newDay.leave_category_id : null;
   const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
 
-  // --- COMP-OFF CREDIT LOGIC ---
+  // --- Comp-Off Leave CREDIT LOGIC ---
   if (!employee) {
     employee = await commonQuery.findOneRecord(Employee, employeeId, {
       include: [

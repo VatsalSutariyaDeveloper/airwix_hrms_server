@@ -1600,14 +1600,16 @@ exports.getAll = async (req, res) => {
                     "profile_image",
                     "created_at",
                     "status",
-                    "onboarding_status"
+                    "onboarding_status",
+                    "aligned_face_templates",
+                    "aligned_face_images"
                 ],
                 order: [["first_name", "ASC"]]
             },
             true,
             "created_at"
         );
-
+ 
         data.items = data.items.map(item => {
             const plain = item.get ? item.get({ plain: true }) : item;
             if (plain.profile_image) {
@@ -1615,6 +1617,25 @@ exports.getAll = async (req, res) => {
             } else {
                 plain.profile_image_url = null;
             }
+ 
+            // Format aligned_face_images to full URLs
+            let faceImages = [];
+            if (plain.aligned_face_images) {
+                try {
+                    const parsed = typeof plain.aligned_face_images === 'string'
+                        ? JSON.parse(plain.aligned_face_images)
+                        : plain.aligned_face_images;
+                    if (Array.isArray(parsed)) {
+                        faceImages = parsed
+                            .filter(img => img !== null && img !== undefined)
+                            .map(imgName => `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${imgName}`);
+                    }
+                } catch (e) {
+                    faceImages = [];
+                }
+            }
+            plain.aligned_face_images_urls = faceImages;
+ 
             return plain;
         });
 
@@ -2776,10 +2797,7 @@ exports.registerFace = async (req, res) => {
             face_descriptor: JSON.stringify(faceDescriptors) // Store as 2D array matching images
         };
 
-        const updateProfileImg = !employee.profile_image;
-        if (updateProfileImg) {
-            updateData.profile_image = filename;
-        }
+        updateData.profile_image = filename;
 
         // Explicitly flag JSONB fields as changed to force Sequelize UPDATE
         employee.changed('registered_face_images', true);
@@ -2788,11 +2806,10 @@ exports.registerFace = async (req, res) => {
         // 5. Save the new vector directly into the database!
         await employee.update(updateData, { transaction });
 
-        if (updateProfileImg) {
-            // Synchronize with associated User
+        // Synchronize profile image with associated User
+        {
             const associatedUser = await commonQuery.findOneRecord(User, { employee_id: employeeId }, {}, transaction);
-            if (associatedUser && !associatedUser.profile_image) {
-                // Copy photo to USER_IMG_FOLDER to keep both URLs functional
+            if (associatedUser) {
                 const srcPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, filename);
                 const destDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
                 const destPath = path.join(destDir, filename);

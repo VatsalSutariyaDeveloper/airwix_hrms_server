@@ -20,13 +20,16 @@ const {
     Reimbursement,
     ReimbursementItem,
     ExpenseType,
-    BranchMaster
+    BranchMaster,
+    AttendanceApproval,
+    CompanySettings
 } = require("../../models");
 const { commonQuery, handleError, constants, sequelize, formatDateTime, getCompanySetting, fileExists } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const { createNotification } = require("../../services/notificationService");
+const { isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
 const LeaveBalanceService = require("../../services/leaveBalanceService");
 
 const getProbationCompletionData = async (companyId) => {
@@ -194,6 +197,7 @@ exports.getPendingCount = async (req, res) => {
         let authorizedOutDutyRequests = 0;
         let authorizedAttendanceRegularizationRequests = 0;
         let authorizedEmployeeResignationRequests = 0;
+        let authorizedAttendanceApprovalRequests = 0;
 
         if (req.user.is_super_admin) {
             // Optimization for super admins
@@ -201,6 +205,7 @@ exports.getPendingCount = async (req, res) => {
             authorizedOutDutyRequests = await commonQuery.countRecords(OutDutyRequest, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedAttendanceRegularizationRequests = await commonQuery.countRecords(AttendanceRegularization, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
             authorizedEmployeeResignationRequests = await commonQuery.countRecords(EmployeeResignation, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
+            authorizedAttendanceApprovalRequests = await commonQuery.countRecords(AttendanceApproval, { approval_status: { [Op.in]: [0, 1] }, status: 0 });
         } else {
             // Helper function to check authorization
             const isUserAuthorizedForRequest = (request, levelField) => {
@@ -291,9 +296,55 @@ exports.getPendingCount = async (req, res) => {
                     authorizedEmployeeResignationRequests++;
                 }
             }
+
+            // Attendance Approval Requests
+            const pendingAttendanceApprovalRequests = await commonQuery.findAllRecords(AttendanceApproval,
+                { approval_status: { [Op.in]: [0, 1] }, status: 0 },
+                queryIncludeOptions,
+                null,
+                true
+            );
+
+            const configRecord = await commonQuery.findOneRecord(CompanySettings, { company_id: req.user.company_id, settings_name: "attendance_approval_config" }, {}, null, false, false);
+            let attendanceConfig = configRecord ? configRecord.settings_value : [];
+            if (typeof attendanceConfig === "string") {
+                try {
+                    attendanceConfig = JSON.parse(attendanceConfig);
+                } catch (e) {
+                    attendanceConfig = [];
+                }
+            }
+            if (attendanceConfig && !Array.isArray(attendanceConfig) && typeof attendanceConfig === "object" && Array.isArray(attendanceConfig.approval_config)) {
+                attendanceConfig = attendanceConfig.approval_config;
+            }
+            const attendanceConfigArray = Array.isArray(attendanceConfig) ? attendanceConfig : [];
+
+            for (const request of pendingAttendanceApprovalRequests) {
+                const employee = request.employee;
+                if (!employee) continue;
+
+                let currentStage = attendanceConfigArray.find(c => parseInt(c.level, 10) === request.current_level);
+                if (!currentStage) currentStage = { type: 'ANYONE' };
+
+                let stageType = (currentStage.type || '').toString().toUpperCase();
+                if (stageType === '3') stageType = 'REPORTING_MANAGER';
+                if (stageType === '4') stageType = 'ATTENDANCE_SUPERVISOR';
+
+                const isOwnRequest = request.employee_id === req.user.employee_id;
+                const isAuthorized = isUserAuthorizedForStage({
+                    user: req.user,
+                    employee,
+                    stageType,
+                    isOwnRequest,
+                });
+
+                if (isAuthorized) {
+                    authorizedAttendanceApprovalRequests++;
+                }
+            }
         }
 
-        const pendingGlobalCount = pendingLeaves + authorizedOutDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests;
+        const pendingGlobalCount = pendingLeaves + authorizedOutDutyRequests + authorizedAttendanceRegularizationRequests + authorizedEmployeeResignationRequests + authorizedAttendanceApprovalRequests;
 
         return res.ok({ pendingCount: pendingGlobalCount });
     } catch (err) {
@@ -340,7 +391,7 @@ exports.getPendingApprovalsDetails = async (req, res) => {
         };
 
         // Query all tables in parallel
-        const [leavesData, outDutiesData, regularizationsData, reimbursementsData] = await Promise.all([
+        const [leavesData, outDutiesData, regularizationsData, reimbursementsData, attendanceApprovalsData, configRecord] = await Promise.all([
             // 1. Leave & Encashment Requests
             commonQuery.findAllRecords(LeaveRequest, {
                 approval_status: { [Op.in]: [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED] },
@@ -452,8 +503,45 @@ exports.getPendingApprovalsDetails = async (req, res) => {
                     }
                 ],
                 order: [['created_at', 'DESC']]
-            })
+            }),
+
+            // 5. Attendance Approval Requests
+            commonQuery.findAllRecords(AttendanceApproval, {
+                approval_status: { [Op.in]: [0, 1] },
+                status: 0
+            }, {
+                include: [
+                    {
+                        model: Employee,
+                        as: "employee",
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"],
+                        required: false
+                    }
+                ],
+                order: [['created_at', 'DESC']]
+            }),
+
+            // 6. Attendance Approval Config
+            commonQuery.findOneRecord(CompanySettings, { company_id: req.user.company_id, settings_name: "attendance_approval_config" }, {}, null, false, false)
         ]);
+
+        let attendanceConfig = configRecord ? configRecord.settings_value : [];
+        if (typeof attendanceConfig === "string") {
+            try {
+                attendanceConfig = JSON.parse(attendanceConfig);
+            } catch (e) {
+                attendanceConfig = [];
+            }
+        }
+        if (attendanceConfig && !Array.isArray(attendanceConfig) && typeof attendanceConfig === "object" && Array.isArray(attendanceConfig.approval_config)) {
+            attendanceConfig = attendanceConfig.approval_config;
+        }
+        const attendanceConfigArray = Array.isArray(attendanceConfig) ? attendanceConfig : [];
 
         // Filter and format the results in memory
         const leaveRequests = [];
@@ -461,6 +549,7 @@ exports.getPendingApprovalsDetails = async (req, res) => {
         const outDuties = [];
         const attendanceRegularizations = [];
         const reimbursements = [];
+        const attendanceApprovals = [];
 
         // Helper to format tracking summary for leaves
         const getLeaveTrackingSummary = (raw) => {
@@ -570,6 +659,44 @@ exports.getPendingApprovalsDetails = async (req, res) => {
             }
         }
 
+        // Filter Attendance Approvals
+        for (const reqObj of attendanceApprovalsData) {
+            const employee = reqObj.employee;
+            if (!employee) continue;
+
+            let currentStage = attendanceConfigArray.find(c => parseInt(c.level, 10) === reqObj.current_level);
+            if (!currentStage) currentStage = { type: 'ANYONE' };
+
+            let stageType = (currentStage.type || '').toString().toUpperCase();
+            if (stageType === '3') stageType = 'REPORTING_MANAGER';
+            if (stageType === '4') stageType = 'ATTENDANCE_SUPERVISOR';
+
+            const isOwnRequest = reqObj.employee_id === req.user.employee_id;
+            const isAuthorized = isUserAuthorizedForStage({
+                user: req.user,
+                employee,
+                stageType,
+                isOwnRequest,
+            });
+
+            if (isAuthorized) {
+                const raw = reqObj.get({ plain: true });
+                raw.approved_by_name = raw.approvedBy?.user_name || null;
+
+                const statusLabels = {
+                    0: "PENDING",
+                    1: "PARTIALLY APPROVED",
+                    3: "APPROVED",
+                    4: "REJECTED",
+                    5: "CANCELLED",
+                };
+                const statusLabel = statusLabels[raw.approval_status] || "PENDING";
+                raw.tracking_summary = `${statusLabel} (Stage ${raw.current_level})`;
+
+                attendanceApprovals.push(raw);
+            }
+        }
+
         // Search filtering
         const search = req.body.search ? req.body.search.toLowerCase() : null;
 
@@ -601,12 +728,17 @@ exports.getPendingApprovalsDetails = async (req, res) => {
             `${item.employee?.first_name} ${item.employee?.employee_code} ${item.expenseType?.name} ${item.description} ${item.tracking_summary}`
         );
 
+        const filteredAttendanceApprovals = applySearchFilter(attendanceApprovals, item =>
+            `${item.employee?.first_name} ${item.employee?.employee_code} ${item.reason}`
+        );
+
         return res.ok({
             leaveRequests: filteredLeaves,
             leaveEncashments: filteredEncashments,
             outDuties: filteredOutDuties,
             attendanceRegularizations: filteredRegularizations,
-            reimbursements: filteredReimbursements
+            reimbursements: filteredReimbursements,
+            attendanceApprovals: filteredAttendanceApprovals
         });
 
     } catch (err) {

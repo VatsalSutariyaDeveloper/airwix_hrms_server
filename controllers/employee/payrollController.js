@@ -997,12 +997,17 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             let pastAccrued = 0;
             let lastPayoutPayslipId = null;
 
-            const pastPayslips = await commonQuery.findAllRecords(Payslip, {
-                employee_id,
-                status: { [Op.in]: [1, 3] } // Finalized or Paid
-            }, {
-                order: [['year', 'DESC'], ['month', 'DESC']]
-            }, transaction);
+            let pastPayslips = [];
+            try {
+                pastPayslips = await commonQuery.findAllRecords(Payslip, {
+                    employee_id,
+                    status: { [Op.in]: [1, 3] } // Finalized or Paid
+                }, {
+                    order: [['year', 'DESC'], ['month', 'DESC']]
+                }, transaction);
+            } catch (err) {
+                console.error(`[PAYROLL-SUMMARY] Error querying past payslips for employee ${employee_id}:`, err.message);
+            }
 
             const accruedPayslips = [];
             for (const ps of pastPayslips) {
@@ -1094,16 +1099,21 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
 
         // Fetch already deducted TDS in this FY
         // This ensures tax is spread over remaining months if it wasn't deducted correctly before
-        const previousPayslips = await Payslip.findAll({
-            where: {
-                employee_id,
-                [Op.or]: [
-                    { year: fyStartYear, month: { [Op.gte]: 4 } },
-                    { year: fyStartYear + 1, month: { [Op.lte]: 3 } }
-                ]
-            },
-            transaction
-        });
+        let previousPayslips = [];
+        try {
+            previousPayslips = await Payslip.findAll({
+                where: {
+                    employee_id,
+                    [Op.or]: [
+                        { year: fyStartYear, month: { [Op.gte]: 4 } },
+                        { year: fyStartYear + 1, month: { [Op.lte]: 3 } }
+                    ]
+                },
+                transaction
+            });
+        } catch (err) {
+            console.error(`[PAYROLL-SUMMARY] Error querying previous payslips for employee ${employee_id}:`, err.message);
+        }
 
         let taxPaidAlready = 0;
         let actualYTD = 0;
@@ -1488,20 +1498,25 @@ const formatPayslipToSummary = async (payslip) => {
  */
 const fetchSalarySummary = async (employee_id, month, year, options = {}) => {
     // 1. Check if a finalized/paid payslip already exists.
-    const existingPayslips = await commonQuery.findAllRecords(Payslip, {
-        employee_id,
-        month,
-        year,
-        status: { [Op.in]: [1, 3] } // Finalized or Paid
-    }, {
-        order: [['id', 'ASC']],
-        include: [{
-            model: Employee,
-            as: "employee",
-            attributes: ['id', 'first_name', 'employee_code'],
-            include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
-        }]
-    });
+    let existingPayslips = [];
+    try {
+        existingPayslips = await commonQuery.findAllRecords(Payslip, {
+            employee_id,
+            month,
+            year,
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
+        }, {
+            order: [['id', 'ASC']],
+            include: [{
+                model: Employee,
+                as: "employee",
+                attributes: ['id', 'first_name', 'employee_code'],
+                include: [{ model: DesignationMaster, as: "designation", attributes: ['designation_name'] }]
+            }]
+        });
+    } catch (err) {
+        console.error(`[PAYROLL-SUMMARY] Error checking existing payslips for employee ${employee_id}:`, err.message);
+    }
 
     if (existingPayslips && existingPayslips.length > 0) {
         // Return all payslips if there are multiple
@@ -3805,12 +3820,17 @@ exports.getPayrollSummary = async (req, res) => {
         }, null, { company_id: true });
 
         // 2. Get unique employee_ids from Payslip for the given month/year
-        const payslipEmployees = await commonQuery.findAllRecords(Payslip, {
-            month, year
-        }, {
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('employee_id')), 'employee_id']],
-            raw: true
-        });
+        let payslipEmployees = [];
+        try {
+            payslipEmployees = await commonQuery.findAllRecords(Payslip, {
+                month, year
+            }, {
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('employee_id')), 'employee_id']],
+                raw: true
+            });
+        } catch (err) {
+            console.error(`[PAYROLL-SUMMARY] Error fetching unique employee_ids from Payslip:`, err.message);
+        }
 
         // 3. Combine unique employee IDs
         const employeeIds = new Set();

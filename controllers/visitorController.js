@@ -12,6 +12,7 @@ exports.createPass = async (req, res) => {
       visitor_phone,
       visitor_email,
       company_name,
+      company_phone,
       purpose,
       scheduled_start_time,
       scheduled_end_time,
@@ -22,17 +23,42 @@ exports.createPass = async (req, res) => {
       valid_to
     } = req.body;
 
-    if (!visitor_name || !visitor_phone || !purpose) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, "Missing required fields");
+    const type = visitor_type || "VISITOR";
+
+    let visitorsList = [];
+    if (req.body.visitors) {
+      try {
+        visitorsList = typeof req.body.visitors === "string"
+          ? JSON.parse(req.body.visitors)
+          : req.body.visitors;
+      } catch (err) {
+        console.error("Failed to parse visitors JSON in createPass:", err);
+      }
     }
 
-    const type = visitor_type || "VISITOR";
+    let resolvedVisitorName = visitor_name;
+    let resolvedVisitorPhone = visitor_phone;
+
     if (["CONTRACTOR", "TPI"].includes(type)) {
       if (!valid_from || !valid_to) {
         await transaction.rollback();
         return res.error(constants.VALIDATION_ERROR, "Valid From and Valid To are required for Contractor/TPI");
       }
+      if (!Array.isArray(visitorsList) || visitorsList.length === 0) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "At least one crew member is required for Contractor/TPI");
+      }
+      if (!resolvedVisitorName) {
+        resolvedVisitorName = visitorsList[0].name;
+      }
+      if (!resolvedVisitorPhone) {
+        resolvedVisitorPhone = visitorsList[0].phone;
+      }
+    }
+
+    if (!resolvedVisitorName || !resolvedVisitorPhone || !purpose) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, "Missing required fields");
     }
 
     // Resolve host employee: employees can only host for themselves, admins/security/hr can host for anyone
@@ -53,20 +79,57 @@ exports.createPass = async (req, res) => {
     const passCode = `VP-${datePart}-${randPart}`;
 
     let visitorPhoto = null;
+    let visitorDocument = null;
+    let savedFiles = {};
     if (req.file || (req.files && Object.keys(req.files).length > 0)) {
       const uploadResult = await uploadFile(req, res, "visitor_passes", transaction);
-      visitorPhoto = (uploadResult && uploadResult.visitor_photo) ? uploadResult.visitor_photo : uploadResult;
-    } else if (req.body.visitor_photo) {
+      if (uploadResult) {
+        savedFiles = uploadResult;
+        visitorPhoto = uploadResult.visitor_photo || null;
+        visitorDocument = uploadResult.visitor_document || null;
+      }
+    }
+
+    if (req.body.visitor_photo) {
       visitorPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
+    }
+    if (req.body.visitor_document) {
+      visitorDocument = await uploadBase64File(req.body.visitor_document, "visitor_passes", transaction);
+    }
+
+    // For Contractor/TPI, resolve first crew member's photo before creating pass
+    if (["CONTRACTOR", "TPI"].includes(type) && Array.isArray(visitorsList) && visitorsList.length > 0) {
+      const fileKey = `visitors[0][photo]`;
+      const fallbackFileKey = `visitors[0].photo`;
+      let firstCrewPhoto = savedFiles[fileKey] || savedFiles[fallbackFileKey] || savedFiles[`visitors_photo_0`] || savedFiles[`visitors_photo[0]`] || null;
+
+      if (!firstCrewPhoto && visitorsList[0].photo && visitorsList[0].photo.startsWith("data:")) {
+        try {
+          firstCrewPhoto = await uploadBase64File(visitorsList[0].photo, "visitor_passes", transaction);
+          // Set in visitorsList so we don't re-upload it inside the loop
+          visitorsList[0].photo = firstCrewPhoto;
+        } catch (uploadErr) {
+          console.error("Failed to upload base64 photo for first crew member:", uploadErr);
+        }
+      } else if (visitorsList[0].photo && !visitorsList[0].photo.startsWith("data:")) {
+        firstCrewPhoto = visitorsList[0].photo;
+      }
+
+      // Default the main pass photo to the first crew member's photo if not provided
+      if (!visitorPhoto) {
+        visitorPhoto = firstCrewPhoto;
+      }
     }
 
     const passData = {
       visitor_photo: visitorPhoto,
+      visitor_document: visitorDocument,
       pass_code: passCode,
-      visitor_name,
-      visitor_phone,
+      visitor_name: resolvedVisitorName,
+      visitor_phone: resolvedVisitorPhone,
       visitor_email,
       company_name,
+      company_phone,
       purpose,
       host_employee_id: resolvedHostEmployeeId,
       scheduled_start_time: scheduled_start_time ? new Date(scheduled_start_time) : null,
@@ -81,6 +144,35 @@ exports.createPass = async (req, res) => {
     };
 
     const visitorPass = await commonQuery.createRecord(VisitorPass, passData, transaction);
+
+    // Pre-register individuals
+    if (["CONTRACTOR", "TPI"].includes(type) && Array.isArray(visitorsList) && visitorsList.length > 0) {
+      for (let i = 0; i < visitorsList.length; i++) {
+        const vis = visitorsList[i];
+        if (vis.name && vis.phone) {
+          // Check if there is an uploaded file for this index
+          const fileKey = `visitors[${i}][photo]`;
+          const fallbackFileKey = `visitors[${i}].photo`;
+          let visPhoto = savedFiles[fileKey] || savedFiles[fallbackFileKey] || savedFiles[`visitors_photo_${i}`] || savedFiles[`visitors_photo[${i}]`] || null;
+
+          if (!visPhoto && vis.photo && vis.photo.startsWith("data:")) {
+            try {
+              visPhoto = await uploadBase64File(vis.photo, "visitor_passes", transaction);
+            } catch (uploadErr) {
+              console.error("Failed to upload base64 photo for crew member:", uploadErr);
+            }
+          }
+          await commonQuery.createRecord(VisitorAttendance, {
+            visitor_pass_id: visitorPass.id,
+            visitor_name: vis.name,
+            visitor_phone: vis.phone,
+            visitor_photo: visPhoto || (vis.photo && !vis.photo.startsWith("data:") ? vis.photo : null),
+            status: 0 // Scheduled / Pending check-in
+          }, transaction);
+        }
+      }
+    }
+
     await transaction.commit();
 
     return res.success("Visitor pass created successfully", visitorPass);
@@ -235,9 +327,9 @@ exports.punchIn = async (req, res) => {
     const isMultiEntry = pass.visitor_type === "CONTRACTOR" || pass.visitor_type === "TPI";
 
     if (isMultiEntry) {
-      if (pass.status !== 0 && pass.status !== 3) {
+      if (pass.status !== 0 && pass.status !== 1 && pass.status !== 3) {
         await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, "Visitor pass must be Scheduled or Checked Out to Punch In");
+        return res.error(constants.VALIDATION_ERROR, "Visitor pass must be Scheduled, Checked In, or Checked Out to Punch In");
       }
       const today = dayjs().startOf('day');
       const validFrom = pass.valid_from ? dayjs(pass.valid_from).startOf('day') : null;
@@ -250,17 +342,22 @@ exports.punchIn = async (req, res) => {
         }
       }
     } else {
-    if (pass.status !== 0) {
-      await transaction.rollback();
-      return res.error(constants.VALIDATION_ERROR, "Visitor pass must be in Scheduled state to Punch In");
+      if (pass.status !== 0) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Visitor pass must be in Scheduled state to Punch In");
       }
     }
 
-    let uploadedPhoto = null;
+    let savedFiles = {};
     if (req.file || (req.files && Object.keys(req.files).length > 0)) {
       const uploadResult = await uploadFile(req, res, "visitor_passes", transaction);
-      uploadedPhoto = (uploadResult && uploadResult.visitor_photo) ? uploadResult.visitor_photo : uploadResult;
-    } else if (req.body.visitor_photo) {
+      if (uploadResult) {
+        savedFiles = uploadResult;
+      }
+    }
+
+    let uploadedPhoto = savedFiles.visitor_photo || null;
+    if (!uploadedPhoto && req.body.visitor_photo) {
       uploadedPhoto = await uploadBase64File(req.body.visitor_photo, "visitor_passes", transaction);
     }
 
@@ -269,30 +366,96 @@ exports.punchIn = async (req, res) => {
     };
     if (!isMultiEntry) {
       updateData.check_in_time = new Date();
-    if (uploadedPhoto) {
-      updateData.visitor_photo = uploadedPhoto;
-    }
-    if (req.body.security_remarks) {
-      updateData.security_remarks = req.body.security_remarks;
+      if (uploadedPhoto) {
+        updateData.visitor_photo = uploadedPhoto;
+      }
+      if (req.body.security_remarks) {
+        updateData.security_remarks = req.body.security_remarks;
       }
     }
 
     const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, updateData, transaction);
-    
+
     if (isMultiEntry) {
-      if (!req.body.visitor_name || !req.body.visitor_phone) {
-        await transaction.rollback();
-        return res.error(constants.VALIDATION_ERROR, "Visitor name and phone are required for Contractor/TPI punch in.");
+      let checkedInList = [];
+      if (req.body.checked_in_list) {
+        try {
+          checkedInList = typeof req.body.checked_in_list === "string"
+            ? JSON.parse(req.body.checked_in_list)
+            : req.body.checked_in_list;
+        } catch (e) {
+          console.error("Failed to parse checked_in_list:", e);
+        }
       }
-      await commonQuery.createRecord(VisitorAttendance, {
-        visitor_pass_id: pass.id,
-        visitor_name: req.body.visitor_name,
-        visitor_phone: req.body.visitor_phone,
-        visitor_photo: uploadedPhoto || req.body.existing_photo || null,
-        check_in_time: new Date(),
-        security_remarks: req.body.security_remarks || null,
-        status: 1
-      }, transaction);
+
+      // Fallback to single crew member for backward compatibility
+      if (!Array.isArray(checkedInList) || checkedInList.length === 0) {
+        if (!req.body.visitor_name || !req.body.visitor_phone) {
+          await transaction.rollback();
+          return res.error(constants.VALIDATION_ERROR, "Visitor name and phone are required for Contractor/TPI punch in.");
+        }
+        checkedInList = [{
+          name: req.body.visitor_name,
+          phone: req.body.visitor_phone,
+          photo: req.body.visitor_photo || null,
+          existing_photo: req.body.existing_photo || null
+        }];
+      }
+
+      for (let i = 0; i < checkedInList.length; i++) {
+        const member = checkedInList[i];
+        if (member.name && member.phone) {
+          // Check if photo was uploaded as binary
+          const fileKey = `crew[${i}][photo]`;
+          const fallbackFileKey = `crew[${i}].photo`;
+          let memberPhoto = savedFiles[fileKey] || savedFiles[fallbackFileKey] || null;
+
+          if (!memberPhoto && member.photo && member.photo.startsWith("data:")) {
+            try {
+              memberPhoto = await uploadBase64File(member.photo, "visitor_passes", transaction);
+            } catch (uploadErr) {
+              console.error("Failed to upload base64 check-in photo:", uploadErr);
+            }
+          }
+
+          const finalCheckInPhoto = memberPhoto || member.existing_photo || null;
+
+          // Check if already checked in to avoid duplicates
+          const activeCheckIn = await commonQuery.findOneRecord(VisitorAttendance, {
+            visitor_pass_id: pass.id,
+            visitor_phone: member.phone,
+            status: 1,
+            check_out_time: null
+          }, {}, transaction);
+
+          if (!activeCheckIn) {
+            const scheduledRecord = await commonQuery.findOneRecord(VisitorAttendance, {
+              visitor_pass_id: pass.id,
+              visitor_phone: member.phone,
+              status: 0
+            }, {}, transaction);
+
+            if (scheduledRecord) {
+              await commonQuery.updateRecordById(VisitorAttendance, { id: scheduledRecord.id }, {
+                visitor_photo: finalCheckInPhoto,
+                check_in_time: new Date(),
+                security_remarks: req.body.security_remarks || null,
+                status: 1
+              }, transaction);
+            } else {
+              await commonQuery.createRecord(VisitorAttendance, {
+                visitor_pass_id: pass.id,
+                visitor_name: member.name,
+                visitor_phone: member.phone,
+                visitor_photo: finalCheckInPhoto,
+                check_in_time: new Date(),
+                security_remarks: req.body.security_remarks || null,
+                status: 1
+              }, transaction);
+            }
+          }
+        }
+      }
     }
 
     await transaction.commit();
@@ -346,23 +509,72 @@ exports.punchOut = async (req, res) => {
       return res.error(constants.VALIDATION_ERROR, "Visitor must be Checked In to Punch Out");
     }
 
-    const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, {
-      status: 3, // Checked Out
-      ...(isMultiEntry ? {} : { check_out_time: new Date() })
-    }, transaction);
+    const updateData = {
+      status: 3 // Checked Out
+    };
+    if (!isMultiEntry) {
+      updateData.check_out_time = new Date();
+    }
+
+    const updatedPass = await commonQuery.updateRecordById(VisitorPass, { id }, updateData, transaction);
 
     if (isMultiEntry) {
-      const activeAttendance = await commonQuery.findOneRecord(VisitorAttendance, {
-        visitor_pass_id: pass.id,
-        status: 1,
-        check_out_time: null
-      }, { order: [["check_in_time", "DESC"]] }, transaction);
+      let checkedOutList = [];
+      if (req.body.checked_out_list) {
+        try {
+          checkedOutList = typeof req.body.checked_out_list === "string"
+            ? JSON.parse(req.body.checked_out_list)
+            : req.body.checked_out_list;
+        } catch (e) {
+          console.error("Failed to parse checked_out_list:", e);
+        }
+      }
 
-      if (activeAttendance) {
-        await commonQuery.updateRecordById(VisitorAttendance, { id: activeAttendance.id }, {
-          status: 3,
-          check_out_time: new Date()
-        }, transaction);
+      if (Array.isArray(checkedOutList) && checkedOutList.length > 0) {
+        for (const member of checkedOutList) {
+          const activeAttendance = await commonQuery.findOneRecord(VisitorAttendance, {
+            visitor_pass_id: pass.id,
+            visitor_phone: member.phone,
+            status: 1,
+            check_out_time: null
+          }, {}, transaction);
+
+          if (activeAttendance) {
+            await commonQuery.updateRecordById(VisitorAttendance, { id: activeAttendance.id }, {
+              status: 3,
+              check_out_time: new Date()
+            }, transaction);
+          }
+        }
+      } else {
+        // Fallback: check out the most recent active check-in
+        const activeAttendance = await commonQuery.findOneRecord(VisitorAttendance, {
+          visitor_pass_id: pass.id,
+          status: 1,
+          check_out_time: null
+        }, { order: [["check_in_time", "DESC"]] }, transaction);
+
+        if (activeAttendance) {
+          await commonQuery.updateRecordById(VisitorAttendance, { id: activeAttendance.id }, {
+            status: 3,
+            check_out_time: new Date()
+          }, transaction);
+        }
+      }
+
+      // Check if there are still any active checked-in crew members remaining inside
+      const remainingActive = await VisitorAttendance.count({
+        where: {
+          visitor_pass_id: pass.id,
+          status: 1,
+          check_out_time: null
+        },
+        transaction
+      });
+
+      // If some crew members are still checked in, keep the parent pass status as Checked In (1)
+      if (remainingActive > 0) {
+        await commonQuery.updateRecordById(VisitorPass, { id }, { status: 1 }, transaction);
       }
     }
 
@@ -405,6 +617,7 @@ exports.updatePass = async (req, res) => {
       visitor_phone,
       visitor_email,
       company_name,
+      company_phone,
       purpose,
       scheduled_start_time,
       scheduled_end_time,
@@ -419,28 +632,53 @@ exports.updatePass = async (req, res) => {
     if (visitor_phone) updateData.visitor_phone = visitor_phone;
     if (visitor_email !== undefined) updateData.visitor_email = visitor_email;
     if (company_name !== undefined) updateData.company_name = company_name;
+    if (company_phone !== undefined) updateData.company_phone = company_phone;
     if (purpose) updateData.purpose = purpose;
     if (scheduled_start_time) updateData.scheduled_start_time = new Date(scheduled_start_time);
     if (scheduled_end_time) updateData.scheduled_end_time = new Date(scheduled_end_time);
     if (remarks !== undefined) updateData.remarks = remarks;
     if (visitor_type) updateData.visitor_type = visitor_type;
-    
+
     // If the visitor type is being updated to Contractor/TPI, enforce valid_from/to
     const type = visitor_type || pass.visitor_type;
+
     if (["CONTRACTOR", "TPI"].includes(type)) {
       if (valid_from) updateData.valid_from = valid_from;
       if (valid_to) updateData.valid_to = valid_to;
       if (!updateData.valid_from && !pass.valid_from) {
-          await transaction.rollback();
-          return res.error(constants.VALIDATION_ERROR, "Valid From is required for Contractor/TPI");
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Valid From is required for Contractor/TPI");
       }
       if (!updateData.valid_to && !pass.valid_to) {
-          await transaction.rollback();
-          return res.error(constants.VALIDATION_ERROR, "Valid To is required for Contractor/TPI");
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Valid To is required for Contractor/TPI");
+      }
+
+      // Check for crew members
+      let visitorsList = [];
+      if (req.body.visitors) {
+        try {
+          visitorsList = typeof req.body.visitors === "string"
+            ? JSON.parse(req.body.visitors)
+            : req.body.visitors;
+        } catch (err) {
+          console.error("Failed to parse visitors JSON in updatePass:", err);
+        }
+      }
+
+      const existingCrewCount = await VisitorAttendance.count({
+        where: { visitor_pass_id: id },
+        transaction
+      });
+
+      const totalCrewCount = existingCrewCount + (Array.isArray(visitorsList) ? visitorsList.length : 0);
+      if (totalCrewCount === 0) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "At least one crew member is required for Contractor/TPI");
       }
     } else {
-       updateData.valid_from = null;
-       updateData.valid_to = null;
+      updateData.valid_from = null;
+      updateData.valid_to = null;
     }
 
     let visitorPhoto = null;

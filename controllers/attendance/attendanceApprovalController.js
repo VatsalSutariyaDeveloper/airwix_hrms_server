@@ -234,14 +234,21 @@ exports.approveRequest = async (req, res) => {
       remark: req.body.remark || '',
     });
 
-    let newStatus = currentLevel >= maxLevel ? 3 : 1; // 3 = APPROVED, 1 = PARTIALLY_APPROVED
+    const isSuperAdmin = !!(
+      req.user?.is_super_admin || 
+      req.user?.role_key === 'BUSINESS_ADMIN' || 
+      req.user?.role_id === 1
+    );
+
+    let newStatus = (currentLevel >= maxLevel || isSuperAdmin) ? 3 : 1; // 3 = APPROVED, 1 = PARTIALLY_APPROVED
+    let nextLevel = isSuperAdmin ? maxLevel + 1 : currentLevel + 1;
 
     const dataupdate = await commonQuery.updateRecordById(
       AttendanceApproval,
       approvalReq.id,
       {
         approval_status: newStatus,
-        current_level: currentLevel + 1,
+        current_level: nextLevel,
         approval_history: history,
         approved_by: req.user.id,
         approval_remark: req.body.remark || '',

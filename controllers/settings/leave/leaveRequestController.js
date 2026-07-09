@@ -78,7 +78,7 @@ const sendApprovalNotifications = async (leaveRequest, employee, actionType, tra
         const startDateStr = formatDateTime(leaveRequest.start_date, 'DD MMM YYYY');
         const endDateStr = formatDateTime(leaveRequest.end_date, 'DD MMM YYYY');
 
-        // Fetch company settings to see if email sending for comp-off credit is enabled
+        // Fetch company settings to see if email sending for Comp-Off Leave credit is enabled
         const companySettings = await getCompanySetting(leaveRequest.company_id);
         const sendEmail = companySettings && (
             companySettings.send_email_compoff_credit === true ||
@@ -123,7 +123,7 @@ const sendApprovalNotifications = async (leaveRequest, employee, actionType, tra
                 branch_id: leaveRequest.branch_id
             }, transaction);
 
-            // Send Comp-off credit email to manager if setting is enabled
+            // Send Comp-Off Leave credit email to manager if setting is enabled
             if (leaveRequest.request_type === 'CREDIT' && sendEmail && actionType === "CREATE" && user && user.email) {
                 const template = employee?.leaveTemplate;
                 const totalLevels = template?.approval_levels || 1;
@@ -140,7 +140,7 @@ const sendApprovalNotifications = async (leaveRequest, employee, actionType, tra
                     level: leaveRequest.current_level,
                     totalLevels
                 }).catch(err => {
-                    console.error("[Email] Failed to send comp-off credit approval email to:", user.email, err);
+                    console.error("[Email] Failed to send Comp-Off Leave credit approval email to:", user.email, err);
                 });
             }
         }
@@ -217,19 +217,19 @@ exports.create = async (req, res) => {
         } else if (is_credit) {
             if (start_date !== end_date) {
                 await transaction.rollback();
-                return res.error("INVALID_DATE_RANGE", { message: "Comp-off credit request must be applied day-by-day (start date and end date must be same)." });
+                return res.error("INVALID_DATE_RANGE", { message: "Comp-Off Leave credit request must be applied day-by-day (start date and end date must be same)." });
             }
 
             const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
             if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off leaves." });
+                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off Leave leaves." });
             }
 
             const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, start_date, transaction);
             if (!isHoliday && !isWeeklyOff) {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: "Comp-off can only be claimed for working on Holidays or Weekly Offs." });
+                return res.error("RULE_VIOLATION", { message: "Comp-Off Leave can only be claimed for working on Holidays or Weekly Offs." });
             }
 
             const attendance = await commonQuery.findOneRecord(AttendanceDay, {
@@ -240,7 +240,7 @@ exports.create = async (req, res) => {
 
             if (!attendance) {
                 await transaction.rollback();
-                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off." });
+                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off Leave." });
             }
 
             const workedMins = parseFloat(attendance.worked_minutes || 0);
@@ -252,7 +252,7 @@ exports.create = async (req, res) => {
                     total_days = 1.0;
                 } else {
                     await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: 1 mins.` });
+                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off Leave. Worked: ${workedMins} mins, Required min: 1 mins.` });
                 }
             } else if (workedMins >= maxCompOff && maxCompOff > 0) {
                 total_days = 1.0;
@@ -260,7 +260,7 @@ exports.create = async (req, res) => {
                 total_days = 0.5;
             } else {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
+                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off Leave. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
             }
 
             // Check for duplicate CREDIT request for the same day
@@ -274,7 +274,7 @@ exports.create = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: "Selected date already has a compensatory off credit request." });
+                return res.error("OVERLAP", { message: "Selected date already has a Comp-Off Leave credit request." });
             }
         } else {
             // --- Calculate total_days based on Sandwich Policy via Service ---
@@ -659,19 +659,19 @@ exports.update = async (req, res) => {
         } else if (is_credit) {
             if (start_date !== end_date) {
                 await transaction.rollback();
-                return res.error("INVALID_DATE_RANGE", { message: "Comp-off credit request must be applied day-by-day (start date and end date must be same)." });
+                return res.error("INVALID_DATE_RANGE", { message: "Comp-Off Leave credit request must be applied day-by-day (start date and end date must be same)." });
             }
 
             const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
             if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off leaves." });
+                return res.error("RULE_VIOLATION", { message: "Your attendance template does not support Comp-Off Leave leaves." });
             }
 
             const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, start_date, transaction);
             if (!isHoliday && !isWeeklyOff) {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: "Comp-off can only be claimed for working on Holidays or Weekly Offs." });
+                return res.error("RULE_VIOLATION", { message: "Comp-Off Leave can only be claimed for working on Holidays or Weekly Offs." });
             }
 
             const attendance = await commonQuery.findOneRecord(AttendanceDay, {
@@ -682,7 +682,7 @@ exports.update = async (req, res) => {
 
             if (!attendance) {
                 await transaction.rollback();
-                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off." });
+                return res.error("NO_ATTENDANCE", { message: "No attendance record found for this day. You must punch in/out to claim Comp-Off Leave." });
             }
 
             const workedMins = parseFloat(attendance.worked_minutes || 0);
@@ -694,7 +694,7 @@ exports.update = async (req, res) => {
                     total_days = 1.0;
                 } else {
                     await transaction.rollback();
-                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: 1 mins.` });
+                    return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off Leave. Worked: ${workedMins} mins, Required min: 1 mins.` });
                 }
             } else if (workedMins >= maxCompOff && maxCompOff > 0) {
                 total_days = 1.0;
@@ -702,7 +702,7 @@ exports.update = async (req, res) => {
                 total_days = 0.5;
             } else {
                 await transaction.rollback();
-                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
+                return res.error("RULE_VIOLATION", { message: `Insufficient working minutes on this day to earn Comp-Off Leave. Worked: ${workedMins} mins, Required min: ${minCompOff} mins.` });
             }
 
             // Check for duplicate CREDIT request for the same day (excluding this request)
@@ -717,7 +717,7 @@ exports.update = async (req, res) => {
 
             if (overlap) {
                 await transaction.rollback();
-                return res.error("OVERLAP", { message: "Selected date already has a compensatory off credit request." });
+                return res.error("OVERLAP", { message: "Selected date already has a Comp-Off Leave credit request." });
             }
         } else {
             const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
@@ -1897,7 +1897,7 @@ exports.getEligibleCompOffDates = async (req, res) => {
 
         const attTemplate = employee.employeeAttendanceTemplate || employee.attendanceTemplate;
         if (!attTemplate || attTemplate.holiday_policy !== 'COMP_OFF') {
-            return res.success("No comp-off policy", []);
+            return res.success("No Comp-Off Leave policy", []);
         }
 
         const minCompOff = attTemplate.comp_off_min_working_mins || 0;
@@ -2000,7 +2000,7 @@ exports.getEligibleCompOffDates = async (req, res) => {
         // Sort descending by date
         eligibleDates.sort((a, b) => b.date.localeCompare(a.date));
 
-        return res.success("Eligible comp-off dates fetched successfully", eligibleDates);
+        return res.success("Eligible Comp-Off Leave dates fetched successfully", eligibleDates);
     } catch (err) {
         return handleError(err, res, req);
     }

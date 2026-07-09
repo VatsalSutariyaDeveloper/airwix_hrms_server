@@ -329,7 +329,7 @@ class EmployeeTemplateService {
             await commonQuery.createRecord(EmployeeAttendanceTemplate, payload, transaction);
         }
 
-        // Trigger targeted leave balance sync for Comp-Off category ONLY
+        // Trigger targeted leave balance sync for Comp-Off Leave category ONLY
         const LeaveBalanceService = require("./leaveBalanceService");
         await LeaveBalanceService.syncCompOffOnly([employeeId], transaction);
     }
@@ -371,7 +371,7 @@ class EmployeeTemplateService {
             await commonQuery.updateRecordById(EmployeeAttendanceTemplate, item.id, item.payload, transaction);
         }
 
-        // Trigger targeted leave balance sync for Comp-Off category ONLY
+        // Trigger targeted leave balance sync for Comp-Off Leave category ONLY
         await LeaveBalanceService.syncCompOffOnly(employeeIds, transaction);
     }
 

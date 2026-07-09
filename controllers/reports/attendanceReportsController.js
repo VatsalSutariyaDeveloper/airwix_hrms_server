@@ -737,7 +737,7 @@ exports.getAttendanceReport = async (req, res) => {
           unpaidLeave: 0,
           leaveCounts: {
             "Casual Leave": 0,
-            "Compoff Leave": 0,
+            "Comp-Off Leave": 0,
             "Paid Leave": 0,
             "Unpaid Leave": 0
           }

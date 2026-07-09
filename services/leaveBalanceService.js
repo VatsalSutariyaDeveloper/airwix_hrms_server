@@ -167,7 +167,7 @@ class LeaveBalanceService {
                 throw validationError;
             }
 
-            // --- [MOD] Dynamic Comp-Off Logic based on Attendance Policy ---
+            // --- [MOD] Dynamic Comp-Off Leave Logic based on Attendance Policy ---
             // Fetch attendance template to check holiday policy
             const attendanceTemplate = await commonQuery.findOneRecord(EmployeeAttendanceTemplate, { employee_id: employeeId }, {}, t, true);
             const isCompOffPolicy = attendanceTemplate && attendanceTemplate.holiday_policy === 'COMP_OFF';
@@ -175,13 +175,13 @@ class LeaveBalanceService {
             // Filter and manage categories
             let categories = [...(template.categories || [])];
             if (isCompOffPolicy) {
-                // If policy is COMP_OFF, ensure a Comp-Off category exists in the list
+                // If policy is COMP_OFF, ensure a Comp-Off Leave category exists in the list
                 if (!categories.some(c => c.is_compoff)) {
                     const masterCompOff = await commonQuery.findOneRecord(LeaveTemplateCategory, { is_compoff: true, status: 0 }, {}, t, false, false);
                     if (masterCompOff) categories.push(masterCompOff);
                 }
             } else {
-                // If policy is NOT COMP_OFF, exclude Comp-Off category and soft-delete existing Comp-Off balances
+                // If policy is NOT COMP_OFF, exclude Comp-Off Leave category and soft-delete existing Comp-Off Leave balances
                 categories = categories.filter(c => !c.is_compoff);
 
                 await commonQuery.hardDeleteRecords(EmployeeLeaveBalance,
@@ -815,7 +815,7 @@ class LeaveBalanceService {
     }
 
     /**
-     * Syncs ONLY the Comp-Off leave category for employees.
+     * Syncs ONLY the Comp-Off Leave leave category for employees.
      * Use this when updating attendance templates to avoid resetting other leave balances.
      */
     static async syncCompOffOnly(employeeIds, transaction = null) {
@@ -881,7 +881,7 @@ class LeaveBalanceService {
                         }, t);
                     }
                 } else {
-                    // Remove comp-off balance if policy changed and category is NOT in the main leave template
+                    // Remove Comp-Off Leave balance if policy changed and category is NOT in the main leave template
                     // (Safety check so we don't accidentally delete if it's explicitly part of their leave template)
                     const isExplicitInTemplate = await commonQuery.findOneRecord(LeaveTemplateCategory, { leave_template_id: emp.leave_template, is_compoff: true, status: 0 }, {}, t);
 
@@ -1188,7 +1188,7 @@ class LeaveBalanceService {
                 console.log(`[Year-End Log] >>> Reset Triggered for Emp ${employee.id}! <<<`);
 
                 // 1. Mark ALL active balances for the cycle that just ended as processed (status 1)
-                // This correctly includes dynamic categories like Comp-Off that aren't in the template
+                // This correctly includes dynamic categories like Comp-Off Leave that aren't in the template
                 const balancesToUpdate = await EmployeeLeaveBalance.findAll({
                     where: {
                         employee_id: employee.id,
@@ -1280,7 +1280,7 @@ class LeaveBalanceService {
 
             let pending = Math.round((allocated + parseFloat(balance.carry_forward_leaves || 0) - used) * 10) / 10;
 
-            // Strict validation: Don't allow negative balance for Paid categories or Comp-Off
+            // Strict validation: Don't allow negative balance for Paid categories or Comp-Off Leave
             if (pending < 0 && (balance.is_paid || balance.is_compoff)) {
                 throw new Error(`Insufficient leave balance in ${balance.leave_category_name}. Available: ${balance.pending_leaves}. Required: ${roundedAmount}.`);
             }

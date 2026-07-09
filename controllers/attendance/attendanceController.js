@@ -48,16 +48,57 @@ const ALIGNED_TEMPLATES = {
   dupSimilarity: 0.97, // skip near-identical vectors
 };
 
+/**
+ * Diversity-preserving eviction: find the two most-similar templates,
+ * evict the OLDER one (lower index). This keeps distinct looks (beard,
+ * glasses, helmet) and discards redundant daily-punch duplicates.
+ * Parallel imgList stays index-synced — evicted image filename is returned
+ * so the caller can delete it from disk.
+ */
+function evictLeastDiverse(list, imgList, maxLen, destDir, logPrefix) {
+  while (list.length > maxLen) {
+    let evictIdx = 0;
+    let highestSim = -2;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (!Array.isArray(list[i]) || !Array.isArray(list[j])) continue;
+        if (list[i].length !== list[j].length) continue;
+        const sim = adaptiveCosineSim(list[i], list[j]);
+        if (sim > highestSim) {
+          highestSim = sim;
+          evictIdx = i; // older of the most-similar pair
+        }
+      }
+    }
+    list.splice(evictIdx, 1);
+    const evictedImg = imgList.splice(evictIdx, 1)[0];
+    if (evictedImg && destDir) {
+      try {
+        const evictPath = path.join(destDir, evictedImg);
+        if (fs.existsSync(evictPath)) {
+          fs.unlinkSync(evictPath);
+        }
+      } catch (e) {
+        console.error(`${logPrefix} Failed to delete evicted image ${evictedImg}: ${e.message}`);
+      }
+    }
+  }
+}
+
 // Lazy column creation — no migration needed, idempotent per tenant DB.
 async function ensureAlignedTemplatesColumn() {
   await sequelize.query(
     'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_templates JSONB'
   );
+  await sequelize.query(
+    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_images JSONB'
+  );
 }
 
 /**
  * SYNC ALIGNED FACE TEMPLATES (v2 attendance devices)
- * Body: { templates: [{ employee_id, vector }] }
+ * Multipart: templates[i][employee_id], templates[i][vector] (JSON string),
+ *            templates[i][image] (optional face image for audit trail)
  */
 exports.saveFaceTemplates = async (req, res) => {
   try {
@@ -66,13 +107,44 @@ exports.saveFaceTemplates = async (req, res) => {
     console.error("ensureAlignedTemplatesColumn failed:", colErr.message);
   }
   try {
-    const items = Array.isArray(req.body.templates) ? req.body.templates : [];
+    // Parse indexed form fields: templates[0][employee_id], templates[0][vector], etc.
+    const items = [];
+    if (Array.isArray(req.body.templates)) {
+      // Standard JSON array (backward compat)
+      for (const t of req.body.templates) items.push(t);
+    } else if (req.body.templates && typeof req.body.templates === 'object') {
+      // Indexed form fields → object keyed by index
+      for (const idx of Object.keys(req.body.templates)) {
+        items.push(req.body.templates[idx]);
+      }
+    } else {
+      // Flat indexed fields like templates[0][employee_id] parsed by body-parser
+      const map = {};
+      for (const key of Object.keys(req.body)) {
+        const m = key.match(/^templates\[(\d+)]\[(\w+)]$/);
+        if (m) {
+          const i = m[1];
+          if (!map[i]) map[i] = {};
+          map[i][m[2]] = req.body[key];
+        }
+      }
+      for (const idx of Object.keys(map)) items.push(map[idx]);
+    }
+
     if (items.length === 0) {
       return res.error(constants.VALIDATION_ERROR, { message: "No templates provided" });
     }
 
+    // Build a lookup for uploaded images: fieldname → file buffer
+    const imageMap = {};
+    const files = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : [];
+    for (const file of files) {
+      imageMap[file.fieldname] = file;
+    }
+
     let saved = 0;
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const empId = parseInt(item.employee_id);
       let vec = item.vector;
       if (typeof vec === 'string') {
@@ -85,6 +157,10 @@ exports.saveFaceTemplates = async (req, res) => {
 
       let list = Array.isArray(employee.aligned_face_templates)
         ? [...employee.aligned_face_templates] : [];
+      let imgList = Array.isArray(employee.aligned_face_images)
+        ? [...employee.aligned_face_images] : [];
+      // Ensure parallel arrays are same length (pad with null if out of sync)
+      while (imgList.length < list.length) imgList.push(null);
 
       let dup = false;
       for (const t of list) {
@@ -92,11 +168,32 @@ exports.saveFaceTemplates = async (req, res) => {
       }
       if (dup) continue;
 
-      list.push(vec);
-      while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+      // Save the face image for audit trail
+      let savedFilename = null;
+      const imageFile = imageMap[`templates[${i}][image]`];
+      const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+      if (imageFile && imageFile.buffer && imageFile.buffer.length > 0) {
+        const ext = path.extname(imageFile.originalname || '.jpg').toLowerCase() || '.jpg';
+        savedFilename = `${Date.now()}_aligned_${empId}${ext}`.replace(/[\/:*?"<>|]/g, "_");
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+        fs.writeFileSync(path.join(destDir, savedFilename), imageFile.buffer);
+        console.log(`[AlignedTemplates] 📸 Emp #${empId}: saved audit image ${savedFilename}`);
+      }
 
+      list.push(vec);
+      imgList.push(savedFilename);
+
+      // Evict oldest when over cap — delete the evicted image from disk
+      evictLeastDiverse(list, imgList, ALIGNED_TEMPLATES.maxPerEmployee, destDir, `[AlignedTemplates] Emp #${empId}`);
+
+      const empUpdateData = {
+        aligned_face_templates: list,
+        aligned_face_images: imgList,
+      };
       employee.changed('aligned_face_templates', true);
-      await employee.update({ aligned_face_templates: list });
+      employee.changed('aligned_face_images', true);
+
+      await employee.update(empUpdateData);
       saved++;
       console.log(`[AlignedTemplates] ✅ Emp #${empId} (${employee.first_name || ''}): template saved — now ${list.length}/${ALIGNED_TEMPLATES.maxPerEmployee}${list.length >= 2 ? ' (MIGRATED to aligned matching)' : ''}`);
     }
@@ -562,7 +659,7 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [
-          [sequelize.literal(`"attendanceDays"."updated_at"`), 'DESC NULLS LAST'],
+          [sequelize.literal(`"attendanceDays"."first_in"`), 'DESC NULLS LAST'],
           ['first_name', 'ASC']
         ],
         attributes: [
@@ -809,14 +906,19 @@ exports.updateAttendanceDay = async (req, res) => {
     let exemptRoles = [];
     if (settings.attendance_approval_level != null && settings.attendance_approval_level !== 'null') approvalRequired = true;
     if (settings.attendance_approval_exempt_roles) {
-      exemptRoles = typeof settings.attendance_approval_exempt_roles === 'string' ? JSON.parse(settings.attendance_approval_exempt_roles) : settings.attendance_approval_exempt_roles; 
+      exemptRoles = typeof settings.attendance_approval_exempt_roles === 'string' ? JSON.parse(settings.attendance_approval_exempt_roles) : settings.attendance_approval_exempt_roles;
     }
     console.log("settings.attendance_approval_level:", settings.attendance_approval_level, "settings.attendance_approval_exempt_roles:", settings.attendance_approval_exempt_roles);
     console.log("User Role ID:", req.user.role_id, "Is Superadmin:", req.user.is_superadmin, "Is Admin:", req.user.is_admin);
     console.log("Approval Required:", approvalRequired, "Exempt Roles:", exemptRoles);
     const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+    const isSuperAdmin = !!(
+      req.user?.is_super_admin ||
+      req.user?.role_key === 'BUSINESS_ADMIN' ||
+      req.user?.role_id === 1
+    );
 
-    if (approvalRequired && !isExempt && !req.user.is_superadmin && !req.body.is_approved_request) {
+    if (approvalRequired && !isExempt && !isSuperAdmin && !req.body.is_approved_request) {
       // Look for an existing pending request for this employee on this date
       const existingReq = await commonQuery.findOneRecord(
         AttendanceApproval,
@@ -833,7 +935,7 @@ exports.updateAttendanceDay = async (req, res) => {
         await commonQuery.updateRecordById(
           AttendanceApproval,
           existingReq.id,
-          { 
+          {
             proposed_attendance_data: req.body,
             reason: req.body.note || req.body.reason || existingReq.reason
           },
@@ -890,7 +992,7 @@ exports.updateAttendanceDay = async (req, res) => {
       t
     );
 
-    // [COMBINED HOLIDAY AND WEEKLY OFF LOGIC (OVERTIME AND COMP-OFF)]
+    // [COMBINED HOLIDAY AND WEEKLY OFF LOGIC (OVERTIME AND Comp-Off Leave)]
     const salaryTemplate = emp?.employeeSalaryTemplate;
     const holidayPolicy = template ? template.holiday_policy : 'BLOCK_ATTENDANCE';
     const lwpBasis = salaryTemplate ? salaryTemplate.lwp_calculation_basis : 'WORKING_DAYS';
@@ -1510,7 +1612,7 @@ exports.deleteAttendanceDay = async (req, res) => {
       await LeaveBalanceService.syncLeaveRecord(employee_id, attendance_date, 0, 0, t);
     }
 
-    // REMOVE ANY PENDING COMP-OFF CREDIT REQUESTS FOR THIS DAY
+    // REMOVE ANY PENDING Comp-Off Leave CREDIT REQUESTS FOR THIS DAY
     await LeaveRequest.destroy({
       where: {
         employee_id,
@@ -2519,7 +2621,7 @@ exports.storeFaceRecognitionError = async (req, res) => {
   await ensureFaceRecognitionErrorSynced(req.tenantPrefix);
   const t = await sequelize.transaction();
   try {
-    console.log("Storing Face Recognition Error Log...",req.body);
+    console.log("Storing Face Recognition Error Log...", req.body);
     const { accuracy, time, company_id, branch_id, image: base64Image, latitude, longitude, employee_id, matches, message, face_vector } = req.body;
     const finalMessage = message || null;
 
@@ -2626,9 +2728,32 @@ exports.getFaceRecognitionErrors = async (req, res) => {
       };
     }
 
-    const fieldConfig = [];
+    const statusVal = req.body.status !== undefined ? req.body.status : 0;
+    let fieldConfig = [];
+    if (statusVal === 1) {
+      // Resolved: Search resolved employee name, code, and message
+      fieldConfig = [
+        ["employee.first_name", true, false],
+        ["employee.employee_code", true, false],
+        ["message", true, false]
+      ];
+    } else if (statusVal === 0) {
+      // Active/Unresolved: Search matches (candidates) and message
+      fieldConfig = [
+        ["matches", true, false],
+        ["message", true, false]
+      ];
+    } else {
+      // All: Search both
+      fieldConfig = [
+        ["employee.first_name", true, false],
+        ["employee.employee_code", true, false],
+        ["matches", true, false],
+        ["message", true, false]
+      ];
+    }
 
-    const payloadForPagination = { ...req.body, status: req.body.status !== undefined ? req.body.status : 0 };
+    const payloadForPagination = { ...req.body, status: statusVal };
     delete payloadForPagination.startDate;
     delete payloadForPagination.endDate;
 
@@ -2729,8 +2854,64 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       return res.error(constants.NOT_FOUND, "Face recognition error log not found");
     }
 
+    const empId = parseInt(employee_id);
+    const vec = faceError.face_vector;
+
+    // Validate before marking as resolved
+    if (empId) {
+      await ensureAlignedTemplatesColumn();
+      const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
+      if (!employee) {
+        return res.error(constants.NOT_FOUND, "Employee not found");
+      }
+
+      // Validation 1: Employee must be registered with face descriptor
+      let fd = employee.face_descriptor;
+      if (fd && typeof fd === 'string') {
+        try {
+          fd = JSON.parse(fd);
+        } catch (e) {
+          fd = null;
+        }
+      }
+      const hasFD = Array.isArray(fd) && fd.length > 0;
+      if (!hasFD) {
+        return res.error(constants.VALIDATION_ERROR, "Employee does not have a registered face. Please register the employee's face first before resolving.");
+      }
+
+      // Validation 2: The error face must belong to the same person.
+      // Compare against BOTH enrolled (face_descriptor) and aligned
+      // (aligned_face_templates) galleries — the error's face_vector may
+      // be from either embedding space.
+      if (Array.isArray(vec) && vec.length >= 10) {
+        let bestSim = 0;
+
+        // Check enrolled vectors
+        const enrolledVectors = Array.isArray(fd[0]) ? fd : [fd];
+        for (const enrolled of enrolledVectors) {
+          if (!Array.isArray(enrolled) || enrolled.length < 10) continue;
+          const sim = adaptiveCosineSim(vec, enrolled);
+          if (sim > bestSim) bestSim = sim;
+        }
+
+        // Check aligned templates (same embedding space as error face_vector)
+        const alignedTemplates = Array.isArray(employee.aligned_face_templates)
+          ? employee.aligned_face_templates : [];
+        for (const at of alignedTemplates) {
+          if (!Array.isArray(at) || at.length < 10) continue;
+          const sim = adaptiveCosineSim(vec, at);
+          if (sim > bestSim) bestSim = sim;
+        }
+
+        if (bestSim < 0.45) {
+          return res.error(constants.VALIDATION_ERROR, `This face does not match the selected employee (similarity: ${(bestSim * 100).toFixed(1)}%). Please select the correct employee.`);
+        }
+      }
+    }
+
+    // All validations passed — now mark as resolved
     const updateData = { status: status !== undefined ? status : 1 }; // 1 = Resolved
-    if (employee_id) updateData.employee_id = parseInt(employee_id);
+    if (employee_id) updateData.employee_id = empId;
 
     await commonQuery.updateRecordById(
       FaceRecognitionError,
@@ -2741,19 +2922,22 @@ exports.resolveFaceRecognitionError = async (req, res) => {
       { company_id: true }
     );
 
-    const empId = parseInt(employee_id);
-    const vec = faceError.face_vector;
     if (empId) {
       try {
-        await ensureAlignedTemplatesColumn();
         const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
-        if (employee) {
+        {
           const empUpdateData = {};
 
-          // A. Store the face_vector in aligned_face_templates (keeping original logic intact)
+          // A. Store the face_vector in aligned_face_templates + aligned_face_images
+          const filename = faceError.image;
+          const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+
           if (Array.isArray(vec) && vec.length >= 10) {
             let list = Array.isArray(employee.aligned_face_templates)
               ? [...employee.aligned_face_templates] : [];
+            let imgList = Array.isArray(employee.aligned_face_images)
+              ? [...employee.aligned_face_images] : [];
+            while (imgList.length < list.length) imgList.push(null);
 
             let dup = false;
             for (const t of list) {
@@ -2761,17 +2945,20 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             }
             if (!dup) {
               list.push(vec);
-              while (list.length > ALIGNED_TEMPLATES.maxPerEmployee) list.shift();
+              imgList.push(filename || null);
+
+              evictLeastDiverse(list, imgList, ALIGNED_TEMPLATES.maxPerEmployee, destDir, `[Resolve] Emp #${empId}`);
+
               empUpdateData.aligned_face_templates = list;
+              empUpdateData.aligned_face_images = imgList;
               employee.changed('aligned_face_templates', true);
+              employee.changed('aligned_face_images', true);
             }
           }
 
-          // B. Copy the physical image and save to registered_face_images / profile_image
-          const filename = faceError.image;
+          // B. Copy the physical image and save to profile_image
           if (filename) {
             const sourcePath = path.join(process.cwd(), "uploads", constants.FACE_ERROR_FOLDER || "employee/face_errors/", filename);
-            const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
             const destPath = path.join(destDir, filename);
 
             if (!fs.existsSync(destDir)) {
@@ -2782,111 +2969,34 @@ exports.resolveFaceRecognitionError = async (req, res) => {
               fs.copyFileSync(sourcePath, destPath);
             }
 
-            // Maintain array of registered face images, limiting to 5
-            let faceImages = [];
-            if (employee.registered_face_images) {
-              try {
-                const parsed = typeof employee.registered_face_images === 'string'
-                  ? JSON.parse(employee.registered_face_images)
-                  : employee.registered_face_images;
-                if (Array.isArray(parsed)) {
-                  faceImages = [...parsed];
-                }
-              } catch (e) {
-                faceImages = [];
-              }
-            }
-
-            faceImages.push(filename);
-            while (faceImages.length > 5) {
-              const oldestFile = faceImages.shift();
-              if (oldestFile) {
-                try {
-                  const oldPath = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER, oldestFile);
-                  if (fs.existsSync(oldPath)) {
-                    fs.unlinkSync(oldPath);
-                  }
-                } catch (e) {
-                  console.log('Failed to delete oldest face image file:', e);
-                }
-              }
-            }
-
-            empUpdateData.registered_face_images = faceImages;
-            employee.changed('registered_face_images', true);
-
-            const updateProfileImg = !employee.profile_image;
-            if (updateProfileImg) {
-              empUpdateData.profile_image = filename;
-            }
+            empUpdateData.profile_image = filename;
 
             await employee.update(empUpdateData);
 
-            if (updateProfileImg) {
-              // Synchronize with associated User
-              const associatedUser = await commonQuery.findOneRecord(User, { employee_id: empId }, {});
-              if (associatedUser && !associatedUser.profile_image) {
-                const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
-                const userDestPath = path.join(userDestDir, filename);
-                if (fs.existsSync(destPath)) {
-                  if (!fs.existsSync(userDestDir)) {
-                    fs.mkdirSync(userDestDir, { recursive: true });
-                  }
-                  fs.copyFileSync(destPath, userDestPath);
+            // Synchronize profile image with associated User
+            const associatedUser = await commonQuery.findOneRecord(User, { employee_id: empId }, {});
+            if (associatedUser) {
+              const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+              const userDestPath = path.join(userDestDir, filename);
+              if (fs.existsSync(destPath)) {
+                if (!fs.existsSync(userDestDir)) {
+                  fs.mkdirSync(userDestDir, { recursive: true });
                 }
-                await associatedUser.update({ profile_image: filename });
+                fs.copyFileSync(destPath, userDestPath);
               }
+              await associatedUser.update({ profile_image: filename });
             }
           } else if (Object.keys(empUpdateData).length > 0) {
             await employee.update(empUpdateData);
           }
           console.log(`[Resolve→Template] ✅ Emp #${empId} verification synchronized.`);
-        }
+        } // end block
       } catch (tplErr) {
         console.error(`[Resolve→Template] ⚠️ Failed to save template/image for emp #${empId}:`, tplErr.message);
       }
     }
 
     return res.ok({ message: "Face recognition error status updated successfully" });
-  } catch (err) {
-    return handleError(err, res, req);
-  }
-};
-
-/**
- * Verified Face Errors (v2 kiosks) — resolved audits with admin-confirmed
- * identity, pulled by kiosks to learn templates for users who keep failing.
- */
-exports.getVerifiedFaceErrors = async (req, res) => {
-  try {
-    const afterId = parseInt(req.body.after_id) || 0;
-
-    const rows = await FaceRecognitionError.findAll({
-      where: {
-        id: { [Op.gt]: afterId },
-        status: 1,
-        employee_id: { [Op.ne]: null },
-        company_id: req.user.company_id,
-      },
-      attributes: ['id', 'employee_id', 'image', ['face_vector', 'vector']],
-      order: [['id', 'ASC']],
-      limit: 20,
-      raw: true,
-    });
-
-    const folder = constants.FACE_ERROR_FOLDER || "employee/face_errors/";
-    const items = rows.map(r => ({
-      id: r.id,
-      employee_id: r.employee_id,
-      image_url: r.image ? `${process.env.FILE_SERVER_URL}${folder}${r.image}` : null,
-      vector: r.vector || null,
-    }));
-
-    if (items.length > 0) {
-      console.log(`[VerifiedAudits] 📤 Sent ${items.length} verified audit(s) after #${afterId} to device (user #${req.user.id})`);
-    }
-
-    return res.success(constants.ACTION_SUCCESSFUL, { items });
   } catch (err) {
     return handleError(err, res, req);
   }
