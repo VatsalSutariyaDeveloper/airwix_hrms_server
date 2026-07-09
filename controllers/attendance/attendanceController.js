@@ -314,11 +314,45 @@ exports.syncPunches = async (req, res) => {
     const results = [];
     for (const punchData of sortedPunches) {
       delete punchData.punch_type;
-      console.log(`\n--- [Sync] Processing Punch: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
-      console.log(`\n--- [Sync] Processing Punch:`, punchData);
+      console.log(`\n--- [Sync] Processing ${punchData.is_face_error ? 'FACE ERROR' : 'Punch'}: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
 
       try {
-        // Check if a punch with the exact same time already exists for this employee to prevent duplicate syncs
+        // ── Face errors are NOT real punches — store them and move on ──
+        if (punchData.is_face_error) {
+          console.log(`[SyncPunches] Face Recognition Error flagged for Emp=${punchData.employee_id}. Storing in FaceRecognitionError...`);
+
+          let faceErrorImage = null;
+          if (punchData.image && punchData.image.trim() !== "") {
+            faceErrorImage = await uploadBase64File(punchData.image, constants.FACE_ERROR_FOLDER || "employee/face_errors/", transaction);
+          }
+
+          await commonQuery.createRecord(FaceRecognitionError, {
+            image: faceErrorImage,
+            accuracy: punchData.match_score || punchData.accuracy || null,
+            time: punchData.punch_time ? dayjs(punchData.punch_time).toDate() : new Date(),
+            company_id: req.user.company_id || punchData.company_id || 0,
+            branch_id: req.user.branch_id || punchData.branch_id || 0,
+            employee_id: punchData.employee_id || null,
+            latitude: punchData.latitude ? parseFloat(punchData.latitude) : null,
+            longitude: punchData.longitude ? parseFloat(punchData.longitude) : null,
+            status: punchData.face_error_status ?? 0,
+            matches: punchData.matches ? (typeof punchData.matches === 'string' ? JSON.parse(punchData.matches) : punchData.matches) : null,
+            message: punchData.message || null,
+            face_vector: punchData.face_vector ? (typeof punchData.face_vector === 'string' ? JSON.parse(punchData.face_vector) : punchData.face_vector) : null
+          }, transaction);
+
+          console.log(`[SyncPunches] :white_check_mark: Stored FaceRecognitionError for Emp=${punchData.employee_id} (status=${punchData.face_error_status ?? 0})`);
+          results.push({
+            employee_id: punchData.employee_id,
+            punch_time: punchData.punch_time,
+            success: true,
+            is_face_error: true
+          });
+          continue;
+        }
+
+        // ── Normal punch processing ──
+        // Check if a punch with the exact same time already exists
         const targetPunchTime = new Date(punchData.punch_time);
         const existingPunch = await commonQuery.findOneRecord(AttendancePunch, {
           employee_id: punchData.employee_id,
@@ -326,20 +360,6 @@ exports.syncPunches = async (req, res) => {
           status: { [Op.ne]: 2 }
         }, {}, transaction, false, {});
 
-        // if (existingPunch) {
-        //   console.log(`[SyncPunches] Duplicate punch detected and skipped: Emp=${punchData.employee_id}, Time=${punchData.punch_time}`);
-        //   results.push({
-        //     employee_id: punchData.employee_id,
-        //     punch_time: punchData.punch_time,
-        //     success: true,
-        //     punch_id: existingPunch.id,
-        //     type: existingPunch.punch_type,
-        //     ignoredAsDuplicate: true
-        //   });
-        //   continue;
-        // }
-
-        // Handle sync image if provided (usually as base64 in offline sync)
         let punchImage = null;
         if (punchData.image && punchData.image.trim() !== "") {
           punchImage = await uploadBase64File(punchData.image, constants.ATTENDANCE_FOLDER, transaction);
@@ -424,9 +444,9 @@ exports.syncPunches = async (req, res) => {
           punch_id: result.punchId,
           type: result.punchType
         });
-        console.log(`[SyncPunches] ✅ Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
+        console.log(`[SyncPunches] :white_check_mark: Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
-        console.error(`[SyncPunches] ❌ FAILED for Emp: ${punchData.employee_id}:`, punchErr);
+        console.error(`[SyncPunches] :x: FAILED for Emp: ${punchData.employee_id}:`, punchErr);
         const errMsg = String(punchErr.message || "");
 
         // Classified by TYPE, not message: Sequelize/DB errors are transient
@@ -441,7 +461,7 @@ exports.syncPunches = async (req, res) => {
         // window, cooldown, leave block, ...). These are NOT face recognition
         // errors — the face was recognized fine, the punch was just blocked
         // for operational reasons. Don't pollute the face errors table.
-        console.warn(`[SyncPunches] ⛔ REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
+        console.warn(`[SyncPunches] :no_entry: REJECTED punch for Emp ${punchData.employee_id}: ${errMsg}`);
         results.push({
           employee_id: punchData.employee_id,
           punch_time: punchData.punch_time,

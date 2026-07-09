@@ -36,6 +36,7 @@ router.post("/transfer", employeeController.transfer);
 router.post("/register-face", bufferImage("image"), employeeController.registerFace);
 router.post("/:id/delete-face-image", employeeController.deleteFaceImage);
 router.post("/face-punch", bufferImage("image"), employeeController.facePunch);
+router.post("/clear-face-data", employeeController.clearFaceData);
 
 // Employee Salary Template Routes
 router.get("/salary-template/:employeeId", employeeSalaryTemplateController.getTemplate);
