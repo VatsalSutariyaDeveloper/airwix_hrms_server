@@ -1,7 +1,7 @@
 const { commonQuery, handleError } = require("../../helpers");
 const { getFilteredAnnouncements } = require("../../helpers/functions/commonFunctions");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster, CanteenAttendance, DeviceMaster } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveTemplateCategory, sequelize, ShiftTemplate, EmployeeHoliday, EmployeeWeeklyOff, OutDutyRequest, Department, DesignationMaster, LeaveRequest, EmployeeLeaveBalance, BranchMaster, CanteenAttendance, DeviceMaster, User } = require("../../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
@@ -639,7 +639,19 @@ exports.getAttendanceReport = async (req, res) => {
         status: 0
       }, {
         include: [
-          { model: DeviceMaster, as: 'device', attributes: ['id', 'device_name'] }
+          { model: DeviceMaster, as: 'device', attributes: ['id', 'device_name'] },
+          {
+            model: User,
+            as: 'user',
+            attributes: ['id', 'user_name'],
+            include: [
+              {
+                model: Employee,
+                as: 'Employee',
+                attributes: ['first_name']
+              }
+            ]
+          }
         ],
         order: [['employee_id', 'ASC'], ['punch_time', 'ASC']]
       }, null, {});
@@ -687,7 +699,7 @@ exports.getAttendanceReport = async (req, res) => {
         punch_time: punch.punch_time,
         punch_type: punch.punch_type,
         formatted_time: dayjs(punch.punch_time).format('h:mm A'),
-        device_name: punch.device ? punch.device.device_name : '-'
+        device_name: punch.device ? punch.device.device_name : (punch.user ? (punch.user.Employee ? punch.user.Employee.first_name : punch.user.user_name) : '-')
       });
     });
 

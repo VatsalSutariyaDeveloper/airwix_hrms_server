@@ -1,4 +1,4 @@
-const { EmployeeAdvance, Employee, PaymentHistory, User } = require("../../models");
+const { EmployeeAdvance, Employee, PaymentHistory, User, Payslip } = require("../../models");
 const { sequelize, validateRequest, commonQuery, handleError, Op, formatDateTime } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const { createNotification } = require("../../services/notificationService");
@@ -97,6 +97,7 @@ exports.getAll = async (req, res) => {
                     // "year",
                     "payment_date", 
                     "amount", 
+                    "adjusted_amount",
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
@@ -144,16 +145,15 @@ exports.getAll = async (req, res) => {
                     }
                 }
 
-                // if (record.month && record.year) {
-                //     const key = `${record.year}-${record.month.toString().padStart(2, '0')}`;
-                //     if (totalsMap[key]) {
-                //         if (record.dataValues) {
-                //             record.dataValues.monthly_total = totalsMap[key];
-                //         } else {
-                //             record.monthly_total = totalsMap[key];
-                //         }
-                //     }
-                // }
+                const amt = parseFloat(record.amount || 0);
+                const adj = parseFloat(record.adjusted_amount || 0);
+                const rem = amt - adj;
+
+                if (record.dataValues) {
+                    record.dataValues.remaining_amount = rem > 0 ? parseFloat(rem.toFixed(2)) : 0;
+                } else {
+                    record.remaining_amount = rem > 0 ? parseFloat(rem.toFixed(2)) : 0;
+                }
             });
         }
 
@@ -175,6 +175,41 @@ exports.getById = async (req, res) => {
             } else {
                 record.payment_date = formatDateTime(record.payment_date);
             }
+        }
+
+        // Fetch adjustments from Payslips where this advance was adjusted
+        const payslips = await commonQuery.findAllRecords(Payslip, {
+            employee_id: record.employee_id,
+            status: { [Op.in]: [1, 3] } // Finalized or Paid
+        }, {
+            attributes: ['id', 'month', 'year', 'payment_history', 'createdAt']
+        });
+
+        const adjustments = [];
+        payslips.forEach(ps => {
+            const advancesAdjusted = ps.payment_history?.advances_adjusted || [];
+            const match = advancesAdjusted.find(a => Number(a.advance_id) === Number(record.id));
+            if (match) {
+                adjustments.push({
+                    payslip_id: ps.id,
+                    month: ps.month,
+                    year: ps.year,
+                    amount: parseFloat(match.amount),
+                    adjusted_date: match.payment_date || ps.createdAt
+                });
+            }
+        });
+
+        const amt = parseFloat(record.amount || 0);
+        const adj = parseFloat(record.adjusted_amount || 0);
+        const rem = amt - adj;
+
+        if (record.dataValues) {
+            record.dataValues.remaining_amount = rem > 0 ? parseFloat(rem.toFixed(2)) : 0;
+            record.dataValues.adjustments = adjustments;
+        } else {
+            record.remaining_amount = rem > 0 ? parseFloat(rem.toFixed(2)) : 0;
+            record.adjustments = adjustments;
         }
         
         return res.ok(record);

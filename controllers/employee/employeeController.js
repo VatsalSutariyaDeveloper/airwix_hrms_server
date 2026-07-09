@@ -4303,3 +4303,113 @@ exports.getTeamEmployees = async (req, res) => {
         return handleError(err, res, req);
     }
 };
+
+exports.clearFaceData = async (req, res) => {
+    try {
+        const { employee_id, type } = req.body;
+        if (!employee_id) {
+            return res.error(constants.VALIDATION_ERROR, "Employee ID is required");
+        }
+        if (!type || (type !== 'registration' && type !== 'aligned')) {
+            return res.error(constants.VALIDATION_ERROR, "Invalid type. Must be 'registration' or 'aligned'");
+        }
+
+        const employee = await commonQuery.findOneRecord(Employee, { id: employee_id }, {}, null, false, {});
+        if (!employee) {
+            return res.error(constants.NOT_FOUND, "Employee not found");
+        }
+
+        const destDir = path.join(process.cwd(), "uploads", constants.EMPLOYEE_IMG_FOLDER || "employee/images/");
+
+        if (type === 'registration') {
+            // 1. Delete registered face images from the disk
+            let images = [];
+            if (employee.registered_face_images) {
+                try {
+                    images = typeof employee.registered_face_images === 'string'
+                        ? JSON.parse(employee.registered_face_images)
+                        : employee.registered_face_images;
+                } catch (e) {
+                    images = [];
+                }
+            }
+
+            if (Array.isArray(images)) {
+                for (const imgName of images) {
+                    if (imgName) {
+                        const filePath = path.join(destDir, imgName);
+                        if (fs.existsSync(filePath)) {
+                            fs.unlinkSync(filePath);
+                            console.log(`[ClearReg] Deleted registered face image: ${imgName}`);
+                        }
+                    }
+                }
+            }
+
+            // 2. Also delete the profile image if it exists
+            if (employee.profile_image) {
+                const profilePath = path.join(destDir, employee.profile_image);
+                if (fs.existsSync(profilePath)) {
+                    fs.unlinkSync(profilePath);
+                    console.log(`[ClearReg] Deleted profile image: ${employee.profile_image}`);
+                }
+            }
+
+            // 3. Clear database fields
+            employee.face_descriptor = null;
+            employee.registered_face_images = null;
+            employee.profile_image = null;
+            
+            await employee.save();
+
+            // 4. Synchronize user record profile photo (if any)
+            const associatedUser = await commonQuery.findOneRecord(User, { employee_id }, {});
+            if (associatedUser) {
+                if (associatedUser.profile_image) {
+                    const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+                    const userProfilePath = path.join(userDestDir, associatedUser.profile_image);
+                    if (fs.existsSync(userProfilePath)) {
+                        fs.unlinkSync(userProfilePath);
+                    }
+                }
+                await associatedUser.update({ profile_image: null });
+            }
+
+            return res.ok({ message: "Employee face registration cleared successfully" });
+        } else if (type === 'aligned') {
+            // 1. Delete aligned face images from the disk
+            let images = [];
+            if (employee.aligned_face_images) {
+                try {
+                    images = typeof employee.aligned_face_images === 'string'
+                        ? JSON.parse(employee.aligned_face_images)
+                        : employee.aligned_face_images;
+                } catch (e) {
+                    images = [];
+                }
+            }
+
+            if (Array.isArray(images)) {
+                for (const imgName of images) {
+                    if (imgName) {
+                        const filePath = path.join(destDir, imgName);
+                        if (fs.existsSync(filePath)) {
+                            fs.unlinkSync(filePath);
+                            console.log(`[ClearAligned] Deleted aligned face image: ${imgName}`);
+                        }
+                    }
+                }
+            }
+
+            // 2. Clear database fields
+            employee.aligned_face_templates = null;
+            employee.aligned_face_images = null;
+            
+            await employee.save();
+
+            return res.ok({ message: "Employee aligned templates cleared successfully" });
+        }
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};

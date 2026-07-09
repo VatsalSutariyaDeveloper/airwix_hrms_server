@@ -1043,7 +1043,7 @@ exports.dropdownList = async (req, res) => {
       extraFilters,
       {
         include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
-        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id", "employee_id"],
         order: [["user_name", "ASC"]],
       }
     );
@@ -1080,7 +1080,7 @@ exports.getUserEmployeeList = async (req, res) => {
       extraFilters,
       {
         include: [{ model: RolePermission, as: 'RolePermission', attributes: [] }],
-        attributes: ["id", "user_name", "email", "mobile_no", "role_id"],
+        attributes: ["id", "user_name", "email", "mobile_no", "role_id", "employee_id"],
         order: [["user_name", "ASC"]],
       }
     );

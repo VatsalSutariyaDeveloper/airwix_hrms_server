@@ -15,10 +15,11 @@ module.exports = (sequelize, DataTypes) => {
         comment: "Cash or Bank payment",
       },
       adjusted_in_payroll: { type: DataTypes.BOOLEAN, defaultValue: false },
+      adjusted_amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0.00 },
       status: { 
         type: DataTypes.SMALLINT, 
         defaultValue: 0, 
-        comment: "0: Pending, 1: Adjusted, 2: Cancelled", 
+        comment: "0: Pending, 1: Adjusted, 2: Cancelled, 3: Partially Adjusted", 
       },
       user_id: { type: DataTypes.INTEGER, allowNull: false },
       branch_id: { type: DataTypes.INTEGER, allowNull: false },
