@@ -1877,6 +1877,18 @@ exports.getAttendanceDayDetails = async (req, res) => {
               model: DeviceMaster,
               as: "device",
               attributes: ["device_name"]
+            },
+            {
+              model: User,
+              as: "user",
+              attributes: ["id", "user_name"],
+              include: [
+                {
+                  model: Employee,
+                  as: "Employee",
+                  attributes: ["first_name"]
+                }
+              ]
             }
           ],
           required: false,
@@ -2099,7 +2111,14 @@ exports.getMonthlyAttendance = async (req, res) => {
             {
               model: User,
               as: 'user',
-              attributes: ['id', 'user_name']
+              attributes: ['id', 'user_name'],
+              include: [
+                {
+                  model: Employee,
+                  as: 'Employee',
+                  attributes: ['first_name']
+                }
+              ]
             },
             {
               model: DeviceMaster,

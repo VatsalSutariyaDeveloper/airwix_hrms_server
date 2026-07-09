@@ -102,10 +102,10 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
             {
                 model: EmployeeAdvance,
                 as: "employeeAdvances",
-                attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'adjusted_in_payroll'],
+                attributes: ['id', 'amount', 'adjusted_amount', 'payment_mode', 'payment_date', 'adjusted_in_payroll'],
                 where: {
                     adjusted_in_payroll: false,
-                    status: 0
+                    status: { [Op.in]: [0, 3] }
                 },
                 required: false
             },
@@ -1180,7 +1180,7 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
     // Calculate payment sums
     const salaryPayments = paymentHistories.filter(ph => ph.payment_type === 'Salary');
     const salarySum = salaryPayments.reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0);
-    const advanceSum = (employee.employeeAdvances || []).reduce((sum, ea) => sum + parseFloat(ea.amount || 0), 0);
+    const advanceSum = (employee.employeeAdvances || []).reduce((sum, ea) => sum + (parseFloat(ea.amount || 0) - parseFloat(ea.adjusted_amount || 0)), 0);
 
     return {
         employee: {
@@ -1256,14 +1256,19 @@ const performSalaryCalculation = async (employee_id, month, year, transaction = 
                 sum: salarySum.toFixed(2)
             },
             advance: {
-                history: (employee.employeeAdvances || []).map(ea => ({
-                    id: ea.id,
-                    amount: ea.amount,
-                    payment_mode: ea.payment_mode,
-                    payment_date: ea.payment_date,
-                    payment_type: 'Advance',
-                    adjusted_in_payroll: ea.adjusted_in_payroll
-                })),
+                history: (employee.employeeAdvances || []).map(ea => {
+                    const remaining = parseFloat(ea.amount || 0) - parseFloat(ea.adjusted_amount || 0);
+                    return {
+                        id: ea.id,
+                        amount: parseFloat(ea.amount || 0),
+                        adjusted_amount: parseFloat(ea.adjusted_amount || 0),
+                        remaining_amount: remaining > 0 ? parseFloat(remaining.toFixed(2)) : 0,
+                        payment_mode: ea.payment_mode,
+                        payment_date: ea.payment_date,
+                        payment_type: 'Advance',
+                        adjusted_in_payroll: ea.adjusted_in_payroll
+                    };
+                }),
                 sum: advanceSum.toFixed(2)
             },
             grand_total: (salarySum + advanceSum).toFixed(2)
@@ -1660,44 +1665,66 @@ const internalFinalizePayroll = async (employee_id, month, year, generate_additi
     const advances_adjusted = [];
 
     if (advance_ids_to_adjust && advance_ids_to_adjust.length > 0) {
+        // Normalize advance_ids_to_adjust: if it's an array of numbers/strings, convert to objects
+        const normalizedAdjustments = advance_ids_to_adjust.map(item => {
+            if (typeof item === 'object' && item !== null && item.hasOwnProperty('id')) {
+                return {
+                    id: parseInt(item.id),
+                    amount_to_adjust: item.amount_to_adjust !== undefined && item.amount_to_adjust !== null ? parseFloat(item.amount_to_adjust) : null
+                };
+            } else {
+                return {
+                    id: parseInt(item),
+                    amount_to_adjust: null
+                };
+            }
+        });
+
+        const adjustmentIds = normalizedAdjustments.map(a => a.id);
+
         // First, get all pending advances for this employee
         const allPendingAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
             employee_id,
-            status: 0,
-            adjusted_in_payroll: false
+            status: { [Op.in]: [0, 3] },
+            adjusted_in_payroll: false,
+            id: { [Op.in]: adjustmentIds }
         }, {}, transaction);
 
-        // Filter to only the IDs that actually exist and are pending
-        const validIds = allPendingAdvances
-            .filter(a => advance_ids_to_adjust.includes(a.id))
-            .map(a => a.id);
-
-        if (validIds.length === 0) {
-            throw new Error(`Invalid advance IDs provided. Available pending advance IDs: ${allPendingAdvances.map(a => a.id).join(', ')}`);
+        if (allPendingAdvances.length === 0) {
+            throw new Error(`Invalid advance IDs provided. No matching pending advances found.`);
         }
 
-        const advanceWhereCondition = {
-            employee_id,
-            status: 0,
-            adjusted_in_payroll: false,
-            id: { [Op.in]: validIds }
-        };
+        for (const advance of allPendingAdvances) {
+            const adjustment = normalizedAdjustments.find(a => a.id === advance.id);
+            const currentAdjusted = parseFloat(advance.adjusted_amount || 0);
+            const remaining = parseFloat(advance.amount) - currentAdjusted;
 
-        const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, advanceWhereCondition, {}, transaction);
+            // If amount_to_adjust is null, adjust the full remaining amount
+            let amountToAdjust = (adjustment.amount_to_adjust !== null && adjustment.amount_to_adjust !== undefined) ? adjustment.amount_to_adjust : remaining;
 
-        if (employeeAdvances.length > 0) {
-            // Update selected advances to mark them as adjusted in payroll
-            await commonQuery.updateRecordById(EmployeeAdvance, advanceWhereCondition, { adjusted_in_payroll: true, status: 1 }, transaction);
+            if (amountToAdjust <= 0) {
+                continue;
+            }
 
-            // Collect advance details for payment history
-            employeeAdvances.forEach(advance => {
-                advances_adjusted.push({
-                    advance_id: advance.id,
-                    amount: advance.amount,
-                    payment_date: advance.payment_date,
-                    payment_mode: advance.payment_mode,
-                    notes: advance.notes
-                });
+            if (amountToAdjust > remaining + 0.01) {
+                throw new Error(`Cannot adjust ${amountToAdjust} from advance of remaining ${remaining}`);
+            }
+
+            const newAdjustedAmount = currentAdjusted + amountToAdjust;
+            const isFullyAdjusted = Math.abs(newAdjustedAmount - parseFloat(advance.amount)) < 0.01;
+
+            await commonQuery.updateRecordById(EmployeeAdvance, advance.id, {
+                adjusted_amount: newAdjustedAmount,
+                adjusted_in_payroll: isFullyAdjusted,
+                status: isFullyAdjusted ? 1 : 3
+            }, transaction);
+
+            advances_adjusted.push({
+                advance_id: advance.id,
+                amount: amountToAdjust, // actual amount adjusted in this payslip
+                payment_date: advance.payment_date,
+                payment_mode: advance.payment_mode,
+                notes: advance.notes
             });
         }
     }
@@ -1874,14 +1901,22 @@ exports.deletePayslip = async (req, res) => {
         // Reset advance adjustments that were included in this payslip ─────────
         const advancesAdjusted = payslip.payment_history?.advances_adjusted || [];
         if (advancesAdjusted.length > 0) {
-            const advanceIds = advancesAdjusted.map(a => a.advance_id);
-            await commonQuery.updateRecordById(EmployeeAdvance, {
-                id: { [Op.in]: advanceIds },
-                employee_id: payslip.employee_id
-            }, {
-                adjusted_in_payroll: false,
-                status: 0
-            }, transaction);
+            for (const adj of advancesAdjusted) {
+                const advance = await commonQuery.findOneRecord(EmployeeAdvance, {
+                    id: adj.advance_id,
+                    employee_id: payslip.employee_id
+                }, {}, transaction);
+
+                if (advance) {
+                    const newAdjustedAmount = Math.max(0, parseFloat(advance.adjusted_amount || 0) - parseFloat(adj.amount || 0));
+                    const isStillPartiallyAdjusted = newAdjustedAmount > 0.01;
+                    await commonQuery.updateRecordById(EmployeeAdvance, advance.id, {
+                        adjusted_amount: newAdjustedAmount,
+                        adjusted_in_payroll: false,
+                        status: isStillPartiallyAdjusted ? 3 : 0
+                    }, transaction);
+                }
+            }
         }
 
         // Reset incentives that were baked into this payslip ───────────────────
@@ -2564,10 +2599,10 @@ exports.getPayslipById = async (req, res) => {
         // Fetch Employee Advance records
         const employeeAdvances = await commonQuery.findAllRecords(EmployeeAdvance, {
             employee_id: payslip.employee_id,
-            status: 0,
+            status: { [Op.in]: [0, 3] },
             adjusted_in_payroll: false
         }, {
-            attributes: ['id', 'amount', 'payment_mode', 'payment_date', 'notes', 'adjusted_in_payroll']
+            attributes: ['id', 'amount', 'adjusted_amount', 'payment_mode', 'payment_date', 'notes', 'adjusted_in_payroll']
         });
 
         // Granular attendance recalculation for UI (since Payslip summary is slightly compressed)
@@ -2702,15 +2737,20 @@ exports.getPayslipById = async (req, res) => {
                     sum: paymentHistories.filter(ph => ph.payment_type === 'Salary').reduce((sum, ph) => sum + parseFloat(ph.amount || 0), 0).toFixed(2)
                 },
                 advance: {
-                    history: employeeAdvances.map(ea => ({
-                        id: ea.id,
-                        amount: ea.amount,
-                        payment_mode: ea.payment_mode,
-                        payment_date: ea.payment_date,
-                        payment_type: 'Advance',
-                        adjusted_in_payroll: ea.adjusted_in_payroll
-                    })),
-                    sum: employeeAdvances.reduce((sum, ea) => sum + parseFloat(ea.amount || 0), 0).toFixed(2)
+                    history: employeeAdvances.map(ea => {
+                        const remaining = parseFloat(ea.amount || 0) - parseFloat(ea.adjusted_amount || 0);
+                        return {
+                            id: ea.id,
+                            amount: parseFloat(ea.amount || 0),
+                            adjusted_amount: parseFloat(ea.adjusted_amount || 0),
+                            remaining_amount: remaining > 0 ? parseFloat(remaining.toFixed(2)) : 0,
+                            payment_mode: ea.payment_mode,
+                            payment_date: ea.payment_date,
+                            payment_type: 'Advance',
+                            adjusted_in_payroll: ea.adjusted_in_payroll
+                        };
+                    }),
+                    sum: employeeAdvances.reduce((sum, ea) => sum + (parseFloat(ea.amount || 0) - parseFloat(ea.adjusted_amount || 0)), 0).toFixed(2)
                 },
             },
             status: payslip.status,

@@ -48,12 +48,13 @@ exports.createPass = async (req, res) => {
         await transaction.rollback();
         return res.error(constants.VALIDATION_ERROR, "At least one crew member is required for Contractor/TPI");
       }
-      if (!resolvedVisitorName) {
-        resolvedVisitorName = visitorsList[0].name;
+      if (!company_name || !company_phone) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Company Name and Company Phone are required for Contractor/TPI");
       }
-      if (!resolvedVisitorPhone) {
-        resolvedVisitorPhone = visitorsList[0].phone;
-      }
+      // Pass identity = the company/vendor, never a specific crew member
+      resolvedVisitorName = company_name;
+      resolvedVisitorPhone = company_phone;
     }
 
     if (!resolvedVisitorName || !resolvedVisitorPhone || !purpose) {
@@ -222,9 +223,21 @@ exports.getPasses = async (req, res) => {
     }
 
     if (start_date && end_date) {
-      whereClause.scheduled_start_time = {
-        [Op.between]: [new Date(start_date), new Date(end_date)]
-      };
+      const from = new Date(start_date);
+      const to   = new Date(end_date);
+
+      // Match either:
+      //  (a) Scheduled passes whose scheduled_start_time falls within the selected day, OR
+      //  (b) Contractor/TPI passes whose valid_from–valid_to range overlaps the selected day
+      whereClause[Op.or] = [
+        // (a) normal visitor: scheduled on this day
+        { scheduled_start_time: { [Op.between]: [from, to] } },
+        // (b) range-based pass: valid_from <= end_of_day AND valid_to >= start_of_day
+        {
+          valid_from: { [Op.lte]: to },
+          valid_to:   { [Op.gte]: from }
+        }
+      ];
     }
 
     if (search) {
@@ -364,13 +377,18 @@ exports.punchIn = async (req, res) => {
     const updateData = {
       status: 1 // Checked In
     };
+    if (req.body.security_remarks) {
+      const newRemarks = req.body.security_remarks.trim();
+      if (pass.security_remarks) {
+        updateData.security_remarks = `${pass.security_remarks}, ${newRemarks}`;
+      } else {
+        updateData.security_remarks = newRemarks;
+      }
+    }
     if (!isMultiEntry) {
       updateData.check_in_time = new Date();
       if (uploadedPhoto) {
         updateData.visitor_photo = uploadedPhoto;
-      }
-      if (req.body.security_remarks) {
-        updateData.security_remarks = req.body.security_remarks;
       }
     }
 
@@ -653,6 +671,15 @@ exports.updatePass = async (req, res) => {
         await transaction.rollback();
         return res.error(constants.VALIDATION_ERROR, "Valid To is required for Contractor/TPI");
       }
+
+      const resolvedCompanyName = company_name !== undefined ? company_name : pass.company_name;
+      const resolvedCompanyPhone = company_phone !== undefined ? company_phone : pass.company_phone;
+      if (!resolvedCompanyName || !resolvedCompanyPhone) {
+        await transaction.rollback();
+        return res.error(constants.VALIDATION_ERROR, "Company Name and Company Phone are required for Contractor/TPI");
+      }
+      updateData.visitor_name = resolvedCompanyName;
+      updateData.visitor_phone = resolvedCompanyPhone;
 
       // Check for crew members
       let visitorsList = [];
