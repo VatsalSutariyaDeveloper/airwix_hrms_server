@@ -707,9 +707,9 @@ exports.verifyMobileNo = async (req, res) => {
       //   }
       // }
 
-      if (isSuperAdmin || isAdmin) {
-        return res.error(403, { message: "Admin or Super Admin login is not allowed." });
-      }
+      // if (isSuperAdmin || isAdmin) {
+      //   return res.error(403, { message: "Admin or Super Admin login is not allowed." });
+      // }
     }
 
     if (entity.status === 1) {

@@ -659,7 +659,7 @@ exports.getAttendanceSummary = async (req, res) => {
           { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
         ],
         order: [
-          [sequelize.literal(`"attendanceDays"."updated_at"`), 'DESC NULLS LAST'],
+          [sequelize.literal(`"attendanceDays"."first_in"`), 'DESC NULLS LAST'],
           ['first_name', 'ASC']
         ],
         attributes: [
@@ -2728,9 +2728,32 @@ exports.getFaceRecognitionErrors = async (req, res) => {
       };
     }
 
-    const fieldConfig = [];
+    const statusVal = req.body.status !== undefined ? req.body.status : 0;
+    let fieldConfig = [];
+    if (statusVal === 1) {
+      // Resolved: Search resolved employee name, code, and message
+      fieldConfig = [
+        ["employee.first_name", true, false],
+        ["employee.employee_code", true, false],
+        ["message", true, false]
+      ];
+    } else if (statusVal === 0) {
+      // Active/Unresolved: Search matches (candidates) and message
+      fieldConfig = [
+        ["matches", true, false],
+        ["message", true, false]
+      ];
+    } else {
+      // All: Search both
+      fieldConfig = [
+        ["employee.first_name", true, false],
+        ["employee.employee_code", true, false],
+        ["matches", true, false],
+        ["message", true, false]
+      ];
+    }
 
-    const payloadForPagination = { ...req.body, status: req.body.status !== undefined ? req.body.status : 0 };
+    const payloadForPagination = { ...req.body, status: statusVal };
     delete payloadForPagination.startDate;
     delete payloadForPagination.endDate;
 
