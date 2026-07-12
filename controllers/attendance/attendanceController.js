@@ -2995,7 +2995,7 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             }
           }
 
-          // B. Copy the physical image and save to profile_image
+          // B. Copy the physical image to destDir so aligned_face_images can load it
           if (filename) {
             const sourcePath = path.join(process.cwd(), "uploads", constants.FACE_ERROR_FOLDER || "employee/face_errors/", filename);
             const destPath = path.join(destDir, filename);
@@ -3007,25 +3007,9 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             if (fs.existsSync(sourcePath)) {
               fs.copyFileSync(sourcePath, destPath);
             }
+          }
 
-            empUpdateData.profile_image = filename;
-
-            await employee.update(empUpdateData);
-
-            // Synchronize profile image with associated User
-            const associatedUser = await commonQuery.findOneRecord(User, { employee_id: empId }, {});
-            if (associatedUser) {
-              const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
-              const userDestPath = path.join(userDestDir, filename);
-              if (fs.existsSync(destPath)) {
-                if (!fs.existsSync(userDestDir)) {
-                  fs.mkdirSync(userDestDir, { recursive: true });
-                }
-                fs.copyFileSync(destPath, userDestPath);
-              }
-              await associatedUser.update({ profile_image: filename });
-            }
-          } else if (Object.keys(empUpdateData).length > 0) {
+          if (Object.keys(empUpdateData).length > 0) {
             await employee.update(empUpdateData);
           }
           console.log(`[Resolve→Template] ✅ Emp #${empId} verification synchronized.`);
