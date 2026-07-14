@@ -575,7 +575,7 @@ function isUserAuthorizedForStage({
             return isAdmin;
 
         case 'ANYONE':
-            return isMatchReportingManager || isMatchAttendanceSupervisor || isSuperAdmin;
+            return isMatchReportingManager || isMatchAttendanceSupervisor || isAdmin || isSuperAdmin;
 
         default:
             return false;
