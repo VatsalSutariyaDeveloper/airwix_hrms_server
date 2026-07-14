@@ -1,8 +1,12 @@
 const constants = require("../constants");
 const { logError } = require("./logFunctions");
 const { Err } = require("../Err");
+const { reportDbTimeout } = require("./dbWatchdog");
 
 exports.handleError = async (err, res = null, req = null, isHighRisk = false) => {
+  // Feed the DB watchdog so repeated pool-exhaustion errors trigger a self-restart
+  reportDbTimeout(err);
+
   // If explicitly handled with our Err class, return immediately for Express
   if (res && (err instanceof Err || err.handled)) {
     if (err.data) {

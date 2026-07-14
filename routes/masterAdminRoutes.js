@@ -18,6 +18,7 @@ router.post("/companies/update-settings", ctrl.updateCompanySettings);
 router.post("/companies/impersonate", ctrl.impersonateCompany);
 router.post("/companies/assign-plan", ctrl.assignCompanyPlan);
 router.post("/companies/update-subscription", ctrl.updateCompanySubscription);
+router.post("/companies/delete", ctrl.deleteCompany);
 
 // --- Organizations ---
 router.get("/organizations/list", ctrl.getOrganizations);

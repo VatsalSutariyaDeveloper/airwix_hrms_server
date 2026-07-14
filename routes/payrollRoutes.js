@@ -75,6 +75,7 @@ router.post("/reimbursement", bufferFile(), reimbursementController.create);
 router.post("/reimbursement/get-transactions", reimbursementController.getAll);
 router.post("/reimbursement/pending-approvals", reimbursementController.getPendingApprovals);
 router.post("/reimbursement/summary", reimbursementController.getReimbursementSummary);
+router.post("/reimbursement/generate-slip-pdf", reimbursementController.generateSlipPdf);
 router.get("/reimbursement/:id", reimbursementController.getById);
 router.post("/reimbursement/:id", bufferFile(), reimbursementController.update);
 router.delete("/reimbursement", reimbursementController.delete);

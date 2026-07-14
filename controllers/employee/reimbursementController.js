@@ -1,9 +1,12 @@
-const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
+const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory, User, CompanyMaster } = require("../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime, deleteFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
 const { Op } = require("sequelize");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
+const path = require("path");
+const fs = require("fs");
+const pdfService = require("../../helpers/functions/pdfService");
 
 
 
@@ -15,6 +18,24 @@ const getBillsDocsUrls = (bills_docs) => {
             ? `${process.env.FILE_SERVER_URL}${constants.REIMBURSEMENT_DOC_FOLDER}${f}`
             : null;
     }).filter(Boolean);
+};
+
+const getReimbursementApprovalMeta = async (companyId, currentLevel, user, transaction = null) => {
+    const setting = await commonQuery.findOneRecord(CompanySettings, {
+        company_id: companyId,
+        settings_name: "reimbursement_approval_config"
+    }, {}, transaction, false, false);
+
+    let config = setting?.settings_value || [];
+    if (typeof config === "string") {
+        try { config = JSON.parse(config); } catch (e) { config = []; }
+    }
+
+    const totalLevels = Array.isArray(config) && config.length > 0 ? config.length : 1;
+    const isFinalApprovalStage = Number(currentLevel || 1) >= totalLevels;
+    const requiresPaymentTypeOnApproval = Boolean(user?.is_super_admin) || isFinalApprovalStage;
+
+    return { totalLevels, isFinalApprovalStage, requiresPaymentTypeOnApproval, config };
 };
 
 // Create a Reimbursement Request
@@ -141,7 +162,7 @@ exports.getAll = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["first_name", "employee_code"],
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     },
                     {
                         model: ExpenseType,
@@ -154,6 +175,11 @@ exports.getAll = async (req, res) => {
                         include: [
                             { model: ExpenseType, as: "expenseType", attributes: ["name"] }
                         ]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"]
                     }
                 ],
                 order: [['created_at', 'DESC']]
@@ -181,6 +207,19 @@ exports.getAll = async (req, res) => {
                 raw.pending_with = [];
             }
 
+            const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+            raw.total_approval_levels = approvalMeta.totalLevels;
+            raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+            raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
+
+            if (raw.payment_type === 2) {
+                const paymentHistory = await commonQuery.findOneRecord(PaymentHistory, {
+                    ref_id: raw.id,
+                    payment_type: "Reimbursement"
+                });
+                raw.payment_mode = paymentHistory ? paymentHistory.payment_mode : null;
+            }
+
             return raw;
         }));
 
@@ -202,7 +241,8 @@ exports.getById = async (req, res) => {
                     model: ReimbursementItem,
                     as: "items",
                     include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
-                }
+                },
+                { model: User, as: "approvedBy", attributes: ["id", "user_name"] }
             ]
         });
 
@@ -232,6 +272,19 @@ exports.getById = async (req, res) => {
             raw.pending_with = pendingDetails.pending_with;
         } else {
             raw.pending_with = [];
+        }
+
+        const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+        raw.total_approval_levels = approvalMeta.totalLevels;
+        raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+        raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
+
+        if (raw.payment_type === 2) {
+            const paymentHistory = await commonQuery.findOneRecord(PaymentHistory, {
+                ref_id: raw.id,
+                payment_type: "Reimbursement"
+            });
+            raw.payment_mode = paymentHistory ? paymentHistory.payment_mode : null;
         }
 
         return res.ok(raw);
@@ -419,7 +472,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, remarks: approval_remark, approved_by, payment_type } = req.body;
+        const { approval_status, remarks: approval_remark, approved_by, payment_type, payment_mode } = req.body;
 
         // 1. Fetch Reimbursement Record
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {}, transaction);
@@ -442,17 +495,9 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
-        // 3. Determine Total Levels from CompanySettings
-        let totalLevels = 1;
-        const approvalLevelSetting = await commonQuery.findOneRecord(CompanySettings, {
-            settings_name: "reimbursement_approval_level",
-        }, {}, transaction);
-
-        if (approvalLevelSetting && approvalLevelSetting.settings_value) {
-            totalLevels = approvalLevelSetting.settings_value;
-        }
-
         const currentLevel = reimbursement.current_level;
+        const approvalMeta = await getReimbursementApprovalMeta(employee.company_id, currentLevel, req.user, transaction);
+        const totalLevels = approvalMeta.totalLevels;
         const history = reimbursement.approval_history || [];
 
         const isApproved = String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED";
@@ -490,17 +535,30 @@ exports.updateStatus = async (req, res) => {
             const updateData = {
                 approval_history: updatedHistory,
                 approval_remark: approval_remark || "",
-                payment_type: payment_type,
                 approval_status: newStatus,
                 current_level: newLevel
             };
+
+            if (approvalMeta.requiresPaymentTypeOnApproval && payment_type !== undefined) {
+                updateData.payment_type = payment_type;
+            }
 
             if (newStatus === constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) {
                 updateData.approved_by = approved_by || req.user?.id;
 
                 const finalPaymentType = payment_type !== undefined ? Number(payment_type) : reimbursement.payment_type;
+                if (![1, 2].includes(Number(finalPaymentType))) {
+                    await transaction.rollback();
+                    return res.error(constants.VALIDATION_ERROR, { payment_type: "Payment method is required for final approval" });
+                }
                 // Create PaymentHistory entry for instant payment (payment_type = 2)
                 if (finalPaymentType === 2) {
+                    const finalPaymentMode = payment_mode || "Bank";
+                    if (!["Cash", "Bank"].includes(finalPaymentMode)) {
+                        await transaction.rollback();
+                        return res.error(constants.VALIDATION_ERROR, { payment_mode: "Invalid payment mode" });
+                    }
+
                     const reimbursementDate = dayjs(reimbursement.date);
                     await commonQuery.createRecord(PaymentHistory, {
                         employee_id: reimbursement.employee_id,
@@ -510,7 +568,7 @@ exports.updateStatus = async (req, res) => {
                         payment_date: dayjs().format('YYYY-MM-DD'),
                         amount: reimbursement.total_amount,
                         payment_type: "Reimbursement",
-                        payment_mode: "Bank",
+                        payment_mode: finalPaymentMode,
                         status: 1, // Adjusted/Paid
                         company_id: reimbursement.company_id || req.user?.company_id,
                         branch_id: reimbursement.branch_id || req.user?.branch_id || 0,
@@ -635,10 +693,25 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
+            const currentLevel = request.current_level || 1;
+            const approvalMeta = await getReimbursementApprovalMeta(request.company_id, currentLevel, req.user);
+            const config = approvalMeta.config || [];
+
+            const currentStage = config.find(c => Number(c.level) === Number(currentLevel)) || {
+                type: currentLevel > 1 ? "ADMIN" : "ANYONE",
+                label: `Level ${currentLevel}`
+            };
+
+            let stageType = (currentStage.type || "ANYONE").toString().toUpperCase();
+            if (stageType === "3") stageType = "REPORTING_MANAGER";
+            if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
+
+            const isOwnRequest = (request.employee_id === req.user.employee_id);
             const isAuthorized = isUserAuthorizedForStage({
                 user: req.user,
                 employee,
-                stageType: 'ANYONE'
+                stageType: stageType,
+                isOwnRequest
             });
 
             if (isAuthorized) {
@@ -667,6 +740,11 @@ exports.getPendingApprovals = async (req, res) => {
                 // Resolve pending approver details
                 const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
                 raw.pending_with = pendingDetails.pending_with;
+
+                const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+                raw.total_approval_levels = approvalMeta.totalLevels;
+                raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+                raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
 
                 pendingForUser.push(raw);
             }
@@ -736,7 +814,7 @@ exports.getReimbursementSummary = async (req, res) => {
                 {
                     model: Employee,
                     as: "employee",
-                    attributes: ["id", "first_name", "employee_code"],
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     required: false
                 },
                 {
@@ -833,6 +911,108 @@ exports.getReimbursementSummary = async (req, res) => {
             reimbursement_history: groupedHistory
         });
 
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+// Generate Reimbursement Slip PDF
+exports.generateSlipPdf = async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) {
+            return res.error("VALIDATION_ERROR", { message: "Reimbursement ID is required" });
+        }
+
+        // Fetch reimbursement detail
+        const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {
+            include: [
+                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id", "joining_date"] },
+                { model: ExpenseType, as: "expenseType", attributes: ["name"] },
+                {
+                    model: ReimbursementItem,
+                    as: "items",
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
+                },
+                { model: User, as: "approvedBy", attributes: ["id", "user_name"] }
+            ]
+        });
+
+        if (!reimbursement) {
+            return res.error("NOT_FOUND", { message: "Reimbursement request not found" });
+        }
+
+        const data = reimbursement.get({ plain: true });
+
+        // Retrieve payment mode if direct payment
+        if (data.payment_type === 2) {
+            const ph = await commonQuery.findOneRecord(PaymentHistory, {
+                ref_id: id,
+                payment_type: "Reimbursement"
+            });
+            if (ph) {
+                data.payment_mode = ph.payment_mode;
+            }
+        }
+
+        // Format dates and fields for the template
+        data.formattedAppliedOn = data.created_at || data.createdAt ? dayjs(data.created_at || data.createdAt).format('DD/MM/YYYY') : 'N/A';
+        data.formattedPeriod = data.date ? dayjs(data.date).format('MMMM YYYY') : '';
+        
+        // Items list formatting dates
+        data.formattedItems = (data.items || []).map(item => ({
+            expenseType: item.expenseType || { name: "Reimbursement" },
+            formattedDate: item.expense_date ? dayjs(item.expense_date).format('DD/MM/YYYY') : 'N/A',
+            description: item.description,
+            amount: item.amount
+        }));
+        
+        if (data.formattedItems.length === 0) {
+            data.formattedItems = [{
+                expenseType: data.expenseType || { name: "Reimbursement" },
+                formattedDate: data.expense_date ? dayjs(data.expense_date).format('DD/MM/YYYY') : (data.date ? dayjs(data.date).format('DD/MM/YYYY') : 'N/A'),
+                description: data.description,
+                amount: data.total_amount
+            }];
+        }
+
+        // Fetch company details
+        const companyId = data.employee?.company_id || data.company_id || req.user.company_id;
+        const company = await CompanyMaster.findOne({ where: { id: companyId } });
+
+        const formattedAddress = [
+            company?.address,
+            company?.address2,
+            company?.city,
+            company?.state_name,
+            company?.pincode
+        ].filter(Boolean).join(", ");
+
+        const companyData = {
+            company_name: company?.company_name || 'Airwix HRMS',
+            address: formattedAddress,
+            company_logo_url: company?.logo_image ? `${process.env.FILE_SERVER_URL}${constants.COMPANY_LOGO_IMG_FOLDER}${company.logo_image}` : null
+        };
+
+        const templatePath = path.join(process.cwd(), 'views', 'reimbursement', 'slip.ejs');
+        const filename = `reimbursement_slip_${id}_${Date.now()}.pdf`;
+        const outputDir = path.join(process.cwd(), 'uploads', 'reimbursements');
+
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const outputPath = path.join(outputDir, filename);
+        
+        // Pass data to template
+        await pdfService.generatePdfFromTemplate(templatePath, { data, companyData }, outputPath);
+
+        const downloadLink = `${process.env.FILE_SERVER_URL}reimbursements/${filename}`;
+
+        return res.ok({
+            download_link: downloadLink,
+            filename: filename
+        });
     } catch (err) {
         return handleError(err, res, req);
     }

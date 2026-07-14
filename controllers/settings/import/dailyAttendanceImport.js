@@ -270,6 +270,8 @@ const runWorker = async () => {
         companyAccessList.push(String(workerData.company_id));
     }
 
+    mockStore.selectedCompanyIds = companyAccessList.map(Number);
+
     // Fetch branches for mapping
     const branches = await requestContext.run(mockStore, async () => {
         const branchWhere = { status: { [Op.ne]: 2 } };

@@ -2611,14 +2611,14 @@ exports.registerFace = async (req, res) => {
 
         if (req.user.access == "attendance") {
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, { status: 0 });
-            if (!device) {
-                await transaction.rollback();
-                return res.status(401).json({
-                    success: false,
-                    error: "UNAUTHORIZED",
-                    message: "Device not Exist."
-                });
-            }
+            // if (!device) {
+            //     await transaction.rollback();
+            //     return res.status(401).json({
+            //         success: false,
+            //         error: "UNAUTHORIZED",
+            //         message: "Device not Exist."
+            //     });
+            // }
 
             if (!employeeId) {
                 await transaction.rollback();
@@ -2878,13 +2878,13 @@ exports.facePunch = async (req, res) => {
 
         if (req.user.access == "attendance") {
             const device = await commonQuery.findOneRecord(DeviceMaster, req.user.id, { status: 0 });
-            if (!device) {
-                return res.status(401).json({
-                    success: false,
-                    error: "UNAUTHORIZED",
-                    message: "Device not Exist."
-                });
-            }
+            // if (!device) {
+            //     return res.status(401).json({
+            //         success: false,
+            //         error: "UNAUTHORIZED",
+            //         message: "Device not Exist."
+            //     });
+            // }
         }
 
         const files = req.files.image || req.files['image'];

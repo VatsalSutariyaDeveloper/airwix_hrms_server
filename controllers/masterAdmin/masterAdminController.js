@@ -1034,4 +1034,110 @@ exports.getModulesAndEntities = async (req, res) => {
   }
 };
 
+// -----------------------------------------------------------
+// 11. DELETE COMPANY (SOFT OR HARD DELETE WITH TENANT CASCADING)
+// -----------------------------------------------------------
+exports.deleteCompany = async (req, res) => {
+  const rootSeq = getRootSequelize();
+  const transaction = await rootSeq.transaction();
+  try {
+    const { company_id, delete_type } = req.body; // delete_type: 'soft' | 'hard'
+
+    if (!company_id) {
+      await transaction.rollback();
+      return res.error("VALIDATION_ERROR", "company_id is required");
+    }
+
+    const company = await CompanyMaster.findOne({ where: { id: company_id }, transaction });
+    if (!company) {
+      await transaction.rollback();
+      return res.error("NOT_FOUND", "Company not found");
+    }
+
+    const organizationId = company.organization_id;
+    const isDefaultCompany = company.is_default === 1;
+
+    let companyIdsToDelete = [company_id];
+    let orgIdToDelete = null;
+
+    if (isDefaultCompany && organizationId) {
+      orgIdToDelete = organizationId;
+      // Find all other companies in the same organization
+      const otherCompanies = await CompanyMaster.findAll({
+        where: { organization_id: organizationId, id: { [Op.ne]: company_id } },
+        transaction,
+        raw: true
+      });
+      const otherCompanyIds = otherCompanies.map(c => c.id);
+      companyIdsToDelete = [...companyIdsToDelete, ...otherCompanyIds];
+    }
+
+    const commonQuery = require("../../helpers/commonQuery");
+    const models = require("../../models");
+
+    if (delete_type === "hard") {
+      // Loop over all models and delete any records matching any of the companyIdsToDelete
+      for (const key in models) {
+        const model = models[key];
+        if (model && model.rawAttributes && model.name !== "CompanyMaster" && model.name !== "Organization") {
+          if (model.rawAttributes.company_id) {
+            await commonQuery.hardDeleteRecords(model, { company_id: { [Op.in]: companyIdsToDelete } }, transaction, false);
+          }
+        }
+      }
+
+      // Retrieve logo and signature images to delete from disk for hard-deleted companies
+      const { deleteFile } = require("../../helpers/fileUpload");
+      const { constants } = require("../../helpers/constants");
+      const companiesToDelete = await CompanyMaster.findAll({
+        where: { id: { [Op.in]: companyIdsToDelete } },
+        transaction,
+        raw: true
+      });
+
+      for (const comp of companiesToDelete) {
+        if (comp.logo_image) {
+          await deleteFile(null, null, constants.COMPANY_LOGO_IMG_FOLDER, comp.logo_image);
+        }
+        if (comp.admin_signature_img) {
+          await deleteFile(null, null, constants.COMPANY_SIGN_IMG_FOLDER, comp.admin_signature_img);
+        }
+      }
+
+      // Hard delete the companies themselves
+      await commonQuery.hardDeleteRecords(CompanyMaster, { id: { [Op.in]: companyIdsToDelete } }, transaction, false);
+
+      // Hard delete the organization itself
+      if (orgIdToDelete) {
+        await commonQuery.hardDeleteRecords(Organization, { id: orgIdToDelete }, transaction, false);
+      }
+    } else {
+      // Soft delete: Loop over all models and soft delete any records matching companyIdsToDelete
+      for (const key in models) {
+        const model = models[key];
+        if (model && model.rawAttributes && model.name !== "CompanyMaster" && model.name !== "Organization") {
+          if (model.rawAttributes.company_id && model.rawAttributes.status) {
+            await commonQuery.softDeleteById(model, { company_id: { [Op.in]: companyIdsToDelete } }, transaction, false);
+          }
+        }
+      }
+
+      // Soft delete the companies themselves
+      await commonQuery.softDeleteById(CompanyMaster, { id: { [Op.in]: companyIdsToDelete } }, transaction, false);
+
+      // Soft delete the organization itself
+      if (orgIdToDelete) {
+        await commonQuery.softDeleteById(Organization, { id: orgIdToDelete }, transaction, false);
+      }
+    }
+
+    await transaction.commit();
+    return res.success("COMPANY_DELETED");
+  } catch (err) {
+    await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+
 

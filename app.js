@@ -20,9 +20,31 @@ if (cluster.isMaster) {
   // Fork the first worker
   const worker = cluster.fork();
 
+  // Crash-loop protection: if workers keep dying too fast (e.g. the DB pool is
+  // stuck exhausted even after a worker restart), respawning alone won't help —
+  // exit the master too, so Docker's restart policy restarts the whole container
+  // with a clean network/DB state.
+  const CRASH_LOOP_THRESHOLD = 5;
+  const CRASH_LOOP_WINDOW_MS = 2 * 60 * 1000;
+  let restartTimestamps = [];
+
   // Listen for worker deaths (crashes)
   cluster.on("exit", (worker, code, signal) => {
     console.error(`💀 Worker Process [${worker.process.pid}] died (Code: ${code}, Signal: ${signal})`);
+
+    const now = Date.now();
+    restartTimestamps.push(now);
+    restartTimestamps = restartTimestamps.filter((t) => now - t <= CRASH_LOOP_WINDOW_MS);
+
+    if (restartTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+      console.error(
+        `🚨 Crash-loop detected: ${CRASH_LOOP_THRESHOLD} worker restarts within ${CRASH_LOOP_WINDOW_MS / 1000}s. ` +
+        `Exiting master [${process.pid}] so Docker restarts the container.`
+      );
+      process.exit(1);
+      return;
+    }
+
     console.log("♻️  Self-Healing: Spawning new worker process instantly...");
     cluster.fork();
   });
