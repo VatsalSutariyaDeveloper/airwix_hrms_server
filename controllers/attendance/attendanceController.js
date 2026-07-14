@@ -3009,8 +3009,24 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             }
           }
 
-          if (Object.keys(empUpdateData).length > 0) {
-            await employee.update(empUpdateData);
+          if(!employee.profile_image) {
+            empUpdateData.profile_image = filename;
+          }
+
+          await employee.update(empUpdateData);
+
+          // Synchronize profile image with associated User
+          const associatedUser = await commonQuery.findOneRecord(User, { employee_id: empId }, {});
+          if (associatedUser) {
+            const userDestDir = path.join(process.cwd(), "uploads", constants.USER_IMG_FOLDER);
+            const userDestPath = path.join(userDestDir, filename);
+            if (fs.existsSync(destPath)) {
+              if (!fs.existsSync(userDestDir)) {
+                fs.mkdirSync(userDestDir, { recursive: true });
+              }
+              fs.copyFileSync(destPath, userDestPath);
+            }
+            await associatedUser.update({ profile_image: filename });
           }
           console.log(`[Resolve→Template] ✅ Emp #${empId} verification synchronized.`);
         } // end block

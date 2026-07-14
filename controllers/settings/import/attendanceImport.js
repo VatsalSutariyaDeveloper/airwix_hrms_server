@@ -9,7 +9,8 @@ const {
   LeaveTemplateCategory,
   EmployeeLeaveBalance,
   LeaveRequest,
-  CompanyMaster
+  CompanyMaster,
+  User
 } = require("../../../models");
 const { Op } = require("sequelize");
 const xlsx = require("xlsx");
@@ -247,6 +248,7 @@ const runWorker = async () => {
         if (typeof access === "string") return access.split(",").map((id) => id.trim()).filter(Boolean);
         return [];
     };
+    console.log("workerData",workerData)
     let companyAccessList = [];
     if (workerData.is_super_admin) {
         let orgId = workerData.organization_id;
@@ -272,11 +274,14 @@ const runWorker = async () => {
             companyAccessList = orgCompanies.map(c => String(c.id));
         }
     } else {
-        companyAccessList = normalizeCompanyAccess(workerData.company_access || "");
+        const userCompanyAccess = await commonQuery.findOneRecord(User, { id: workerData.user_id }, { attributes: ['company_access'], raw: true }, transaction);
+        companyAccessList = normalizeCompanyAccess(userCompanyAccess?.company_access || "");
     }
     if (workerData.company_id && !companyAccessList.includes(String(workerData.company_id))) {
         companyAccessList.push(String(workerData.company_id));
     }
+
+    mockStore.selectedCompanyIds = companyAccessList.map(Number);
 
     // Fetch branches for mapping
     const branches = await requestContext.run(mockStore, async () => {
@@ -377,6 +382,7 @@ const runWorker = async () => {
 
     // 3. Fetch all existing days for this range/employees in one go
     const existingDaysMap = new Map();
+    const leaveRequestsMap = new Map();
     if (empIdList.length > 0 && minDate && maxDate) {
         const existingData = await AttendanceDay.findAll({
             where: {
@@ -391,6 +397,28 @@ const runWorker = async () => {
             const dateStr = dayjs(d.attendance_date).format("YYYY-MM-DD");
             const dKey = `${d.employee_id}_${dateStr}`;
             existingDaysMap.set(dKey, d);
+        });
+
+        // Pre-fetch active debit leave requests for these employees overlapping the date range
+        const existingLeaveRequests = await LeaveRequest.findAll({
+            where: {
+                employee_id: { [Op.in]: empIdList },
+                start_date: { [Op.lte]: maxDate },
+                end_date: { [Op.gte]: minDate },
+                status: 0,
+                request_type: 'DEBIT',
+                reason: { [Op.ne]: "Auto-generated from Attendance Import" }
+            },
+            attributes: ['id', 'employee_id', 'leave_category_id', 'start_date', 'end_date', 'approval_status', 'total_days'],
+            transaction,
+            raw: true
+        });
+
+        existingLeaveRequests.forEach(lr => {
+            if (!leaveRequestsMap.has(lr.employee_id)) {
+                leaveRequestsMap.set(lr.employee_id, []);
+            }
+            leaveRequestsMap.get(lr.employee_id).push(lr);
         });
 
         // Pre-fetch balances for the current year to avoid redundant queries in loop
@@ -413,6 +441,7 @@ const runWorker = async () => {
     }
     // ----------------------------------------------------------
 
+    const leaveRequestsToApprove = new Set();
     const createdCountRef = { val: 0 };
     const updatedCountRef = { val: 0 };
     const leaveIncrementMap = new Map();
@@ -785,7 +814,38 @@ const runWorker = async () => {
                     const isFullLeave = (status === 6);
                     const isHalfLeave = (status === 1 && leaveCategoryId);
                     
-                    const newDays = (isFullLeave || isShortLeave) ? 1.0 : (isHalfLeave ? 0.5 : 0);
+                    let newDays = (isFullLeave || isShortLeave) ? 1.0 : (isHalfLeave ? 0.5 : 0);
+
+                    // Check if there is an overlapping leave request in the system for this day
+                    let hasExistingManualLeave = false;
+                    if (newDays > 0) {
+                        const empLeaves = leaveRequestsMap.get(employeeId) || [];
+                        const overlappingLeaves = empLeaves.filter(lr => 
+                            lr.start_date <= attendanceDate && 
+                            lr.end_date >= attendanceDate
+                        );
+
+                        const approvedRequest = overlappingLeaves.find(lr => 
+                            lr.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED
+                        );
+
+                        const pendingRequest = overlappingLeaves.find(lr => 
+                            lr.approval_status === constants.LEAVE_APPROVAL_STATUS.PENDING ||
+                            lr.approval_status === constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED
+                        );
+
+                        if (approvedRequest) {
+                            // If already that day leave approved then not need any changes and not need update leave balance in employee
+                            newDays = 0;
+                            hasExistingManualLeave = true;
+                        } else if (pendingRequest) {
+                            // If a pending/partially approved request exists, approve it.
+                            // The balance was already adjusted when the request was created in system, so do not update balance again.
+                            leaveRequestsToApprove.add(pendingRequest.id);
+                            newDays = 0;
+                            hasExistingManualLeave = true;
+                        }
+                    }
 
                     let oldDays = 0;
                     if (existingDay && existingDay.leave_category_id) {
@@ -807,7 +867,7 @@ const runWorker = async () => {
                          leaveIncrementMap.set(oldBalKey, (leaveIncrementMap.get(oldBalKey) || 0) - oldDays);
                     }
 
-                    if (newDays > 0 && leaveCategoryId) {
+                    if (newDays > 0 && leaveCategoryId && !hasExistingManualLeave) {
                         leaveRequestPayloads.push({
                             employee_id: employeeId,
                             leave_category_id: leaveCategoryId,
@@ -972,19 +1032,32 @@ const runWorker = async () => {
     }
     
     // 6. Bulk Create Leave Requests (Maintain History)
-    if (leaveRequestPayloads.length > 0) {
-        // Clear existing auto-requests for the touched date range to prevent duplicates
-        const processedEmpIdsForLeave = [...new Set(leaveRequestPayloads.map(p => p.employee_id))];
+    // Clear existing auto-requests for the touched date range to prevent duplicates
+    if (empIdList.length > 0) {
         await LeaveRequest.destroy({
             where: {
-                employee_id: { [Op.in]: processedEmpIdsForLeave },
+                employee_id: { [Op.in]: empIdList },
                 start_date: { [Op.between]: [minDate, maxDate] },
                 reason: "Auto-generated from Attendance Import"
             },
             transaction
         });
+    }
 
+    if (leaveRequestPayloads.length > 0) {
         await LeaveRequest.bulkCreate(leaveRequestPayloads, { transaction });
+    }
+
+    // 7. Bulk Approve existing pending leave requests that matched leave days
+    if (leaveRequestsToApprove.size > 0) {
+        await LeaveRequest.update({
+            approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+            approved_by: mockStore.userId,
+            approval_remark: "Approved via Attendance Import"
+        }, {
+            where: { id: { [Op.in]: Array.from(leaveRequestsToApprove) } },
+            transaction
+        });
     }
     // -----------------------------------------------------
 
