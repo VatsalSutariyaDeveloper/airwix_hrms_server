@@ -17,7 +17,7 @@ async function getApproverInfo(userId, companyId) {
                     include: [{ model: DesignationMaster, as: "designation", attributes: ["designation_name"] }]
                 }
             ]
-        });
+        }, null, false, false);
 
         if (!user) return null;
 
@@ -60,7 +60,7 @@ async function getAdmins(companyId) {
                     include: [{ model: DesignationMaster, as: "designation", attributes: ["designation_name"] }]
                 }
             ]
-        });
+        }, null, false);
 
         return adminUsers.map(user => {
             let name = "";
@@ -338,7 +338,7 @@ async function resolvePendingApprovers(request, type) {
 
             case "REIMBURSEMENT": {
                 // Fetches company settings ONLY when needed
-                const companySettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "reimbursement_approval_config" });
+                const companySettings = await commonQuery.findOneRecord(CompanySettings, { company_id: companyId, settings_name: "reimbursement_approval_config" }, {}, null, false, false);
                 rawConfig = companySettings ? (companySettings.settings_value || []) : [];
                 break;
             }

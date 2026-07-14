@@ -17,6 +17,24 @@ const getBillsDocsUrls = (bills_docs) => {
     }).filter(Boolean);
 };
 
+const getReimbursementApprovalMeta = async (companyId, currentLevel, user, transaction = null) => {
+    const setting = await commonQuery.findOneRecord(CompanySettings, {
+        company_id: companyId,
+        settings_name: "reimbursement_approval_config"
+    }, {}, transaction, false, false);
+
+    let config = setting?.settings_value || [];
+    if (typeof config === "string") {
+        try { config = JSON.parse(config); } catch (e) { config = []; }
+    }
+
+    const totalLevels = Array.isArray(config) && config.length > 0 ? config.length : 1;
+    const isFinalApprovalStage = Number(currentLevel || 1) >= totalLevels;
+    const requiresPaymentTypeOnApproval = Boolean(user?.is_super_admin) || isFinalApprovalStage;
+
+    return { totalLevels, isFinalApprovalStage, requiresPaymentTypeOnApproval, config };
+};
+
 // Create a Reimbursement Request
 exports.create = async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -141,7 +159,7 @@ exports.getAll = async (req, res) => {
                     {
                         model: Employee,
                         as: "employee",
-                        attributes: ["first_name", "employee_code"],
+                        attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     },
                     {
                         model: ExpenseType,
@@ -180,6 +198,11 @@ exports.getAll = async (req, res) => {
             } else {
                 raw.pending_with = [];
             }
+
+            const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+            raw.total_approval_levels = approvalMeta.totalLevels;
+            raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+            raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
 
             return raw;
         }));
@@ -233,6 +256,11 @@ exports.getById = async (req, res) => {
         } else {
             raw.pending_with = [];
         }
+
+        const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+        raw.total_approval_levels = approvalMeta.totalLevels;
+        raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+        raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
 
         return res.ok(raw);
     } catch (err) {
@@ -442,17 +470,9 @@ exports.updateStatus = async (req, res) => {
             return res.error(constants.NOT_FOUND, { message: "Employee not found" });
         }
 
-        // 3. Determine Total Levels from CompanySettings
-        let totalLevels = 1;
-        const approvalLevelSetting = await commonQuery.findOneRecord(CompanySettings, {
-            settings_name: "reimbursement_approval_level",
-        }, {}, transaction);
-
-        if (approvalLevelSetting && approvalLevelSetting.settings_value) {
-            totalLevels = approvalLevelSetting.settings_value;
-        }
-
         const currentLevel = reimbursement.current_level;
+        const approvalMeta = await getReimbursementApprovalMeta(employee.company_id, currentLevel, req.user, transaction);
+        const totalLevels = approvalMeta.totalLevels;
         const history = reimbursement.approval_history || [];
 
         const isApproved = String(approval_status) === String(constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) || approval_status === "APPROVED";
@@ -490,15 +510,22 @@ exports.updateStatus = async (req, res) => {
             const updateData = {
                 approval_history: updatedHistory,
                 approval_remark: approval_remark || "",
-                payment_type: payment_type,
                 approval_status: newStatus,
                 current_level: newLevel
             };
+
+            if (approvalMeta.requiresPaymentTypeOnApproval && payment_type !== undefined) {
+                updateData.payment_type = payment_type;
+            }
 
             if (newStatus === constants.REIMBURSEMENT_APPROVAL_STATUS.APPROVED) {
                 updateData.approved_by = approved_by || req.user?.id;
 
                 const finalPaymentType = payment_type !== undefined ? Number(payment_type) : reimbursement.payment_type;
+                if (![1, 2].includes(Number(finalPaymentType))) {
+                    await transaction.rollback();
+                    return res.error(constants.VALIDATION_ERROR, { payment_type: "Payment method is required for final approval" });
+                }
                 // Create PaymentHistory entry for instant payment (payment_type = 2)
                 if (finalPaymentType === 2) {
                     const reimbursementDate = dayjs(reimbursement.date);
@@ -635,10 +662,25 @@ exports.getPendingApprovals = async (req, res) => {
             const employee = request.employee;
             if (!employee) continue;
 
+            const currentLevel = request.current_level || 1;
+            const approvalMeta = await getReimbursementApprovalMeta(request.company_id, currentLevel, req.user);
+            const config = approvalMeta.config || [];
+
+            const currentStage = config.find(c => Number(c.level) === Number(currentLevel)) || {
+                type: currentLevel > 1 ? "ADMIN" : "ANYONE",
+                label: `Level ${currentLevel}`
+            };
+
+            let stageType = (currentStage.type || "ANYONE").toString().toUpperCase();
+            if (stageType === "3") stageType = "REPORTING_MANAGER";
+            if (stageType === "4") stageType = "ATTENDANCE_SUPERVISOR";
+
+            const isOwnRequest = (request.employee_id === req.user.employee_id);
             const isAuthorized = isUserAuthorizedForStage({
                 user: req.user,
                 employee,
-                stageType: 'ANYONE'
+                stageType: stageType,
+                isOwnRequest
             });
 
             if (isAuthorized) {
@@ -667,6 +709,11 @@ exports.getPendingApprovals = async (req, res) => {
                 // Resolve pending approver details
                 const pendingDetails = await resolvePendingApprovers(raw, "REIMBURSEMENT");
                 raw.pending_with = pendingDetails.pending_with;
+
+                const approvalMeta = await getReimbursementApprovalMeta(raw.company_id, raw.current_level, req.user);
+                raw.total_approval_levels = approvalMeta.totalLevels;
+                raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
+                raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
 
                 pendingForUser.push(raw);
             }
@@ -736,7 +783,7 @@ exports.getReimbursementSummary = async (req, res) => {
                 {
                     model: Employee,
                     as: "employee",
-                    attributes: ["id", "first_name", "employee_code"],
+                    attributes: ["id", "first_name", "employee_code", "reporting_manager", "attendance_supervisor"],
                     required: false
                 },
                 {
