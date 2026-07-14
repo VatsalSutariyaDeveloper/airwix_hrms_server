@@ -1,9 +1,12 @@
-const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory } = require("../../models");
+const { Reimbursement, ReimbursementItem, Employee, ExpenseType, sequelize, AttendanceTemplate, EmployeeAttendanceTemplate, CompanySettings, PaymentHistory, User, CompanyMaster } = require("../../models");
 const { validateRequest, commonQuery, handleError, uploadFile, fileExists, formatDateTime, deleteFile } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
 const dayjs = require("dayjs");
 const { Op } = require("sequelize");
 const { resolvePendingApprovers, getNextApprovalState, isUserAuthorizedForStage } = require("../../helpers/approvalHelper");
+const path = require("path");
+const fs = require("fs");
+const pdfService = require("../../helpers/functions/pdfService");
 
 
 
@@ -172,6 +175,11 @@ exports.getAll = async (req, res) => {
                         include: [
                             { model: ExpenseType, as: "expenseType", attributes: ["name"] }
                         ]
+                    },
+                    {
+                        model: User,
+                        as: "approvedBy",
+                        attributes: ["id", "user_name"]
                     }
                 ],
                 order: [['created_at', 'DESC']]
@@ -204,6 +212,14 @@ exports.getAll = async (req, res) => {
             raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
             raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
 
+            if (raw.payment_type === 2) {
+                const paymentHistory = await commonQuery.findOneRecord(PaymentHistory, {
+                    ref_id: raw.id,
+                    payment_type: "Reimbursement"
+                });
+                raw.payment_mode = paymentHistory ? paymentHistory.payment_mode : null;
+            }
+
             return raw;
         }));
 
@@ -225,7 +241,8 @@ exports.getById = async (req, res) => {
                     model: ReimbursementItem,
                     as: "items",
                     include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
-                }
+                },
+                { model: User, as: "approvedBy", attributes: ["id", "user_name"] }
             ]
         });
 
@@ -261,6 +278,14 @@ exports.getById = async (req, res) => {
         raw.total_approval_levels = approvalMeta.totalLevels;
         raw.is_final_approval_stage = approvalMeta.isFinalApprovalStage;
         raw.requires_payment_type_on_approval = approvalMeta.requiresPaymentTypeOnApproval;
+
+        if (raw.payment_type === 2) {
+            const paymentHistory = await commonQuery.findOneRecord(PaymentHistory, {
+                ref_id: raw.id,
+                payment_type: "Reimbursement"
+            });
+            raw.payment_mode = paymentHistory ? paymentHistory.payment_mode : null;
+        }
 
         return res.ok(raw);
     } catch (err) {
@@ -447,7 +472,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const { approval_status, remarks: approval_remark, approved_by, payment_type } = req.body;
+        const { approval_status, remarks: approval_remark, approved_by, payment_type, payment_mode } = req.body;
 
         // 1. Fetch Reimbursement Record
         const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {}, transaction);
@@ -528,6 +553,12 @@ exports.updateStatus = async (req, res) => {
                 }
                 // Create PaymentHistory entry for instant payment (payment_type = 2)
                 if (finalPaymentType === 2) {
+                    const finalPaymentMode = payment_mode || "Bank";
+                    if (!["Cash", "Bank"].includes(finalPaymentMode)) {
+                        await transaction.rollback();
+                        return res.error(constants.VALIDATION_ERROR, { payment_mode: "Invalid payment mode" });
+                    }
+
                     const reimbursementDate = dayjs(reimbursement.date);
                     await commonQuery.createRecord(PaymentHistory, {
                         employee_id: reimbursement.employee_id,
@@ -537,7 +568,7 @@ exports.updateStatus = async (req, res) => {
                         payment_date: dayjs().format('YYYY-MM-DD'),
                         amount: reimbursement.total_amount,
                         payment_type: "Reimbursement",
-                        payment_mode: "Bank",
+                        payment_mode: finalPaymentMode,
                         status: 1, // Adjusted/Paid
                         company_id: reimbursement.company_id || req.user?.company_id,
                         branch_id: reimbursement.branch_id || req.user?.branch_id || 0,
@@ -880,6 +911,108 @@ exports.getReimbursementSummary = async (req, res) => {
             reimbursement_history: groupedHistory
         });
 
+    } catch (err) {
+        return handleError(err, res, req);
+    }
+};
+
+// Generate Reimbursement Slip PDF
+exports.generateSlipPdf = async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) {
+            return res.error("VALIDATION_ERROR", { message: "Reimbursement ID is required" });
+        }
+
+        // Fetch reimbursement detail
+        const reimbursement = await commonQuery.findOneRecord(Reimbursement, { id }, {
+            include: [
+                { model: Employee, as: "employee", attributes: ["first_name", "employee_code", "reporting_manager", "attendance_supervisor", "company_id", "joining_date"] },
+                { model: ExpenseType, as: "expenseType", attributes: ["name"] },
+                {
+                    model: ReimbursementItem,
+                    as: "items",
+                    include: [{ model: ExpenseType, as: "expenseType", attributes: ["name"] }]
+                },
+                { model: User, as: "approvedBy", attributes: ["id", "user_name"] }
+            ]
+        });
+
+        if (!reimbursement) {
+            return res.error("NOT_FOUND", { message: "Reimbursement request not found" });
+        }
+
+        const data = reimbursement.get({ plain: true });
+
+        // Retrieve payment mode if direct payment
+        if (data.payment_type === 2) {
+            const ph = await commonQuery.findOneRecord(PaymentHistory, {
+                ref_id: id,
+                payment_type: "Reimbursement"
+            });
+            if (ph) {
+                data.payment_mode = ph.payment_mode;
+            }
+        }
+
+        // Format dates and fields for the template
+        data.formattedAppliedOn = data.created_at || data.createdAt ? dayjs(data.created_at || data.createdAt).format('DD/MM/YYYY') : 'N/A';
+        data.formattedPeriod = data.date ? dayjs(data.date).format('MMMM YYYY') : '';
+        
+        // Items list formatting dates
+        data.formattedItems = (data.items || []).map(item => ({
+            expenseType: item.expenseType || { name: "Reimbursement" },
+            formattedDate: item.expense_date ? dayjs(item.expense_date).format('DD/MM/YYYY') : 'N/A',
+            description: item.description,
+            amount: item.amount
+        }));
+        
+        if (data.formattedItems.length === 0) {
+            data.formattedItems = [{
+                expenseType: data.expenseType || { name: "Reimbursement" },
+                formattedDate: data.expense_date ? dayjs(data.expense_date).format('DD/MM/YYYY') : (data.date ? dayjs(data.date).format('DD/MM/YYYY') : 'N/A'),
+                description: data.description,
+                amount: data.total_amount
+            }];
+        }
+
+        // Fetch company details
+        const companyId = data.employee?.company_id || data.company_id || req.user.company_id;
+        const company = await CompanyMaster.findOne({ where: { id: companyId } });
+
+        const formattedAddress = [
+            company?.address,
+            company?.address2,
+            company?.city,
+            company?.state_name,
+            company?.pincode
+        ].filter(Boolean).join(", ");
+
+        const companyData = {
+            company_name: company?.company_name || 'Airwix HRMS',
+            address: formattedAddress,
+            company_logo_url: company?.logo_image ? `${process.env.FILE_SERVER_URL}${constants.COMPANY_LOGO_IMG_FOLDER}${company.logo_image}` : null
+        };
+
+        const templatePath = path.join(process.cwd(), 'views', 'reimbursement', 'slip.ejs');
+        const filename = `reimbursement_slip_${id}_${Date.now()}.pdf`;
+        const outputDir = path.join(process.cwd(), 'uploads', 'reimbursements');
+
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const outputPath = path.join(outputDir, filename);
+        
+        // Pass data to template
+        await pdfService.generatePdfFromTemplate(templatePath, { data, companyData }, outputPath);
+
+        const downloadLink = `${process.env.FILE_SERVER_URL}reimbursements/${filename}`;
+
+        return res.ok({
+            download_link: downloadLink,
+            filename: filename
+        });
     } catch (err) {
         return handleError(err, res, req);
     }

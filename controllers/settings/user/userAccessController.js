@@ -238,6 +238,7 @@ exports.sessionData = async (req, res) => {
       ...userJson,
       permission: permissions?.permissions ?? null,
       branch_access: userData.branch_access || "",
+      role_key: userData.RolePermission.role_key,
       profile_image_url: employeeData?.profile_image ? `${process.env.FILE_SERVER_URL}${constants.EMPLOYEE_IMG_FOLDER}${employeeData.profile_image}` : null,
       is_attendance_supervisor: userData.RolePermission.role_key === constants.ROLE_KEYS.ATTENDANCE_SUPERVISOR ? true : false,
       is_reporting_manager: userData.RolePermission.role_key === constants.ROLE_KEYS.REPORTING_MANAGER ? true : false,

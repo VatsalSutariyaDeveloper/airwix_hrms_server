@@ -439,7 +439,7 @@ exports.login = async (req, res) => {
       state_id: user.state_id,
       country_id: user.country_id,
       pincode: user.pincode,
-      user_key: user.user_key,
+      role_key: userPermission?.role_key,
       profile_image: user.profile_image ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${user.profile_image}` : null,
       authorized_signature: user.authorized_signature,
       role_name: userPermission?.role_name,
@@ -1279,7 +1279,7 @@ exports.verifyOtp = async (req, res) => {
       state_id: isDevice ? null : entity.state_id,
       country_id: isDevice ? null : entity.country_id,
       pincode: isDevice ? null : entity.pincode,
-      user_key: isDevice ? null : entity.user_key,
+      role_key: entity.RolePermission?.role_key,
       profile_image: (!isDevice && entity.profile_image)
         ? `${process.env.FILE_SERVER_URL}${constants.USER_IMG_FOLDER}${entity.profile_image}`
         : (!isDevice && entity.employee_profile_image)
