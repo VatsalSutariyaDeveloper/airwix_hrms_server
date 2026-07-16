@@ -3,6 +3,7 @@ const { OtpVerification } = require("../models");
 const otpRateLimit = require("./otpRateLimit");
 const emailService = require("../services/emailService");
 const { isValidIndianMobile } = require("./phoneValidation");
+const { constants } = require("./constants");
 
 // Configuration
 const OTP_EXPIRY_MINUTES = 10;
@@ -41,20 +42,29 @@ module.exports = {
       throw { status: "VALIDATION_ERROR", message: "Invalid mobile number. Must be a valid Indian mobile number." };
     }
 
-    // Check Rate Limit
-    const rateLimit = await otpRateLimit.checkRateLimit(identifier);
-    if (!rateLimit.allowed) {
-      throw { status: "RATE_LIMIT_ERROR", message: rateLimit.message };
+    const isExceptionEmail = isEmailAddress && constants.OTP_EMAIL_EXCEPTIONS.includes(identifier.trim().toLowerCase());
+    const isExceptionMobile = !isEmailAddress && (
+      constants.OTP_MOBILE_EXCEPTIONS.includes(identifier) ||
+      constants.OTP_MOBILE_EXCEPTIONS.includes(identifier.replace(/\D/g, "").slice(-10))
+    );
+    const isException = isExceptionEmail || isExceptionMobile;
+
+    // Check Rate Limit (skip for exceptions)
+    if (!isException) {
+      const rateLimit = await otpRateLimit.checkRateLimit(identifier);
+      if (!rateLimit.allowed) {
+        throw { status: "RATE_LIMIT_ERROR", message: rateLimit.message };
+      }
     }
 
-    // 🛠️ DEVELOPMENT MODE: Use a static OTP if running locally
+    // 🛠️ DEVELOPMENT MODE or EXCEPTION: Use a static OTP
     const isLocal = process.env.NODE_ENV === 'local';
-    const otp = isLocal ? "123456" : generateNumericOTP(6);
+    const otp = (isLocal || isException) ? "123456" : generateNumericOTP(6);
     const expires_at = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
-    if (isLocal) {
+    if (isLocal || isException) {
       console.log(`\n-----------------------------------------`);
-      console.log(`🛠️  [DEV-MODE] OTP for ${identifier}: ${otp}`);
+      console.log(`🛠️  [BYPASS/DEV-MODE] OTP for ${identifier}: ${otp}`);
       console.log(`-----------------------------------------\n`);
     }
 
@@ -112,8 +122,8 @@ module.exports = {
 
     // Send OTP via SMS or Email based on identifier type
     let isSent = false;
-    if (isLocal) {
-      // In local mode, we already logged the OTP above, no need to send actual email/SMS
+    if (isLocal || isException) {
+      // In local mode or exception list, we do not send actual email/SMS
       isSent = true;
     } else if (isEmailAddress) {
       await emailService.sendOtpToEmail(identifier, otp, userName);
@@ -136,10 +146,17 @@ module.exports = {
 
   verifyOtp: async (identifier, otp) => {
     const isLocal = process.env.NODE_ENV === 'local';
-    
-    // 🛠️ DEVELOPMENT BYPASS: Accept 123456 as a universal OTP in local mode
-    if (isLocal && otp === "123456") {
-      console.log(`🛠️  [DEV-MODE] Universal OTP Verification bypassed for ${identifier}`);
+    const isEmailAddress = isEmail(identifier);
+    const isExceptionEmail = isEmailAddress && constants.OTP_EMAIL_EXCEPTIONS.includes(identifier.trim().toLowerCase());
+    const isExceptionMobile = !isEmailAddress && (
+      constants.OTP_MOBILE_EXCEPTIONS.includes(identifier) ||
+      constants.OTP_MOBILE_EXCEPTIONS.includes(identifier.replace(/\D/g, "").slice(-10))
+    );
+    const isException = isExceptionEmail || isExceptionMobile;
+
+    // 🛠️ DEVELOPMENT BYPASS: Accept 123456 as a universal OTP in local mode or exceptions
+    if ((isLocal || isException) && otp === "123456") {
+      console.log(`🛠️  [BYPASS/DEV-MODE] Universal OTP Verification bypassed for ${identifier}`);
       return true;
     }
 

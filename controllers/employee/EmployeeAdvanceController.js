@@ -91,18 +91,18 @@ exports.getAll = async (req, res) => {
                     }
                 ],
                 attributes: [
-                    "id", 
-                    "employee_id", 
+                    "id",
+                    "employee_id",
                     // "month", 
                     // "year",
-                    "payment_date", 
-                    "amount", 
+                    "payment_date",
+                    "amount",
                     "adjusted_amount",
                     "payment_mode",
                     "adjusted_in_payroll",
                     "status",
                     "branch_id",
-                   ["employee.first_name", "employee_name"],
+                    ["employee.first_name", "employee_name"],
                 ]
             },
         );
@@ -167,7 +167,7 @@ exports.getById = async (req, res) => {
     try {
         const record = await commonQuery.findOneRecord(EmployeeAdvance, req.params.id);
         if (!record || record.status === 2) return res.error(constants.NOT_FOUND);
-        
+
         // Format Payment Date
         if (record.payment_date) {
             if (record.dataValues) {
@@ -195,7 +195,7 @@ exports.getById = async (req, res) => {
                     month: ps.month,
                     year: ps.year,
                     amount: parseFloat(match.amount),
-                    adjusted_date: match.payment_date || ps.createdAt
+                    adjusted_date: formatDateTime(ps.createdAt, 'DD-MM-YYYY')
                 });
             }
         });
@@ -211,7 +211,7 @@ exports.getById = async (req, res) => {
             record.remaining_amount = rem > 0 ? parseFloat(rem.toFixed(2)) : 0;
             record.adjustments = adjustments;
         }
-        
+
         return res.ok(record);
     } catch (err) {
         return handleError(err, res, req);
@@ -258,7 +258,7 @@ exports.update = async (req, res) => {
             year: paymentDate.getFullYear()
         };
 
-        const paymentHistory = await commonQuery.updateRecordById(PaymentHistory, {ref_id: updated.id}, paymentHistoryData, transaction);
+        const paymentHistory = await commonQuery.updateRecordById(PaymentHistory, { ref_id: updated.id }, paymentHistoryData, transaction);
 
         if (!paymentHistory || paymentHistory.status === 2) {
             await transaction.rollback();
@@ -284,7 +284,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.VALIDATION_ERROR, errors);
         }
-        let { ids } = req.body; 
+        let { ids } = req.body;
 
         if (!Array.isArray(ids) || ids.length === 0) {
             await transaction.rollback();
@@ -302,7 +302,7 @@ exports.delete = async (req, res) => {
             await transaction.rollback();
             return res.error(constants.ALREADY_DELETED);
         }
-        
+
         await transaction.commit();
         return res.success(constants.DELETED);
     } catch (err) {
@@ -316,7 +316,7 @@ exports.updateStatus = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
 
-        const { status, ids } = req.body;   
+        const { status, ids } = req.body;
 
         const requiredFields = {
             ids: "Select Any One Data",
@@ -391,11 +391,11 @@ exports.updateStatus = async (req, res) => {
 exports.advanceView = async (req, res) => {
     try {
         const { employee_id, month, year } = req.body;
-        
+
         if (!employee_id) {
             return res.error(constants.INVALID_ID);
         }
-        
+
         let whereCondition = { employee_id };
         // if (month && year) {
         //     whereCondition = {
@@ -438,9 +438,9 @@ exports.advanceView = async (req, res) => {
         }
 
         const total_amount = await commonQuery.sumRecords(EmployeeAdvance, 'amount', whereCondition);
-        
-        
-       return res.ok({ ...advance, total_amount });
+
+
+        return res.ok({ ...advance, total_amount });
     } catch (err) {
         return handleError(err, res, req);
     }
