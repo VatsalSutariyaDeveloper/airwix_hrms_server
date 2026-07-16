@@ -600,6 +600,9 @@ const ENTITIES = {
   // many transactions...
   ATTENDANCE: { ID: 403, NAME: "Attendance" },
   EMPLOYEE: { ID: 60, NAME: "Employee" },
+
+  OTP_EMAIL_EXCEPTIONS: ["admin@airwix.com", "test@airwix.com"],
+  OTP_MOBILE_EXCEPTIONS: ["9999999999", "8888888888", "1234567890", "8200172869"],
 };
 
 module.exports = { constants, ENTITIES };

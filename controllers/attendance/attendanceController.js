@@ -311,6 +311,7 @@ exports.syncPunches = async (req, res) => {
 
     console.log(`[SyncPunches] After filtering/sorting: ${sortedPunches.length} valid punches to process.`);
 
+    const lastProcessedPunchTimes = {};
     const results = [];
     for (const punchData of sortedPunches) {
       delete punchData.punch_type;
@@ -352,13 +353,31 @@ exports.syncPunches = async (req, res) => {
         }
 
         // ── Normal punch processing ──
-        // Check if a punch with the exact same time already exists
         const targetPunchTime = new Date(punchData.punch_time);
-        const existingPunch = await commonQuery.findOneRecord(AttendancePunch, {
+
+        // 1. Check local processed punches in this sync batch
+        const lastLocalTime = lastProcessedPunchTimes[punchData.employee_id];
+        if (lastLocalTime) {
+          const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastLocalTime), 'second'));
+          if (diffSec < 30) {
+            throw new Error("Duplicate punch detected within 30 seconds");
+          }
+        }
+
+        // 2. Check database for existing punches within 30 seconds of this target punch time
+        const lastPunch = await commonQuery.findOneRecord(AttendancePunch, {
           employee_id: punchData.employee_id,
-          punch_time: targetPunchTime,
           status: { [Op.ne]: 2 }
-        }, {}, transaction, false, {});
+        }, {
+          order: [['punch_time', 'DESC']]
+        }, transaction, false, {});
+
+        if (lastPunch) {
+          const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastPunch.punch_time), 'second'));
+          if (diffSec < 30) {
+            throw new Error("Duplicate punch detected within 30 seconds");
+          }
+        }
 
         let punchImage = null;
         if (punchData.image && punchData.image.trim() !== "") {
@@ -444,6 +463,7 @@ exports.syncPunches = async (req, res) => {
           punch_id: result.punchId,
           type: result.punchType
         });
+        lastProcessedPunchTimes[punchData.employee_id] = targetPunchTime;
         console.log(`[SyncPunches] :white_check_mark: Success for Emp: ${punchData.employee_id} - PunchID: ${result.punchId}, Type: ${result.punchType}`);
       } catch (punchErr) {
         console.error(`[SyncPunches] :x: FAILED for Emp: ${punchData.employee_id}:`, punchErr);
