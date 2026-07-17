@@ -204,6 +204,11 @@ const reloadCompanyCache = async (company_id) => {
 
 // ================= ROUTE PERMISSION CACHE =================
 let reloadPromise = null;
+let lastReloadAt = 0;
+// Once we've reloaded from DB (even if it came back empty), don't hit the DB
+// again for every single request that misses the cache - that's what was
+// happening when route_permissions had 0 rows: every request re-queried Postgres.
+const MIN_RELOAD_INTERVAL_MS = 60 * 1000;
 
 const reloadRoutePermissions = async () => {
     // 1. If a reload is already running, return that existing promise
@@ -229,7 +234,7 @@ const reloadRoutePermissions = async () => {
                 val: r.permission_id
             }));
 
-            // 4. Use mset (Atomic Update). 
+            // 4. Use mset (Atomic Update).
             // ⚠️ DO NOT USE flushAll() here. It causes downtime.
             // mset overwrites existing keys safely.
             if (formattedRoutes.length > 0) {
@@ -240,6 +245,7 @@ const reloadRoutePermissions = async () => {
             console.error("[Cache] Route reload failed", err);
         } finally {
             // 5. Release the lock
+            lastReloadAt = Date.now();
             reloadPromise = null;
         }
     })();
@@ -249,18 +255,20 @@ const reloadRoutePermissions = async () => {
 
 const getRoutePermissionId = async (method, path) => {
     const key = `${method.toUpperCase()}:${path}`;
-    
+
     // 1. Try Cache
     let cached = routeCache.get(key);
     if (cached !== undefined) return cached;
 
-    // 2. Cache Miss? Reload (Safely)
-    console.log(`⚠️ Cache Miss for [${key}]. Reloading...`);
-    
-    // 3. AWAIT the reload!
-    await reloadRoutePermissions();
+    // 2. Cache Miss - only hit the DB if we haven't just refreshed.
+    // Prevents hammering Postgres on every request when a rule is genuinely
+    // missing (or the table is empty) and every miss would otherwise reload.
+    if (reloadPromise || Date.now() - lastReloadAt > MIN_RELOAD_INTERVAL_MS) {
+        console.log(`⚠️ Cache Miss for [${key}]. Reloading...`);
+        await reloadRoutePermissions();
+    }
 
-    // 4. Retry Cache
+    // 3. Retry Cache
     return routeCache.get(key);
 };
 
