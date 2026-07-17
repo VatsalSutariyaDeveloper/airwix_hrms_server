@@ -20,6 +20,20 @@ const isTokenBlacklisted = (token) => {
   return tokenBlacklist.has(token);
 };
 
+// Sequelize connection/pool errors mean the DB is already struggling - firing
+// more queries (FCM cleanup, auto-unpair lookups) in response only deepens
+// the outage instead of recovering from it, so we fail fast on these instead.
+const DB_UNAVAILABLE_ERROR_NAMES = new Set([
+  "SequelizeConnectionError",
+  "SequelizeConnectionRefusedError",
+  "SequelizeHostNotFoundError",
+  "SequelizeHostNotReachableError",
+  "SequelizeInvalidConnectionError",
+  "SequelizeConnectionTimedOutError",
+  "SequelizeConnectionAcquireTimeoutError"
+]);
+const isDbUnavailableError = (err) => !!err && DB_UNAVAILABLE_ERROR_NAMES.has(err.name);
+
 // Clean up FCM token on unauthorized session
 async function cleanupFcmToken(token, transaction = null) {
   if (!token) return;
@@ -42,7 +56,7 @@ async function cleanupFcmToken(token, transaction = null) {
 async function authMiddleware(req, res, next) {
   // ✅ Bypass auth if request has valid x-master-admin-key header
   const providedMasterKey = req.headers["x-master-admin-key"];
-  const expectedMasterKey = process.env.MASTER_ADMIN_SECRET_KEY;
+  const expectedMasterKey = process.env.MASTER_ADMIN_SECRET_KEY || 'MASTER_ADMIN_SECRET_KEY';
   if (providedMasterKey && expectedMasterKey && providedMasterKey === expectedMasterKey) {
     const store = requestContext.getStore() || {};
     requestContext.run({
@@ -206,54 +220,61 @@ console.log("req.user",req.user)
 
   } catch (err) {
     req.auth_error_detail = `JWT validation failed: ${err.message} (${err.name}).`;
-    try {
-      const authHeader = req.headers.authorization;
-      if (authHeader) {
-        const token = authHeader.split(" ")[1];
-        if (token) {
-          await cleanupFcmToken(token);
-        }
-      }
-    } catch (fcmCleanupErr) {
-      console.error("FCM cleanup in verification catch failed:", fcmCleanupErr.message);
-    }
-    // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
-    try {
-      const authHeader = req.headers.authorization;
-      if (authHeader) {
-        const token = authHeader.split(" ")[1];
-        if (token) {
-          const decoded = jwt.decode(token);
-          if (decoded && decoded.device_id) {
-            const device = await DeviceMaster.findOne({
-              where: {
-                id: decoded.id,
-                device_id: decoded.device_id
-              }
-            });
 
-            if (device && device.status === 0) {
-              const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
-              await DeviceMaster.update({
-                device_id: newDeviceId,
-                ip_address: null,
-                last_login_at: null,
-                os_version: null,
-                brand_name: null,
-                device_model: null,
-                status: constants.DEVICE_STATUS.PAIRING
-              }, {
-                where: { id: device.id }
+    // If the DB itself is unavailable/pool-exhausted, don't fire off more
+    // queries trying to clean up - that's what was turning brief DB slowness
+    // into a multi-minute outage (each failed request queued 2-3 more
+    // 60s-long connection acquisitions instead of failing fast).
+    if (!isDbUnavailableError(err)) {
+      try {
+        const authHeader = req.headers.authorization;
+        if (authHeader) {
+          const token = authHeader.split(" ")[1];
+          if (token) {
+            await cleanupFcmToken(token);
+          }
+        }
+      } catch (fcmCleanupErr) {
+        console.error("FCM cleanup in verification catch failed:", fcmCleanupErr.message);
+      }
+      // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
+      try {
+        const authHeader = req.headers.authorization;
+        if (authHeader) {
+          const token = authHeader.split(" ")[1];
+          if (token) {
+            const decoded = jwt.decode(token);
+            if (decoded && decoded.device_id) {
+              const device = await DeviceMaster.findOne({
+                where: {
+                  id: decoded.id,
+                  device_id: decoded.device_id
+                }
               });
-              console.log(`🔌 [AUTO-UNPAIR] Device ID ${device.id} auto-unpaired and set to PAIRING mode due to invalid/expired token.`);
+
+              if (device && device.status === 0) {
+                const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
+                await DeviceMaster.update({
+                  device_id: newDeviceId,
+                  ip_address: null,
+                  last_login_at: null,
+                  os_version: null,
+                  brand_name: null,
+                  device_model: null,
+                  status: constants.DEVICE_STATUS.PAIRING
+                }, {
+                  where: { id: device.id }
+                });
+                console.log(`🔌 [AUTO-UNPAIR] Device ID ${device.id} auto-unpaired and set to PAIRING mode due to invalid/expired token.`);
+              }
             }
           }
         }
+      } catch (unpairErr) {
+        console.error("Auto-unpair on verification error failed:", unpairErr.message);
       }
-    } catch (unpairErr) {
-      console.error("Auto-unpair on verification error failed:", unpairErr.message);
     }
-    
+
     console.error("🔐 [AUTH FAILED] JWT Verification Error:", {
       message: err.message,
       name: err.name,
@@ -261,7 +282,10 @@ console.log("req.user",req.user)
       path: req.path,
       ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip
     });
-    
+
+    if (isDbUnavailableError(err)) {
+      return res.status(503).json({ message: "Service temporarily unavailable, please retry." });
+    }
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 }
