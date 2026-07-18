@@ -238,6 +238,15 @@ console.log("req.user",req.user)
         console.error("FCM cleanup in verification catch failed:", fcmCleanupErr.message);
       }
       // 🔍 Log the detailed error to easily diagnose signature mismatches, expired tokens, or environment mismatches
+      //
+      // ⚠️ Deliberately NO auto-unpair here anymore. This block used to rotate
+      // the device_id of an ACTIVE device whenever ANY invalid/expired token
+      // carrying that device_id arrived. One stray request from a stale token
+      // (background sync isolate, old session still in flight after re-login,
+      // token signed with a different JWT_SECRET) would then permanently kill
+      // the device's CURRENT valid session too → every request 401 → the app
+      // auto-logged-out and forced a re-pairing for no real reason.
+      // An invalid token must only be rejected, never mutate device state.
       try {
         const authHeader = req.headers.authorization;
         if (authHeader) {
@@ -245,33 +254,15 @@ console.log("req.user",req.user)
           if (token) {
             const decoded = jwt.decode(token);
             if (decoded && decoded.device_id) {
-              const device = await DeviceMaster.findOne({
-                where: {
-                  id: decoded.id,
-                  device_id: decoded.device_id
-                }
-              });
-
-              if (device && device.status === 0) {
-                const newDeviceId = await deviceHelper.generateUniqueDeviceId(device.company_id, device.branch_id);
-                await DeviceMaster.update({
-                  device_id: newDeviceId,
-                  ip_address: null,
-                  last_login_at: null,
-                  os_version: null,
-                  brand_name: null,
-                  device_model: null,
-                  status: constants.DEVICE_STATUS.PAIRING
-                }, {
-                  where: { id: device.id }
-                });
-                console.log(`🔌 [AUTO-UNPAIR] Device ID ${device.id} auto-unpaired and set to PAIRING mode due to invalid/expired token.`);
-              }
+              console.warn(
+                `🔐 [AUTH FAILED] Invalid token carried device_id '${decoded.device_id}' (entity id ${decoded.id}). ` +
+                `Rejected with 401 only — device row left untouched.`
+              );
             }
           }
         }
-      } catch (unpairErr) {
-        console.error("Auto-unpair on verification error failed:", unpairErr.message);
+      } catch (decodeErr) {
+        console.error("Decode-for-logging in verification catch failed:", decodeErr.message);
       }
     }
 
