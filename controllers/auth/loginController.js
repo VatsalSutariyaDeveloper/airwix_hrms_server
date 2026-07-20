@@ -2118,9 +2118,57 @@ exports.getOtpVerifications = async (req, res) => {
       }
     });
 
+    // Fetch rate limit details for tracked numbers
+    const trackedInfo = await otpRateLimit.getAllBlockedNumbers();
+    const blockedMap = {};
+    const activeMap = {};
+    
+    if (trackedInfo && trackedInfo.blocked_numbers) {
+      trackedInfo.blocked_numbers.forEach(num => {
+        blockedMap[num.mobile_no] = num;
+      });
+    }
+    if (trackedInfo && trackedInfo.active_numbers) {
+      trackedInfo.active_numbers.forEach(num => {
+        activeMap[num.mobile_no] = num;
+      });
+    }
+
     const items = data.map(item => {
       const plain = item.get({ plain: true });
       plain.company = lookup[item.identifier] || null;
+      
+      const blockedData = blockedMap[item.identifier];
+      const activeData = activeMap[item.identifier];
+      
+      if (blockedData) {
+        plain.rate_limit = {
+          is_blocked: true,
+          attempts: blockedData.attempts,
+          max_attempts: blockedData.max_attempts,
+          ttl_seconds: blockedData.ttl_seconds,
+          ttl_minutes: blockedData.ttl_minutes,
+          message: `Limit Exceeded (${blockedData.ttl_minutes} min remaining)`
+        };
+      } else if (activeData) {
+        plain.rate_limit = {
+          is_blocked: false,
+          attempts: activeData.attempts,
+          max_attempts: activeData.max_attempts,
+          ttl_seconds: activeData.ttl_seconds,
+          ttl_minutes: activeData.ttl_minutes,
+          message: `${activeData.attempts}/${activeData.max_attempts} attempts used`
+        };
+      } else {
+        plain.rate_limit = {
+          is_blocked: false,
+          attempts: 0,
+          max_attempts: 3,
+          ttl_seconds: 0,
+          ttl_minutes: 0,
+          message: "No attempts used"
+        };
+      }
       return plain;
     });
 
@@ -2144,8 +2192,15 @@ exports.deleteOtpVerification = async (req, res) => {
     if (!id) {
       return res.error(constants.VALIDATION_ERROR, { message: "ID is required" });
     }
-    await OtpVerification.destroy({ where: { id } });
-    return res.success("OTP_VERIFICATION_DELETED", { message: "OTP verification log deleted successfully" });
+    
+    // Reset rate limit attempts when verification record is deleted
+    const record = await OtpVerification.findByPk(id);
+    if (record) {
+      await otpRateLimit.resetAttempts(record.identifier);
+      await record.destroy();
+    }
+    
+    return res.success("OTP_VERIFICATION_DELETED", { message: "OTP verification log deleted and rate limit reset successfully" });
   } catch (err) {
     return handleError(err, res, req);
   }
