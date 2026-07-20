@@ -134,11 +134,6 @@ async function authMiddleware(req, res, next) {
         } 
       });
       if (!device) {
-        // Reject-only: an invalid/mismatched device session must never mutate
-        // DeviceMaster (regenerating device_id, clearing pairing fields, etc.).
-        // That auto-unpair behavior used to run here and could kick an
-        // otherwise-active device back into PAIRING mode from a single stale
-        // request — same class of bug the JWT-catch block below was fixed for.
         const existingDevice = await DeviceMaster.findOne({ where: { id: decoded.id } });
         if (!existingDevice) {
           req.auth_error_detail = `Device with ID ${decoded.id} does not exist in DeviceMaster.`;
