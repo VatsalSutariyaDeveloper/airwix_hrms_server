@@ -51,6 +51,7 @@ function initModels(prefix) {
   const ActivationRequest = require("./activationRequest")(seq, DataTypes);
   const EmployeeResignation = require("./employeeResignation")(seq, DataTypes);
   const ApiLog = require("./apiLog")(seq, DataTypes);
+  const ClientLog = require("./clientLog")(seq, DataTypes);
   const Logs = require("./logs")(seq, DataTypes);
   const Notification = require("./notification")(seq, DataTypes);
   const Announcement = require("./announcement")(seq, DataTypes);
@@ -176,6 +177,7 @@ function initModels(prefix) {
     ActivationRequest,
     EmployeeResignation,
     ApiLog,
+    ClientLog,
     Logs,
     Notification,
     Announcement,

@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const { CompanyMaster, CompanySubscription, SubscriptionPlan, User, Organization } = require("../../models");
-const { createConnectionByPrefix } = require("../../config/database");
+const { sequelize: rootSequelizeInstance } = require("../../config/database");
 const { handleError } = require("../../helpers");
 const subscriptionController = require("../subscription/subscriptionController");
 
@@ -8,7 +8,7 @@ const subscriptionController = require("../subscription/subscriptionController")
  * Helper: get the root (non-tenant) sequelize instance
  */
 function getRootSequelize() {
-  return createConnectionByPrefix("");
+  return rootSequelizeInstance;
 }
 
 // -----------------------------------------------------------
@@ -851,6 +851,67 @@ exports.getApiLogs = async (req, res) => {
     );
 
     return res.ok(result);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+/**
+ * App Session Logs — events the mobile app reports about its own session
+ * (auto_logout, api_401, manual_logout, base_url_switch, app_error).
+ * This is the table to look at first when a user reports "the app logged me
+ * out on its own": `reason` says why, `base_url` says which backend the app
+ * was actually talking to at the time.
+ */
+exports.getClientLogs = async (req, res) => {
+  try {
+    const { ClientLog } = require("../../models");
+    const commonQuery = require("../../helpers/commonQuery");
+
+    const fieldConfig = [
+      ["event", true, true],
+      ["reason", true, true],
+      ["endpoint", true, true],
+      ["base_url", true, true],
+      ["company_id", true, true],
+      ["status_code", true, true],
+      ["app_version", true, true],
+      ["device_model", true, true],
+      ["ip_address", true, true],
+      ["created_at", true, true],
+    ];
+
+    const result = await commonQuery.fetchPaginatedData(
+      ClientLog,
+      req.body,
+      fieldConfig,
+      {
+        attributes: [
+          "id", "event", "reason", "endpoint", "status_code", "server_message",
+          "base_url", "is_erp", "access", "device_id", "token_valid",
+          "app_version", "device_os", "device_brand", "device_model",
+          "ip_address", "client_time", "payload", "created_at",
+          "company_id", "user_id", "employee_id",
+        ],
+        include: [
+          { model: User, as: "user", attributes: ["id", "user_name", "email"] },
+          { model: CompanyMaster, as: "company", attributes: ["id", "company_name"] },
+        ],
+      },
+      {} // Bypass company restrictions
+    );
+
+    return res.ok(result);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.clearClientLogs = async (req, res) => {
+  try {
+    const { ClientLog } = require("../../models");
+    await ClientLog.destroy({ where: {} });
+    return res.ok({ message: "App session logs cleared successfully" });
   } catch (err) {
     return handleError(err, res, req);
   }
