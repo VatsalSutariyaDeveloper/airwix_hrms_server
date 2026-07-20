@@ -2,6 +2,7 @@ const constants = require("../constants");
 const { logError } = require("./logFunctions");
 const { Err } = require("../Err");
 const { reportDbTimeout } = require("./dbWatchdog");
+const { sendAlert } = require("./notifyAlert");
 
 exports.handleError = async (err, res = null, req = null, isHighRisk = false) => {
   // Feed the DB watchdog so repeated pool-exhaustion errors trigger a self-restart
@@ -97,6 +98,14 @@ exports.handleError = async (err, res = null, req = null, isHighRisk = false) =>
   console.error(`💥 [Stack Trace] :`);
   console.error(err?.stack || "No stack trace available");
   console.error('\x1b[31m%s\x1b[0m', '_________________________________________________________________\n');
+
+  // Only alert on genuine crash-level events, not routine per-request errors -
+  // otherwise every 400 validation error would spam the phone into being ignored.
+  if (isHighRisk || isProcessError) {
+    sendAlert(
+      `${header.trim()}\n${method} ${url}\n${err?.name || 'Error'}: ${err?.message || 'No message'}`
+    );
+  }
 
 
   /* ===============================

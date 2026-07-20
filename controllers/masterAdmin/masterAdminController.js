@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const { CompanyMaster, CompanySubscription, SubscriptionPlan, User, Organization } = require("../../models");
-const { createConnectionByPrefix } = require("../../config/database");
+const { sequelize: rootSequelizeInstance } = require("../../config/database");
 const { handleError } = require("../../helpers");
 const subscriptionController = require("../subscription/subscriptionController");
 
@@ -8,7 +8,7 @@ const subscriptionController = require("../subscription/subscriptionController")
  * Helper: get the root (non-tenant) sequelize instance
  */
 function getRootSequelize() {
-  return createConnectionByPrefix("");
+  return rootSequelizeInstance;
 }
 
 // -----------------------------------------------------------
