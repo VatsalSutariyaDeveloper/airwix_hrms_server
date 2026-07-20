@@ -39,9 +39,24 @@ const createConnectionByPrefix = (prefix) => {
       timezone: '+05:30',
       pool: {
         max: 25,
-        min: 2,
+        min: 0,
         acquire: 60000,
-        idle: 10000
+        idle: 30000
+      },
+      dialectOptions: {
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 5000
+      },
+      retry: {
+        max: 3,
+        match: [
+          /ECONNRESET/,
+          /ETIMEDOUT/,
+          /EHOSTUNREACH/,
+          /EPIPE/,
+          /ECONNREFUSED/,
+          Sequelize.ConnectionError
+        ]
       }
     }
   );

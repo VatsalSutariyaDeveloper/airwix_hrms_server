@@ -5,7 +5,51 @@ const syncedApiTenants = new Set();
 
 const apiLogger = async (req, res, next) => {
   const startTime = Date.now();
-  
+
+  // Skip logging the logs retrieval themselves to avoid recursion/spam
+  if (req.originalUrl.includes("/api/logs") || req.originalUrl.includes("/api/activity")) {
+    return next();
+  }
+
+  // Capture + mask the request body up front, on a copy - request handlers
+  // further down the chain may mutate req.body before the response finishes.
+  let requestBody = null;
+  if (req.method !== "GET" && req.body) {
+    requestBody = { ...req.body };
+    if (requestBody.password) requestBody.password = "********";
+    if (requestBody.token) requestBody.token = "********";
+  }
+
+  const { storage } = require("./tenantMiddleware");
+  let tenantPrefix = "DEFAULT";
+  try {
+    tenantPrefix = storage.getStore() || "DEFAULT";
+  } catch (e) {}
+
+  // Create the log row immediately - before the request is processed - so a
+  // request that hangs, crashes, or never sends a response still leaves a
+  // record. The row is filled in with the outcome once the response finishes.
+  const logEntryPromise = (async () => {
+    try {
+      if (!syncedApiTenants.has(tenantPrefix)) {
+        await ApiLog.sync();
+        syncedApiTenants.add(tenantPrefix);
+      }
+      return await ApiLog.create({
+        method: req.method,
+        url: req.originalUrl,
+        ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
+        request_body: requestBody,
+        user_agent: req.headers["user-agent"],
+        status: null,
+        status_code: null
+      });
+    } catch (err) {
+      console.error(`[APILOG] Failed to create API log entry for tenant ${tenantPrefix}:`, err.message);
+      return null;
+    }
+  })();
+
   // To capture the response body, we need to override res.send
   const originalSend = res.send;
   let responseBody;
@@ -19,11 +63,6 @@ const apiLogger = async (req, res, next) => {
     try {
       const duration = Date.now() - startTime;
       const store = requestContext.getStore();
-      
-      // Skip logging the logs retrieval themselves to avoid recursion/spam
-      if (req.originalUrl.includes("/api/logs") || req.originalUrl.includes("/api/activity")) {
-        return;
-      }
 
       // Safely parse the response body
       let parsedResponse = null;
@@ -47,45 +86,20 @@ const apiLogger = async (req, res, next) => {
         parsedResponse.auth_error_detail = req.auth_error_detail;
       }
 
-      const logData = {
+      const logEntry = await logEntryPromise;
+      if (!logEntry) return;
+
+      await logEntry.update({
         company_id: store?.companyId || null,
         branch_id: store?.branchId || null,
         user_id: (store?.access === 'attendance' || store?.access === 'canteen') ? null : (store?.userId || null),
-        method: req.method,
-        url: req.originalUrl,
         status_code: res.statusCode,
-        ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
-        request_body: req.method !== "GET" ? req.body : null,
         response_body: parsedResponse,
         duration: duration,
-        user_agent: req.headers["user-agent"],
         status: res.statusCode >= 400 ? 1 : 0 // 0 = Success, 1 = Error
-      };
-
-      // Mask sensitive fields
-      if (logData.request_body) {
-        if (logData.request_body.password) logData.request_body.password = "********";
-        if (logData.request_body.token) logData.request_body.token = "********";
-      }
-
-      const { storage } = require("./tenantMiddleware");
-      let tenantPrefix = "DEFAULT";
-      try {
-        tenantPrefix = storage.getStore() || "DEFAULT";
-      } catch (e) {}
-
-      if (!syncedApiTenants.has(tenantPrefix)) {
-        try {
-          await ApiLog.sync();
-          syncedApiTenants.add(tenantPrefix);
-        } catch (syncErr) {
-          console.error(`[APILOG] Failed to sync ApiLog table for tenant ${tenantPrefix}:`, syncErr.message);
-        }
-      }
-
-      await ApiLog.create(logData);
+      });
     } catch (err) {
-      console.error("Failed to save API log:", err.message);
+      console.error("Failed to update API log:", err.message);
     }
   });
 
