@@ -13,9 +13,24 @@ const masterSequelize = new Sequelize(
     port: process.env.MASTER_DB_PORT,
     pool: {
       max: 25,
-      min: 2,
+      min: 0,
       acquire: 60000,
-      idle: 10000
+      idle: 30000
+    },
+    dialectOptions: {
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 5000
+    },
+    retry: {
+      max: 3,
+      match: [
+        /ECONNRESET/,
+        /ETIMEDOUT/,
+        /EHOSTUNREACH/,
+        /EPIPE/,
+        /ECONNREFUSED/,
+        Sequelize.ConnectionError
+      ]
     }
   }
 );
