@@ -28,6 +28,10 @@ router.post("/verify-pin", loginController.verifyPin);
 router.post("/login/verify-otp", loginController.verifyOtp);
 router.post("/generate-pin", loginController.generatePin);
 router.post("/forgot-pin", loginController.forgotPin);
+// Session/diagnostic events shipped by the mobile app (SessionLogger).
+// Public on purpose: the app calls this while its session is dying, so the
+// token may already be expired/revoked — the controller only decodes it.
+router.post("/client-log", require("../controllers/auth/clientLogController").store);
 router.post("/forgot-password", userController.forgotPassword);
 router.get("/otp-limit/check/:mobile_no", loginController.checkOtpRateLimit);
 

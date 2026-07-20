@@ -46,6 +46,8 @@ router.post("/system-logs/database", ctrl.getDatabaseLogs);
 router.post("/system-logs/database/clear", ctrl.clearDatabaseLogs);
 router.post("/system-logs/api", ctrl.getApiLogs);
 router.post("/system-logs/api/clear", ctrl.clearApiLogs);
+router.post("/system-logs/client", ctrl.getClientLogs);
+router.post("/system-logs/client/clear", ctrl.clearClientLogs);
 router.get("/system-logs/files", ctrl.getLogFiles);
 router.get("/system-logs/file-content", ctrl.getLogFileContent);
 router.post("/system-logs/files/clear", ctrl.clearLogFile);
