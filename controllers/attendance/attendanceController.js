@@ -360,7 +360,15 @@ exports.syncPunches = async (req, res) => {
         if (lastLocalTime) {
           const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastLocalTime), 'second'));
           if (diffSec < 30) {
-            throw new Error("Duplicate punch detected within 30 seconds");
+            console.log(`[SyncPunches] Duplicate punch detected within 30 seconds (local batch) for Emp=${punchData.employee_id}. Skipping creation and returning success.`);
+            results.push({
+              employee_id: punchData.employee_id,
+              punch_time: punchData.punch_time,
+              success: true,
+              punch_id: "DUPLICATE",
+              type: "Duplicate"
+            });
+            continue;
           }
         }
 
@@ -375,7 +383,15 @@ exports.syncPunches = async (req, res) => {
         if (lastPunch) {
           const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastPunch.punch_time), 'second'));
           if (diffSec < 30) {
-            throw new Error("Duplicate punch detected within 30 seconds");
+            console.log(`[SyncPunches] Duplicate punch detected within 30 seconds (DB) for Emp=${punchData.employee_id}. Skipping creation and returning success.`);
+            results.push({
+              employee_id: punchData.employee_id,
+              punch_time: punchData.punch_time,
+              success: true,
+              punch_id: lastPunch.id,
+              type: lastPunch.punch_type
+            });
+            continue;
           }
         }
 

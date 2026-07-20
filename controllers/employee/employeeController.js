@@ -974,12 +974,14 @@ exports.getProfile = async (req, res) => {
                     'emergency_contact_name', 'emergency_contact_mobile', 'emergency_contact_relation',
                     'present_address1', 'present_address2', 'present_city', 'present_pincode',
                     'permanent_address1', 'permanent_address2', 'permanent_city', 'permanent_pincode',
-                    'profile_image', 'employee_code'
+                    'profile_image', 'employee_code', 'company_id', 'branch_id'
                 ],
                 include: [
                     { model: User, as: 'linked_user', attributes: ['user_name', 'email', 'mobile_no'], required: false },
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
-                    { model: Department, as: 'department', attributes: ['name'] }
+                    { model: Department, as: 'department', attributes: ['name'] },
+                    { model: BranchMaster, as: 'branch', attributes: ['branch_name'] },
+                    { model: CompanyMaster, as: 'company', attributes: ['company_name'] }
                 ]
             }, null, false, {});
 
@@ -1001,6 +1003,8 @@ exports.getProfile = async (req, res) => {
                 email: plain.email || plain.linked_user?.email || 'N/A',
                 mobile_no: plain.mobile_no || plain.linked_user?.mobile_no || 'N/A',
                 profile_image_url: getFileUrl(plain.profile_image),
+                company_name: plain.company?.company_name || 'N/A',
+                branch_name: plain.branch?.branch_name || 'N/A',
                 header: {
                     id: plain.id,
                     employee_code: plain.employee_code || 'N/A',
@@ -1070,6 +1074,8 @@ exports.getProfile = async (req, res) => {
                     { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
                     { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
                     { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                    { model: BranchMaster, as: 'branch', attributes: ['branch_name'] },
+                    { model: CompanyMaster, as: 'company', attributes: ['company_name'] },
 
                     // Joins with Employee-specific Templates/Data
                     { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
@@ -1161,6 +1167,8 @@ exports.getProfile = async (req, res) => {
         const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
 
         const profileData = {
+            company_name: plainRecord.company?.company_name || 'N/A',
+            branch_name: plainRecord.branch?.branch_name || 'N/A',
             header: {
                 id: plainRecord.id,
                 employee_code: plainRecord.employee_code,
@@ -1316,6 +1324,8 @@ exports.getProfileById = async (req, res) => {
                 { model: User, as: 'linked_user', attributes: ['id', 'user_name', 'email', 'mobile_no', 'role_id'] },
                 { model: User, as: 'manager', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
                 { model: User, as: 'supervisor', attributes: ['id', 'user_name', 'email', 'mobile_no'] },
+                { model: BranchMaster, as: 'branch', attributes: ['branch_name'] },
+                { model: CompanyMaster, as: 'company', attributes: ['company_name'] },
                 { model: EmployeeSalaryTemplate, as: 'employeeSalaryTemplate', attributes: ['template_name', 'ctc_monthly', 'lwp_calculation_basis', 'salary_type', 'staff_type'] },
                 {
                     model: EmployeeAttendanceTemplate, as: 'employeeAttendanceTemplate',
@@ -1374,6 +1384,8 @@ exports.getProfileById = async (req, res) => {
         const probationPeriodDays = Number(companySettings?.probation_period_days) || 0;
 
         const profileData = {
+            company_name: plainRecord.company?.company_name || 'N/A',
+            branch_name: plainRecord.branch?.branch_name || 'N/A',
             header: {
                 id: plainRecord.id,
                 employee_code: plainRecord.employee_code,
