@@ -85,27 +85,12 @@ function evictLeastDiverse(list, imgList, maxLen, destDir, logPrefix) {
   }
 }
 
-// Lazy column creation — no migration needed, idempotent per tenant DB.
-async function ensureAlignedTemplatesColumn() {
-  await sequelize.query(
-    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_templates JSONB'
-  );
-  await sequelize.query(
-    'ALTER TABLE employees ADD COLUMN IF NOT EXISTS aligned_face_images JSONB'
-  );
-}
-
 /**
  * SYNC ALIGNED FACE TEMPLATES (v2 attendance devices)
  * Multipart: templates[i][employee_id], templates[i][vector] (JSON string),
  *            templates[i][image] (optional face image for audit trail)
  */
 exports.saveFaceTemplates = async (req, res) => {
-  try {
-    await ensureAlignedTemplatesColumn();
-  } catch (colErr) {
-    console.error("ensureAlignedTemplatesColumn failed:", colErr.message);
-  }
   try {
     // Parse indexed form fields: templates[0][employee_id], templates[0][vector], etc.
     const items = [];
@@ -838,12 +823,12 @@ exports.getAttendanceSummary = async (req, res) => {
           if (day.first_in) {
             const punches = day.attendancePunches || [];
             const firstInPunch = punches.find(p => p.punch_type === 'IN' && dayjs(p.punch_time).format('HH:mm:ss') === day.first_in);
-            day.first_in_full = firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate();
+            day.setDataValue('first_in_full', firstInPunch ? firstInPunch.punch_time : dayjs(`${day.attendance_date} ${day.first_in}`).toDate());
           }
           if (day.last_out) {
             const punches = day.attendancePunches || [];
             const lastOutPunch = [...punches].reverse().find(p => p.punch_type === 'OUT' && dayjs(p.punch_time).format('HH:mm:ss') === day.last_out);
-            day.last_out_full = lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate();
+            day.setDataValue('last_out_full', lastOutPunch ? lastOutPunch.punch_time : dayjs(`${day.attendance_date} ${day.last_out}`).toDate());
           }
           if (day.attendancePunches) {
             day.attendancePunches.sort((a, b) => new Date(a.punch_time) - new Date(b.punch_time));
@@ -2934,7 +2919,6 @@ exports.resolveFaceRecognitionError = async (req, res) => {
 
     // Validate before marking as resolved
     if (empId) {
-      await ensureAlignedTemplatesColumn();
       const employee = await commonQuery.findOneRecord(Employee, { id: empId }, {}, null, false, {});
       if (!employee) {
         return res.error(constants.NOT_FOUND, "Employee not found");

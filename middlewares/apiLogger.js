@@ -3,6 +3,27 @@ const { requestContext } = require("../utils/requestContext.js");
 
 const syncedApiTenants = new Set();
 
+// Unbounded request/response bodies (bulk exports, reports, big list endpoints)
+// are what actually blow up api_logs - each one gets stored as a Postgres TOAST
+// value, and at high request volume those TOAST rows are what balloon the
+// table's on-disk size far past what the row count would suggest. Cap what
+// gets persisted so a single heavy endpoint can't do that.
+const MAX_LOGGED_JSON_LENGTH = 20000; // ~20KB
+const capJsonForLogging = (data) => {
+  if (!data) return data;
+  try {
+    const str = JSON.stringify(data);
+    if (str.length <= MAX_LOGGED_JSON_LENGTH) return data;
+    return {
+      _truncated: true,
+      _original_size: str.length,
+      _preview: str.slice(0, 2000)
+    };
+  } catch (err) {
+    return { _error: "Failed to serialize for logging" };
+  }
+};
+
 const apiLogger = async (req, res, next) => {
   const startTime = Date.now();
 
@@ -39,7 +60,7 @@ const apiLogger = async (req, res, next) => {
         method: req.method,
         url: req.originalUrl,
         ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
-        request_body: requestBody,
+        request_body: capJsonForLogging(requestBody),
         user_agent: req.headers["user-agent"],
         status: null,
         status_code: null
@@ -94,7 +115,7 @@ const apiLogger = async (req, res, next) => {
         branch_id: store?.branchId || null,
         user_id: (store?.access === 'attendance' || store?.access === 'canteen') ? null : (store?.userId || null),
         status_code: res.statusCode,
-        response_body: parsedResponse,
+        response_body: capJsonForLogging(parsedResponse),
         duration: duration,
         status: res.statusCode >= 400 ? 1 : 0 // 0 = Success, 1 = Error
       });

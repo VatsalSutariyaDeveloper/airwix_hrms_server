@@ -205,6 +205,65 @@ const employeeAttendanceController = {
         }
     },
 
+    updateWorkTiming: async (req, res) => {
+        const transaction = await sequelize.transaction();
+        try {
+            const { employeeId } = req.params;
+            const { shifts, weeklyOffs } = req.body;
+
+            if (!Array.isArray(shifts) || !Array.isArray(weeklyOffs)) {
+                return res.error("Invalid work timing data", 400);
+            }
+
+            await commonQuery.hardDeleteRecords(EmployeeWeeklyOff, {
+                employee_id: employeeId
+            }, transaction);
+
+            if (weeklyOffs.length > 0) {
+                const weeklyOffPayloads = weeklyOffs.map(off => ({
+                    employee_id: employeeId,
+                    template_id: off.template_id || null,
+                    day_of_week: off.day_of_week,
+                    week_no: off.week_no || 0,
+                    is_off: off.is_off !== undefined ? off.is_off : true,
+                    status: off.status || 0,
+                    company_id: req.user?.company_id || 0,
+                }));
+
+                await commonQuery.bulkCreate(EmployeeWeeklyOff, weeklyOffPayloads, {}, transaction);
+            }
+
+            await commonQuery.hardDeleteRecords(EmployeeShift, {
+                employee_id: employeeId
+            }, transaction);
+
+            if (shifts.length > 0) {
+                const shiftPayloads = shifts.map(shift => {
+                    const { id, createdAt, updatedAt, ...cleanShift } = shift;
+                    return {
+                        ...cleanShift,
+                        employee_id: employeeId,
+                        company_id: req.user?.company_id || 0,
+                    };
+                });
+
+                await commonQuery.bulkCreate(EmployeeShift, shiftPayloads, {}, transaction);
+            }
+
+            // Sync past attendance data for the current month, once, after both configs are saved
+            await EmployeeTemplateService.syncAttendanceForPastDays([employeeId], transaction, {
+                user_id: req.user.id,
+                company_id: req.user.company_id
+            });
+
+            await transaction.commit();
+            return res.success("Employee work timing updated successfully");
+        } catch (error) {
+            await transaction.rollback();
+            return handleError(error, res, req);
+        }
+    },
+
     /**
      * Get employee-specific attendance template.
      */

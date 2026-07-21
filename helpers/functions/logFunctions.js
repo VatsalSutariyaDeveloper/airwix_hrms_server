@@ -301,33 +301,76 @@ exports.writeLogToFile = (filename, message) => {
     });
 };
 
+// Retention window for every log table - anything older gets archived to a
+// file on disk, then deleted from the DB, in small batches instead of one
+// giant DELETE. A single DELETE across millions of TOASTed JSONB rows holds
+// its lock/WAL footprint for the whole statement and is exactly the kind of
+// "heavy process" that stalls the DB on an already-bloated table; batching
+// keeps each transaction short and gives autovacuum room to keep up between
+// batches.
+const LOG_RETENTION_DAYS = 7;
+const BATCH_DELETE_SIZE = 2000;
+
+// Archives rows older than the retention window to a JSON file (streamed, so
+// we never hold more than one batch in memory), then deletes them from `model`
+// in the same batches. `dateColumn` is the actual DB column name to filter on.
+// `options.onBatch(rows)` runs after archiving but before deleting each batch -
+// used by callers that need a side effect per row (e.g. removing a file that
+// a row references) before the DB record disappears.
+const archiveAndDeleteOldRows = async (model, dateColumn, tableLabel, options = {}) => {
+    const { onBatch, retentionDays = LOG_RETENTION_DAYS } = options;
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() - retentionDays);
+
+    let totalArchived = 0;
+    let archiveStream = null;
+    let archiveFilePath = null;
+    for (;;) {
+        const rows = await model.findAll({
+            where: { [dateColumn]: { [Op.lt]: thresholdDate } },
+            limit: BATCH_DELETE_SIZE,
+            raw: true
+        });
+        if (rows.length === 0) break;
+
+        if (!archiveStream) {
+            const fileName = `${tableLabel}_archive_${new Date().toISOString().split('T')[0]}.json`;
+            archiveFilePath = path.join(__dirname, '../../uploads/archives', fileName);
+            if (!fs.existsSync(path.dirname(archiveFilePath))) {
+                fs.mkdirSync(path.dirname(archiveFilePath), { recursive: true });
+            }
+            archiveStream = fs.createWriteStream(archiveFilePath);
+            archiveStream.write("[\n");
+        } else {
+            archiveStream.write(",\n");
+        }
+        archiveStream.write(rows.map((r) => JSON.stringify(r)).join(",\n"));
+
+        if (onBatch) {
+            try {
+                await onBatch(rows);
+            } catch (err) {
+                console.error(`[LOG_CLEANUP] onBatch hook failed for ${tableLabel}:`, err.message);
+            }
+        }
+
+        await model.destroy({ where: { id: rows.map((r) => r.id) } });
+        totalArchived += rows.length;
+
+        // Yield between batches so this cleanup doesn't hog the connection pool/DB.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (archiveStream) {
+        archiveStream.write("\n]");
+        archiveStream.end();
+        console.log(`[LOG_CLEANUP] Archived ${totalArchived} old rows from ${tableLabel} to ${archiveFilePath}.`);
+    }
+    return totalArchived;
+};
+exports.archiveAndDeleteOldRows = archiveAndDeleteOldRows;
+
 // Archive Function (Updated for new table names)
 exports.archiveAndCleanupLogs = async () => {
-    const thresholdDate = new Date();
-    thresholdDate.setDate(thresholdDate.getDate() - 31);
-    
-    // Archive Logs Table
-    const oldLogs = await Logs.findAll({
-        where: { createdAt: { [Op.lt]: thresholdDate } },
-        raw: true
-    });
-
-    if (oldLogs.length > 0) {
-        const fileName = `logs_archive_${new Date().toISOString().split('T')[0]}.json`;
-        const filePath = path.join(__dirname, '../../uploads/archives', fileName);
-        if (!fs.existsSync(path.dirname(filePath))) {
-            fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        }
-        fs.writeFileSync(filePath, JSON.stringify(oldLogs));
-        
-        const idsToDelete = oldLogs.map(log => log.id);
-        await Logs.destroy({ where: { id: idsToDelete } });
-    }
-
-    // Cleanup ApiLog Table (No archive, just delete after 10 days)
-    const apiLogThreshold = new Date();
-    apiLogThreshold.setDate(apiLogThreshold.getDate() - 10);
-    await ApiLog.destroy({
-        where: { created_at: { [Op.lt]: apiLogThreshold } }
-    });
+    await archiveAndDeleteOldRows(Logs, "createdAt", "logs");
+    await archiveAndDeleteOldRows(ApiLog, "created_at", "api_logs");
 };

@@ -286,15 +286,9 @@ class EmployeeTemplateService {
         console.log("syncAttendanceForPastDays", employeeIds, transaction, meta);
         if (!Array.isArray(employeeIds) || employeeIds.length === 0) return;
         try {
-            // Rebuild current month to fill in holidays, weekly offs, and auto-absent
-            const startOfMonth = dayjs().startOf('month');
-            const today = dayjs();
-            let cur = startOfMonth;
-
-            while (cur.isBefore(today) || cur.isSame(today, 'day')) {
-                await bulkSyncAttendanceDays(employeeIds, cur.format("YYYY-MM-DD"), meta, transaction);
-                cur = cur.add(1, 'day');
-            }
+            const today = dayjs().format('YYYY-MM-DD');
+            // Updated based on business rule: Only sync today's attendance, do not touch past days.
+            await bulkSyncAttendanceDays(employeeIds, today, meta, transaction);
         } catch (error) {
             console.error("Error in syncAttendanceForPastDays:", error);
             // Don't throw to avoid blocking the main transaction if auto-sync fails
