@@ -32,7 +32,26 @@ const DB_UNAVAILABLE_ERROR_NAMES = new Set([
   "SequelizeConnectionTimedOutError",
   "SequelizeConnectionAcquireTimeoutError"
 ]);
-const isDbUnavailableError = (err) => !!err && DB_UNAVAILABLE_ERROR_NAMES.has(err.name);
+// A dropped connection mid-query (e.g. a stale pooled connection reset by the
+// DB/network - see the device-health cron ECONNRESET issue) surfaces as a
+// plain SequelizeDatabaseError, not one of the *ConnectionError* classes
+// above. Without this, User/Company/Branch/Device lookups below would throw,
+// get mislabeled as a JWT failure by the catch block, and return a false 401
+// "Invalid or expired token" to the client instead of a retryable 503 - which
+// is exactly the kind of blip a container restart/rebuild triggers.
+const DB_UNAVAILABLE_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "ECONNREFUSED"
+]);
+const isDbUnavailableError = (err) => {
+  if (!err) return false;
+  if (DB_UNAVAILABLE_ERROR_NAMES.has(err.name)) return true;
+  const code = err.parent?.code || err.original?.code || err.code;
+  return DB_UNAVAILABLE_ERROR_CODES.has(code);
+};
 
 // Clean up FCM token on unauthorized session
 async function cleanupFcmToken(token, transaction = null) {

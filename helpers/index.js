@@ -11,7 +11,7 @@ const { fixDecimals, fixNum, fixQty, parseDate, formatDateTime, initializeCompan
 const { constants, ENTITIES } = require("./constants");
 const { getCompanySetting, clearCompanyCache, clearAllCompaniesCache, getCompanySubscription, clearCompanySubscriptionCache, clearAllCompanySubscriptionCache, reloadCompanyCache, reloadRoutePermissions, getRoutePermissionId, updateSubscriptionCache, reloadCompanySubscriptionCache, reloadCompanySettingsCache } = require("./cache");
 const { handleImport, handleExport, streamExport } = require("./functions/excelService");
-const { logQuery, logError, writeLogToFile, archiveAndCleanupLogs } = require("./functions/logFunctions");
+const { logQuery, logError, writeLogToFile, archiveAndCleanupLogs, archiveAndDeleteOldRows } = require("./functions/logFunctions");
 const otpService = require("./otpService");
 const { Err, fail } = require("./Err");
 const { getContext } = require("../utils/requestContext");
@@ -46,6 +46,7 @@ module.exports = {
   logError,
   writeLogToFile,
   archiveAndCleanupLogs,
+  archiveAndDeleteOldRows,
   updateItemCurrentStock,
   initializeCompanySettings,
   initializeCompanyRoles,

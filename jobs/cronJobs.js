@@ -2,7 +2,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const dayjs = require('dayjs');
-const { archiveAndCleanupLogs } = require('../helpers');
+const { archiveAndCleanupLogs, archiveAndDeleteOldRows } = require('../helpers');
 const LeaveBalanceService = require("../services/leaveBalanceService");
 const ContractorDeactivationService = require("../services/contractorDeactivationService");
 const ResignationService = require("../services/resignationService");
@@ -280,46 +280,40 @@ const jobAnnouncementNotifications = async (asOf = null, batch_id = null) => {
 
 const jobFaceAuditCleanup = async (asOf = null, batch_id = null) => {
     console.log('⏰ Running daily face recognition audit cleanup task...');
-    const fifteenDaysAgo = dayjs().subtract(15, 'day').format('YYYY-MM-DD HH:mm:ss');
 
-    // 1. Find records to delete (need image paths)
-    const records = await FaceRecognitionError.findAll({
-        where: {
-            created_at: { [Op.lt]: fifteenDaysAgo }
-        },
-        attributes: ['id', 'image']
-    });
+    let deletedFiles = 0;
+    const totalArchived = await archiveAndDeleteOldRows(
+        FaceRecognitionError,
+        "created_at",
+        "face_recognition_errors",
+        {
+            retentionDays: 7,
+            // Runs per batch, before that batch's DB rows are deleted - removes the
+            // face-error image files from disk so they don't outlive their record.
+            onBatch: async (rows) => {
+                for (const record of rows) {
+                    if (record.image) {
+                        const filePath = path.join(process.cwd(), 'uploads', 'employee', 'face_errors', record.image);
+                        try {
+                            if (fs.existsSync(filePath)) {
+                                fs.unlinkSync(filePath);
+                                deletedFiles++;
+                            }
+                        } catch (err) {
+                            console.error(`[FaceAuditCleanup] Failed to delete image ${record.image}:`, err.message);
+                        }
+                    }
+                }
+            }
+        }
+    );
 
-    if (records.length === 0) {
+    if (totalArchived === 0) {
         console.log('ℹ️ No expired face recognition audit logs found.');
         return;
     }
 
-    // 2. Delete images from filesystem
-    let deletedFiles = 0;
-    for (const record of records) {
-        if (record.image) {
-            const filePath = path.join(process.cwd(), 'uploads', 'employee', 'face_errors', record.image);
-            try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                    deletedFiles++;
-                }
-            } catch (err) {
-                console.error(`[FaceAuditCleanup] Failed to delete image ${record.image}:`, err.message);
-            }
-        }
-    }
-
-    // 3. Delete records from database
-    const recordIds = records.map(r => r.id);
-    await FaceRecognitionError.destroy({
-        where: {
-            id: { [Op.in]: recordIds }
-        }
-    });
-
-    console.log(`✅ Face audit cleanup completed. ${recordIds.length} records and ${deletedFiles} images removed.`);
+    console.log(`✅ Face audit cleanup completed. ${totalArchived} records and ${deletedFiles} images removed.`);
 };
 
 const jobAttendanceIrregularityAlert = async (asOf = null, batch_id = null) => {
