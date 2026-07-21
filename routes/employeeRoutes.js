@@ -55,6 +55,7 @@ router.get("/weekly-off/:employeeId", employeeAttendanceController.getWeeklyOffs
 router.put("/weekly-off/:employeeId", employeeAttendanceController.updateWeeklyOffs);
 router.get("/attendance-setting/:employeeId", employeeAttendanceController.getAttendanceTemplate);
 router.put("/attendance-setting/:employeeId", employeeAttendanceController.updateAttendanceTemplate);
+router.put("/work-timing/:employeeId", employeeAttendanceController.updateWorkTiming);
 
 router.get("/employee-holidays-by-id/:employeeId", employeeController.getEmployeeHolidays);
 

@@ -1942,7 +1942,7 @@ exports.assignRole = async (req, res) => {
 exports.assignTemplate = async (req, res) => {
     const transaction = await sequelize.transaction();
     try {
-        let { field_name, employees, is_select_all, filter_params, target_value, excluded_ids } = req.body;
+        let { field_name, employees, is_select_all, filter_params, target_value, excluded_ids, only_template } = req.body;
 
         if (is_select_all) {
             const where = {};
@@ -2102,18 +2102,22 @@ exports.assignTemplate = async (req, res) => {
 
         // 5. Trigger Background Rebuild (Fire and Forget)
         // Only necessary for templates that affect attendance calculations: Shift, Holiday, WeeklyOff
-        // if (['shift_template', 'holiday_template', 'weekly_off_template'].includes(field_name)) {
-        //     (async () => {
-        //         try {
-        //             console.log(`[Background] Starting attendance rebuild for ${employeeIdsToRebuild.length} employees...`);
-        //             // We process rebuilds in bulk using the optimized method
-        //             await EmployeeTemplateService.rebuildCurrentMonthAttendance(employeeIdsToRebuild, null);
-        //             console.log(`[Background] Completed attendance rebuild.`);
-        //         } catch (err) {
-        //             console.error("[Background] Global error in attendance rebuild task:", err);
-        //         }
-        //     })();
-        // }
+        if (!only_template && ['shift_template', 'holiday_template', 'weekly_off_template'].includes(field_name)) {
+            (async () => {
+                try {
+                    console.log(`[Background] Starting attendance sync for ${employeeIdsToRebuild.length} employees...`);
+                    // Process rebuild using optimized past days sync (only today)
+                    await EmployeeTemplateService.syncAttendanceForPastDays(employeeIdsToRebuild, null, {
+                        user_id: req.user?.id || 0,
+                        company_id: req.user?.company_id || 0,
+                        branch_id: req.user?.branch_id || 0
+                    });
+                    console.log(`[Background] Completed attendance sync.`);
+                } catch (err) {
+                    console.error("[Background] Global error in attendance rebuild task:", err);
+                }
+            })();
+        }
 
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
