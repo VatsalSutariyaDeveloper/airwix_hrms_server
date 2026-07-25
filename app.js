@@ -95,6 +95,12 @@ if (cluster.isMaster) {
   const visitorRoutes = require("./routes/visitorRoutes");
 
   const app = express();
+  // Behind a reverse proxy/load balancer (nginx, docker network, etc.) the socket
+  // peer is the proxy's internal IP, not the real client. Trusting the proxy makes
+  // Express parse X-Forwarded-For itself, so req.ip resolves to the actual client
+  // public IP everywhere in the app (logging, rate limiting, geoip, etc.).
+  app.set("trust proxy", true);
+
   const { requestContext } = require("./utils/requestContext.js");
   app.use((req, res, next) => {
     requestContext.run(
@@ -102,7 +108,7 @@ if (cluster.isMaster) {
         userId: null,
         companyId: null,
         branchId: null,
-        ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress || req.ip,
+        ip: req.ip || req.connection.remoteAddress,
         userAgent: req.headers["user-agent"] || "unknown",
         endpoint: `${req.method} ${req.originalUrl}`,
         access: "public"

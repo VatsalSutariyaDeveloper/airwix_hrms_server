@@ -299,7 +299,13 @@ exports.syncPunches = async (req, res) => {
     const lastProcessedPunchTimes = {};
     const results = [];
     for (const punchData of sortedPunches) {
-      delete punchData.punch_type;
+      // Preserve punch_type only when the employee explicitly confirmed IN/OUT
+      // (manual punch-confirmation flow on FACE_RECOGNITION mode). Otherwise the
+      // helper decides IN/OUT itself via the auto-toggle logic.
+      if (!punchData.manual_confirmation) {
+        delete punchData.punch_type;
+      }
+      delete punchData.manual_confirmation;
       console.log(`\n--- [Sync] Processing ${punchData.is_face_error ? 'FACE ERROR' : 'Punch'}: Emp=${punchData.employee_id}, Time=${punchData.punch_time} ---`);
 
       try {

@@ -3721,7 +3721,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                     model: EmployeeAttendanceTemplate,
                     as: 'employeeAttendanceTemplate',
                     where: { status: 0 },
-                    attributes: ['id', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins']
+                    attributes: ['id', 'mode', 'punch_confirmation_mode', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins']
                 },
                 {
                     model: ShiftTemplate,
@@ -3874,6 +3874,7 @@ exports.availableOutDuty = async (req, res) => {
         let outDuty = null;
         let canPunch = false;
         let attendanceMode = 'MANUAL';
+        let punchConfirmationMode = 'AUTO';
         let locationConfig = null;
 
         if (employee_id) {
@@ -3905,6 +3906,9 @@ exports.availableOutDuty = async (req, res) => {
             const template = employee?.employeeAttendanceTemplate || employee?.attendanceTemplate;
             if (template?.mode) {
                 attendanceMode = template.mode;
+            }
+            if (template?.punch_confirmation_mode) {
+                punchConfirmationMode = template.punch_confirmation_mode;
             }
             if (template && ['LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION'].includes(template.mode)) {
                 canPunch = true;
@@ -3940,6 +3944,7 @@ exports.availableOutDuty = async (req, res) => {
             can_punch_from_personal_device: !!todayOutDutyRequest || canPunch,
             outDuty,
             attendanceMode,
+            punchConfirmationMode,
             locationConfig
         });
     } catch (err) {
