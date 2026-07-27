@@ -1028,6 +1028,16 @@ exports.updateAttendanceDay = async (req, res) => {
       note,
     } = req.body;
 
+    if (req.body.is_approved_request) {
+      worked_minutes = undefined;
+      overtime_minutes = undefined;
+      overtime_amount = undefined;
+      overtime_data = undefined;
+      fine_minutes = undefined;
+      fine_amount = undefined;
+      fine_data = undefined;
+    }
+
     const day = await getOrCreateAttendanceDay(
       employee_id,
       attendance_date,
@@ -1496,7 +1506,7 @@ exports.updateAttendanceDay = async (req, res) => {
       return res.error(constants.LEAVE_BALANCE_ERROR, balanceError);
     }
 
-    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, payload, t, false, {});
+    const result = await commonQuery.updateRecordById(AttendanceDay, { id: day.id }, newDayPayload, t, false, {});
 
     // --- LATE CHECK: SHORT LEAVE DEDUCTION ---
     // If employee is 120+ minutes late and has a last out time, deduct 1 from Short Leave.
@@ -3035,7 +3045,7 @@ exports.resolveFaceRecognitionError = async (req, res) => {
             }
           }
 
-          if(!employee.profile_image) {
+          if (!employee.profile_image) {
             empUpdateData.profile_image = filename;
           }
 
