@@ -96,7 +96,7 @@ module.exports = {
           record = await User.findOne({ where: { email: identifier, status: 0 }, transaction, attributes: ["company_id", "user_name"] });
         } else {
           record = await User.findOne({ where: { mobile_no: identifier, status: 0 }, transaction, attributes: ["company_id", "user_name"] }) ||
-                   await DeviceMaster.findOne({ where: { mobile_no: identifier, status: 0 }, transaction, attributes: ["company_id", "device_name"] });
+            await DeviceMaster.findOne({ where: { mobile_no: identifier, status: 0 }, transaction, attributes: ["company_id", "device_name"] });
         }
         if (record) {
           resolvedCompanyId = record.company_id || resolvedCompanyId;
@@ -166,11 +166,11 @@ module.exports = {
 
     // ✅ THROW OBJECTS WITH STATUS AND MESSAGE
     if (!record) {
-      throw { status: "NOT_FOUND", message: "OTP request not found" };
+      throw { status: "VALIDATION_ERROR", message: "Wrong OTP. Enter Correct OTP" };
     }
 
     if (record.otp != otp) {
-      throw { status: "VALIDATION_ERROR", message: "Invalid OTP" };
+      throw { status: "VALIDATION_ERROR", message: "Wrong OTP. Enter Correct OTP" };
     }
 
     if (new Date() > new Date(record.expires_at)) {
@@ -190,9 +190,9 @@ module.exports = {
   },
 
   cleanupOtp: async (identifier, transaction) => {
-     await OtpVerification.destroy({
-       where: { identifier },
-       transaction
-     });
+    await OtpVerification.destroy({
+      where: { identifier },
+      transaction
+    });
   }
 };

@@ -496,16 +496,93 @@ async function punch(employeeId, meta, transaction = null) {
   // 0️⃣.A Determine Target Day (For IN, it's 'today'. For OUT, it's the IN's day)
   if (!isForgotPunchIn) {
     targetDayDate = today;
-    if (punchType === "OUT" && lastPunchGlobal) {
+    if (punchType === "IN") {
+      // Check if this punch-in is within yesterday's night shift window
+      const yesterdayDate = dayjs(now).subtract(1, "day").format("YYYY-MM-DD");
+      const dow = dayjs(yesterdayDate).day();
+      const empShiftRecord = await commonQuery.findOneRecord(EmployeeShift, {
+        employee_id: employeeId,
+        day_of_week: dow,
+        status: 0,
+      }, {}, transaction, false, {});
+
+      let yesterdayShift = null;
+      if (empShiftRecord) {
+        yesterdayShift = await commonQuery.findOneRecord(ShiftTemplate, { id: empShiftRecord.shift_id, company_id: employee.company_id }, {}, transaction, false, {});
+      } else if (employee.shift_template) {
+        yesterdayShift = await commonQuery.findOneRecord(ShiftTemplate, { id: employee.shift_template, company_id: employee.company_id }, {}, transaction, false, {});
+      }
+
+      if (yesterdayShift) {
+        const yesterdayShiftStart = dayjs(`${yesterdayDate} ${yesterdayShift.start_time}`);
+        let yesterdayShiftEnd = dayjs(`${yesterdayDate} ${yesterdayShift.end_time}`);
+        if (yesterdayShift.is_night_shift || yesterdayShift.end_time < yesterdayShift.start_time) {
+          yesterdayShiftEnd = yesterdayShiftEnd.add(1, 'day');
+        }
+
+        const currentPunchTime = dayjs(now);
+        // Include a standard 120 minutes (2 hours) buffer before yesterday's shift start
+        const shiftStartWithBuffer = yesterdayShiftStart.subtract(120, 'minute');
+        if (currentPunchTime.isAfter(shiftStartWithBuffer) && currentPunchTime.isBefore(yesterdayShiftEnd)) {
+          targetDayDate = yesterdayDate;
+          console.log(`[Punch] Manual IN within Yesterday's shift window: Assigned to yesterday ${targetDayDate}`);
+        }
+      }
+    } else if (punchType === "OUT" && lastPunchGlobal) {
       if (!lastInDay) {
         lastInDay = await commonQuery.findOneRecord(AttendanceDay, {
           id: lastPunchGlobal.day_id,
-          // company_id: { [Op.in]: allowedCompanyIds }
-        }, {}, transaction, false, {});
+        }, { attributes: ['id', 'attendance_date', 'shift_id'] }, transaction, false, {});
       }
 
       if (lastInDay) {
-        targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
+        // Calculate cutoffTime to verify if this OUT punch is within range
+        const firstPunch = await commonQuery.findOneRecord(AttendancePunch, {
+          day_id: lastPunchGlobal.day_id,
+          status: 0
+        }, { order: [["punch_time", "ASC"]] }, transaction, true, {});
+
+        const startTime = firstPunch ? firstPunch.punch_time : lastPunchGlobal.punch_time;
+        const defaultPunchCutoffHours = parseInt(settings.default_punch_cutoff_hours || 24);
+        let cutoffTime = dayjs(startTime).add(defaultPunchCutoffHours, "hour");
+
+        // CHECK IF OVERTIME ALLOWED
+        const isOvertimeAllowed = template && !!template.overtime_allowed && template.max_overtime_mins > 0;
+
+        // GET SHIFT DETAILS IF AVAILABLE
+        let hasShift = false;
+        let shiftEnd = null;
+        if (lastInDay.shift_id) {
+          const lastShift = await commonQuery.findOneRecord(ShiftTemplate, { id: lastInDay.shift_id, company_id: employee.company_id }, {
+            attributes: ['id', 'start_time', 'end_time', 'is_night_shift']
+          }, transaction, false, {});
+          if (lastShift) {
+            hasShift = true;
+            shiftEnd = dayjs(`${lastInDay.attendance_date} ${lastShift.end_time}`);
+            if (lastShift.end_time < lastShift.start_time) {
+              shiftEnd = shiftEnd.add(1, 'day');
+            }
+          }
+        }
+
+        // OVERRIDE CUTOFF BASED ON SHIFT & OVERTIME RULES
+        if (hasShift) {
+          if (isOvertimeAllowed) {
+            const otCutoff = shiftEnd.add(template.max_overtime_mins, 'minute');
+            cutoffTime = otCutoff;
+          } else {
+            const shiftCutoffHours = parseInt(settings.shift_cutoff_hours || 14);
+            cutoffTime = dayjs(startTime).add(shiftCutoffHours, "hour");
+          }
+        }
+
+        if (dayjs(now).isBefore(cutoffTime)) {
+          targetDayDate = dayjs(lastInDay.attendance_date).format("YYYY-MM-DD");
+          console.log(`[Punch] Manual OUT within cutoff: Assigned to last day ${targetDayDate}`);
+        } else {
+          targetDayDate = today;
+          console.log(`[Punch] Manual OUT after cutoff: Assigned to current day ${targetDayDate}`);
+        }
       }
     }
   }

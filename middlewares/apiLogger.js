@@ -59,7 +59,7 @@ const apiLogger = async (req, res, next) => {
       return await ApiLog.create({
         method: req.method,
         url: req.originalUrl,
-        ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
+        ip_address: req.ip || req.connection.remoteAddress,
         request_body: capJsonForLogging(requestBody),
         user_agent: req.headers["user-agent"],
         status: null,

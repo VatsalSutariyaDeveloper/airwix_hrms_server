@@ -5,6 +5,7 @@ module.exports = (sequelize, DataTypes) => {
     
     // Copied from AttendanceTemplate
     mode: { type: DataTypes.ENUM('AUTO_PRESENT', 'MANUAL', 'LOCATION_BASED', 'SELFIE_BASED', 'SELFIE_AND_LOCATION', 'FACE_RECOGNITION'), defaultValue: 'FACE_RECOGNITION' },
+    punch_confirmation_mode: { type: DataTypes.STRING(10), defaultValue: 'AUTO', validate: { isIn: [['AUTO', 'MANUAL']] } },
 
     // Location area restriction (copied from AttendanceTemplate)
     location_latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },
