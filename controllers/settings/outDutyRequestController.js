@@ -749,7 +749,7 @@ exports.cancelLeave = async (req, res) => {
         }, transaction);
 
         const updatedRequest = await commonQuery.findOneRecord(OutDutyRequest, { id }, {}, transaction);
-        const employee = await commonQuery.findOneRecord(Employee, employeeId, {}, transaction);
+        const employee = await commonQuery.findOneRecord(Employee, outDutyRequest.employee_id, {}, transaction);
         await sendApprovalNotifications(updatedRequest, employee, "CANCEL", transaction);
 
         const start = dayjs(outDutyRequest.start_date);
