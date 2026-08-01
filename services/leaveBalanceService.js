@@ -1383,21 +1383,190 @@ class LeaveBalanceService {
                             await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -manualRequest.total_days, t, date, employee);
                             await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, { approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED }, t, false, {});
                         } else {
-                            // Multi-day request: We can't easily "split" it, but we MUST refund the balance for this day.
-                            console.log(`[syncLeaveRecord] Refunding 1 day from multi-day manual request: #${manualRequest.id}`);
-                            // We determine deduction amount (usually 1.0 but could be 0.5 if it was a half day session? 
-                            // Standardizing on 1.0 for now for simplification, or 0.5 if sessions indicate it.)
+                            // Multi-day request: Split the request into separate segments
+                            console.log(`[syncLeaveRecord] Splitting multi-day manual request: #${manualRequest.id} around date ${date}`);
+                            
                             let refundAmount = 1.0;
+                            // Check if the cancelled date is on the start or end boundary and has session adjustments
                             if (manualRequest.start_date === date && manualRequest.start_session !== 0) refundAmount = 0.5;
                             else if (manualRequest.end_date === date && manualRequest.end_session !== 0) refundAmount = 0.5;
 
                             await this.adjustLeaveBalance(employeeId, manualRequest.leave_category_id, -refundAmount, t, date, employee);
 
-                            // Note: We keep the request but add a note or log it somewhere.
-                            // In a future update, consider splitting the request into before/after segments.
-                            await LeaveRequest.update({
-                                note: (manualRequest.note || "") + ` [Day ${date} work-overridden: balance refunded]`
-                            }, { where: { id: manualRequest.id }, transaction: t });
+                            const origStartDate = manualRequest.start_date;
+                            const origEndDate = manualRequest.end_date;
+                            const prevDate = dayjs(date).subtract(1, 'day').format('YYYY-MM-DD');
+                            const nextDate = dayjs(date).add(1, 'day').format('YYYY-MM-DD');
+
+                            // Helper function to calculate split days
+                            const getSplitDays = async (sD, eD, sS, eS) => {
+                                const { getDayOffInfo } = require("../helpers/attendanceHelper");
+                                const employeeRecord = employee || await commonQuery.findOneRecord(Employee, employeeId, {
+                                    include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                                }, t);
+                                if (!employeeRecord) return 0;
+                                
+                                const template = employeeRecord.leaveTemplate;
+                                const countSandwich = template ? template.count_sandwich_leaves : false;
+                                
+                                const start = dayjs(sD);
+                                const end = dayjs(eD);
+                                const calendarDays = end.diff(start, 'day') + 1;
+                                
+                                const dayOffMap = new Map();
+                                for (let i = 0; i < calendarDays; i++) {
+                                    const curDate = start.add(i, 'day');
+                                    const cur = curDate.format('YYYY-MM-DD');
+                                    const dayOff = await getDayOffInfo(employeeRecord, cur, t);
+                                    
+                                    let isWorking = true;
+                                    if (dayOff.isHoliday || dayOff.isWeeklyOff) {
+                                        isWorking = false;
+                                    }
+                                    
+                                    dayOffMap.set(cur, {
+                                        date: cur,
+                                        is_working: isWorking
+                                    });
+                                }
+                                
+                                let applySandwich = false;
+                                if (countSandwich) {
+                                    const days = Array.from(dayOffMap.keys()).sort();
+                                    for (let i = 1; i < days.length - 1; i++) {
+                                        const prevDay = dayOffMap.get(days[i - 1]);
+                                        const currentDay = dayOffMap.get(days[i]);
+                                        const nextDay = dayOffMap.get(days[i + 1]);
+                                        if (!currentDay.is_working && prevDay.is_working && nextDay.is_working) {
+                                            applySandwich = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                let workingDays = 0;
+                                for (let i = 0; i < calendarDays; i++) {
+                                    const curDate = start.add(i, 'day');
+                                    const cur = curDate.format('YYYY-MM-DD');
+                                    const dayInfo = dayOffMap.get(cur);
+                                    let isWorking = dayInfo.is_working;
+                                    
+                                    if (applySandwich && !isWorking) {
+                                        isWorking = true;
+                                    }
+                                    
+                                    if (isWorking) {
+                                        workingDays += 1;
+                                    }
+                                }
+                                
+                                if (sD === eD && sS !== 0) {
+                                    workingDays = workingDays > 0 ? 0.5 : 0;
+                                } else {
+                                    if (sS !== 0 && workingDays > 0) workingDays -= 0.5;
+                                    if (eS !== 0 && sD !== eD && workingDays > 0) workingDays -= 0.5;
+                                }
+                                return Math.max(workingDays, 0);
+                            };
+
+                            if (date === origStartDate) {
+                                // CASE 1: Cancelling first day
+                                // Existing row moves start date forward
+                                const newDays = await getSplitDays(nextDate, origEndDate, 0, manualRequest.end_session);
+                                await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, {
+                                    start_date: nextDate,
+                                    start_session: 0,
+                                    total_days: newDays,
+                                    reason: (manualRequest.reason || "") + ` [Day ${date} cancelled: start date moved to ${nextDate}]`
+                                }, t);
+
+                                // Create cancelled placeholder
+                                const cancelledPlaceholder = {
+                                    ...manualRequest.toJSON(),
+                                    start_date: date,
+                                    end_date: date,
+                                    start_session: manualRequest.start_session,
+                                    end_session: manualRequest.start_session,
+                                    total_days: refundAmount,
+                                    approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                                    reason: `Cancelled due to attendance override`
+                                };
+                                delete cancelledPlaceholder.id;
+                                delete cancelledPlaceholder.createdAt;
+                                delete cancelledPlaceholder.updatedAt;
+                                await commonQuery.createRecord(LeaveRequest, cancelledPlaceholder, t);
+
+                            } else if (date === origEndDate) {
+                                // CASE 2: Cancelling last day
+                                // Existing row moves end date backward
+                                const newDays = await getSplitDays(origStartDate, prevDate, manualRequest.start_session, 0);
+                                await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, {
+                                    end_date: prevDate,
+                                    end_session: 0,
+                                    total_days: newDays,
+                                    reason: (manualRequest.reason || "") + ` [Day ${date} cancelled: end date moved to ${prevDate}]`
+                                }, t);
+
+                                // Create cancelled placeholder
+                                const cancelledPlaceholder = {
+                                    ...manualRequest.toJSON(),
+                                    start_date: date,
+                                    end_date: date,
+                                    start_session: manualRequest.end_session,
+                                    end_session: manualRequest.end_session,
+                                    total_days: refundAmount,
+                                    approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                                    reason: `Cancelled due to attendance override`
+                                };
+                                delete cancelledPlaceholder.id;
+                                delete cancelledPlaceholder.createdAt;
+                                delete cancelledPlaceholder.updatedAt;
+                                await commonQuery.createRecord(LeaveRequest, cancelledPlaceholder, t);
+
+                            } else {
+                                // CASE 3: Cancelling a middle day
+                                // 1. First segment: origStartDate -> prevDate (Approved)
+                                const firstSegDays = await getSplitDays(origStartDate, prevDate, manualRequest.start_session, 0);
+                                await commonQuery.updateRecordById(LeaveRequest, manualRequest.id, {
+                                    end_date: prevDate,
+                                    end_session: 0,
+                                    total_days: firstSegDays,
+                                    reason: (manualRequest.reason || "") + ` [Split: Segment 1 ending at ${prevDate}]`
+                                }, t);
+
+                                // 2. Cancelled day placeholder
+                                const cancelledPlaceholder = {
+                                    ...manualRequest.toJSON(),
+                                    start_date: date,
+                                    end_date: date,
+                                    start_session: 0,
+                                    end_session: 0,
+                                    total_days: refundAmount,
+                                    approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                                    reason: `Split cancellation for day ${date} due to attendance override`
+                                };
+                                delete cancelledPlaceholder.id;
+                                delete cancelledPlaceholder.createdAt;
+                                delete cancelledPlaceholder.updatedAt;
+                                await commonQuery.createRecord(LeaveRequest, cancelledPlaceholder, t);
+
+                                // 3. Second segment: nextDate -> origEndDate (Approved)
+                                const secondSegDays = await getSplitDays(nextDate, origEndDate, 0, manualRequest.end_session);
+                                const secondSegPlaceholder = {
+                                    ...manualRequest.toJSON(),
+                                    start_date: nextDate,
+                                    end_date: origEndDate,
+                                    start_session: 0,
+                                    end_session: manualRequest.end_session,
+                                    total_days: secondSegDays,
+                                    approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
+                                    reason: (manualRequest.reason || "") + ` [Split: Segment 2 starting at ${nextDate}]`
+                                };
+                                delete secondSegPlaceholder.id;
+                                delete secondSegPlaceholder.createdAt;
+                                delete secondSegPlaceholder.updatedAt;
+                                await commonQuery.createRecord(LeaveRequest, secondSegPlaceholder, t);
+                            }
                         }
                     } else {
                         console.log(`[syncLeaveRecord] Manual request preserved due to 'Forced Present' rule.`);
