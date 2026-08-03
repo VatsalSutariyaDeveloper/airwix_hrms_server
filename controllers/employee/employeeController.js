@@ -3729,14 +3729,6 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                     attributes: ['id', 'shift_name', 'start_time', 'end_time', 'is_night_shift', 'punch_in', 'punch_out', 'first_possible_punch_in', 'last_possible_punch_out']
                 },
                 {
-                    model: AttendancePunch,
-                    as: 'attendancePunches',
-                    attributes: ['id', 'punch_time', 'punch_type'],
-                    limit: 10,
-                    order: [['punch_time', 'DESC']],
-                    separate: true
-                },
-                {
                     model: EmployeeHoliday,
                     as: 'employeeHolidays',
                     where: { status: 0 },
@@ -3788,6 +3780,33 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             }
         } catch (e) { alignedByEmp = {}; } // column may not exist yet in this tenant
 
+        // Last 10 punches per employee. This used to be a Sequelize hasMany
+        // include with { separate: true, limit: 10 }, which for a per-parent
+        // limit generates one UNION ALL subquery per employee - with ~150-200
+        // active employees per branch that's a single query with 150-200
+        // subqueries, expensive enough to pressure the DB connection under
+        // concurrent device polling. A single window-function query returns
+        // the same "top 10 per employee" result in one query plan.
+        let recentPunchesByEmp = {};
+        if (employees.length > 0) {
+            const employeeIds = employees.map(e => e.id);
+            const recentPunches = await sequelize.query(
+                `SELECT id, punch_time, punch_type, employee_id FROM (
+                    SELECT id, punch_time, punch_type, employee_id,
+                           ROW_NUMBER() OVER (PARTITION BY employee_id ORDER BY punch_time DESC) AS rn
+                    FROM attendance_punch
+                    WHERE employee_id IN (:employeeIds)
+                ) ranked
+                WHERE rn <= 10
+                ORDER BY employee_id, punch_time DESC`,
+                { replacements: { employeeIds }, type: sequelize.QueryTypes.SELECT }
+            );
+            for (const p of recentPunches) {
+                if (!recentPunchesByEmp[p.employee_id]) recentPunchesByEmp[p.employee_id] = [];
+                recentPunchesByEmp[p.employee_id].push({ id: p.id, punch_time: p.punch_time, punch_type: p.punch_type });
+            }
+        }
+
         const employeeList = employees.map(emp => ({
             id: emp.id,
             employee_name: emp.first_name,
@@ -3804,7 +3823,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             // --- VALIDATION DATA ---
             attendance_template: emp.employeeAttendanceTemplate,
             assigned_shift: emp.shiftTemplate,
-            recent_punches: emp.attendancePunches || [],
+            recent_punches: recentPunchesByEmp[emp.id] || [],
             holidays: emp.employeeHolidays || [],
             weekly_offs: emp.employeeWeeklyOffs?.map(w => ({
                 id: w.id,

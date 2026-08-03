@@ -3597,14 +3597,39 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
   for (const emp of employees) {
     let status = null;
     let leave_cat = null;
+    let leave_session = null;
     let note = null;
 
     if (outDutyMap.has(emp.id)) {
-      status = 12; // OUT_DUTY
+      const o = outDutyMap.get(emp.id);
+      let isOutDutyHalfDay = false;
+      if (o.start_date === date && o.start_session !== 0 && o.start_session !== 3) {
+        isOutDutyHalfDay = true;
+      } else if (o.end_date === date && o.end_session !== 0 && o.end_session !== 3) {
+        isOutDutyHalfDay = true;
+      } else if (parseFloat(o.total_days) < 1) {
+        isOutDutyHalfDay = true;
+      }
+      status = isOutDutyHalfDay ? 13 : 12; // 13: HALF_OUT_DUTY, 12: OUT_DUTY
       // note = "System: Out Duty auto-detected";
     } else if (leaveMap.has(emp.id)) {
-      status = 6; // LEAVE
-      leave_cat = leaveMap.get(emp.id).leave_category_id;
+      const l = leaveMap.get(emp.id);
+      let isHalfDay = false;
+      let currentSession = null;
+      if (l.start_date === date && l.start_session !== 0) {
+        isHalfDay = true;
+        currentSession = l.start_session;
+      } else if (l.end_date === date && l.end_session !== 0) {
+        isHalfDay = true;
+        currentSession = l.end_session;
+      } else if (parseFloat(l.total_days) < 1 && l.start_date === l.end_date) {
+        isHalfDay = true;
+        currentSession = 1; // Default to Session 1 if unknown but < 1 day
+      }
+
+      status = isHalfDay ? 1 : 6; // 1: HALF_DAY, 6: LEAVE
+      leave_cat = l.leave_category_id;
+      leave_session = isHalfDay ? currentSession : null;
       // note = "System: Leave auto-detected";
     } else if (holidayMap.has(emp.id)) {
       status = 4; // HOLIDAY
@@ -3646,12 +3671,13 @@ async function bulkSyncAttendanceDays(employeeIds, date, meta = {}, transaction 
       }
     }
 
-    if (status) {
+    if (status !== null) {
       payloads.push({
         employee_id: emp.id,
         attendance_date: date,
         status,
         leave_category_id: leave_cat,
+        leave_session,
         company_id: meta.company_id || emp.company_id,
         branch_id: meta.branch_id || emp.branch_id,
         user_id: meta.user_id || 0,

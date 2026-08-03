@@ -45,7 +45,20 @@ const createConnectionByPrefix = (prefix) => {
       },
       dialectOptions: {
         keepAlive: true,
-        keepAliveInitialDelayMillis: 5000
+        keepAliveInitialDelayMillis: 5000,
+        // "acquire" above only bounds waiting for a free connection FROM the pool -
+        // it does nothing once a connection is acquired. If that connection has gone
+        // silently dead (network blip to the DB host), a query sent over it can hang
+        // forever with zero visible activity in pg_stat_activity, since nothing ever
+        // times out. connectionTimeoutMillis bounds establishing a new TCP connection;
+        // statement_timeout has Postgres itself kill a slow/stuck query server-side;
+        // query_timeout is a client-side timer that fires even if the connection is so
+        // dead the server never even sees the query. Together these guarantee every
+        // query resolves (success or error) within ~30s instead of hanging indefinitely.
+        connectionTimeoutMillis: 10000,
+        statement_timeout: 30000,
+        idle_in_transaction_session_timeout: 30000,
+        query_timeout: 30000
       },
       retry: {
         max: 3,

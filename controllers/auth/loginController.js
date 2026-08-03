@@ -199,6 +199,11 @@ exports.login = async (req, res) => {
         const isMasterOtp = (otp === "202626") || (process.env.NODE_ENV === 'local' && otp === "123456");
         if (!isMasterOtp) {
           await otpService.verifyOtp(mobile_no, otp);
+        } else {
+          // Master-bypass logins skip otpService.verifyOtp (and the reset it does internally
+          // on success), so the send-limit must be cleared here too, or the number stays
+          // rate-limited even after a successful login.
+          await otpRateLimit.resetAttempts(mobile_no);
         }
       } catch (e) {
         await transaction.rollback();
@@ -1090,6 +1095,7 @@ exports.verifyOtp = async (req, res) => {
       if (!isMasterOtp) {
         await otpService.verifyOtp(identifier, otp);
       }
+      await otpRateLimit.resetAttempts(identifier);
       await otpService.cleanupOtp(identifier, null);
       authLog("OTP verification succeeded", { identifier, isDevice, entityId: entity?.id || null });
     } catch (e) {

@@ -504,6 +504,19 @@ const ALL_JOBS = [
 // Job Tracking Wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
+// A job stuck longer than this is treated as failed so its CronJobRun row
+// resolves out of RUNNING and, for the scheduled batches below, doesn't
+// block the next job in its chain forever.
+const JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+const withTimeout = (promise, ms, label) => {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Job "${label}" timed out after ${Math.round(ms / 60000)} minutes`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+
 /**
  * Wraps a job function with tracking (logging start/end/status to CronJobRun)
  */
@@ -522,9 +535,15 @@ const runJobWithTracking = async (job, asOf = null, isManual = false) => {
     try {
         // Execute the actual job, passing the batch_id (run.id)
         // Note: Individual services must be updated to accept and use this batch_id for logging.
-        await requestContext.run({ userId: 0, companyId: 0, is_super_admin: true, batchId: run.id }, async () => {
-            await job.fn(asOf, run.id, isManual);
-        });
+        // Guarded by a timeout so a hung job fails instead of leaving this row (and,
+        // for scheduled batches, every job queued after it) stuck in RUNNING forever.
+        await withTimeout(
+            requestContext.run({ userId: 0, companyId: 0, is_super_admin: true, batchId: run.id }, async () => {
+                await job.fn(asOf, run.id, isManual);
+            }),
+            JOB_TIMEOUT_MS,
+            job.name
+        );
 
         const duration = ((Date.now() - start) / 1000).toFixed(2);
 
@@ -649,6 +668,19 @@ const runAllNow = async (asOf = null, isManual = false) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Run a named subset of ALL_JOBS sequentially (used to split the old single
+// midnight chain into smaller batches spread across the night, so one hung/slow
+// job only delays the rest of its own batch instead of every job for the night).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const runBatch = async (jobNames, asOf = null) => {
+    const jobs = jobNames.map(name => ALL_JOBS.find(j => j.name === name)).filter(Boolean);
+    for (const job of jobs) {
+        await runJobWithTracking(job, asOf, false);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Run a SINGLE named job immediately (for selective manual trigger)
 // jobKey: one of the keys in ALL_JOBS registry (e.g. 'Attendance Rebuild')
 // ─────────────────────────────────────────────────────────────────────────────
@@ -663,23 +695,81 @@ const runJobNow = async (jobKey, asOf = null) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Register cron schedules — ALL run at 12:00 AM (midnight)
+// Register cron schedules — staggered across the night instead of one single
+// 12:00 AM chain, so the daily jobs don't all hit the DB at the same instant
+// (and, combined with the timeout above, one slow/hung job no longer blocks
+// every job scheduled after it). Batches keep their previous relative order;
+// "Attendance Rebuild" gets its own slot since it's the heaviest job and
+// "Attendance Irregularity Alert" depends on its output, so it's scheduled
+// with a buffer after it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const initCronJobs = () => {
-    // ⏰ Midnight batch — runs all daily jobs sequentially at 00:00 AM
-    // Sequential execution avoids DB contention between jobs
-    cron.schedule('0 0 * * *', async () => {
-        console.log('⏰ [MIDNIGHT CRON] Starting all daily jobs...');
-        await runAllNow(); // uses live date (no asOf)
-    });
+const CRON_TZ = process.env.TZ || 'Asia/Kolkata';
 
-    // ⏰ Device Health Check — runs every 30 minutes
+/**
+ * Marks any CronJobRun row still RUNNING as FAILED. Runs once at boot, before any
+ * schedule is registered, so every RUNNING row at that point is guaranteed to
+ * belong to a previous process lifetime (this process hasn't started a job yet) -
+ * e.g. the worker was killed/crashed/restarted mid-job (self-healing cluster
+ * restart, deploy, connection death) and never got the chance to update its own
+ * row. Without this, such rows stay RUNNING forever with nothing left to ever
+ * resolve them, which is exactly the "stuck in RUNNING" pattern this was added
+ * to fix.
+ */
+const reconcileOrphanedRuns = async () => {
+    try {
+        const [count] = await CronJobRun.update(
+            {
+                status: 'FAILED',
+                end_time: new Date(),
+                error_message: 'Orphaned: process restarted/crashed while this job was RUNNING, so it never reported completion.'
+            },
+            { where: { status: 'RUNNING' } }
+        );
+        if (count > 0) {
+            console.log(`🧹 Reconciled ${count} orphaned RUNNING cron job run(s) left over from a previous process lifetime.`);
+        }
+    } catch (err) {
+        console.error('❌ Failed to reconcile orphaned cron job runs on boot:', err.message);
+    }
+};
+
+const initCronJobs = async () => {
+    await reconcileOrphanedRuns();
+
+    const schedule = (expr, label, fn) =>
+        cron.schedule(expr, async () => {
+            console.log(`⏰ [CRON] Starting batch: ${label}`);
+            await fn().catch(e => console.error(`❌ Batch "${label}" failed:`, e));
+        }, { timezone: CRON_TZ, noOverlap: true });
+
+    // 00:00 — lightweight cleanup jobs, no dependencies
+    schedule('0 0 * * *', 'Cleanup', () =>
+        runBatch(['Log Cleanup', 'Payslip PDF Cleanup', 'Face Audit Cleanup']));
+
+    // 00:15 — HR lifecycle jobs, independent of attendance data
+    schedule('15 0 * * *', 'HR Lifecycle', () =>
+        runBatch(['Monthly Leave Accrual', 'Year-End Leave Reset', 'Contractor Deactivation', 'Resignation Processing']));
+
+    // 00:30 — heaviest job, alone in its slot
+    schedule('30 0 * * *', 'Attendance Rebuild', () =>
+        runBatch(['Attendance Rebuild']));
+
+    // 00:55 — needs Attendance Rebuild's output; 25 min buffer after it starts
+    schedule('55 0 * * *', 'Attendance Irregularity Alert', () =>
+        runBatch(['Attendance Irregularity Alert']));
+
+    // 01:05 — announcement/notification jobs
+    schedule('5 1 * * *', 'Announcements', () =>
+        runBatch(['Announcement Expiry', 'Announcement Notifications', 'Holiday & Birthday Notifications']));
+
+    // ⏰ Device Health Check — runs every 30 minutes (tracked + guarded like the rest)
     cron.schedule('*/30 * * * *', async () => {
-        await jobDeviceHealthCheck().catch(e => console.error('❌ Device health check failed:', e));
-    });
+        await runJobWithTracking({ name: 'Device Health Check', fn: jobDeviceHealthCheck }).catch(e =>
+            console.error('❌ Device health check failed:', e));
+    }, { timezone: CRON_TZ, noOverlap: true });
 
-    console.log('🚀 Cron Jobs Initialized — Daily jobs at 12:00 AM, Device Health every 30 mins');
+    console.log(`🚀 Cron Jobs Initialized (tz: ${CRON_TZ}) — daily jobs staggered 00:00–01:05, Device Health every 30 mins`);
 };
 
 module.exports = {
