@@ -264,6 +264,24 @@ exports.attendancePunch = async (req, res) => {
 };
 
 /**
+ * Rolls back a transaction defensively. If the connection already died mid-request,
+ * Sequelize marks the transaction "finished" as soon as a rollback attempt starts -
+ * even if that attempt itself then fails - so a second rollback() call throws
+ * "Transaction cannot be rolled back because it has been finished with state:
+ * rollback" and masks whatever the real underlying error was. This makes rollback
+ * safe to call more than once in the same request.
+ */
+const safeRollback = async (transaction, context = "") => {
+  try {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+  } catch (rollbackErr) {
+    console.error(`[SyncPunches]${context ? ` [${context}]` : ""} Rollback failed (transaction likely already closed):`, rollbackErr.message);
+  }
+};
+
+/**
  * SYNC PUNCHES (Offline Sync)
  */
 exports.syncPunches = async (req, res) => {
@@ -273,7 +291,7 @@ exports.syncPunches = async (req, res) => {
     const { punches } = req.body;
 
     if (!punches || !Array.isArray(punches)) {
-      await transaction.rollback();
+      await safeRollback(transaction, "validation");
       return res.error(constants.VALIDATION_ERROR, "Punches array is required");
     }
 
@@ -480,7 +498,7 @@ exports.syncPunches = async (req, res) => {
         // system failures → fail the batch so the device retries everything.
         const isSystemError = punchErr.name && String(punchErr.name).startsWith("Sequelize");
         if (isSystemError) {
-          await transaction.rollback();
+          await safeRollback(transaction, "system-error");
           return handleError(punchErr, res, req);
         }
 
@@ -511,7 +529,7 @@ exports.syncPunches = async (req, res) => {
       results
     });
   } catch (err) {
-    await transaction.rollback();
+    await safeRollback(transaction, "outer");
     return handleError(err, res, req);
   }
 };
