@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const cronParser = require('cron-parser');
 const fs = require('fs');
 const path = require('path');
 const dayjs = require('dayjs');
@@ -734,6 +735,73 @@ const reconcileOrphanedRuns = async () => {
     }
 };
 
+// Single source of truth for both scheduling (below) and catch-up detection
+// (catchUpMissedRuns) - each batch's cron expression and the job names it runs.
+const BATCHES = [
+    // 00:00 — lightweight cleanup jobs, no dependencies
+    { time: '0 0 * * *', label: 'Cleanup', jobs: ['Log Cleanup', 'Payslip PDF Cleanup', 'Face Audit Cleanup'] },
+    // 00:15 — HR lifecycle jobs, independent of attendance data
+    { time: '15 0 * * *', label: 'HR Lifecycle', jobs: ['Monthly Leave Accrual', 'Year-End Leave Reset', 'Contractor Deactivation', 'Resignation Processing'] },
+    // 00:30 — heaviest job, alone in its slot
+    { time: '30 0 * * *', label: 'Attendance Rebuild', jobs: ['Attendance Rebuild'] },
+    // 00:55 — needs Attendance Rebuild's output; 25 min buffer after it starts
+    { time: '55 0 * * *', label: 'Attendance Irregularity Alert', jobs: ['Attendance Irregularity Alert'] },
+    // 01:05 — announcement/notification jobs
+    { time: '5 1 * * *', label: 'Announcements', jobs: ['Announcement Expiry', 'Announcement Notifications', 'Holiday & Birthday Notifications'] },
+];
+const DEVICE_HEALTH_SCHEDULE = '*/30 * * * *';
+
+/**
+ * Off by default - set CRON_CATCHUP_ENABLED=true to turn on. This runs real
+ * jobs (real notifications, real employee-record changes) the moment it finds
+ * something missed, and since nodemon restarts this process on every file
+ * save, that could otherwise fire the instant a totally unrelated code change
+ * is saved. Requiring an explicit opt-in keeps that a deliberate choice.
+ */
+const CATCHUP_ENABLED = process.env.CRON_CATCHUP_ENABLED === 'true';
+
+/**
+ * node-cron has no concept of a missed tick - if this process is down (or
+ * mid-restart) at the exact moment a schedule was due, that tick is gone
+ * forever; the job simply won't run until its next natural occurrence, which
+ * for a once-daily job means silently losing that whole day's run. This
+ * checks, for every job, whether a CronJobRun exists since its most recent due
+ * time (per its cron expression) and runs it immediately if not - the same
+ * "was this cycle covered" check used for airwix_erp_v2's pg-boss-based
+ * catch-up, adapted here since node-cron has no queue to re-dispatch through.
+ */
+const catchUpMissedRuns = async () => {
+    if (!CATCHUP_ENABLED) {
+        console.log('⏭️  Cron catch-up disabled (set CRON_CATCHUP_ENABLED=true to enable). Skipping missed-run check.');
+        return;
+    }
+
+    const schedules = [
+        ...BATCHES.flatMap(b => b.jobs.map(name => ({ name, expr: b.time }))),
+        { name: 'Device Health Check', expr: DEVICE_HEALTH_SCHEDULE },
+    ];
+
+    for (const { name, expr } of schedules) {
+        try {
+            const lastDue = cronParser.parseExpression(expr, { tz: CRON_TZ }).prev().toDate();
+
+            const recentRun = await CronJobRun.findOne({
+                where: { job_name: name, start_time: { [Op.gte]: lastDue } },
+                order: [['start_time', 'DESC']]
+            });
+            if (recentRun) continue;
+
+            const job = ALL_JOBS.find(j => j.name === name);
+            if (!job) continue;
+
+            console.warn(`⏰ Catch-up: "${name}" missed its scheduled run (server was likely down at ${lastDue.toISOString()}), running now...`);
+            await runJobWithTracking(job);
+        } catch (err) {
+            console.error(`❌ Failed to check/catch-up job "${name}":`, err.message);
+        }
+    }
+};
+
 const initCronJobs = async () => {
     await reconcileOrphanedRuns();
 
@@ -743,39 +811,26 @@ const initCronJobs = async () => {
             await fn().catch(e => console.error(`❌ Batch "${label}" failed:`, e));
         }, { timezone: CRON_TZ, noOverlap: true });
 
-    // 00:00 — lightweight cleanup jobs, no dependencies
-    schedule('0 0 * * *', 'Cleanup', () =>
-        runBatch(['Log Cleanup', 'Payslip PDF Cleanup', 'Face Audit Cleanup']));
-
-    // 00:15 — HR lifecycle jobs, independent of attendance data
-    schedule('15 0 * * *', 'HR Lifecycle', () =>
-        runBatch(['Monthly Leave Accrual', 'Year-End Leave Reset', 'Contractor Deactivation', 'Resignation Processing']));
-
-    // 00:30 — heaviest job, alone in its slot
-    schedule('30 0 * * *', 'Attendance Rebuild', () =>
-        runBatch(['Attendance Rebuild']));
-
-    // 00:55 — needs Attendance Rebuild's output; 25 min buffer after it starts
-    schedule('55 0 * * *', 'Attendance Irregularity Alert', () =>
-        runBatch(['Attendance Irregularity Alert']));
-
-    // 01:05 — announcement/notification jobs
-    schedule('5 1 * * *', 'Announcements', () =>
-        runBatch(['Announcement Expiry', 'Announcement Notifications', 'Holiday & Birthday Notifications']));
+    for (const batch of BATCHES) {
+        schedule(batch.time, batch.label, () => runBatch(batch.jobs));
+    }
 
     // ⏰ Device Health Check — runs every 30 minutes (tracked + guarded like the rest)
-    cron.schedule('*/30 * * * *', async () => {
+    cron.schedule(DEVICE_HEALTH_SCHEDULE, async () => {
         await runJobWithTracking({ name: 'Device Health Check', fn: jobDeviceHealthCheck }).catch(e =>
             console.error('❌ Device health check failed:', e));
     }, { timezone: CRON_TZ, noOverlap: true });
 
     console.log(`🚀 Cron Jobs Initialized (tz: ${CRON_TZ}) — daily jobs staggered 00:00–01:05, Device Health every 30 mins`);
+
+    await catchUpMissedRuns();
 };
 
 module.exports = {
     initCronJobs,
     runAllNow,
     runJobNow,
+    catchUpMissedRuns,
     ALL_JOBS,
     // Individual jobs (can be triggered selectively)
     jobLogCleanup,
