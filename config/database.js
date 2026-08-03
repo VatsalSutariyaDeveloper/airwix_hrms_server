@@ -22,14 +22,6 @@ const createConnectionByPrefix = (prefix) => {
     throw new Error(`Database configuration for prefix '${prefix}' is incomplete (missing host or name).`);
   }
 
-  // A pooler in front of Postgres (PgBouncer, typically on port 6432) rejects
-  // statement_timeout / idle_in_transaction_session_timeout as unsupported
-  // startup parameters and FATALs the whole connection instead of just
-  // bounding query time - this took down every connection for at least one
-  // prefix in production. connectionTimeoutMillis and query_timeout are pure
-  // pg client-side timers (never sent to Postgres), so they're always safe.
-  const isPooledConnection = Number(dbPort) === 6432;
-
   const sequelize = new Sequelize(
     dbName,
     dbUser,
@@ -58,17 +50,18 @@ const createConnectionByPrefix = (prefix) => {
         // it does nothing once a connection is acquired. If that connection has gone
         // silently dead (network blip to the DB host), a query sent over it can hang
         // forever with zero visible activity in pg_stat_activity, since nothing ever
-        // times out. connectionTimeoutMillis bounds establishing a new TCP connection;
-        // statement_timeout has Postgres itself kill a slow/stuck query server-side;
-        // query_timeout is a client-side timer that fires even if the connection is so
-        // dead the server never even sees the query. Together these guarantee every
-        // query resolves (success or error) within ~30s instead of hanging indefinitely.
+        // times out. Both of these are pure pg client-side timers - never sent to
+        // Postgres as connection/startup parameters - so they're safe on every
+        // connection regardless of whether it goes through a pooler (unlike
+        // statement_timeout / idle_in_transaction_session_timeout, deliberately left
+        // out here: at least one prefix in production routes through a pooler that
+        // FATALs the entire connection on receiving those as startup parameters, and
+        // this app connects through several different prefixed DB configs whose
+        // pooling setup isn't reliably known from here - not worth guessing wrong a
+        // second time when these two alone already prevent the original symptom,
+        // a query hanging forever with zero visible activity).
         connectionTimeoutMillis: 10000,
         query_timeout: 30000,
-        ...(isPooledConnection ? {} : {
-          statement_timeout: 30000,
-          idle_in_transaction_session_timeout: 30000,
-        }),
       },
       retry: {
         max: 3,
