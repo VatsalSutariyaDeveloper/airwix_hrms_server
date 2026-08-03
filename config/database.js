@@ -22,6 +22,14 @@ const createConnectionByPrefix = (prefix) => {
     throw new Error(`Database configuration for prefix '${prefix}' is incomplete (missing host or name).`);
   }
 
+  // A pooler in front of Postgres (PgBouncer, typically on port 6432) rejects
+  // statement_timeout / idle_in_transaction_session_timeout as unsupported
+  // startup parameters and FATALs the whole connection instead of just
+  // bounding query time - this took down every connection for at least one
+  // prefix in production. connectionTimeoutMillis and query_timeout are pure
+  // pg client-side timers (never sent to Postgres), so they're always safe.
+  const isPooledConnection = Number(dbPort) === 6432;
+
   const sequelize = new Sequelize(
     dbName,
     dbUser,
@@ -30,7 +38,7 @@ const createConnectionByPrefix = (prefix) => {
       host: dbHost,
       dialect: "postgres",
       port: dbPort,
-      logging: process.env.DEBUG_SQL == "true" ? 
+      logging: process.env.DEBUG_SQL == "true" ?
         (msg) => {
           if (typeof msg === "string") {
             console.log(`\n[SQL - ${prefix}]:`, msg);
@@ -56,9 +64,11 @@ const createConnectionByPrefix = (prefix) => {
         // dead the server never even sees the query. Together these guarantee every
         // query resolves (success or error) within ~30s instead of hanging indefinitely.
         connectionTimeoutMillis: 10000,
-        statement_timeout: 30000,
-        idle_in_transaction_session_timeout: 30000,
-        query_timeout: 30000
+        query_timeout: 30000,
+        ...(isPooledConnection ? {} : {
+          statement_timeout: 30000,
+          idle_in_transaction_session_timeout: 30000,
+        }),
       },
       retry: {
         max: 3,
