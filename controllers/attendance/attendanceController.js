@@ -3409,7 +3409,7 @@ exports.getIrregularitiesCount = async (req, res) => {
         where: {
           company_id: companyId,
           employee_id: currentEmpId,
-          approval_status: { [Op.in]: [0, 1, 3] },
+          approval_status: { [Op.in]: [0, 1] },
           status: 0,
           attendance_date: { [Op.between]: [startDate, endDate] }
         },
@@ -3528,7 +3528,7 @@ exports.getSelfIrregularities = async (req, res) => {
     const regWhere = {
       company_id: companyId,
       employee_id: ownEmpId,
-      approval_status: { [Op.in]: [0, 1, 3] },
+      approval_status: { [Op.in]: [0, 1] },
       status: 0
     };
     if (whereClause.attendance_date) {
@@ -3672,7 +3672,7 @@ exports.getSelfIrregularitiesCount = async (req, res) => {
     const regWhere = {
       company_id: companyId,
       employee_id: ownEmpId,
-      approval_status: { [Op.in]: [0, 1, 3] },
+      approval_status: { [Op.in]: [0, 1] },
       status: 0,
       attendance_date: {
         [Op.gte]: dayjs(startDate).startOf('day').toDate(),
