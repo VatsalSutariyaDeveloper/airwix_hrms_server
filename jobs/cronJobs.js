@@ -741,7 +741,9 @@ const BATCHES = [
     // 00:00 — lightweight cleanup jobs, no dependencies
     { time: '0 0 * * *', label: 'Cleanup', jobs: ['Log Cleanup', 'Payslip PDF Cleanup', 'Face Audit Cleanup'] },
     // 00:15 — HR lifecycle jobs, independent of attendance data
-    { time: '15 0 * * *', label: 'HR Lifecycle', jobs: ['Monthly Leave Accrual', 'Year-End Leave Reset', 'Contractor Deactivation', 'Resignation Processing'] },
+    // 'Monthly Leave Accrual' and 'Year-End Leave Reset' are disabled from auto-run per request
+    // (still available for manual trigger via runJobNow) - do not re-enable without confirming.
+    { time: '15 0 * * *', label: 'HR Lifecycle', jobs: [/* 'Monthly Leave Accrual', */ /* 'Year-End Leave Reset', */ 'Contractor Deactivation', 'Resignation Processing'] },
     // 00:30 — heaviest job, alone in its slot
     { time: '30 0 * * *', label: 'Attendance Rebuild', jobs: ['Attendance Rebuild'] },
     // 00:55 — needs Attendance Rebuild's output; 25 min buffer after it starts

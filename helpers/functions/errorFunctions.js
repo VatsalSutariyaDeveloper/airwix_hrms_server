@@ -1,4 +1,4 @@
-const constants = require("../constants");
+const { constants } = require("../constants");
 const { logError } = require("./logFunctions");
 const { Err } = require("../Err");
 const { reportDbTimeout } = require("./dbWatchdog");

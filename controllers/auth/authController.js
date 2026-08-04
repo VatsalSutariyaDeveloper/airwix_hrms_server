@@ -559,7 +559,7 @@ exports.redirectToStore = async (req, res) => {
 
     // URLs with environment variable support and high-quality defaults
     const playStoreUrl = process.env.PLAY_STORE_URL || "https://play.google.com/store/apps/details?id=com.app.airwixpayroll";
-    const appStoreUrl = process.env.APP_STORE_URL || "https://hrms.airwix.in";
+    const appStoreUrl = process.env.APP_STORE_URL || "https://apps.apple.com/in/app/airwix-payroll/id6780379577";
     const fallbackUrl = process.env.FRONTEND_URL || "https://hrms.airwix.in";
 
     const isAndroid = /android/i.test(userAgent);
