@@ -68,6 +68,7 @@ module.exports = {
   whatsappService,
   cryptoHelper: require("./cryptoHelper"),
   deviceHelper: require("./deviceHelper"),
+  sessionHelper: require("./sessionHelper"),
   Err,
   fail
 };

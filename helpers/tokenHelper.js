@@ -30,7 +30,8 @@ const generateToken = (user, companyId, access_by = "web login") => {
       access: user.access,
       device_id: user.device_id || null,
       fcm_token: user.fcm_token || null,
-      selectedCompanyIds: user.selectedCompanyIds || null
+      selectedCompanyIds: user.selectedCompanyIds || null,
+      session_id: user.session_id || null
     },
     process.env.JWT_SECRET || "your_jwt_secret",
     { expiresIn }

@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const { requestContext } = require("../utils/requestContext.js");
 const { User, CompanyMaster, BranchMaster, DeviceMaster } = require("../models");
 const { constants } = require("../helpers");
+const { isSessionValid } = require("../helpers/sessionCache");
 
 // In-memory token blacklist
 const tokenBlacklist = new Set();
@@ -115,6 +116,19 @@ async function authMiddleware(req, res, next) {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Session revocation check (self-logout or admin force-logout from another
+    // device). Tokens without session_id (issued before this feature existed,
+    // or device/attendance-kiosk tokens) skip this entirely - fully backward
+    // compatible, nobody gets logged out by this check alone.
+    if (decoded.session_id) {
+      const valid = await isSessionValid(decoded.session_id);
+      if (!valid) {
+        req.auth_error_detail = `Session ${decoded.session_id} has been logged out.`;
+        await cleanupFcmToken(token);
+        return res.status(401).json({ success: false, message: "Session has been logged out from another location." });
+      }
+    }
+
     // Verify User, Company, and Branch status
     if (decoded.id && !decoded.device_id) {
       const user = await User.findOne({ where: { id: decoded.id, status: 0 } });
@@ -195,6 +209,7 @@ async function authMiddleware(req, res, next) {
 
     req.user = {
       id: decoded.id,
+      session_id: decoded.session_id || null,
       employee_id: decoded.employee_id,
       company_id: decoded.company_id,
       organization_id: decoded.organization_id || null, // Decrypt organization_id

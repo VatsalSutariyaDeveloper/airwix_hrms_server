@@ -72,6 +72,7 @@ module.exports = (sequelize, DataTypes) => {
     AttendanceApproval.associate = (models) => {
         AttendanceApproval.belongsTo(models.Employee, { foreignKey: "employee_id", as: "employee" });
         AttendanceApproval.belongsTo(models.User, { foreignKey: "approved_by", as: "approvedBy" });
+        AttendanceApproval.belongsTo(models.User, { foreignKey: "user_id", as: "requestedBy" });
     };
 
     return AttendanceApproval;

@@ -20,6 +20,7 @@ const customParseFormat = require("dayjs/plugin/customParseFormat");
 dayjs.extend(customParseFormat);
 const { fail } = require('../../../helpers/Err');
 const { requestContext } = require("../../../utils/requestContext");
+const LeaveBalanceService = require("../../../services/leaveBalanceService");
 
 let isCancelled = false;
 let transaction = null;
@@ -308,7 +309,7 @@ const runWorker = async () => {
           empWhere.company_id = mockStore.companyId;
       }
       return await commonQuery.findAllRecords(Employee, empWhere, {
-        attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template', 'company_id'],
+        attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template', 'company_id', 'joining_date'],
         raw: true
       }, transaction, { company_id: true });
     });
@@ -328,10 +329,39 @@ const runWorker = async () => {
     });
     
     const employeeBalancesMap = new Map();
+    const employeeCategoryRulesMap = new Map();
+    const templateCategoriesMap = new Map();
     const getEmployeeCategory = (empId, categoryName) => {
         const normName = String(categoryName || '').toLowerCase().trim();
         const key = `${empId}_${normName}`;
-        return employeeBalancesMap.get(key) || null;
+        if (employeeBalancesMap.has(key)) {
+            return employeeBalancesMap.get(key);
+        }
+        // Fallback to template categories
+        const empData = employeeDataMap.get(empId);
+        if (empData && empData.leave_template) {
+            const tc = templateCategoriesMap.get(`${empData.leave_template}_${normName}`);
+            if (tc) {
+                return tc.id;
+            }
+        }
+        return null;
+    };
+    const getEmployeeCategoryRules = (empId, categoryId) => {
+        const rulesKey = `${empId}_${categoryId}`;
+        if (employeeCategoryRulesMap.has(rulesKey)) {
+            return employeeCategoryRulesMap.get(rulesKey);
+        }
+        // Fallback to template categories
+        const empData = employeeDataMap.get(empId);
+        if (empData && empData.leave_template) {
+            for (const [key, value] of templateCategoriesMap.entries()) {
+                if (key.startsWith(`${empData.leave_template}_`) && value.id === categoryId) {
+                    return value.automation_rules ? JSON.parse(value.automation_rules) : {};
+                }
+            }
+        }
+        return {};
     };
     const balanceCache = new Set();
 
@@ -428,7 +458,7 @@ const runWorker = async () => {
                 year: sheetYear,
                 status: 0
             },
-            attributes: ['employee_id', 'leave_category_id', 'leave_category_name'],
+            attributes: ['employee_id', 'leave_category_id', 'leave_category_name', 'automation_rules'],
             transaction,
             raw: true
         });
@@ -437,14 +467,49 @@ const runWorker = async () => {
             const normName = String(b.leave_category_name || '').toLowerCase().trim();
             const key = `${b.employee_id}_${normName}`;
             employeeBalancesMap.set(key, b.leave_category_id);
+            
+            // Cache rules
+            const rulesKey = `${b.employee_id}_${b.leave_category_id}`;
+            const parsedRules = b.automation_rules ? JSON.parse(b.automation_rules) : {};
+            employeeCategoryRulesMap.set(rulesKey, parsedRules);
         });
+
+        // Pre-fetch LeaveTemplateCategory for the employees' templates to resolve fallbacks
+        const templateIds = [...new Set(employeesList.map(e => e.leave_template).filter(Boolean))];
+        if (templateIds.length > 0) {
+            const templateCategories = await LeaveTemplateCategory.findAll({
+                where: {
+                    leave_template_id: { [Op.in]: templateIds },
+                    status: 0
+                },
+                attributes: ['id', 'leave_template_id', 'leave_category_name', 'automation_rules'],
+                transaction,
+                raw: true
+            });
+            templateCategories.forEach(tc => {
+                const normName = String(tc.leave_category_name || '').toLowerCase().trim();
+                templateCategoriesMap.set(`${tc.leave_template_id}_${normName}`, {
+                    id: tc.id,
+                    automation_rules: tc.automation_rules
+                });
+            });
+        }
     }
     // ----------------------------------------------------------
 
     const leaveRequestsToApprove = new Set();
+    // Per-employee classification of every day the sheet actually covers, used
+    // after the main loop to reconcile leaves that exist in the system but are
+    // contradicted by the muster roll.
+    //   nonLeave -> sheet says worked / absent / OD  (contradicts a leave)
+    //   neutral  -> weekly-off / holiday             (legitimately sits INSIDE a
+    //               multi-day leave span, so it must neither contradict a leave
+    //               nor block a full cancellation)
+    const employeeNonLeaveDays = new Map();
+    const employeeNeutralDays = new Map();
     const createdCountRef = { val: 0 };
     const updatedCountRef = { val: 0 };
-    const leaveIncrementMap = new Map();
+    const balanceAdjustments = [];
     let employeeCreatedCount = 0;
     let errorCount = 0;
     const errorSample = [];
@@ -687,7 +752,7 @@ const runWorker = async () => {
 
                     let status = 5; 
                     const s = statusChar.toUpperCase();
-                    let importedNote = null;
+                                        let importedNote = null;
                     let leaveCategoryId = null;
                     let leaveSession = null;
 
@@ -713,10 +778,24 @@ const runWorker = async () => {
                     }
 
                     if (leaveCatName) {
+                        leaveCategoryId = getEmployeeCategory(employeeId, leaveCatName);
+                    } else if (s === 'P/2') {
+                        leaveCategoryId = getEmployeeCategory(employeeId, "unpaid leave");
+                    }
+
+                    let finalIsHalfDay = isHalfDay;
+                    if (leaveCategoryId) {
+                        const rules = getEmployeeCategoryRules(employeeId, leaveCategoryId);
+                        if (isHalfDay && rules.allow_half_day === false) {
+                            finalIsHalfDay = false;
+                        }
+                    }
+
+                    if (leaveCatName) {
                         if (markPresent) {
                              status = 0; // PRESENT
                         } else {
-                             status = isHalfDay ? 1 : 6;
+                             status = finalIsHalfDay ? 1 : 6;
                         }
 
                         if (status === 1 || markPresent) {
@@ -729,7 +808,6 @@ const runWorker = async () => {
                             }
                         }
 
-                        leaveCategoryId = getEmployeeCategory(employeeId, leaveCatName);
                         importedNote = `Imported: ${statusChar}`;
                     } else if (s === 'HD') {
                         status = 1;
@@ -745,7 +823,7 @@ const runWorker = async () => {
                     } else if (s === 'OD/2') {
                          status = 13; // HALF_OD
                     } else if (s === 'P/2') {
-                        status = 1; // HALF_DAY
+                        status = finalIsHalfDay ? 1 : 6;
                         leaveSession = 1; // Default
                         if (firstIn && lastOut) {
                             const inHr = dayjs(firstIn).hour();
@@ -753,7 +831,6 @@ const runWorker = async () => {
                             if (inHr >= 12) leaveSession = 1;
                             else if (outHr <= 15) leaveSession = 2;
                         }
-                        leaveCategoryId = getEmployeeCategory(employeeId, "unpaid leave");
                         importedNote = `Imported: ${statusChar}`;
                     } else if (s === 'P') {
                         status = 0; // PRESENT
@@ -847,7 +924,18 @@ const runWorker = async () => {
                         }
                     }
 
-                    let oldDays = 0;
+                    // Record how the sheet classifies this day (see the map
+                    // declarations above). leaveCategoryId is the reliable marker
+                    // of a leave day here - newDays is zeroed out above whenever an
+                    // existing request already covers the day.
+                    if (!leaveCategoryId) {
+                        const isNeutralDay = (status === 3 || status === 4); // weekly-off / holiday
+                        const bucket = isNeutralDay ? employeeNeutralDays : employeeNonLeaveDays;
+                        if (!bucket.has(employeeId)) bucket.set(employeeId, new Set());
+                        bucket.get(employeeId).add(attendanceDate);
+                    }
+
+                                        let oldDays = 0;
                     if (existingDay && existingDay.leave_category_id) {
                          // If it was status 6 (Leave) or status 0 with a category (Short Leave), it's 1.0
                          if (existingDay.status === 6 || existingDay.status === 0) oldDays = 1.0;
@@ -855,16 +943,40 @@ const runWorker = async () => {
                     }
 
                     if (leaveCategoryId) {
-                         const balKey = `${employeeId}_${leaveCategoryId}_${year}`;
                          const diffUsage = newDays - ((existingDay && existingDay.leave_category_id === leaveCategoryId) ? oldDays : 0);
                          if (diffUsage !== 0) {
-                              leaveIncrementMap.set(balKey, (leaveIncrementMap.get(balKey) || 0) + diffUsage);
+                              balanceAdjustments.push({
+                                  employeeId,
+                                  leaveCategoryId,
+                                  amount: diffUsage,
+                                  date: attendanceDate
+                              });
                          }
                     }
-                    // Handle case where it WAS a leave but now it's not OR category changed
-                    if (existingDay && existingDay.leave_category_id && existingDay.leave_category_id !== leaveCategoryId) {
-                         const oldBalKey = `${employeeId}_${existingDay.leave_category_id}_${year}`;
-                         leaveIncrementMap.set(oldBalKey, (leaveIncrementMap.get(oldBalKey) || 0) - oldDays);
+                    // Handle case where it WAS a leave but now it's not OR category changed.
+                    // Exception: when the day stops being a leave *and* a system leave
+                    // request still covers it, step 8 below cancels that request and
+                    // refunds through it. Refunding here as well would credit the
+                    // balance twice for the same day.
+                    const refundOwnedByRequestCancellation = !leaveCategoryId && existingDay && existingDay.leave_category_id &&
+                        (leaveRequestsMap.get(employeeId) || []).some(lr =>
+                            lr.start_date <= attendanceDate &&
+                            lr.end_date >= attendanceDate &&
+                            lr.leave_category_id === existingDay.leave_category_id &&
+                            [
+                                constants.LEAVE_APPROVAL_STATUS.PENDING,
+                                constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                                constants.LEAVE_APPROVAL_STATUS.APPROVED
+                            ].includes(lr.approval_status)
+                        );
+
+                    if (existingDay && existingDay.leave_category_id && existingDay.leave_category_id !== leaveCategoryId && !refundOwnedByRequestCancellation) {
+                         balanceAdjustments.push({
+                             employeeId,
+                             leaveCategoryId: existingDay.leave_category_id,
+                             amount: -oldDays,
+                             date: attendanceDate
+                         });
                     }
 
                     if (newDays > 0 && leaveCategoryId && !hasExistingManualLeave) {
@@ -1012,22 +1124,54 @@ const runWorker = async () => {
         }
     }
     // 5. Update Leave Balances
-    if (leaveIncrementMap.size > 0) {
-        for (const [balKey, amount] of leaveIncrementMap.entries()) {
-            if (amount === 0) continue;
-            const [empId, catId, yr] = balKey.split('_');
-            await EmployeeLeaveBalance.update({
-                used_leaves: sequelize.literal(`used_leaves + ${amount}`),
-                pending_leaves: sequelize.literal(`pending_leaves - ${amount}`)
-            }, {
-                where: {
-                    employee_id: empId,
-                    leave_category_id: catId,
-                    year: yr,
-                    status: 0
-                },
-                transaction
+    if (balanceAdjustments.length > 0) {
+        for (const adj of balanceAdjustments) {
+            if (adj.amount === 0) continue;
+            const employeeObj = await commonQuery.findOneRecord(Employee, adj.employeeId, {}, transaction);
+            
+            // Check if balance exists, if not initialize it on-the-fly
+            const template = employeeObj.leave_template ? (employeeObj.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, employeeObj.leave_template, {}, transaction)) : null;
+            const cycleDates = LeaveBalanceService.getCycleDates(employeeObj.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', dayjs(adj.date), {
+                leave_period_start: template?.leave_period_start,
+                leave_period_end: template?.leave_period_end
             });
+            const balanceYear = cycleDates.end.year();
+            const balanceMonth = (template && (template.leave_policy_cycle === 'MONTHLY' || template.leave_policy_cycle === 'QUARTERLY')) ? cycleDates.end.month() + 1 : null;
+            
+            const cacheKey = `${adj.employeeId}_${adj.leaveCategoryId}_${balanceYear}_${balanceMonth || 'null'}`;
+            if (!balanceCache.has(cacheKey)) {
+                const existingBal = await EmployeeLeaveBalance.findOne({
+                    where: {
+                        employee_id: adj.employeeId,
+                        leave_category_id: adj.leaveCategoryId,
+                        year: balanceYear,
+                        month: balanceMonth,
+                        status: 0
+                    },
+                    transaction
+                });
+                if (!existingBal && employeeObj.leave_template) {
+                    await LeaveBalanceService.initializeBalance(
+                        adj.employeeId,
+                        employeeObj.leave_template,
+                        transaction,
+                        employeeObj,
+                        null,
+                        dayjs(adj.date).toDate()
+                    );
+                }
+                balanceCache.add(cacheKey);
+            }
+
+            // Adjust leave balance using standard Service Helper
+            await LeaveBalanceService.adjustLeaveBalance(
+                adj.employeeId,
+                adj.leaveCategoryId,
+                adj.amount,
+                transaction,
+                dayjs(adj.date),
+                employeeObj
+            );
         }
     }
     
@@ -1059,6 +1203,99 @@ const runWorker = async () => {
             transaction
         });
     }
+
+    // 8. Cancel leaves that exist in the system but are contradicted by the sheet.
+    //    The muster roll is the source of truth: if a day came in as worked/absent/OD
+    //    but a leave still sits on it, that leave is undone and its balance refunded.
+    let cancelledLeaveCount = 0;
+    const skippedLeaveCancellations = [];
+    if (leaveRequestsMap.size > 0) {
+        const ACTIVE_APPROVAL_STATUSES = [
+            constants.LEAVE_APPROVAL_STATUS.PENDING,
+            constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED,
+            constants.LEAVE_APPROVAL_STATUS.APPROVED
+        ];
+
+        // Employees here were already resolved and authorized in the main loop, so
+        // tenant scoping is bypassed on this lookup. leaveTemplate is included
+        // because syncLeaveRecord needs it to recompute split day counts.
+        const employeeCacheForCancel = new Map();
+        const getEmployeeForCancel = async (empId) => {
+            if (!employeeCacheForCancel.has(empId)) {
+                employeeCacheForCancel.set(empId, await commonQuery.findOneRecord(Employee, empId, {
+                    include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
+                }, transaction, false, {}));
+            }
+            return employeeCacheForCancel.get(empId);
+        };
+
+        for (const [empId, requests] of leaveRequestsMap.entries()) {
+            const nonLeave = employeeNonLeaveDays.get(empId);
+            if (!nonLeave || nonLeave.size === 0) continue;
+            const neutral = employeeNeutralDays.get(empId) || new Set();
+
+            for (const lr of requests) {
+                if (!ACTIVE_APPROVAL_STATUSES.includes(lr.approval_status)) continue;
+                // Already confirmed as a genuine leave by this same sheet - skip.
+                if (leaveRequestsToApprove.has(lr.id)) continue;
+
+                // Which days of this request does the sheet actually contradict,
+                // and which days does this sheet say nothing about at all?
+                const contradicted = [];
+                const uncovered = [];
+                let cur = dayjs(lr.start_date);
+                const endDay = dayjs(lr.end_date);
+                while (cur.isSame(endDay) || cur.isBefore(endDay)) {
+                    const d = cur.format("YYYY-MM-DD");
+                    if (nonLeave.has(d)) contradicted.push(d);
+                    else if (!neutral.has(d)) uncovered.push(d);
+                    cur = cur.add(1, 'day');
+                }
+
+                if (contradicted.length === 0) continue;
+
+                if (lr.approval_status === constants.LEAVE_APPROVAL_STATUS.APPROVED) {
+                    // syncLeaveRecord cancels a single-day request outright and
+                    // correctly splits a multi-day span around the worked day,
+                    // refunding the balance in both cases. It re-reads the request
+                    // each call, so looping over the contradicted days is safe.
+                    const empObj = await getEmployeeForCancel(empId);
+                    for (const d of contradicted) {
+                        await LeaveBalanceService.syncLeaveRecord(empId, d, null, 0, transaction, empObj);
+                    }
+                    cancelledLeaveCount++;
+                } else {
+                    // Never approved, so any contradiction at all invalidates the
+                    // whole request - it's cancelled outright and the reserved
+                    // balance refunded. The employee can re-apply for whatever days
+                    // genuinely remain.
+                    const empObj = await getEmployeeForCancel(empId);
+                    await LeaveBalanceService.adjustLeaveBalance(
+                        empId,
+                        lr.leave_category_id,
+                        -parseFloat(lr.total_days || 0),
+                        transaction,
+                        dayjs(lr.start_date),
+                        empObj
+                    );
+                    await LeaveRequest.update({
+                        approval_status: constants.LEAVE_APPROVAL_STATUS.CANCELLED,
+                        approval_remark: "Cancelled via Attendance Import (marked as worked in muster roll)"
+                    }, { where: { id: lr.id }, transaction });
+                    cancelledLeaveCount++;
+
+                    // The request reached beyond the days this sheet covers, so those
+                    // days were cancelled on the strength of the contradicted ones.
+                    // Worth telling the importer about rather than doing it silently.
+                    if (uncovered.length > 0) {
+                        skippedLeaveCancellations.push(
+                            `Employee #${empId}: pending leave request #${lr.id} (${lr.start_date} to ${lr.end_date}) was cancelled because ${contradicted.join(", ")} came in as worked. Note that ${uncovered.join(", ")} fell outside this sheet and were cancelled along with it.`
+                        );
+                    }
+                }
+            }
+        }
+    }
     // -----------------------------------------------------
 
     await transaction.commit();
@@ -1066,12 +1303,24 @@ const runWorker = async () => {
     parentPort.postMessage({
       status: "SUCCESS",
       result: {
-        message: `Attendance import completed. Created ${employeeCreatedCount} new employees and ${createdCountRef.val + updatedCountRef.val} attendance records.`,
+        message: `Attendance import completed. Created ${employeeCreatedCount} new employees and ${createdCountRef.val + updatedCountRef.val} attendance records. Leaves synced: ${leaveRequestsToApprove.size} approved, ${leaveRequestPayloads.length} generated, ${cancelledLeaveCount} cancelled.`,
         count: createdCountRef.val,
         updated: updatedCountRef.val,
         employeeCreated: employeeCreatedCount,
         skipped: errorCount,
-        summary: { created: createdCountRef.val, updated: updatedCountRef.val, employeeCreated: employeeCreatedCount, errors: errorCount },
+        leavesApproved: leaveRequestsToApprove.size,
+        leavesGenerated: leaveRequestPayloads.length,
+        leavesCancelled: cancelledLeaveCount,
+        summary: {
+            created: createdCountRef.val,
+            updated: updatedCountRef.val,
+            employeeCreated: employeeCreatedCount,
+            errors: errorCount,
+            leavesApproved: leaveRequestsToApprove.size,
+            leavesGenerated: leaveRequestPayloads.length,
+            leavesCancelled: cancelledLeaveCount
+        },
+        warnings: skippedLeaveCancellations,
         errors: errorSample
       }
     });

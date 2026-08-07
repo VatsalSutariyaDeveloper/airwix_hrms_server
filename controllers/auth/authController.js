@@ -7,6 +7,7 @@ const otpRateLimit = require("../../helpers/otpRateLimit");
 const moment = require("moment");
 const emailService = require("../../services/emailService");
 const { generateToken } = require("../../helpers/tokenHelper");
+const { createLoginSession } = require("../../helpers/sessionHelper");
 const { requestContext } = require("../../utils/requestContext");
 
 // Send OTP to Mobile or Email for Registration
@@ -162,8 +163,15 @@ exports.register = async (req, res) => {
       country_id,
       state_id,
       city,
-      pincode
+      pincode,
+      latitude,
+      longitude
     } = req.body;
+
+    if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
+    }
 
     // if (!registration_token) {
     //     await transaction.rollback();
@@ -404,11 +412,21 @@ exports.register = async (req, res) => {
 
     await transaction.commit();
 
+    const session_id = await createLoginSession(newUser, req, {
+      login_method: "REGISTER",
+      company_id: newCompany.id,
+      branch_id: newBranch.id,
+      access_by: "web login",
+      latitude,
+      longitude
+    });
+
     const token = generateToken({
       ...newUser.get({ plain: true }),
       organization_id: newOrg.id,
       branch_id: newBranch.id,
       is_super_admin: newUser.is_super_admin || (adminRole && newUser.role_id == adminRole.id),
+      session_id
     }, newCompany.id, "web login");
 
     const userData = {

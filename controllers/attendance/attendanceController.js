@@ -362,46 +362,51 @@ exports.syncPunches = async (req, res) => {
         }
 
         // ── Normal punch processing ──
-        const targetPunchTime = new Date(punchData.punch_time);
+        const targetPunchTime = dayjs(punchData.punch_time);
 
         // 1. Check local processed punches in this sync batch
         const lastLocalTime = lastProcessedPunchTimes[punchData.employee_id];
         if (lastLocalTime) {
-          const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastLocalTime), 'second'));
+          const diffSec = Math.abs(targetPunchTime.diff(dayjs(lastLocalTime), 'second'));
           if (diffSec < 30) {
-            console.log(`[SyncPunches] Duplicate punch detected within 30 seconds (local batch) for Emp=${punchData.employee_id}. Skipping creation and returning success.`);
+            console.log(`[SyncPunches] 🛑 Rapid API call / duplicate punch detected in current batch (${diffSec}s diff) for Emp=${punchData.employee_id}. Skipping duplicate punch creation.`);
             results.push({
               employee_id: punchData.employee_id,
               punch_time: punchData.punch_time,
               success: true,
-              punch_id: "DUPLICATE",
+              punch_id: "DUPLICATE_SKIPPED",
               type: "Duplicate"
             });
             continue;
           }
         }
 
-        // 2. Check database for existing punches within 30 seconds of this target punch time
-        const lastPunch = await commonQuery.findOneRecord(AttendancePunch, {
+        // 2. DB Duplicate Guard: Check if punch exists in Database within 30 seconds of target punch_time
+        const windowStart = targetPunchTime.subtract(30, 'second').toDate();
+        const windowEnd = targetPunchTime.add(30, 'second').toDate();
+
+        const existingPunch = await commonQuery.findOneRecord(AttendancePunch, {
           employee_id: punchData.employee_id,
-          status: { [Op.ne]: 2 }
+          status: { [Op.ne]: 2 }, // Exclude deleted punches
+          punch_time: {
+            [Op.between]: [windowStart, windowEnd]
+          }
         }, {
           order: [['punch_time', 'DESC']]
         }, transaction, false, {});
 
-        if (lastPunch) {
-          const diffSec = Math.abs(dayjs(targetPunchTime).diff(dayjs(lastPunch.punch_time), 'second'));
-          if (diffSec < 30) {
-            console.log(`[SyncPunches] Duplicate punch detected within 30 seconds (DB) for Emp=${punchData.employee_id}. Skipping creation and returning success.`);
-            results.push({
-              employee_id: punchData.employee_id,
-              punch_time: punchData.punch_time,
-              success: true,
-              punch_id: lastPunch.id,
-              type: lastPunch.punch_type
-            });
-            continue;
-          }
+        if (existingPunch) {
+          console.log(`[SyncPunches] 🛑 Duplicate punch detected in DB within 30 seconds for Emp=${punchData.employee_id} (Punch ID: ${existingPunch.id}). Skipping creation and returning success.`);
+          
+          lastProcessedPunchTimes[punchData.employee_id] = targetPunchTime;
+          results.push({
+            employee_id: punchData.employee_id,
+            punch_time: punchData.punch_time,
+            success: true,
+            punch_id: existingPunch.id,
+            type: existingPunch.punch_type
+          });
+          continue;
         }
 
         let punchImage = null;

@@ -106,6 +106,12 @@ exports.listApprovals = async (req, res) => {
           attributes: ['id', 'user_name'],
           required: false,
         },
+        {
+          model: User,
+          as: 'requestedBy',
+          attributes: ['id', 'user_name'],
+          required: false,
+        },
       ],
       order: [['created_at', 'DESC']],
       // Fetch all for in-memory filtering since it's dependent on multi-level config
@@ -119,6 +125,7 @@ exports.listApprovals = async (req, res) => {
 
       const raw = request.get({ plain: true });
       raw.approved_by_name = raw.approvedBy?.user_name || null;
+      raw.requested_by_name = raw.requestedBy?.user_name || null;
 
       const { AttendanceDay } = require('../../models');
       const actualDay = await commonQuery.findOneRecord(AttendanceDay, {
