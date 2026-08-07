@@ -1,7 +1,8 @@
 const { Op } = require("sequelize");
-const { CompanyMaster, CompanySubscription, SubscriptionPlan, User, Organization } = require("../../models");
+const { CompanyMaster, CompanySubscription, SubscriptionPlan, User, Organization, LoginHistory } = require("../../models");
 const { sequelize: rootSequelizeInstance } = require("../../config/database");
-const { handleError } = require("../../helpers");
+const { handleError, commonQuery } = require("../../helpers");
+const { clearSessionCache } = require("../../helpers/sessionCache");
 const subscriptionController = require("../subscription/subscriptionController");
 
 /**
@@ -1196,6 +1197,86 @@ exports.deleteCompany = async (req, res) => {
     return res.success("COMPANY_DELETED");
   } catch (err) {
     await transaction.rollback();
+    return handleError(err, res, req);
+  }
+};
+
+// -----------------------------------------------------------
+// LOGIN SESSIONS (cross-company visibility + force logout)
+// -----------------------------------------------------------
+exports.getSessions = async (req, res) => {
+  try {
+    const fieldConfig = [
+      ["ip_address", true, true],
+      ["login_method", true, true],
+      ["access_by", true, true],
+      ["device_type", true, true],
+      ["status", true, true],
+      ["company_id", true, true],
+      ["user_id", true, true],
+      ["in_time", true, true],
+    ];
+
+    const result = await commonQuery.fetchPaginatedData(
+      LoginHistory,
+      req.body,
+      fieldConfig,
+      {
+        attributes: [
+          "id", "user_id", "company_id", "branch_id", "ip_address",
+          "browser", "browser_version", "os", "city", "state", "country", "latitude", "longitude",
+          "access_by", "login_method", "device_type", "device_model", "device_brand", "os_version",
+          "in_time", "out_time", "status", "logout_type", "logged_out_by", "logged_out_by_ip", "created_at"
+        ],
+        include: [
+          // Explicit `status` override: commonQuery's normalizeInclude() auto-excludes
+          // status=2 (deleted) rows from any include with a status column. That's the
+          // right default for normal listings, but wrong for an audit/security log -
+          // we specifically need to identify who a session belonged to even if that
+          // user/company was later deactivated or deleted (e.g. after being caught).
+          { model: User, as: "user", attributes: ["id", "user_name", "email", "mobile_no"], where: { status: { [Op.in]: [0, 1, 2] } } },
+          { model: CompanyMaster, as: "company", attributes: ["id", "company_name"], where: { status: { [Op.in]: [0, 1, 2] } } },
+        ],
+        order: [["in_time", "DESC"]]
+      },
+      {} // Bypass tenant restrictions - master admin sees sessions across all companies
+    );
+
+    return res.ok(result);
+  } catch (err) {
+    return handleError(err, res, req);
+  }
+};
+
+exports.forceLogoutSession = async (req, res) => {
+  try {
+    const { session_id } = req.body;
+    if (!session_id) {
+      return res.error("VALIDATION_ERROR", "session_id is required");
+    }
+
+    const session = await LoginHistory.findByPk(session_id);
+    if (!session) {
+      return res.error("NOT_FOUND", "Session not found");
+    }
+
+    if (session.out_time || session.status !== 0) {
+      return res.error("VALIDATION_ERROR", "Session is already logged out.");
+    }
+
+    await session.update({
+      out_time: new Date(),
+      status: 1,
+      logout_type: "ADMIN_FORCED",
+      logged_out_by_ip: req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || null,
+    });
+
+    // Makes the revocation effective on this worker immediately; other cluster
+    // workers pick it up within the session cache TTL (see helpers/sessionCache.js).
+    clearSessionCache(session.id);
+
+    return res.success("SESSION_LOGGED_OUT");
+  } catch (err) {
     return handleError(err, res, req);
   }
 };

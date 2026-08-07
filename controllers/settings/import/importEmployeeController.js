@@ -175,6 +175,7 @@ exports.importData = async (req, res) => {
             count: result.count,
             skipped: result.skipped,
             summary: result.summary,
+            warnings: result.warnings, // Non-fatal items needing manual review
             errors: result.errors // Include error messages
           });
         }

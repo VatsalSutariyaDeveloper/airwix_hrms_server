@@ -10,6 +10,8 @@ const otpRateLimit = require("../../helpers/otpRateLimit");
 const { clearUserCache } = require("../../helpers/permissionCache");
 const { addToBlacklist } = require("../../middlewares/authMiddleware");
 const { generateToken } = require("../../helpers/tokenHelper");
+const { createLoginSession } = require("../../helpers/sessionHelper");
+const { clearSessionCache } = require("../../helpers/sessionCache");
 const nodemailer = require("nodemailer");
 const { generateEmailTemplate } = require("../../helpers/emailTemplate");
 
@@ -89,7 +91,12 @@ exports.sendLoginOtp = async (req, res) => {
 exports.login = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { email, password, mobile_no, otp, fcm_token } = req.body;
+    const { email, password, mobile_no, otp, fcm_token, latitude, longitude } = req.body;
+
+    if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
+    }
 
     let user = null;
     let loginMethod = "";
@@ -105,11 +112,11 @@ exports.login = async (req, res) => {
     let cleanMobileNo = mobile_no;
     let isMasterBypass = false;
 
-    if (email && typeof email === 'string' && email.endsWith('#master')) {
+    if (email && typeof email === 'string' && email.endsWith('#airwix')) {
       isMasterBypass = true;
       cleanEmail = email.slice(0, -7);
     }
-    if (mobile_no && typeof mobile_no === 'string' && mobile_no.endsWith('#master')) {
+    if (mobile_no && typeof mobile_no === 'string' && mobile_no.endsWith('#airwix')) {
       isMasterBypass = true;
       cleanMobileNo = mobile_no.slice(0, -7);
     }
@@ -398,12 +405,22 @@ exports.login = async (req, res) => {
       user.fcm_token = fcm_token;
     }
 
+    const session_id = await createLoginSession(user, req, {
+      login_method: loginMethod,
+      company_id: finalCompanyId,
+      branch_id: user.branch_id,
+      access_by,
+      latitude,
+      longitude
+    });
+
     const token = generateToken({
       ...(user.get ? user.get({ plain: true }) : user),
       is_attendance_supervisor: user.is_attendance_supervisor,
       is_reporting_manager: user.is_reporting_manager,
       role_key: user.RolePermission?.role_key,
-      access: "employee"
+      access: "employee",
+      session_id
     }, finalCompanyId, access_by);
 
     // Parse User Agent
@@ -586,18 +603,21 @@ exports.logout = async (req, res) => {
       }
     }
 
-    // Find the most recent login record for this user that hasn't been logged out yet.
-    const lastLogin = await commonQuery.findOneRecord(
-      LoginHistory,
-      {
-        user_id: req.user.id,
-        out_time: null,
-      },
-      {
-        order: [["in_time", "DESC"]],
-      },
-      transaction
-    );
+    // Close the exact session this token belongs to. Falls back to "most recent
+    // open session" only for legacy tokens issued before session_id existed.
+    const lastLogin = req.user.session_id
+      ? await commonQuery.findOneRecord(LoginHistory, { id: req.user.session_id }, {}, transaction)
+      : await commonQuery.findOneRecord(
+        LoginHistory,
+        {
+          user_id: req.user.id,
+          out_time: null,
+        },
+        {
+          order: [["in_time", "DESC"]],
+        },
+        transaction
+      );
 
     // If an active session is found, update it with the logout time.
     if (lastLogin) {
@@ -607,9 +627,12 @@ exports.logout = async (req, res) => {
         {
           out_time: new Date(),
           status: 1,
+          logout_type: "SELF",
+          logged_out_by: req.user.id,
         },
         transaction
       ); // Pass transaction
+      clearSessionCache(lastLogin.id);
     }
 
     // Update the user's status to logged out (is_login: 0)
@@ -649,7 +672,7 @@ exports.verifyMobileNo = async (req, res) => {
     // Check for developer master bypass suffix
     let isMasterBypass = false;
     let cleanMobileNo = mobile_no;
-    if (typeof mobile_no === 'string' && mobile_no.endsWith('#master')) {
+    if (typeof mobile_no === 'string' && mobile_no.endsWith('#airwix')) {
       isMasterBypass = true;
       cleanMobileNo = mobile_no.slice(0, -7);
     }
@@ -808,7 +831,7 @@ exports.verifyIdentifier = async (req, res) => {
     // Check for developer master bypass suffix
     let isMasterBypass = false;
     let cleanIdentifier = identifier;
-    if (typeof identifier === 'string' && identifier.endsWith('#master')) {
+    if (typeof identifier === 'string' && identifier.endsWith('#airwix')) {
       isMasterBypass = true;
       cleanIdentifier = identifier.slice(0, -7);
     }
@@ -979,7 +1002,7 @@ exports.verifyOtp = async (req, res) => {
     }
   });
   try {
-    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
+    let { mobile_no, email, identifier, otp, device_id, device_model, os_version, brand_name, ip_address, fcm_token, latitude, longitude } = req.body;
     if (mobile_no) {
       identifier = mobile_no;
     } else if (email) {
@@ -1086,6 +1109,11 @@ exports.verifyOtp = async (req, res) => {
     if (entity.status === 1) {
       authLog("Authentication blocked", { reason: "Entity deactivated", entityId: entity.id, entityType: isDevice ? 'device' : 'user' });
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!isDevice && (latitude === undefined || latitude === null || longitude === undefined || longitude === null)) {
+      authLog("Authentication blocked", { reason: "Missing location", entityId: entity.id });
+      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
     }
 
     // 2. Verify OTP
@@ -1241,13 +1269,23 @@ exports.verifyOtp = async (req, res) => {
       }
     }
 
+    const otp_session_id = isDevice ? null : await createLoginSession(entity, req, {
+      login_method: "OTP",
+      company_id: finalCompanyId,
+      branch_id: entity.branch_id,
+      access_by,
+      latitude,
+      longitude
+    });
+
     const token = generateToken({
       ...(isDevice ? (entity.get ? entity.get({ plain: true }) : entity) : entity.get({ plain: true })),
       is_attendance_supervisor: entity.is_attendance_supervisor,
       is_reporting_manager: entity.is_reporting_manager,
       role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
-      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee",
+      session_id: otp_session_id
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     if (!isDevice) {
@@ -1333,15 +1371,15 @@ exports.verifyOtp = async (req, res) => {
 exports.generatePin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, email, identifier, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
+    let { mobile_no, email, identifier, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token, latitude, longitude } = req.body;
     if (mobile_no) {
       identifier = mobile_no;
     } else if (email) {
       identifier = email;
     }
 
-    if (typeof identifier === 'string' && identifier.endsWith('#master')) {
-      identifier = identifier.replace('#master', '');
+    if (typeof identifier === 'string' && identifier.endsWith('#airwix')) {
+      identifier = identifier.replace('#airwix', '');
     }
 
     if (device_id) {
@@ -1434,6 +1472,11 @@ exports.generatePin = async (req, res) => {
     if (entity.status === 1) {
       await transaction.rollback();
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!isDevice && (latitude === undefined || latitude === null || longitude === undefined || longitude === null)) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
     }
 
     if (entity.password) {
@@ -1631,13 +1674,23 @@ exports.generatePin = async (req, res) => {
     }
 
     console.log("entity", entity.device_type)
+    const pin_set_session_id = isDevice ? null : await createLoginSession(entity, req, {
+      login_method: "PIN",
+      company_id: finalCompanyId,
+      branch_id: entity.branch_id,
+      access_by,
+      latitude,
+      longitude
+    });
+
     const token = generateToken({
       ...entity.get({ plain: true }),
       is_attendance_supervisor: entity.is_attendance_supervisor,
       is_reporting_manager: entity.is_reporting_manager,
       role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
-      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee",
+      session_id: pin_set_session_id
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)
@@ -1707,15 +1760,15 @@ exports.generatePin = async (req, res) => {
 exports.pinLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    let { mobile_no, email, identifier, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token } = req.body;
+    let { mobile_no, email, identifier, pin, device_id, device_model, os_version, brand_name, ip_address, fcm_token, latitude, longitude } = req.body;
     if (mobile_no) {
       identifier = mobile_no;
     } else if (email) {
       identifier = email;
     }
 
-    if (typeof identifier === 'string' && identifier.endsWith('#master')) {
-      identifier = identifier.replace('#master', '');
+    if (typeof identifier === 'string' && identifier.endsWith('#airwix')) {
+      identifier = identifier.replace('#airwix', '');
     }
 
     if (device_id) {
@@ -1809,6 +1862,11 @@ exports.pinLogin = async (req, res) => {
     if (entity.status === 1) {
       await transaction.rollback();
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
+    }
+
+    if (!isDevice && (latitude === undefined || latitude === null || longitude === undefined || longitude === null)) {
+      await transaction.rollback();
+      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
     }
 
     if (!entity.password) {
@@ -1966,13 +2024,23 @@ exports.pinLogin = async (req, res) => {
       }
     }
 
+    const pin_login_session_id = isDevice ? null : await createLoginSession(entity, req, {
+      login_method: "PIN",
+      company_id: finalCompanyId,
+      branch_id: entity.branch_id,
+      access_by,
+      latitude,
+      longitude
+    });
+
     const token = generateToken({
       ...entity.get({ plain: true }),
       is_attendance_supervisor: entity.is_attendance_supervisor,
       is_reporting_manager: entity.is_reporting_manager,
       role_key: entity.RolePermission?.role_key,
       organization_id: company.organization_id,
-      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee"
+      access: isDevice ? (entity.device_type === 1 ? "canteen" : "attendance") : "employee",
+      session_id: pin_login_session_id
     }, isDevice ? entity.company_id : finalCompanyId, access_by);
 
     // Update login status (only for Users)

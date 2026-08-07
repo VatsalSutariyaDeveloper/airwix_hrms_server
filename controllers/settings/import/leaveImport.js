@@ -273,44 +273,57 @@ const runWorker = async () => {
                 const balKey = `${employee.id}:${col.canonicalCleanedName}:${targetYear}:${targetMonth || 'null'}`;
                 const existing = balanceMap.get(balKey);
 
-                const payload = {
-                    employee_id: employee.id,
-                    leave_template_id: targetTemplate.id,
-                    leave_category_id: categoryData.id,
-                    year: targetYear,
-                    month: targetMonth,
-                    leave_category_name: categoryData.leave_category_name,
-                    total_allocated: addedCount,
-                    pending_leaves: addedCount,
-                    used_leaves: 0,
-                    is_paid: categoryData.is_paid,
-                    is_compoff: categoryData.is_compoff,
-                    unused_leave_rule: categoryData.unused_leave_rule,
-                    carry_forward_limit: categoryData.carry_forward_limit,
-                    company_id: mockStore.companyId,
-                    branch_id: employee.branch_id || mockStore.branchId,
-                    user_id: mockStore.userId,
-                    status: 0
-                };
+                // Excel value = available balance (pending_leaves)
+                const availableBalance = addedCount;
 
                 // 5. Update Existing or Create New Balance record
                 if (existing) {
-                    // DIRECT OVERWRITE logic: Excel value becomes the new total_allocated
-                    const newTotal = addedCount;
                     const used = parseFloat(existing.used_leaves || 0);
-                    const newPending = Math.floor((newTotal - used) * 2) / 2;
+                    // Back-calculate total_allocated so that: total_allocated = available_balance + used_leaves
+                    const newTotal = Math.floor((availableBalance + used) * 2) / 2;
 
                     balancesToUpdate.push({ 
-                        ...payload,
+                        employee_id: employee.id,
+                        leave_template_id: targetTemplate.id,
+                        leave_category_id: categoryData.id,
+                        year: targetYear,
+                        month: targetMonth,
+                        leave_category_name: categoryData.leave_category_name,
                         total_allocated: newTotal,
-                        pending_leaves: newPending > 0 ? newPending : 0,
-                        used_leaves: used, // Keep track of already used leaves
+                        pending_leaves: availableBalance,
+                        used_leaves: used,
+                        is_paid: categoryData.is_paid,
+                        is_compoff: categoryData.is_compoff,
+                        unused_leave_rule: categoryData.unused_leave_rule,
+                        carry_forward_limit: categoryData.carry_forward_limit,
+                        company_id: mockStore.companyId,
+                        branch_id: employee.branch_id || mockStore.branchId,
+                        user_id: mockStore.userId,
+                        status: 0,
                         id: existing.id 
                     });
                     updatedCount++;
                 } else {
-                    // Create a new balance record for this employee/category/year
-                    balancesToCreate.push(payload);
+                    // New record: no used leaves yet, so total_allocated = available balance
+                    balancesToCreate.push({
+                        employee_id: employee.id,
+                        leave_template_id: targetTemplate.id,
+                        leave_category_id: categoryData.id,
+                        year: targetYear,
+                        month: targetMonth,
+                        leave_category_name: categoryData.leave_category_name,
+                        total_allocated: availableBalance,
+                        pending_leaves: availableBalance,
+                        used_leaves: 0,
+                        is_paid: categoryData.is_paid,
+                        is_compoff: categoryData.is_compoff,
+                        unused_leave_rule: categoryData.unused_leave_rule,
+                        carry_forward_limit: categoryData.carry_forward_limit,
+                        company_id: mockStore.companyId,
+                        branch_id: employee.branch_id || mockStore.branchId,
+                        user_id: mockStore.userId,
+                        status: 0
+                    });
                     createdCount++;
                 }
             }

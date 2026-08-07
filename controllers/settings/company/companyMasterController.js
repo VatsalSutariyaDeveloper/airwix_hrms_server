@@ -268,7 +268,7 @@ exports.getCompanies = async (req, res) => {
      const record = await commonQuery.findOneRecord(
         CompanyMaster,
         req.body.company_id,
-        { attributes: ['id', 'company_id'] },
+        { attributes: ['id', 'company_id', 'organization_id'] },
         null,
         false,
         {}

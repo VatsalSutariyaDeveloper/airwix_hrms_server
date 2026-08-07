@@ -175,7 +175,9 @@ exports.updateByEmployeeId = async (req, res) => {
                 let newTotal = parseFloat(bal.leave_count !== undefined ? bal.leave_count : bal.total_allocated || 0);
                 newTotal = Math.round(newTotal * 2) / 2;
                 
-                const used = parseFloat(existingBalance.used_leaves || 0);
+                let used = parseFloat(bal.used_leaves !== undefined ? bal.used_leaves : existingBalance.used_leaves || 0);
+                used = Math.round(used * 2) / 2;
+
                 const carryForward = Math.round(parseFloat(existingBalance.carry_forward_leaves || 0) * 2) / 2;
                 const isPaid = bal.is_paid !== undefined ? bal.is_paid : existingBalance.is_paid;
                 const isCompOff = bal.is_compoff !== undefined ? bal.is_compoff : existingBalance.is_compoff;
@@ -189,6 +191,7 @@ exports.updateByEmployeeId = async (req, res) => {
 
                 const updateData = {
                     total_allocated: newTotal,
+                    used_leaves: used,
                     pending_leaves: pending,
                     leave_category_name: bal.leave_category_name || existingBalance.leave_category_name,
                     unused_leave_rule: bal.unused_leave_rule || existingBalance.unused_leave_rule,
@@ -204,6 +207,17 @@ exports.updateByEmployeeId = async (req, res) => {
                 let newTotal = parseFloat(bal.leave_count || bal.total_allocated || 0);
                 newTotal = Math.round(newTotal * 2) / 2;
                 
+                let used = parseFloat(bal.used_leaves !== undefined ? bal.used_leaves : 0);
+                used = Math.round(used * 2) / 2;
+
+                let pending = Math.round((newTotal - used) * 2) / 2;
+                const isPaid = bal.is_paid !== undefined ? bal.is_paid : true;
+                const isCompOff = bal.is_compoff !== undefined ? bal.is_compoff : false;
+
+                if ((!isPaid && !isCompOff) || pending < 0) {
+                    pending = Math.max(0, pending);
+                }
+
                 // Get cycle year
                 const template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
                 const { end } = LeaveBalanceService.getCycleDates(employee.joining_date, template.leave_policy_cycle, dayjs(), {
@@ -219,11 +233,12 @@ exports.updateByEmployeeId = async (req, res) => {
                     month: template.leave_policy_cycle === 'MONTHLY' ? end.month() + 1 : null,
                     leave_category_name: bal.leave_category_name,
                     total_allocated: newTotal,
-                    pending_leaves: newTotal,
+                    used_leaves: used,
+                    pending_leaves: pending,
                     unused_leave_rule: bal.unused_leave_rule || 'LAPSE',
                     carry_forward_limit: bal.carry_forward_limit !== undefined ? (Math.round(bal.carry_forward_limit * 2) / 2) : 0,
-                    is_paid: bal.is_paid !== undefined ? bal.is_paid : true,
-                    is_compoff: bal.is_compoff !== undefined ? bal.is_compoff : false,
+                    is_paid: isPaid,
+                    is_compoff: isCompOff,
                     automation_rules: bal.automation_rules || null,
                     company_id: employee.company_id,
                     status: 0

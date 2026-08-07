@@ -41,6 +41,10 @@ router.post("/activation-requests/process", ctrl.processActivationRequest);
 const masterAdminAdministrationRoutes = require("./masterAdminAdministrationRoutes");
 router.use("/administration", masterAdminAdministrationRoutes);
 
+// --- Login Sessions ---
+router.post("/sessions/list", ctrl.getSessions);
+router.post("/sessions/force-logout", ctrl.forceLogoutSession);
+
 // --- System Logs ---
 router.post("/system-logs/database", ctrl.getDatabaseLogs);
 router.post("/system-logs/database/clear", ctrl.clearDatabaseLogs);
