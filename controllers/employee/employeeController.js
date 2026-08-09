@@ -3720,8 +3720,9 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: EmployeeAttendanceTemplate,
                     as: 'employeeAttendanceTemplate',
-                    where: { status: 0 },
-                    attributes: ['id', 'mode', 'punch_confirmation_mode', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins']
+                    where: { status: 0, mode: 'FACE_RECOGNITION' },
+                    attributes: ['id', 'mode', 'punch_confirmation_mode', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins'],
+                    required: true
                 },
                 {
                     model: ShiftTemplate,
