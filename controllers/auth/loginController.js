@@ -1111,10 +1111,10 @@ exports.verifyOtp = async (req, res) => {
       return res.error(403, { message: "Your account is deactivated. Please contact admin." });
     }
 
-    if (!isDevice && (latitude === undefined || latitude === null || longitude === undefined || longitude === null)) {
-      authLog("Authentication blocked", { reason: "Missing location", entityId: entity.id });
-      return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
-    }
+    // if (!isDevice && (latitude === undefined || latitude === null || longitude === undefined || longitude === null)) {
+    //   authLog("Authentication blocked", { reason: "Missing location", entityId: entity.id });
+    //   return res.error(constants.VALIDATION_ERROR, { message: "Location access is required to sign in. Please allow location access and try again." });
+    // }
 
     // 2. Verify OTP
     try {
