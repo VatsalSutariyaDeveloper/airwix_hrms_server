@@ -845,7 +845,14 @@ async function punch(employeeId, meta, transaction = null) {
     day_id: dayId,
     punch_type: punchType,
     punch_time: now,
-    ...cleanMeta,
+    image_name: cleanMeta.image_name || null,
+    device_id: cleanMeta.device_id || null,
+    latitude: cleanMeta.latitude || null,
+    longitude: cleanMeta.longitude || null,
+    ip_address: cleanMeta.ip_address || null,
+    user_id: cleanMeta.user_id || 0,
+    branch_id: cleanMeta.branch_id || 0,
+    company_id: cleanMeta.company_id || 0,
     face_descriptor: faceDescriptor,
     match_score: cleanMeta.match_score || null
   }, transaction, {});

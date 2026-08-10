@@ -3694,6 +3694,18 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
             return res.error(constants.VALIDATION_ERROR, { message: "No branch identifier found in session." });
         }
 
+        let attendanceWhere= {};
+        if(company_id == 2){
+            attendanceWhere = {
+                mode: 'FACE_RECOGNITION',
+                status: 0
+            };
+        } else {
+            attendanceWhere = {
+                status: 0
+            };
+        }
+
         const punchWhere = await getPunchAllowedWhere(req.user.company_id, req.user.branch_id);
         const where = {
             ...punchWhere,
@@ -3720,7 +3732,7 @@ exports.getEmployeesByDeviceBranch = async (req, res) => {
                 {
                     model: EmployeeAttendanceTemplate,
                     as: 'employeeAttendanceTemplate',
-                    where: { status: 0, mode: 'FACE_RECOGNITION' },
+                    where: attendanceWhere,
                     attributes: ['id', 'mode', 'punch_confirmation_mode', 'holiday_policy', 'allow_multiple_punches', 'max_overtime_mins'],
                     required: true
                 },
