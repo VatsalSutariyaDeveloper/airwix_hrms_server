@@ -1107,7 +1107,7 @@ exports.getById = async (req, res) => {
         // Add approver name if available
         raw.approved_by = raw.approvedBy?.user_name || null;
 
-        const template = await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template);
+        const template = raw.employee?.leave_template ? await commonQuery.findOneRecord(LeaveTemplate, raw.employee.leave_template, {}, null, false, {}) : null;
         const totalLevels = template ? template.approval_levels : 1;
         const levelConfigs = template ? (template.approval_config || []) : [];
         const approvers = await commonQuery.findAllRecords(User, { status: 0 });

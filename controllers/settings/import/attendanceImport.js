@@ -311,7 +311,7 @@ const runWorker = async () => {
       return await commonQuery.findAllRecords(Employee, empWhere, {
         attributes: ['id', 'employee_code', 'first_name', 'branch_id', 'leave_template', 'company_id', 'joining_date'],
         raw: true
-      }, transaction, { company_id: true });
+      }, transaction, false, {});
     });
 
     const employeeCodeMap = new Map();
@@ -321,9 +321,13 @@ const runWorker = async () => {
         const normCode = normalize(emp.employee_code);
         employeeCodeMap.set(normCode, emp.id);
         employeeDataMap.set(emp.id, { 
+          id: emp.id,
+          employee_code: emp.employee_code,
+          first_name: emp.first_name,
           branch_id: emp.branch_id, 
           leave_template: emp.leave_template,
-          company_id: emp.company_id 
+          company_id: emp.company_id,
+          joining_date: emp.joining_date 
         });
       }
     });
@@ -1127,10 +1131,14 @@ const runWorker = async () => {
     if (balanceAdjustments.length > 0) {
         for (const adj of balanceAdjustments) {
             if (adj.amount === 0) continue;
-            const employeeObj = await commonQuery.findOneRecord(Employee, adj.employeeId, {}, transaction);
+            let employeeObj = await commonQuery.findOneRecord(Employee, adj.employeeId, {}, transaction, false, {});
+            if (!employeeObj) {
+                employeeObj = employeeDataMap.get(adj.employeeId);
+            }
+            if (!employeeObj) continue;
             
             // Check if balance exists, if not initialize it on-the-fly
-            const template = employeeObj.leave_template ? (employeeObj.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, employeeObj.leave_template, {}, transaction)) : null;
+            const template = employeeObj.leave_template ? (employeeObj.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, employeeObj.leave_template, {}, transaction, false, {})) : null;
             const cycleDates = LeaveBalanceService.getCycleDates(employeeObj.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', dayjs(adj.date), {
                 leave_period_start: template?.leave_period_start,
                 leave_period_end: template?.leave_period_end
@@ -1222,9 +1230,10 @@ const runWorker = async () => {
         const employeeCacheForCancel = new Map();
         const getEmployeeForCancel = async (empId) => {
             if (!employeeCacheForCancel.has(empId)) {
-                employeeCacheForCancel.set(empId, await commonQuery.findOneRecord(Employee, empId, {
+                const emp = await commonQuery.findOneRecord(Employee, empId, {
                     include: [{ model: LeaveTemplate, as: "leaveTemplate" }]
-                }, transaction, false, {}));
+                }, transaction, false, {});
+                employeeCacheForCancel.set(empId, emp || employeeDataMap.get(empId) || null);
             }
             return employeeCacheForCancel.get(empId);
         };
@@ -1340,6 +1349,13 @@ const startWorker = async () => {
         userId: workerData.user_id,
         companyId: workerData.company_id,
         branchId: workerData.branch_id,
+        is_super_admin: workerData.is_super_admin,
+        branch_access: workerData.branch_access,
+        company_access: workerData.company_access,
+        organization_id: workerData.organization_id,
+        user_id: workerData.user_id,
+        company_id: workerData.company_id,
+        branch_id: workerData.branch_id,
         ip: "127.0.0.1"
     };
 

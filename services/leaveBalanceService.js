@@ -839,7 +839,7 @@ class LeaveBalanceService {
                 const isCompOffPolicy = attendanceTemplate && (attendanceTemplate.holiday_policy === 'COMP_OFF' || attendanceTemplate.weekly_off_policy === 'COMP_OFF');
 
                 if (isCompOffPolicy) {
-                    const leaveTemplate = await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
+                    const leaveTemplate = emp.leave_template ? await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t, false, {}) : null;
                     if (!leaveTemplate) continue;
 
                     const refDate = dayjs();
@@ -883,7 +883,7 @@ class LeaveBalanceService {
                 } else {
                     // Remove Comp-Off Leave balance if policy changed and category is NOT in the main leave template
                     // (Safety check so we don't accidentally delete if it's explicitly part of their leave template)
-                    const isExplicitInTemplate = await commonQuery.findOneRecord(LeaveTemplateCategory, { leave_template_id: emp.leave_template, is_compoff: true, status: 0 }, {}, t);
+                    const isExplicitInTemplate = emp.leave_template ? await commonQuery.findOneRecord(LeaveTemplateCategory, { leave_template_id: emp.leave_template, is_compoff: true, status: 0 }, {}, t, false, {}) : null;
 
                     if (!isExplicitInTemplate) {
                         await commonQuery.hardDeleteRecords(EmployeeLeaveBalance, {
@@ -1249,7 +1249,7 @@ class LeaveBalanceService {
 
             // Determine the correct cycle/year
             // Attempt to use templates from emp if they were included
-            const template = emp.leaveTemplate || await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t);
+            const template = emp.leaveTemplate || (emp.leave_template ? await commonQuery.findOneRecord(LeaveTemplate, emp.leave_template, {}, t, false, {}) : null);
             const { end } = this.getCycleDates(emp.joining_date, template ? template.leave_policy_cycle : 'CALENDAR_YEAR', date, {
                 leave_period_start: template?.leave_period_start,
                 leave_period_end: template?.leave_period_end
