@@ -3242,7 +3242,7 @@ async function sendCompOffApprovalNotifications(leaveRequest, employee, transact
       if (sendEmail && user && user.email) {
         let template = employee?.leaveTemplate;
         if (!template && employee?.leave_template) {
-          template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction);
+          template = await commonQuery.findOneRecord(LeaveTemplate, employee.leave_template, {}, transaction, false, {});
         }
         const totalLevels = template?.approval_levels || 1;
         const emailService = require("../services/emailService");
@@ -3280,11 +3280,11 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
   const { isHoliday, isWeeklyOff } = await getDayOffInfo(employee, date, transaction);
   if (!isHoliday && !isWeeklyOff) return;
 
-  let compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {
+  let compOffCategory = employee.leave_template ? await commonQuery.findOneRecord(LeaveTemplateCategory, {
     is_compoff: true,
     leave_template_id: employee.leave_template,
     status: 0
-  }, {}, transaction, false, {});
+  }, {}, transaction, false, {}) : null;
 
   if (!compOffCategory) {
     compOffCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, {

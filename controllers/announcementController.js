@@ -443,7 +443,7 @@ exports.getActiveAnnouncements = async (req, res) => {
       ...announcement.toJSON(),
       announcement_date: formatDateTime(announcement.announcement_date),
       expiry_date: announcement.expiry_date ? formatDateTime(announcement.expiry_date) : null,
-      created_by: announcement.created_by.user_name,
+      created_by: announcement.created_by?.user_name || null,
     }));
 
     await transaction.commit();
