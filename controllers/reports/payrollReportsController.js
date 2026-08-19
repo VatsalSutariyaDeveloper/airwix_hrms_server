@@ -127,7 +127,7 @@ exports.getEmployerContributionReport = async (req, res) => {
 
         const payslips = await commonQuery.fetchPaginatedData(
             Payslip,
-            {where, ...req.body},
+            req.body,
             fieldConfig,
             {
             include: [
@@ -148,11 +148,12 @@ exports.getEmployerContributionReport = async (req, res) => {
                         }
                     ]
                 },
-                
+
             ]
         },
         { company_id: true, branch_id: true },
-        'created_at'
+        'created_at',
+        where
         );
 
         let allContributionColumns = new Set();
@@ -228,7 +229,7 @@ exports.getCTCBreakdownReport = async (req, res) => {
 
         const employees = await commonQuery.fetchPaginatedData(
             Employee,
-            { where, ...req.body },
+            req.body,
             fieldConfig,
             {
                 attributes: ['id', 'first_name', 'employee_code', 'branch_id'],
@@ -236,8 +237,8 @@ exports.getCTCBreakdownReport = async (req, res) => {
                 include: [
                     { model: DesignationMaster, as: 'designation', attributes: ['designation_name'] },
                     { model: Department, as: 'department', attributes: ['name'] },
-                    { 
-                        model: EmployeeSalaryTemplate, 
+                    {
+                        model: EmployeeSalaryTemplate,
                         as: 'employeeSalaryTemplate',
                         required: true,
                         include: [{
@@ -250,7 +251,8 @@ exports.getCTCBreakdownReport = async (req, res) => {
                 ]
             },
             { company_id: true, branch_id: true },
-            'created_at'
+            'created_at',
+            where
         );
 
         const branchWhere = {};
@@ -357,7 +359,7 @@ exports.getGeneratedPayslipReport = async (req, res) => {
 
         const payslips = await commonQuery.fetchPaginatedData(
             Payslip,
-            { where, ...req.body },
+            req.body,
             fieldConfig,
             {
                 include: [
@@ -373,7 +375,8 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 ]
             },
             { company_id: true, branch_id: true },
-            'created_at'
+            'created_at',
+            where
         );
 
         const branchWhere = {};
@@ -428,7 +431,6 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                 paid_leave_amount: 0, 
 
                 base_salary: 0,
-                overtime: 0,
                 overtime_amount: 0,
                 reimbursement_amount: (ps.reimbursement_details || []).reduce((sum, r) => sum + parseFloat(r.amount || 0), 0),
 
@@ -451,8 +453,6 @@ exports.getGeneratedPayslipReport = async (req, res) => {
                     row.base_salary += amt;
                 } else if (name.toLowerCase().includes('overtime')) {
                     row.overtime_amount += amt;
-
-                    row.overtime = 0;
                 } else {
                     dynamicEarnings.add(name);
                     row.earnings[name] = (row.earnings[name] || 0) + amt;
@@ -553,7 +553,7 @@ exports.getPFReport = async (req, res) => {
 
         const payslips = await commonQuery.fetchPaginatedData(
             Payslip,
-            { where, ...req.body },
+            req.body,
             fieldConfig,
             {
                 include: [
@@ -565,7 +565,8 @@ exports.getPFReport = async (req, res) => {
                 ]
             },
             { company_id: true, branch_id: true },
-            'created_at'
+            'created_at',
+            where
         );
         // payslips = payslips.get({ plain: true });
         // Filter out employees without PF
@@ -814,7 +815,7 @@ exports.getESIReport = async (req, res) => {
 
         const payslips = await commonQuery.fetchPaginatedData(
             Payslip,
-            { where, ...req.body },
+            req.body,
             fieldConfig,
             {
                 include: [
@@ -826,7 +827,8 @@ exports.getESIReport = async (req, res) => {
                 ]
             },
             { company_id: true, branch_id: true },
-            'created_at'
+            'created_at',
+            where
         );
 
         let reportData = [];
@@ -904,7 +906,7 @@ exports.getESIReport = async (req, res) => {
             if (row.employee_share > 0 || row.employer_share > 0 || (row.ip_number && row.ip_number !== '-')) {
                 reportData.push(row);
             }
-            
+
         });
 
         return res.ok({
