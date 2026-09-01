@@ -261,7 +261,9 @@ exports.login = async (req, res) => {
 
     // 1. Enforce Platform Restriction (Employee = App Only, check allowed_clients)
     const access_by = req.body.access_by === "application" ? "application" : "web login";
-    const isEmployee = user.RolePermission?.role_key === constants.ROLE_KEYS.EMPLOYEE;
+    const roleKey = (user.RolePermission?.role_key || "").toUpperCase();
+    const isEmployee = roleKey === constants.ROLE_KEYS.EMPLOYEE;
+    const isReportingManager = user.is_reporting_manager || roleKey === constants.ROLE_KEYS.REPORTING_MANAGER;
 
     // Resolve client login restriction against role permissions
     if (user.RolePermission && user.RolePermission.allowed_clients) {
@@ -272,7 +274,7 @@ exports.login = async (req, res) => {
         await transaction.rollback();
         return res.error(403, { message: "This account is not authorized to use the mobile application." });
       }
-      if (!isMobileRequest && !allowedClientsList.includes("web") && !allowedClientsList.includes("both")) {
+      if (!isMobileRequest && !allowedClientsList.includes("web") && !allowedClientsList.includes("both") && !isReportingManager) {
         await transaction.rollback();
         return res.error(403, { message: "This account is not authorized to log in via the web portal." });
       }
@@ -312,7 +314,10 @@ exports.login = async (req, res) => {
 
     let finalCompanyId = user.company_id;
     if (!isEmployee) {
-      const companyAccessList = normalizeCompanyAccess(user.company_access || "");
+      let companyAccessList = normalizeCompanyAccess(user.company_access || "");
+      if (companyAccessList.length === 0 && user.company_id) {
+        companyAccessList = [String(user.company_id)];
+      }
       if (!isAdmin && companyAccessList.length === 0) {
         await transaction.rollback();
         return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
@@ -1178,7 +1183,10 @@ exports.verifyOtp = async (req, res) => {
 
     let finalCompanyId = entity.company_id;
     if (!isDevice && !isEmployee) {
-      const companyAccessList = normalizeCompanyAccess(entity.company_access || "");
+      let companyAccessList = normalizeCompanyAccess(entity.company_access || "");
+      if (companyAccessList.length === 0 && entity.company_id) {
+        companyAccessList = [String(entity.company_id)];
+      }
       if (!isAdmin && companyAccessList.length === 0) {
         authLog("Access denied", { reason: "No company access", entityId: entity.id, companyAccessListLength: companyAccessList.length });
         return res.error(constants.FORBIDDEN, { message: "User does not have access to any companies." });
