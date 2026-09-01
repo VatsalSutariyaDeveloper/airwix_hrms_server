@@ -1507,7 +1507,7 @@ exports.getLeaveReport = async (req, res) => {
     if (cleanedCompany) {
       branchWhere.company_id = cleanedCompany;
     } else {
-      branchWhere.company_id = req.user.company_id;
+      branchWhere.company_id = req.user?.company_id;
     }
     const branches = await commonQuery.findAllRecords(BranchMaster, branchWhere);
     const branchMap = {};
@@ -1536,28 +1536,15 @@ exports.getLeaveReport = async (req, res) => {
     if (employees.items.length === 0) return res.ok({ categories: [], items: [], total: 0, currentPage: 1, pageSize: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false, appliedFilters: {} });
     const employeeIds = employees.items.map(e => e.id);
 
-    // Fetch LeaveBalances logic
+    // 1. Fetch LeaveBalances directly from EmployeeLeaveBalance table for requested year
     const balances = await commonQuery.findAllRecords(EmployeeLeaveBalance, {
       year: parseInt(year),
       employee_id: { [Op.in]: employeeIds },
       status: 0
     });
 
-    const balancesByEmp = {};
-    balances.forEach(b => {
-      if (!balancesByEmp[b.employee_id]) balancesByEmp[b.employee_id] = {};
-      const catName = b.leave_category_name;
-      const assigned = parseFloat(b.total_allocated || 0) + parseFloat(b.carry_forward_leaves || 0);
-      balancesByEmp[b.employee_id][catName] = assigned;
-    });
-
-    // Prepare categories
-    const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { status: 0 });
-    const leaveCatNames = allLeaveCategories.map(c => c.leave_category_name);
-    const allCategories = ['Week Off', 'Holiday', ...leaveCatNames];
-
-    // Fetch leaves, weekoffs, holidays
-    const leaves = await commonQuery.findAllRecords(LeaveRequest, {
+    // 2. Fetch Approved Leave Requests for Month-wise calculation
+    const approvedLeaves = await commonQuery.findAllRecords(LeaveRequest, {
       employee_id: { [Op.in]: employeeIds },
       request_type: 'DEBIT',
       approval_status: constants.LEAVE_APPROVAL_STATUS.APPROVED,
@@ -1571,123 +1558,116 @@ exports.getLeaveReport = async (req, res) => {
       include: [{ model: LeaveTemplateCategory, as: 'category', attributes: ['leave_category_name'] }]
     });
 
-    const holidays = await commonQuery.findAllRecords(EmployeeHoliday, {
-      employee_id: { [Op.in]: employeeIds },
-      status: 0,
-      date: { [Op.between]: [startDateStr, endDateStr] }
-    });
-
-    const weekOffs = await commonQuery.findAllRecords(EmployeeWeeklyOff, {
-      employee_id: { [Op.in]: employeeIds },
-      status: 0
-    });
-
-    const holidaysByEmp = {};
-    holidays.forEach(h => {
-      if (!holidaysByEmp[h.employee_id]) holidaysByEmp[h.employee_id] = [];
-      holidaysByEmp[h.employee_id].push({ date: h.date, name: h.name });
-    });
-
-    const weekOffsByEmp = {};
-    weekOffs.forEach(w => {
-      if (!weekOffsByEmp[w.employee_id]) weekOffsByEmp[w.employee_id] = [];
-      weekOffsByEmp[w.employee_id].push({ day: w.day_of_week, weekMask: w.week_no });
+    // Extract categories (excluding Week Off and Holiday)
+    const allLeaveCategories = await commonQuery.findAllRecords(LeaveTemplateCategory, { status: 0 });
+    const leaveCatNames = new Set(allLeaveCategories.map(c => c.leave_category_name).filter(name => name !== 'Week Off' && name !== 'Holiday'));
+    
+    // Include categories present in employee_leave_balances for these employees
+    balances.forEach(b => {
+      if (b.leave_category_name && b.leave_category_name !== 'Week Off' && b.leave_category_name !== 'Holiday') {
+        leaveCatNames.add(b.leave_category_name);
+      }
     });
 
     const leavesByEmp = {};
-    leaves.forEach(l => {
+    approvedLeaves.forEach(l => {
       if (!leavesByEmp[l.employee_id]) leavesByEmp[l.employee_id] = [];
+      const catName = l.category?.leave_category_name || 'Other';
+      if (catName && catName !== 'Week Off' && catName !== 'Holiday') {
+        leaveCatNames.add(catName);
+      }
       leavesByEmp[l.employee_id].push({
         start: dayjs(l.start_date).isBefore(startDate) ? startDate : dayjs(l.start_date),
         end: dayjs(l.end_date).isAfter(endDate) ? endDate : dayjs(l.end_date),
-        total_days: l.total_days,
-        category: l.category?.leave_category_name || 'Other'
+        total_days: parseFloat(l.total_days || 0),
+        category: catName
       });
+    });
+
+    const allCategories = Array.from(leaveCatNames);
+
+    // Group balances by employee and leave category (from EmployeeLeaveBalance)
+    const balancesByEmp = {};
+    balances.forEach(b => {
+      if (!balancesByEmp[b.employee_id]) balancesByEmp[b.employee_id] = {};
+      const catName = b.leave_category_name;
+      if (!catName || catName === 'Week Off' || catName === 'Holiday') return;
+
+      const allocated = parseFloat(b.total_allocated || 0) + parseFloat(b.carry_forward_leaves || 0);
+      const used = parseFloat(b.used_leaves || 0);
+      const pending = parseFloat(b.pending_leaves !== undefined && b.pending_leaves !== null ? b.pending_leaves : (allocated - used));
+
+      if (!balancesByEmp[b.employee_id][catName]) {
+        balancesByEmp[b.employee_id][catName] = {
+          assigned: allocated,
+          used: used,
+          pending: pending
+        };
+      } else {
+        balancesByEmp[b.employee_id][catName].assigned += allocated;
+        balancesByEmp[b.employee_id][catName].used += used;
+        balancesByEmp[b.employee_id][catName].pending += pending;
+      }
     });
 
     const reportData = employees.items.map(emp => {
       const row = {
+        employee_id: emp.id,
         employee_code: emp.employee_code || '-',
         employee_name: emp.first_name || '-',
         phone: emp.mobile_no || '-',
         branch: branchMap[emp.branch_id] || '-',
         department: emp.department?.name || '-',
         designation: emp.designation?.designation_name || '-',
-        assigned: balancesByEmp[emp.id] || {},
+        assigned: {},
         total_used: {},
-        pending: {}, // [NEW] Track pending balance
+        pending: {},
         months: {}
       };
 
       allCategories.forEach(c => {
+        row.assigned[c] = 0;
         row.total_used[c] = 0;
         row.pending[c] = 0;
       });
+
       for (let m = 1; m <= 12; m++) {
         row.months[m] = {};
         allCategories.forEach(c => row.months[m][c] = 0);
       }
 
-      const empHolidays = holidaysByEmp[emp.id] || [];
-      const empWeekOffs = weekOffsByEmp[emp.id] || [];
-      const empLeaves = leavesByEmp[emp.id] || [];
-      const leaveSet = new Set();
+      // Populate assigned, total_used, pending from EmployeeLeaveBalance
+      const empBalances = balancesByEmp[emp.id] || {};
+      allCategories.forEach(c => {
+        if (empBalances[c]) {
+          row.assigned[c] = parseFloat(empBalances[c].assigned.toFixed(2));
+          row.total_used[c] = parseFloat(empBalances[c].used.toFixed(2));
+          row.pending[c] = parseFloat(empBalances[c].pending.toFixed(2));
+        }
+      });
 
+      // Populate month-wise used leave from approved leave requests
+      const empLeaves = leavesByEmp[emp.id] || [];
       empLeaves.forEach(lr => {
         let current = lr.start;
         const spanDays = lr.end.diff(lr.start, 'day') + 1;
-        // If a leave started or ended out of year, total_days might be off, but approximation holds for split
-        const dailyVal = parseFloat(lr.total_days || 0) / spanDays;
+        const dailyVal = spanDays > 0 ? (lr.total_days / spanDays) : 0;
 
         while (current.isSameOrBefore(lr.end, 'day')) {
           const m = current.month() + 1;
           const cat = lr.category;
-          if (row.months[m][cat] !== undefined) {
+          if (row.months[m] && row.months[m][cat] !== undefined) {
             row.months[m][cat] += dailyVal;
-            row.total_used[cat] += dailyVal;
           }
-          if (dailyVal >= 0.5) leaveSet.add(current.format('YYYY-MM-DD'));
           current = current.add(1, 'day');
         }
       });
 
-      // Prevent checking dates before joining
-      const empStartDate = emp.joining_date && dayjs(emp.joining_date).isAfter(startDate)
-        ? dayjs(emp.joining_date) : startDate;
-
-      for (let d = empStartDate; d.isSameOrBefore(endDate, 'day'); d = d.add(1, 'day')) {
-        const dateStr = d.format('YYYY-MM-DD');
-        if (leaveSet.has(dateStr)) continue; // skip weekoff count if actively on leave
-
-        const m = d.month() + 1;
-
-        const isHoli = empHolidays.find(h => h.date === dateStr);
-        if (isHoli) {
-          row.months[m]['Holiday'] += 1;
-          row.total_used['Holiday'] += 1;
-          continue;
-        }
-
-        const weekOfMonth = Math.ceil(d.date() / 7);
-        const isWO = empWeekOffs.find(w => {
-          return w.day === d.day() && (w.weekMask === 0 || w.weekMask === weekOfMonth);
+      for (let m = 1; m <= 12; m++) {
+        allCategories.forEach(c => {
+          row.months[m][c] = parseFloat((row.months[m][c] || 0).toFixed(2));
         });
-
-        if (isWO) {
-          row.months[m]['Week Off'] += 1;
-          row.total_used['Week Off'] += 1;
-        }
       }
-
-      // [NEW] Final calculation of rounded pending balances
-      allCategories.forEach(c => {
-        row.total_used[c] = parseFloat(row.total_used[c].toFixed(2));
-        if (row.assigned[c] !== undefined) {
-          row.pending[c] = parseFloat((row.assigned[c] - row.total_used[c]).toFixed(2));
-        } else {
-          row.pending[c] = '-'; // For categories like Week Off/Holiday that don't have a fixed allocation
-        }
-      });
 
       return row;
     });

@@ -361,7 +361,13 @@ const runWorker = async () => {
         if (empData && empData.leave_template) {
             for (const [key, value] of templateCategoriesMap.entries()) {
                 if (key.startsWith(`${empData.leave_template}_`) && value.id === categoryId) {
-                    return value.automation_rules ? JSON.parse(value.automation_rules) : {};
+                    if (!value.automation_rules) return {};
+                    if (typeof value.automation_rules === 'object') return value.automation_rules;
+                    try {
+                        return JSON.parse(value.automation_rules);
+                    } catch (e) {
+                        return {};
+                    }
                 }
             }
         }
@@ -791,7 +797,9 @@ const runWorker = async () => {
                     if (leaveCategoryId) {
                         const rules = getEmployeeCategoryRules(employeeId, leaveCategoryId);
                         if (isHalfDay && rules.allow_half_day === false) {
-                            finalIsHalfDay = false;
+                            finalIsHalfDay = false; // Half day not allowed -> convert to full day leave (deduct 1.0)
+                        } else if (!isHalfDay && rules.allow_full_day === false) {
+                            finalIsHalfDay = true;  // Full day not allowed -> convert to half day leave (deduct 0.5)
                         }
                     }
 

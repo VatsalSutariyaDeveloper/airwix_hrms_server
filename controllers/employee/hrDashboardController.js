@@ -2,6 +2,7 @@ const {
     Employee,
     AttendanceDay,
     LeaveRequest,
+    LeaveSandwichReviewFlag,
     Holiday,
     Department,
     DesignationMaster,
@@ -1154,6 +1155,24 @@ const compileLeaveSummary = async (employee) => {
         order: [["start_date", "DESC"]]
     });
 
+    // Fetch applied sandwich flags for this employee so we can surface gap dates in the detail view.
+    // Best-effort: this only decorates history rows, so a missing table (schema script not yet run)
+    // must not take the whole dashboard down with it.
+    const sandwichGapByLeaveId = new Map();
+    try {
+        const appliedSandwichFlags = await commonQuery.findAllRecords(LeaveSandwichReviewFlag, {
+            employee_id,
+            review_status: 1,
+        }, { attributes: ["earlier_leave_request_id", "gap_dates"] }, null, {});
+        for (const f of (appliedSandwichFlags || [])) {
+            if (f.earlier_leave_request_id && Array.isArray(f.gap_dates) && f.gap_dates.length > 0) {
+                sandwichGapByLeaveId.set(f.earlier_leave_request_id, f.gap_dates);
+            }
+        }
+    } catch (err) {
+        console.warn("[hrDashboard] Skipping sandwich gap dates:", err.message);
+    }
+
     let totalUsed = 0;
     let totalLeft = 0;
     const formattedBalances = balances.map(b => {
@@ -1233,7 +1252,8 @@ const compileLeaveSummary = async (employee) => {
             approved_by: leave.approvedBy?.user_name || null,
             approval_remark: leave.approval_remark || "",
             start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
-            end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
+            end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2"),
+            sandwich_gap_dates: sandwichGapByLeaveId.get(leave.id) || (Array.isArray(leave.sandwich_gap_dates) && leave.sandwich_gap_dates.length > 0 ? leave.sandwich_gap_dates : null),
         });
     });
 

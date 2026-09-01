@@ -34,6 +34,11 @@ module.exports = (sequelize, DataTypes) => {
                 comment: "JSON configuration for each level: [{level: 1, type: 'SUPERVISOR/MANAGER/ADMIN/EMPLOYER'}]"
             },
             count_sandwich_leaves: { type: DataTypes.BOOLEAN, defaultValue: false },
+            sandwich_rules: {
+                type: DataTypes.JSON,
+                allowNull: true,
+                comment: "{enabled, absorb_weekly_off, absorb_holiday, absorb_holiday_types:['mandatory','restricted'], max_consecutive_offdays, half_day_boundary:'exempt'|'count_half'|'count_full', rules:[{left,off,right,applicable}], applies_to}. Null = derive from legacy count_sandwich_leaves."
+            },
             total_leaves: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
             status: { 
                 type: DataTypes.SMALLINT, 

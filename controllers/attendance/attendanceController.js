@@ -1,7 +1,7 @@
 const { punch, manualPunch, rebuildAttendanceDay, getOrCreateAttendanceDay, syncAttendanceToLeaveBalance, bulkSyncAttendanceDays } = require("../../helpers/attendanceHelper");
 const { validateRequest, commonQuery, handleError, uploadFile, uploadBase64File } = require("../../helpers");
 const { constants } = require("../../helpers/constants");
-const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization, AttendanceApproval, CompanyConfigration, CompanySettings } = require("../../models");
+const { Employee, AttendanceDay, AttendancePunch, LeaveRequest, LeaveTemplateCategory, LeaveSandwichReviewFlag, Sequelize, sequelize, ShiftTemplate, EmployeeHoliday, User, RolePermission, EmployeeWeeklyOff, EmployeeLeaveBalance, ShiftBreak, EmployeeAttendanceTemplate, AttendanceTemplate, LeaveTemplate, HolidayTransaction, WeeklyOffTemplateDay, DeviceMaster, OutDutyRequest, Department, DesignationMaster, BranchMaster, Holiday, EmployeeSalaryTemplate, FaceRecognitionError, CompanyMaster, AttendanceRegularization, AttendanceApproval, CompanyConfigration, CompanySettings } = require("../../models");
 const fs = require("fs");
 const path = require("path");
 const { Op } = Sequelize;
@@ -2577,6 +2577,24 @@ exports.getLeaveSummary = async (req, res) => {
       order: [["start_date", "DESC"]]
     }, null, isOwnRequest ? { applyHierarchy: false } : true);
 
+    // Fetch applied sandwich flags so each leave item can expose its gap dates.
+    // Best-effort: this only decorates history rows, so a missing table (schema script not yet run)
+    // must not fail the whole leave summary.
+    const sandwichGapByLeaveId = new Map();
+    try {
+      const appliedSandwichFlags = await commonQuery.findAllRecords(LeaveSandwichReviewFlag, {
+        employee_id,
+        review_status: 1,
+      }, { attributes: ["earlier_leave_request_id", "gap_dates"] }, null, {});
+      for (const f of (appliedSandwichFlags || [])) {
+        if (f.earlier_leave_request_id && Array.isArray(f.gap_dates) && f.gap_dates.length > 0) {
+          sandwichGapByLeaveId.set(f.earlier_leave_request_id, f.gap_dates);
+        }
+      }
+    } catch (err) {
+      console.warn("[attendance] Skipping sandwich gap dates:", err.message);
+    }
+
     // 3. Format Balances
     let totalUsed = 0;
     let totalLeft = 0;
@@ -2667,7 +2685,8 @@ exports.getLeaveSummary = async (req, res) => {
         approved_by: leave.approvedBy?.user_name || null,
         approval_remark: leave.approval_remark || "",
         start_session: leave.start_session === 0 ? "Full Day" : (leave.start_session === 1 ? "Session 1" : "Session 2"),
-        end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2")
+        end_session: leave.end_session === 0 ? "Full Day" : (leave.end_session === 1 ? "Session 1" : "Session 2"),
+        sandwich_gap_dates: sandwichGapByLeaveId.get(leave.id) || (Array.isArray(leave.sandwich_gap_dates) && leave.sandwich_gap_dates.length > 0 ? leave.sandwich_gap_dates : null),
       });
     });
 

@@ -19,6 +19,7 @@ const weeklyOffTemplateController = require("../controllers/settings/weeklyOffTe
 const attendanceTemplateController = require("../controllers/settings/attendanceTemplateController");
 const leaveTemplateController = require("../controllers/settings/leave/leaveTemplateController");
 const leaveRequestController = require("../controllers/settings/leave/leaveRequestController");
+const leaveSandwichReviewController = require("../controllers/settings/leave/leaveSandwichReviewController");
 const salaryTemplateController = require("../controllers/settings/salary/salaryTemplateController");
 const salaryComponentController = require("../controllers/settings/salary/salaryComponentController");
 const departmentController = require("../controllers/settings/departmentController");
@@ -245,6 +246,8 @@ router.get("/leave-request/:id", leaveRequestController.getById);
 router.put("/leave-request/status/:id", leaveRequestController.updateStatus);
 router.put("/leave-request/cancel/:id", leaveRequestController.cancelLeave);
 router.post("/leave-request/calculate-days", leaveRequestController.calculateLeaveDays);
+
+router.patch("/leave-sandwich-review/:id", leaveSandwichReviewController.updateStatus);
 router.post("/leave-balance", employeeLeaveBalanceController.getByEmployeeId);
 router.delete("/leave-request", leaveRequestController.delete);
 

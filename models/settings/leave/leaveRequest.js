@@ -54,6 +54,11 @@ module.exports = (sequelize, DataTypes) => {
                 type: DataTypes.ENUM('DEBIT', 'CREDIT', 'ENCASHMENT'),
                 defaultValue: 'DEBIT',
                 comment: "DEBIT: Taken leave, CREDIT: Earned leave, ENCASHMENT: Encashment request"
+            },
+            sandwich_gap_dates: {
+                type: DataTypes.JSON,
+                allowNull: true,
+                comment: "Cross-request sandwich gap dates counted in total_days at apply time"
             }
         },
         {
