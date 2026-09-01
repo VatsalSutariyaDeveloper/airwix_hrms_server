@@ -211,6 +211,8 @@ exports.create = async (req, res) => {
         let total_days = 0;
         let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
         let is_credit = req.body.request_type === 'CREDIT';
+        // Off-days between this request and an adjacent leave that were folded into total_days
+        let appliedSandwichGapDates = null;
 
         if (is_encashment) {
             total_days = requestedTotal;
@@ -278,12 +280,42 @@ exports.create = async (req, res) => {
             }
         } else {
             // --- Calculate total_days based on Sandwich Policy via Service ---
-            const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
+            const { totalWorkingDays: sandwichWorkingDays, config: sandwichConfig } = await LeaveBalanceService.computeSandwichAdjustedWorkingDays(
+                employee, leave_category_id, start_date, end_date, transaction,
+                { startSession: start_session, endSession: end_session }
+            );
+            let workingDays = sandwichWorkingDays;
 
-            // Calculate session-based reduction
+            // Cross-request sandwich detection: if an adjacent APPROVED leave request
+            // brackets this one across a weekend/holiday (e.g. this request is the
+            // Monday half of a Friday-leave + Monday-leave pair), credit the gap days
+            // to THIS (later) request now. The earlier, already-approved request is
+            // never rewritten here — see the review-flag flow in leaveSandwichReviewController.
+            if (sandwichConfig && sandwichConfig.enabled) {
+                const gapCap = sandwichConfig.max_consecutive_offdays || 7;
+                const { before: adjacentEarlier } = await LeaveBalanceService.findAdjacentApprovedLeave(
+                    employee_id, leave_category_id, start_date, end_date, gapCap, transaction, null,
+                    [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.APPROVED]
+                );
+                if (adjacentEarlier) {
+                    const gapDays = await LeaveBalanceService.computeCrossRequestGapDays(
+                        employee, leave_category_id, adjacentEarlier, { start_date, end_date, start_session, end_session }, transaction
+                    );
+                    workingDays += gapDays.length;
+                    if (gapDays.length > 0) appliedSandwichGapDates = gapDays.map(d => d.date);
+                }
+            }
+
+            // Calculate session-based reduction (only reduce if the day is normally a working day)
+            const startDayOff = await getDayOffInfo(employee, start_date, transaction);
+            const isStartWorking = !startDayOff.isHoliday && !startDayOff.isWeeklyOff;
+
+            const endDayOff = await getDayOffInfo(employee, end_date, transaction);
+            const isEndWorking = !endDayOff.isHoliday && !endDayOff.isWeeklyOff;
+
             let sessionReduction = 0;
-            if (start_session !== 0) sessionReduction += 0.5;
-            if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
+            if (start_session !== 0 && isStartWorking) sessionReduction += 0.5;
+            if (end_session !== 0 && !(start_date === end_date) && isEndWorking) sessionReduction += 0.5;
 
             // If it's a single day leave and a session is selected, total is 0.5
             if (start_date === end_date && start_session !== 0) {
@@ -554,6 +586,7 @@ exports.create = async (req, res) => {
         const POST = {
             ...req.body,
             total_days,
+            sandwich_gap_dates: appliedSandwichGapDates || null,
             branch_id: req.body.branch_id || employee.branch_id,
             company_id: req.body.company_id || employee.company_id,
             user_id: req.body.user_id || req.user.id
@@ -653,6 +686,8 @@ exports.update = async (req, res) => {
         let total_days = 0;
         let is_encashment = req.body.is_encashment === true || req.body.is_encashment === "true";
         let is_credit = req.body.request_type === 'CREDIT';
+        // Off-days between this request and an adjacent leave that were folded into total_days
+        let appliedSandwichGapDates = null;
 
         if (is_encashment) {
             total_days = requestedTotal;
@@ -720,10 +755,37 @@ exports.update = async (req, res) => {
                 return res.error("OVERLAP", { message: "Selected date already has a Comp-Off Leave credit request." });
             }
         } else {
-            const workingDays = await LeaveBalanceService.calculateWorkingDays(employee_id, start_date, end_date, transaction);
+            const { totalWorkingDays: sandwichWorkingDays, config: sandwichConfig } = await LeaveBalanceService.computeSandwichAdjustedWorkingDays(
+                employee, leave_category_id, start_date, end_date, transaction,
+                { startSession: start_session, endSession: end_session }
+            );
+            let workingDays = sandwichWorkingDays;
+
+            // Cross-request sandwich detection — see exports.create for the rationale.
+            if (sandwichConfig && sandwichConfig.enabled) {
+                const gapCap = sandwichConfig.max_consecutive_offdays || 7;
+                const { before: adjacentEarlier } = await LeaveBalanceService.findAdjacentApprovedLeave(
+                    employee_id, leave_category_id, start_date, end_date, gapCap, transaction, id,
+                    [constants.LEAVE_APPROVAL_STATUS.PENDING, constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED, constants.LEAVE_APPROVAL_STATUS.APPROVED]
+                );
+                if (adjacentEarlier) {
+                    const gapDays = await LeaveBalanceService.computeCrossRequestGapDays(
+                        employee, leave_category_id, adjacentEarlier, { start_date, end_date, start_session, end_session }, transaction
+                    );
+                    workingDays += gapDays.length;
+                    if (gapDays.length > 0) appliedSandwichGapDates = gapDays.map(d => d.date);
+                }
+            }
+
+            const startDayOff = await getDayOffInfo(employee, start_date, transaction);
+            const isStartWorking = !startDayOff.isHoliday && !startDayOff.isWeeklyOff;
+
+            const endDayOff = await getDayOffInfo(employee, end_date, transaction);
+            const isEndWorking = !endDayOff.isHoliday && !endDayOff.isWeeklyOff;
+
             let sessionReduction = 0;
-            if (start_session !== 0) sessionReduction += 0.5;
-            if (end_session !== 0 && !(start_date === end_date)) sessionReduction += 0.5;
+            if (start_session !== 0 && isStartWorking) sessionReduction += 0.5;
+            if (end_session !== 0 && !(start_date === end_date) && isEndWorking) sessionReduction += 0.5;
 
             if (start_date === end_date && start_session !== 0) {
                 total_days = workingDays > 0 ? 0.5 : 0;
@@ -879,7 +941,8 @@ exports.update = async (req, res) => {
 
         const PUT = {
             ...req.body,
-            total_days
+            total_days,
+            sandwich_gap_dates: appliedSandwichGapDates || null
         };
 
         if (req.files && Object.keys(req.files).length > 0) {
@@ -1640,19 +1703,52 @@ exports.cancelLeave = async (req, res) => {
         }, transaction);
         await sendApprovalNotifications(leaveRequest, employee, "CANCEL", transaction);
 
-        await transaction.commit();
-        return res.success("LEAVE_CANCELLED");
-
-        // 6. If it was already APPROVED, Rebuild Attendance to remove Leave status
+        // 6. If it was already APPROVED, detach it from the attendance day(s) it covers so the
+        // day no longer shows this leave's category. Deliberately NOT a full rebuildAttendanceDay
+        // here — that recomputes status from punches/shift rules and would blow away a manually
+        // forced Half Day override; the attendance day's status is left as the admin set it, only
+        // the now-invalid leave link is removed:
+        //   - Half Day (status 1): category cleared, status stays Half Day — the worked half stays
+        //     paid (payroll already pays 0.5 day for any Half Day status), the other half is simply
+        //     no longer covered by leave (unpaid/absent in effect, with nothing left to display).
+        //   - Full Leave (status 6) with no punches: becomes Absent, since nothing justifies a
+        //     "Leave" status once the leave backing it is gone.
+        //   - Full Leave (status 6) WITH punches (an edge case — e.g. leave overridden to Present
+        //     elsewhere while still tagged): category cleared only, status untouched.
         if (Number(oldStatus) === constants.LEAVE_APPROVAL_STATUS.APPROVED && !leaveRequest.is_encashment) {
             const start = dayjs(leaveRequest.start_date);
             const end = dayjs(leaveRequest.end_date);
             const diff = end.diff(start, 'day');
             for (let i = 0; i <= diff; i++) {
                 const targetDate = start.add(i, 'day').format('YYYY-MM-DD');
-                await rebuildAttendanceDay(leaveRequest.employee_id, targetDate, { user_id: req.user?.id }, transaction);
+                const day = await commonQuery.findOneRecord(AttendanceDay, {
+                    employee_id: leaveRequest.employee_id,
+                    attendance_date: targetDate,
+                    status: { [Op.ne]: 2 }
+                }, {}, transaction, false, {});
+
+                // Only touch a day still linked to THIS request's category — if it was since
+                // reassigned to a different leave category, leave it alone.
+                if (!day || Number(day.leave_category_id) !== Number(leaveRequest.leave_category_id)) continue;
+
+                if (Number(day.status) === 1) {
+                    await commonQuery.updateRecordById(AttendanceDay, day.id, {
+                        leave_category_id: null,
+                        leave_session: null
+                    }, transaction, false, {});
+                } else if (Number(day.status) === 6) {
+                    const hasPunches = !!(day.first_in || day.last_out);
+                    await commonQuery.updateRecordById(AttendanceDay, day.id, {
+                        leave_category_id: null,
+                        leave_session: null,
+                        ...(hasPunches ? {} : { status: 5, worked_minutes: 0 })
+                    }, transaction, false, {});
+                }
             }
         }
+
+        await transaction.commit();
+        return res.success("LEAVE_CANCELLED");
     } catch (err) {
         if (!transaction.finished) await transaction.rollback();
         return handleError(err, res, req);
@@ -1689,7 +1785,6 @@ exports.calculateLeaveDays = async (req, res) => {
         }
 
         const template = employee.leaveTemplate;
-        const countSandwich = template ? template.count_sandwich_leaves : false;
 
         const start = dayjs(start_date);
         const end = dayjs(end_date);
@@ -1704,12 +1799,15 @@ exports.calculateLeaveDays = async (req, res) => {
 
         const { leave_category_id } = req.body;
         let rules = {};
+        let leaveCategory = null;
         if (leave_category_id) {
-            const category = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
-            if (category) {
-                rules = category.automation_rules ? JSON.parse(category.automation_rules) : {};
+            leaveCategory = await commonQuery.findOneRecord(LeaveTemplateCategory, leave_category_id);
+            if (leaveCategory) {
+                rules = leaveCategory.automation_rules ? JSON.parse(leaveCategory.automation_rules) : {};
             }
         }
+
+        const sandwichConfig = LeaveBalanceService.resolveSandwichConfig(template, leaveCategory);
 
         if (isEncashment) {
             workingDays = calendarDays;
@@ -1720,6 +1818,7 @@ exports.calculateLeaveDays = async (req, res) => {
                 if (end_session !== 0 && start_date !== end_date) workingDays -= 0.5;
             }
         } else {
+            const dayOffMap = new Map();
             for (let i = 0; i < calendarDays; i++) {
                 const curDate = start.add(i, 'day');
                 const cur = curDate.format('YYYY-MM-DD');
@@ -1736,13 +1835,99 @@ exports.calculateLeaveDays = async (req, res) => {
                     isWorking = false;
                 }
 
-                dateWiseBreakdown.push({
+                dayOffMap.set(cur, {
                     date: cur,
                     name: dayStatus,
-                    is_working: isWorking
+                    is_working: isWorking,
+                    dayOff: dayOff
+                });
+            }
+
+            if (sandwichConfig && sandwichConfig.enabled) {
+                const days = Array.from(dayOffMap.keys()).sort();
+                const sandwichRules = Array.isArray(sandwichConfig.rules) ? sandwichConfig.rules : null;
+
+                for (let i = 1; i < days.length - 1; i++) {
+                    const currentDay = dayOffMap.get(days[i]);
+
+                    if (!currentDay.is_working) {
+                        let hasWorkingBefore = false;
+                        for (let j = 0; j < i; j++) {
+                            if (dayOffMap.get(days[j]).is_working) { hasWorkingBefore = true; break; }
+                        }
+                        let hasWorkingAfter = false;
+                        for (let j = i + 1; j < days.length; j++) {
+                            if (dayOffMap.get(days[j]).is_working) { hasWorkingAfter = true; break; }
+                        }
+
+                        let shouldAbsorb = false;
+                        if (sandwichRules) {
+                            const offType = currentDay.dayOff.isHoliday ? 'holiday' : 'weekoff';
+
+                            // Find nearest leave (working) day index on each side
+                            let nearestBeforeIdx = -1;
+                            for (let j = i - 1; j >= 0; j--) {
+                                if (dayOffMap.get(days[j]).is_working) { nearestBeforeIdx = j; break; }
+                            }
+                            let nearestAfterIdx = -1;
+                            for (let j = i + 1; j < days.length; j++) {
+                                if (dayOffMap.get(days[j]).is_working) { nearestAfterIdx = j; break; }
+                            }
+
+                            // Semantics match leaveBalanceService.computeSandwichAdjustedWorkingDays:
+                            //   hasLeave before → person is absent (on leave) → 'absent'
+                            //   no leave before → person was working → 'working'
+                            //   nearest day is first/last and it's a half-day session → 'halfday'
+                            let leftType;
+                            if (nearestBeforeIdx === -1) {
+                                leftType = 'working';
+                            } else if (nearestBeforeIdx === 0 && start_session !== 0) {
+                                leftType = 'halfday';
+                            } else {
+                                leftType = 'absent';
+                            }
+
+                            let rightType;
+                            if (nearestAfterIdx === -1) {
+                                rightType = 'working';
+                            } else if (nearestAfterIdx === days.length - 1 && end_session !== 0) {
+                                rightType = 'halfday';
+                            } else {
+                                rightType = 'absent';
+                            }
+
+                            shouldAbsorb = LeaveBalanceService.matchSandwichRules(sandwichRules, leftType, offType, rightType);
+                        } else {
+                            // Legacy boolean: absorb if sandwiched between working days
+                            const absorbOff = currentDay.dayOff.isHoliday
+                                ? (sandwichConfig.absorb_holiday !== false)
+                                : (sandwichConfig.absorb_weekly_off !== false);
+                            shouldAbsorb = absorbOff && hasWorkingBefore && hasWorkingAfter;
+                        }
+
+                        if (shouldAbsorb) {
+                            currentDay.is_working = true;
+                            currentDay.is_sandwich = true;
+                        }
+                    }
+                }
+            }
+
+            for (let i = 0; i < calendarDays; i++) {
+                const curDate = start.add(i, 'day');
+                const cur = curDate.format('YYYY-MM-DD');
+                const dayInfo = dayOffMap.get(cur);
+
+                const isWorking = dayInfo.is_working;
+
+                dateWiseBreakdown.push({
+                    date: cur,
+                    name: dayInfo.name,
+                    is_working: isWorking,
+                    is_sandwich: dayInfo.is_sandwich || false
                 });
 
-                if (isWorking || countSandwich) {
+                if (isWorking) {
                     let dayVal = 1;
                     if (i === 0 && start_session !== 0) {
                         dayVal = 0.5;
@@ -1760,11 +1945,73 @@ exports.calculateLeaveDays = async (req, res) => {
             }
         }
 
+        // Check for adjacent leaves that would create cross-request sandwich gap days
+        let sandwich_preview = null;
+        if (!isEncashment && leave_category_id && employee && sandwichConfig && sandwichConfig.enabled) {
+            try {
+                // Include both pending (0) and approved (3) adjacent leaves so the
+                // preview shows even before the earlier leave has been approved.
+                const LOOK_BACK_DAYS = 14;
+                const windowStart = dayjs(start_date).subtract(LOOK_BACK_DAYS, 'day').format('YYYY-MM-DD');
+                const windowEnd = dayjs(end_date).add(LOOK_BACK_DAYS, 'day').format('YYYY-MM-DD');
+
+                // Search any category — sandwich can span different leave types.
+                // Use approval_status (not status which is the soft-delete flag).
+                const adjacentLeaves = await commonQuery.findAllRecords(LeaveRequest, {
+                    employee_id: employee_id,
+                    approval_status: {
+                        [Op.in]: [
+                            constants.LEAVE_APPROVAL_STATUS.PENDING,
+                            constants.LEAVE_APPROVAL_STATUS.PARTIALLY_APPROVED,
+                            constants.LEAVE_APPROVAL_STATUS.APPROVED
+                        ]
+                    },
+                    status: 0,
+                    is_encashment: false,
+                    [Op.or]: [
+                        // earlier request: ends before our start
+                        { end_date: { [Op.lt]: start_date, [Op.gte]: windowStart } },
+                        // later request: starts after our end
+                        { start_date: { [Op.gt]: end_date, [Op.lte]: windowEnd } }
+                    ]
+                }, { attributes: ['id', 'start_date', 'end_date', 'start_session', 'end_session', 'leave_category_id'] }, null, {});
+
+                const mockNewRequest = { start_date, end_date, start_session, end_session };
+                const previewDates = [];
+
+                for (const adj of (adjacentLeaves || [])) {
+                    const isEarlier = adj.end_date < start_date;
+                    const earlier = isEarlier ? adj : mockNewRequest;
+                    const later = isEarlier ? mockNewRequest : adj;
+                    const gapDays = await LeaveBalanceService.computeCrossRequestGapDays(
+                        employee, leave_category_id, earlier, later, null
+                    );
+                    for (const d of gapDays) {
+                        if (!previewDates.find(x => x.date === d.date)) {
+                            previewDates.push(d);
+                        }
+                    }
+                }
+
+                if (previewDates.length > 0) {
+                    sandwich_preview = previewDates.map(d => ({
+                        date: d.date,
+                        name: d.reason === 'holiday_sandwiched' ? 'Holiday' : 'Week Off'
+                    }));
+                }
+            } catch (_) {
+                // preview is best-effort — never fail the main calculation
+            }
+        }
+
+        const sandwichPreviewCount = Array.isArray(sandwich_preview) ? sandwich_preview.length : 0;
+
         return res.success("Working days calculated", {
-            total_days: workingDays,
+            total_days: workingDays + sandwichPreviewCount,
             breakdown: dateWiseBreakdown,
             is_allow_full_day: rules?.allow_full_day ?? true,
-            is_allow_half_day: rules?.allow_half_day ?? true
+            is_allow_half_day: rules?.allow_half_day ?? true,
+            sandwich_preview
         });
     } catch (err) {
         return handleError(err, res, req);

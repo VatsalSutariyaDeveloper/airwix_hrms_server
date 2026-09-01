@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const { sequelize, AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster, BranchMaster } = require("../models");
+const { sequelize, AttendanceDay, AttendancePunch, Employee, AttendanceTemplate, HolidayTransaction, EmployeeShift, WeeklyOffTemplateDay, LeaveRequest, ShiftTemplate, EmployeeSalaryTemplate, EmployeeHoliday, EmployeeWeeklyOff, ShiftBreak, EmployeeAttendanceTemplate, LeaveTemplateCategory, LeaveTemplate, WeeklyOffTemplate, OutDutyRequest, DeviceMaster, CanteenAttendance, CompanyMaster, BranchMaster } = require("../models");
 const commonQuery = require("./commonQuery");
 const { Err } = require("./Err");
 const dayjs = require("dayjs");
@@ -895,7 +895,8 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
     employee = await commonQuery.findOneRecord(Employee, employeeId, {
       include: [
         { model: EmployeeAttendanceTemplate, where: { status: 0 }, as: "employeeAttendanceTemplate", required: false },
-        { model: AttendanceTemplate, as: "attendanceTemplate", required: false }
+        { model: AttendanceTemplate, as: "attendanceTemplate", required: false },
+        { model: LeaveTemplate, as: "leaveTemplate", required: false }
       ],
     }, transaction, false, {});
   }
@@ -1236,7 +1237,15 @@ async function rebuildAttendanceDay(employeeId, date, meta = {}, transaction = n
   }
 
   // --- LEAVE PROCESSING ---
-  if (approvedLeave) {
+  // An approved leave only marks a holiday / weekly-off as a leave day when the
+  // effective sandwich policy absorbs off-days; otherwise the off-day keeps its
+  // own status and is not deducted from the employee.
+  const leaveDayOff = approvedLeave ? await getDayOffInfo(employee, date, transaction) : null;
+  const countSandwichLeave = approvedLeave
+    ? await LeaveBalanceService.isSandwichEnabledForLeave(employee, approvedLeave.leave_category_id, transaction)
+    : false;
+
+  if (approvedLeave && (countSandwichLeave || (!leaveDayOff.isWeeklyOff && !leaveDayOff.isHoliday))) {
     const category = await commonQuery.findOneRecord(LeaveTemplateCategory, approvedLeave.leave_category_id, {}, transaction, false, {});
     const rules = (category && category.automation_rules) ? JSON.parse(category.automation_rules) : {};
 
@@ -3411,9 +3420,23 @@ async function syncCompOffCredit(employee, date, status, transaction, attendance
  */
 async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transaction, employee = null) {
   const LeaveBalanceService = require("../services/leaveBalanceService");
-  const getDeduction = (status) => {
+  // HALF_DAY normally deducts 0.5, but a category configured with allow_half_day=false
+  // (half-day leaves not supported, only full-day) has no half-day balance unit to charge —
+  // manually marking a day Half Day against such a category deducts a full day instead,
+  // same as the category's own "Half Day / Full Day Restriction" rule elsewhere.
+  const getDeduction = async (status, categoryId) => {
     if (Number(status) === 6) return 1.0; // LEAVE
-    if (Number(status) === 1) return 0.5; // HALF_DAY
+    if (Number(status) === 1) {
+      if (categoryId) {
+        const category = await commonQuery.findOneRecord(LeaveTemplateCategory, categoryId, {}, transaction, false, {});
+        let rules = category?.automation_rules || {};
+        if (typeof rules === 'string') {
+          try { rules = JSON.parse(rules); } catch (e) { rules = {}; }
+        }
+        if (rules.allow_half_day === false) return 1.0;
+      }
+      return 0.5; // HALF_DAY
+    }
     return 0;
   };
 
@@ -3422,11 +3445,11 @@ async function syncAttendanceToLeaveBalance(employeeId, oldDay, newDay, transact
 
   const oldStatus = oldDay ? Number(oldDay.status) : null;
   const oldCategoryId = oldDay ? oldDay.leave_category_id : null;
-  const oldDeduction = (oldCategoryId && oldStatus !== null) ? getDeduction(oldStatus) : 0;
+  const oldDeduction = (oldCategoryId && oldStatus !== null) ? await getDeduction(oldStatus, oldCategoryId) : 0;
 
   const newStatus = newDay ? Number(newDay.status) : null;
   const newCategoryId = newDay ? newDay.leave_category_id : null;
-  const newDeduction = (newCategoryId && newStatus !== null) ? getDeduction(newStatus) : 0;
+  const newDeduction = (newCategoryId && newStatus !== null) ? await getDeduction(newStatus, newCategoryId) : 0;
 
   // --- Comp-Off Leave CREDIT LOGIC ---
   if (!employee) {

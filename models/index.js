@@ -100,6 +100,7 @@ function initModels(prefix) {
   const LeaveTemplateCategory = require("./settings/leave/leaveTemplateCategory")(seq, DataTypes);
   const EmployeeLeaveBalance = require("./employeeData/EmployeeLeaveBalance")(seq, DataTypes);
   const LeaveRequest = require("./settings/leave/leaveRequest")(seq, DataTypes);
+  const LeaveSandwichReviewFlag = require("./settings/leave/leaveSandwichReviewFlag")(seq, DataTypes);
   const VisitorPass = require("./visitorPass")(seq, DataTypes);
 
   // Salary models
@@ -202,6 +203,7 @@ function initModels(prefix) {
     LeaveTemplate,
     LeaveTemplateCategory,
     LeaveRequest,
+    LeaveSandwichReviewFlag,
     SalaryTemplate,
     SalaryTemplateTransaction,
     SalaryComponent,
