@@ -273,14 +273,13 @@ const runWorker = async () => {
                 const balKey = `${employee.id}:${col.canonicalCleanedName}:${targetYear}:${targetMonth || 'null'}`;
                 const existing = balanceMap.get(balKey);
 
-                // Excel value = available balance (pending_leaves)
-                const availableBalance = addedCount;
-
                 // 5. Update Existing or Create New Balance record
                 if (existing) {
+                    // ADDITION logic: Excel value is added to existing total_allocated (existing + imported)
+                    const currentTotal = parseFloat(existing.total_allocated || 0);
+                    const newTotal = Math.floor((currentTotal + addedCount) * 2) / 2;
                     const used = parseFloat(existing.used_leaves || 0);
-                    // Back-calculate total_allocated so that: total_allocated = available_balance + used_leaves
-                    const newTotal = Math.floor((availableBalance + used) * 2) / 2;
+                    const newPending = Math.floor((newTotal - used) * 2) / 2;
 
                     balancesToUpdate.push({ 
                         employee_id: employee.id,
@@ -290,7 +289,7 @@ const runWorker = async () => {
                         month: targetMonth,
                         leave_category_name: categoryData.leave_category_name,
                         total_allocated: newTotal,
-                        pending_leaves: availableBalance,
+                        pending_leaves: newPending > 0 ? newPending : 0,
                         used_leaves: used,
                         is_paid: categoryData.is_paid,
                         is_compoff: categoryData.is_compoff,
@@ -302,9 +301,11 @@ const runWorker = async () => {
                         status: 0,
                         id: existing.id 
                     });
+                    existing.total_allocated = newTotal;
+                    existing.pending_leaves = newPending > 0 ? newPending : 0;
                     updatedCount++;
                 } else {
-                    // New record: no used leaves yet, so total_allocated = available balance
+                    // New record: no used leaves yet, so total_allocated and pending_leaves equal imported count
                     balancesToCreate.push({
                         employee_id: employee.id,
                         leave_template_id: targetTemplate.id,
@@ -312,8 +313,8 @@ const runWorker = async () => {
                         year: targetYear,
                         month: targetMonth,
                         leave_category_name: categoryData.leave_category_name,
-                        total_allocated: availableBalance,
-                        pending_leaves: availableBalance,
+                        total_allocated: addedCount,
+                        pending_leaves: addedCount,
                         used_leaves: 0,
                         is_paid: categoryData.is_paid,
                         is_compoff: categoryData.is_compoff,
