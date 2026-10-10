@@ -49,6 +49,8 @@ const runWorker = async () => {
 
   let fieldMapping = {};
   try { fieldMapping = JSON.parse(body.field_mapping || "{}"); } catch (e) { }
+
+  const leaveImportMode = String(body.leave_import_mode || 'overwrite').toLowerCase().trim();
   
   const refDate = dayjs(); // Today for import reference
 
@@ -275,10 +277,18 @@ const runWorker = async () => {
 
                 // 5. Update Existing or Create New Balance record
                 if (existing) {
-                    // ADDITION logic: Excel value is added to existing total_allocated (existing + imported)
                     const currentTotal = parseFloat(existing.total_allocated || 0);
-                    const newTotal = Math.floor((currentTotal + addedCount) * 2) / 2;
                     const used = parseFloat(existing.used_leaves || 0);
+
+                    let newTotal = 0;
+                    if (leaveImportMode === 'increment') {
+                        // Increment logic: Excel value is added to existing total_allocated (e.g. 10 + 5 = 15)
+                        newTotal = Math.floor((currentTotal + addedCount) * 2) / 2;
+                    } else {
+                        // Overwrite / Opening balance logic: Excel value replaces total_allocated (e.g. 10 replaced with 5)
+                        newTotal = addedCount;
+                    }
+
                     const newPending = Math.floor((newTotal - used) * 2) / 2;
 
                     balancesToUpdate.push({ 

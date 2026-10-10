@@ -385,15 +385,30 @@ exports.syncPunches = async (req, res) => {
         const windowStart = targetPunchTime.subtract(30, 'second').toDate();
         const windowEnd = targetPunchTime.add(30, 'second').toDate();
 
-        const existingPunch = await commonQuery.findOneRecord(AttendancePunch, {
-          employee_id: punchData.employee_id,
-          status: { [Op.ne]: 2 }, // Exclude deleted punches
-          punch_time: {
-            [Op.between]: [windowStart, windowEnd]
-          }
-        }, {
-          order: [['punch_time', 'DESC']]
-        }, transaction, false, {});
+        // Race guard: two identical requests arriving at the same instant each run in
+        // their own transaction and cannot see each other's uncommitted punch. Take a
+        // row lock on the employee so concurrent syncs for the same employee are
+        // serialized; the second one waits until the first commits, then the locking
+        // read below (a "current read", not the REPEATABLE READ snapshot) sees its punch.
+        await Employee.findOne({
+          where: { id: punchData.employee_id },
+          attributes: ["id"],
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        });
+
+        const existingPunch = await AttendancePunch.findOne({
+          where: {
+            employee_id: punchData.employee_id,
+            status: { [Op.ne]: 2 }, // Exclude deleted punches
+            punch_time: {
+              [Op.between]: [windowStart, windowEnd]
+            }
+          },
+          order: [['punch_time', 'DESC']],
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        });
 
         if (existingPunch) {
           console.log(`[SyncPunches] 🛑 Duplicate punch detected in DB within 30 seconds for Emp=${punchData.employee_id} (Punch ID: ${existingPunch.id}). Skipping creation and returning success.`);
@@ -981,7 +996,29 @@ exports.updateAttendanceDay = async (req, res) => {
     console.log("settings.attendance_approval_level:", settings.attendance_approval_level, "settings.attendance_approval_exempt_roles:", settings.attendance_approval_exempt_roles);
     console.log("User Role ID:", req.user.role_id, "Is Superadmin:", req.user.is_superadmin, "Is Admin:", req.user.is_admin);
     console.log("Approval Required:", approvalRequired, "Exempt Roles:", exemptRoles);
-    const isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+    // Role rows are per-company, so the exempt role ids saved in THIS company's settings
+    // never equal the id of a user created in another company (e.g. an Admin of the main
+    // company working in a sub-company). Match by role identity instead of raw id.
+    let isExempt = exemptRoles.includes(String(req.user.role_id)) || exemptRoles.includes(Number(req.user.role_id));
+    if (!isExempt && exemptRoles.length) {
+      try {
+        const [userRole, exemptRoleRows] = await Promise.all([
+          RolePermission.findOne({ where: { id: req.user.role_id }, attributes: ["id", "role_name", "role_key", "p_role_id"], transaction: t }),
+          RolePermission.findAll({ where: { id: { [Op.in]: exemptRoles.map(Number).filter(Boolean) } }, attributes: ["id", "role_name", "role_key", "p_role_id"], transaction: t }),
+        ]);
+        const norm = (v) => String(v || "").trim().toLowerCase();
+        if (userRole) {
+          isExempt = exemptRoleRows.some((r) =>
+            (r.role_key && userRole.role_key && r.role_key === userRole.role_key) ||
+            (r.p_role_id && Number(r.p_role_id) === Number(userRole.id)) ||
+            (userRole.p_role_id && Number(userRole.p_role_id) === Number(r.id)) ||
+            (norm(r.role_name) && norm(r.role_name) === norm(userRole.role_name))
+          );
+        }
+      } catch (roleErr) {
+        console.error("[AttendanceApproval] Cross-company role match failed:", roleErr.message);
+      }
+    }
     const isSuperAdmin = !!(
       req.user?.is_super_admin ||
       req.user?.role_key === 'BUSINESS_ADMIN' ||
